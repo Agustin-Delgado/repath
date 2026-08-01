@@ -15,7 +15,8 @@ import {
 	pointKey,
 	type Instance,
 	type Rotation,
-	type Schematic
+	type Schematic,
+	type Wire
 } from './schematic/model';
 import { compileSchematic } from './schematic/netlist';
 
@@ -55,6 +56,9 @@ class AppState {
 	probes = $state<string[]>([]);
 	stopTime = $state(EXAMPLES[0].stopTime);
 	exampleId = $state(EXAMPLES[0].id);
+
+	/** Net under the cursor, highlighted across every wire that carries it. */
+	hoverNet = $state<number | null>(null);
 
 	running = $state(false);
 	result = $state<TransientRun | null>(null);
@@ -119,7 +123,7 @@ class AppState {
 
 	// -- editing ----------------------------------------------------------
 
-	place(kind: string, x: number, y: number): Instance {
+	place(kind: string, x: number, y: number, rotation: Rotation = 0): Instance {
 		this.checkpoint();
 		const instance: Instance = {
 			id: freshId(),
@@ -127,7 +131,7 @@ class AppState {
 			name: nextName(this.schematic.instances, kind),
 			x,
 			y,
-			rotation: 0,
+			rotation,
 			params: defaultParams(kind)
 		};
 		this.schematic.instances.push(instance);
@@ -136,16 +140,29 @@ class AppState {
 	}
 
 	addWire(x1: number, y1: number, x2: number, y2: number): void {
-		if (x1 === x2 && y1 === y2) return;
-		this.checkpoint();
-		// Route as an L so every segment stays axis-aligned, which is what the
-		// connectivity pass assumes and what schematics look like anyway.
-		if (x1 !== x2 && y1 !== y2) {
-			this.schematic.wires.push({ id: freshId(), x1, y1, x2: x2, y2: y1 });
-			this.schematic.wires.push({ id: freshId(), x1: x2, y1, x2, y2 });
-		} else {
-			this.schematic.wires.push({ id: freshId(), x1, y1, x2, y2 });
+		this.addWirePath([
+			{ x: x1, y: y1 },
+			{ x: x2, y: y2 }
+		]);
+	}
+
+	/**
+	 * Commit a polyline as wires, one per segment.
+	 *
+	 * The routing decision belongs to the tool that drew it, not here — that way
+	 * the preview the user saw and the geometry that lands are the same thing.
+	 */
+	addWirePath(points: ReadonlyArray<{ x: number; y: number }>): void {
+		const segments: Wire[] = [];
+		for (let i = 0; i < points.length - 1; i++) {
+			const a = points[i];
+			const b = points[i + 1];
+			if (a.x === b.x && a.y === b.y) continue;
+			segments.push({ id: freshId(), x1: a.x, y1: a.y, x2: b.x, y2: b.y });
 		}
+		if (segments.length === 0) return;
+		this.checkpoint();
+		this.schematic.wires.push(...segments);
 	}
 
 	deleteSelection(): void {

@@ -43,7 +43,9 @@ drop on any host.
 ```
 crates/repath-core    the simulation engine (pure Rust, no web dependencies)
 crates/repath-wasm    WebAssembly bindings
-web                   SvelteKit editor, scope, and component library
+web/src/lib/canvas    2D editor engine — viewport, layers, spatial index, tools
+web/src/lib/schematic the circuit-specific half: symbols, netlist, drawing, tools
+web                   SvelteKit shell, scope, component palette
 ```
 
 ### The analog side
@@ -117,6 +119,36 @@ The editor works out where a bridge is needed from the pins on each net. Analog 
 and digital pins on the same wire means a bridge — in whichever direction the
 digital pins point.
 
+### The editor
+
+The canvas is its own small engine (`web/src/lib/canvas`), deliberately ignorant of
+circuits so it can be tested without a browser and reused for anything else.
+
+**Layered canvases.** Grid, schematic and overlay each get their own canvas.
+Dragging a selection rectangle repaints the overlay alone; the schematic
+underneath — which may hold thousands of components — is never re-rasterized.
+Nothing repaints at all until something calls `invalidate`.
+
+**A spatial index.** Every question the editor asks is a spatial one: what is on
+screen, what is under the cursor, what falls inside the marquee. A uniform grid
+hash keeps those proportional to the answer rather than to the document. Items
+carry a precise hit test alongside their bounding box, so a long diagonal wire is
+pickable along the wire and not across the empty rectangle around it.
+
+**Snapping**, which is most of what separates precise from fiddly. Three things
+can be snapped to, in order of how much you probably meant them: pins, then
+anywhere along an existing wire, then the grid. The radius is a screen-pixel
+tolerance converted to world units, so the feel stays constant across zoom levels
+instead of getting stickier as you zoom in.
+
+**Tools as state machines.** Select, wire and place are separate objects with a
+small protocol — pointer events in, overlay drawing out. None of them touches the
+DOM, which is what keeps the pointer handling from collapsing back into one
+function full of mode flags.
+
+Text is drawn in screen space rather than scaled with the world: rasterizing a
+glyph and then magnifying it is what makes canvas text look muddy.
+
 ## What is in the box
 
 | | |
@@ -132,14 +164,22 @@ digital pins point.
 
 | | |
 |---|---|
-| Place a part | pick it in the palette, then click the canvas |
-| Draw a wire | `W`, then drag |
-| Rotate | `R` |
-| Delete | `Del` |
+| Place a part | pick it in the palette, then click the canvas — `R` turns the ghost before you drop it |
+| Draw a wire | `W`, then drag; or click once per corner and finish on a pin |
+| Flip a wire's bend | `Space` while drawing |
+| Straight wire only | hold `Shift` while drawing |
+| Select | click, `Shift`-click to add, or drag a box around things |
+| Rotate / delete | `R` / `Del` |
 | Pan | middle-drag, or `Alt`-drag |
-| Zoom | scroll |
+| Zoom | scroll — `Shift`-scroll pans sideways |
+| Fit to the drawing | `F` |
+| Back to selecting | `V` or `Esc` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Plot a net | tick it in the Signals list |
+
+Wires and pins snap: aim near a pin and the endpoint lands on it exactly, with the
+pin's name shown so you can see what you are about to connect to. Hovering
+highlights the whole net, not just the segment under the cursor.
 
 Values accept engineering notation: `4k7`, `4.7k`, `10u`, `1meg`, `100n`.
 
@@ -153,6 +193,11 @@ Roughly in order of how much they would change what repath is good for:
 - **Subcircuits.** Draw a block once, use it everywhere, nest it.
 - **Sparse matrix solver.** The dense LU is fine to a few hundred nodes and then it
   is not.
+- **Live animation.** The canvas already has a spare layer for it: current shown
+  flowing along the wires, and wires tinted by voltage, driven from the simulation
+  results. This is the strongest visual differentiator over what else is free.
+- **Dirty-rectangle repaint.** Layer-level invalidation plus viewport culling
+  covers most of the benefit today; per-region repaint is the next step up.
 - **Netlist import/export** in SPICE format.
 - **Sharing by URL**, so a circuit can be pasted into a forum answer.
 - **Richer device models** — Early effect on the BJT, MOSFET levels beyond
@@ -163,6 +208,7 @@ Roughly in order of how much they would change what repath is good for:
 
 ```sh
 cargo test --workspace     # engine
+cd web && npm test         # canvas engine
 cd web && npm run check    # types
 ```
 

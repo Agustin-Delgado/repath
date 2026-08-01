@@ -49,6 +49,14 @@ export interface ComponentDef {
 	 * value clear of it. Defaults to 30, which suits the two-terminal parts.
 	 */
 	bodyExtent?: number;
+	/**
+	 * Local, unrotated bounding box of everything drawn, leads included.
+	 *
+	 * Used for culling and for hit testing, so it wants to be tight: a square
+	 * derived from the pin extents would make a resistor selectable from 20 units
+	 * above it, where there is nothing drawn at all.
+	 */
+	box: { x: number; y: number; w: number; h: number };
 }
 
 export interface Instance {
@@ -181,6 +189,7 @@ const SOURCE_PARAMS: ParamDef[] = [
 export const CATALOG: ComponentDef[] = [
 	{
 		kind: 'resistor',
+		box: { x: -30, y: -9, w: 60, h: 18 },
 		label: 'Resistor',
 		group: 'passive',
 		prefix: 'R',
@@ -189,6 +198,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'capacitor',
+		box: { x: -30, y: -13, w: 60, h: 26 },
 		label: 'Capacitor',
 		group: 'passive',
 		prefix: 'C',
@@ -197,6 +207,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'inductor',
+		box: { x: -30, y: -8, w: 60, h: 16 },
 		label: 'Inductor',
 		group: 'passive',
 		prefix: 'L',
@@ -205,6 +216,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'ground',
+		box: { x: -12, y: -10, w: 24, h: 20 },
 		label: 'Ground',
 		group: 'passive',
 		prefix: 'GND',
@@ -213,6 +225,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'vsource',
+		box: { x: -17, y: -30, w: 34, h: 60 },
 		label: 'Voltage source',
 		group: 'sources',
 		prefix: 'V',
@@ -221,6 +234,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'isource',
+		box: { x: -17, y: -30, w: 34, h: 60 },
 		label: 'Current source',
 		group: 'sources',
 		prefix: 'I',
@@ -231,6 +245,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'diode',
+		box: { x: -30, y: -11, w: 60, h: 22 },
 		label: 'Diode',
 		group: 'semiconductor',
 		prefix: 'D',
@@ -258,6 +273,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'nmos',
+		box: { x: -30, y: -30, w: 42, h: 60 },
 		label: 'NMOS',
 		group: 'semiconductor',
 		prefix: 'M',
@@ -270,6 +286,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'pmos',
+		box: { x: -30, y: -30, w: 42, h: 60 },
 		label: 'PMOS',
 		group: 'semiconductor',
 		prefix: 'M',
@@ -282,6 +299,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'npn',
+		box: { x: -30, y: -30, w: 42, h: 60 },
 		label: 'NPN',
 		group: 'semiconductor',
 		prefix: 'Q',
@@ -293,6 +311,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'pnp',
+		box: { x: -30, y: -30, w: 42, h: 60 },
 		label: 'PNP',
 		group: 'semiconductor',
 		prefix: 'Q',
@@ -304,6 +323,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'opamp',
+		box: { x: -30, y: -22, w: 60, h: 44 },
 		label: 'Op-amp',
 		group: 'analog',
 		prefix: 'U',
@@ -316,6 +336,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'and',
+		box: { x: -30, y: -18, w: 60, h: 36 },
 		label: 'AND',
 		group: 'logic',
 		prefix: 'U',
@@ -324,6 +345,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'nand',
+		box: { x: -30, y: -18, w: 60, h: 36 },
 		label: 'NAND',
 		group: 'logic',
 		prefix: 'U',
@@ -332,6 +354,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'or',
+		box: { x: -30, y: -18, w: 60, h: 36 },
 		label: 'OR',
 		group: 'logic',
 		prefix: 'U',
@@ -340,6 +363,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'nor',
+		box: { x: -30, y: -18, w: 60, h: 36 },
 		label: 'NOR',
 		group: 'logic',
 		prefix: 'U',
@@ -348,6 +372,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'xor',
+		box: { x: -30, y: -18, w: 60, h: 36 },
 		label: 'XOR',
 		group: 'logic',
 		prefix: 'U',
@@ -356,6 +381,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'not',
+		box: { x: -30, y: -16, w: 60, h: 32 },
 		label: 'NOT',
 		group: 'logic',
 		prefix: 'U',
@@ -364,6 +390,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'dff',
+		box: { x: -30, y: -32, w: 60, h: 64 },
 		label: 'D flip-flop',
 		group: 'logic',
 		prefix: 'FF',
@@ -378,6 +405,7 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		kind: 'clock',
+		box: { x: -22, y: -16, w: 52, h: 32 },
 		label: 'Clock',
 		group: 'logic',
 		prefix: 'CLK',
