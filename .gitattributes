@@ -1,0 +1,4 @@
+# Normalise line endings so contributors on Windows and Linux see the same diffs.
+* text=auto eol=lf
+*.png binary
+*.wasm binary

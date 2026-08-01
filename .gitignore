@@ -1,0 +1,11 @@
+/target
+**/node_modules
+**/.svelte-kit
+**/build
+**/dist
+/web/src/lib/wasm
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
