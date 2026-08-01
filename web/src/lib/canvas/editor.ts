@@ -50,6 +50,13 @@ export class CanvasEditor {
 	private frame: number | null = null;
 	private disposed = false;
 
+	/**
+	 * Last known pointer position in world units, or null before the pointer has
+	 * ever been over the canvas. Paste-at-cursor needs this, and there is no DOM
+	 * element to ask.
+	 */
+	pointerWorld: Vec2 | null = null;
+
 	private activeTool: Tool | null = null;
 	private gesture: {
 		pointerId: number;
@@ -248,6 +255,7 @@ export class CanvasEditor {
 
 	private onPointerMove = (event: PointerEvent) => {
 		const screen = this.localPoint(event);
+		this.pointerWorld = this.viewport.toWorld(screen);
 		const gesture = this.gesture;
 
 		if (gesture?.panning) {

@@ -192,6 +192,25 @@
 			ctx.fillText(trace.label, plot.x - 8, (top + bottom) / 2);
 		});
 
+		// Playhead: where the live overlay on the schematic is showing.
+		if (app.result) {
+			const x = toX(Math.min(app.playbackTime, stop));
+			ctx.strokeStyle = colour('--accent');
+			ctx.lineWidth = 1.5;
+			ctx.beginPath();
+			ctx.moveTo(x, plot.y - 4);
+			ctx.lineTo(x, plot.y + plot.h + laneHeight);
+			ctx.stroke();
+			// A small tab at the top, so it reads as a handle rather than a gridline.
+			ctx.fillStyle = colour('--accent');
+			ctx.beginPath();
+			ctx.moveTo(x - 4, plot.y - 8);
+			ctx.lineTo(x + 4, plot.y - 8);
+			ctx.lineTo(x, plot.y - 2);
+			ctx.closePath();
+			ctx.fill();
+		}
+
 		// Cursor.
 		if (cursor) {
 			ctx.strokeStyle = colour('--scope-cursor');
@@ -203,6 +222,29 @@
 			ctx.stroke();
 			ctx.setLineDash([]);
 		}
+	}
+
+	/**
+	 * The playhead quantized to whole pixels.
+	 *
+	 * The redraw effect depends on this rather than on the raw time, so a playing
+	 * animation repaints the scope only when the line actually moves — sixty
+	 * full-canvas repaints a second for a sub-pixel move is not a good trade.
+	 */
+	const playheadPx = $derived.by(() => {
+		const run = app.result;
+		if (!run || run.time.length === 0) return -1;
+		const stop = run.time[run.time.length - 1] || 1;
+		const plotW = Math.max(size.width - PADDING.left - PADDING.right, 10);
+		return Math.round((app.playbackTime / stop) * plotW);
+	});
+
+	function seekTo(event: PointerEvent) {
+		if (!canvas || !app.result) return;
+		const rect = canvas.getBoundingClientRect();
+		const stop = app.result.time[app.result.time.length - 1] || app.stopTime;
+		const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
+		app.seek(((event.clientX - rect.left - PADDING.left) / plotW) * stop);
 	}
 
 	/** Sample index nearest the cursor time, for the readout. */
@@ -235,6 +277,8 @@
 		const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
 		const t = ((x - PADDING.left) / plotW) * stop;
 		cursor = t >= 0 && t <= stop ? { x, time: t } : null;
+		// Dragging scrubs; a plain hover only reads values off.
+		if (event.buttons & 1) seekTo(event);
 	}
 
 	$effect(() => {
@@ -248,7 +292,7 @@
 
 	$effect(() => {
 		// Redraw whenever anything the plot depends on changes.
-		void [app.result, traces, digitalTraces, range, size, cursor];
+		void [app.result, traces, digitalTraces, range, size, cursor, playheadPx];
 		draw();
 	});
 </script>
@@ -260,6 +304,7 @@
 			style:width="{size.width}px"
 			style:height="{size.height}px"
 			onpointermove={onMove}
+			onpointerdown={seekTo}
 			onpointerleave={() => (cursor = null)}
 		></canvas>
 
@@ -340,6 +385,7 @@
 
 	canvas {
 		display: block;
+		cursor: col-resize;
 	}
 
 	.empty {

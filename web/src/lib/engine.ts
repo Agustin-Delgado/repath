@@ -26,6 +26,7 @@ interface RunMeta {
 	unknown_names: string[];
 	node_count: number;
 	point_count: number;
+	element_names: string[];
 	net_names: string[];
 	digital: DigitalTransition[][];
 	stats: RunStats;
@@ -35,8 +36,20 @@ export interface TransientRun {
 	time: Float64Array;
 	/** Signal label (`v(n1)`, `i(R2)`) -> samples, aligned with `time`. */
 	signals: Map<string, Float64Array>;
+	/**
+	 * The same samples indexed by unknown rather than by name.
+	 *
+	 * Columnar rather than a row per timepoint: the animation asks for one
+	 * signal across time far more often than for every signal at one instant,
+	 * and this way that is a single contiguous array.
+	 */
+	signalsByIndex: Float64Array[];
 	unknownNames: string[];
 	nodeCount: number;
+	/** Instance names, indexing `currents`. */
+	elementNames: string[];
+	/** Current through each element across the run, one array per element. */
+	currents: Float64Array[];
 	netNames: string[];
 	digital: DigitalTransition[][];
 	stats: RunStats;
@@ -92,15 +105,21 @@ export async function runTransient(
 
 		const time = simulation.time();
 		const signals = new Map<string, Float64Array>();
-		meta.unknown_names.forEach((name, index) => {
-			signals.set(name, simulation.signal(index));
+		const signalsByIndex = meta.unknown_names.map((name, index) => {
+			const samples = simulation.signal(index);
+			signals.set(name, samples);
+			return samples;
 		});
+		const currents = meta.element_names.map((_, index) => simulation.current(index));
 
 		return {
 			time,
 			signals,
+			signalsByIndex,
 			unknownNames: meta.unknown_names,
 			nodeCount: meta.node_count,
+			elementNames: meta.element_names,
+			currents,
 			netNames: meta.net_names,
 			digital: meta.digital,
 			stats: meta.stats,

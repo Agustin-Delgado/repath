@@ -1,16 +1,19 @@
 <script lang="ts">
 	import Inspector from '$lib/components/Inspector.svelte';
 	import Palette from '$lib/components/Palette.svelte';
+	import Playback from '$lib/components/Playback.svelte';
 	import Schematic from '$lib/components/Schematic.svelte';
 	import Scope from '$lib/components/Scope.svelte';
 	import { ensureEngine, engineVersion } from '$lib/engine';
 	import { EXAMPLES } from '$lib/examples';
+	import { decodeCircuit, shareUrl } from '$lib/share';
 	import { app } from '$lib/state.svelte';
 	import { formatValue, parseValue } from '$lib/units';
 
 	let version = $state('');
 	let stopField = $state(formatValue(app.stopTime, 3));
 	let fileInput = $state<HTMLInputElement | null>(null);
+	let shareState = $state<'idle' | 'copied' | 'failed'>('idle');
 
 	$effect(() => {
 		// Keep the field in sync when an example changes the run length.
@@ -18,12 +21,38 @@
 	});
 
 	$effect(() => {
-		ensureEngine().then(() => {
+		ensureEngine().then(async () => {
 			version = engineVersion();
+
+			// A circuit in the fragment wins over the default example: someone
+			// following a link wants the circuit in the link.
+			if (location.hash.length > 2) {
+				try {
+					app.loadShared(await decodeCircuit(location.hash));
+				} catch (cause) {
+					app.error = cause instanceof Error ? cause.message : String(cause);
+				}
+			}
 			// Show a working circuit rather than an empty scope on first load.
 			app.run();
 		});
 	});
+
+	async function share() {
+		try {
+			const url = await shareUrl(
+				{ schematic: app.schematic, stopTime: app.stopTime },
+				new URL(location.href)
+			);
+			history.replaceState(null, '', url);
+			await navigator.clipboard.writeText(url);
+			shareState = 'copied';
+		} catch {
+			// Clipboard access can be refused; the URL bar still holds the link.
+			shareState = 'failed';
+		}
+		setTimeout(() => (shareState = 'idle'), 2500);
+	}
 
 	function commitStopTime(value: string) {
 		const parsed = parseValue(value);
@@ -107,6 +136,9 @@
 				{/each}
 			</select>
 
+			<button onclick={share} title="Copy a link that contains this circuit">
+				{shareState === 'copied' ? 'Copied' : shareState === 'failed' ? 'In the URL bar' : 'Share'}
+			</button>
 			<button onclick={save} title="Download this circuit">Save</button>
 			<button onclick={() => fileInput?.click()} title="Open a saved circuit">Open</button>
 			<input
@@ -138,7 +170,10 @@
 		<aside class="right"><Inspector /></aside>
 	</main>
 
-	<section class="bottom"><Scope /></section>
+	<section class="bottom">
+		<Playback />
+		<Scope />
+	</section>
 </div>
 
 <style>
@@ -315,6 +350,8 @@
 	.bottom {
 		border-top: 1px solid var(--border);
 		min-height: 0;
+		display: grid;
+		grid-template-rows: auto minmax(0, 1fr);
 	}
 
 	@media (max-width: 900px) {

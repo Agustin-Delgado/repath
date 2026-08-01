@@ -242,11 +242,14 @@ pub struct CurrentSource {
     pub p: NodeId,
     pub m: NodeId,
     pub waveform: Waveform,
+    /// Value last stamped. A current source has no branch unknown to read the
+    /// answer back from, so it remembers what it injected.
+    last: f64,
 }
 
 impl CurrentSource {
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, waveform: Waveform) -> Self {
-        Self { name: name.into(), p, m, waveform }
+        Self { name: name.into(), p, m, waveform, last: 0.0 }
     }
 }
 
@@ -260,6 +263,7 @@ impl Element for CurrentSource {
 
     fn stamp(&mut self, sys: &mut LinearSystem, ctx: &StampCtx) -> StampReport {
         let i = self.waveform.value(ctx.time) * ctx.source_scale;
+        self.last = i;
         sys.add_current(node_index(self.p), node_index(self.m), i);
         StampReport::CLEAN
     }
@@ -272,9 +276,13 @@ impl Element for CurrentSource {
         self.waveform.next_breakpoint(t)
     }
 
-    fn current(&self, ctx: &[f64]) -> Option<f64> {
-        let _ = ctx;
-        None
+    fn current(&self, x: &[f64]) -> Option<f64> {
+        let _ = x;
+        Some(self.last)
+    }
+
+    fn reset(&mut self) {
+        self.last = 0.0;
     }
 }
 

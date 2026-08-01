@@ -218,6 +218,24 @@ impl Circuit {
         self.elements.get(index)?.current(x)
     }
 
+    /// Instance names, in the same order as [`Self::collect_currents`].
+    pub fn element_names(&self) -> Vec<String> {
+        self.elements.iter().map(|e| e.name().to_string()).collect()
+    }
+
+    /// Current through every element, in element order.
+    ///
+    /// Recorded per timepoint so a viewer can show current flowing without
+    /// having to re-derive device physics it should not have to know about.
+    /// Elements that cannot report a current contribute zero.
+    pub fn collect_currents(&self, x: &[f64], out: &mut Vec<f64>) {
+        out.clear();
+        out.reserve(self.elements.len());
+        for element in &self.elements {
+            out.push(element.current(x).unwrap_or(0.0));
+        }
+    }
+
     /// Discard all history so the next run starts from scratch.
     pub fn reset(&mut self) {
         for element in &mut self.elements {

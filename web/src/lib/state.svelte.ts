@@ -9,10 +9,12 @@
 import { runTransient, type TransientRun } from './engine';
 import { EXAMPLES, exampleById } from './examples';
 import {
+	GRID,
 	defaultParams,
 	definitionOf,
 	nextName,
 	pointKey,
+	snap,
 	type Instance,
 	type Rotation,
 	type Schematic,
@@ -47,6 +49,13 @@ export const TRACE_COLOURS = [
 let idCounter = 0;
 const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`;
 
+/** Direction-independent identity for a wire, for spotting duplicates. */
+function wireSignature(x1: number, y1: number, x2: number, y2: number): string {
+	const a = `${x1},${y1}`;
+	const b = `${x2},${y2}`;
+	return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
 const HISTORY_LIMIT = 100;
 
 class AppState {
@@ -64,8 +73,35 @@ class AppState {
 	result = $state<TransientRun | null>(null);
 	error = $state<string | null>(null);
 
+	// -- playback ---------------------------------------------------------
+
+	playing = $state(false);
+	/** Where in simulated time the live overlay is showing. */
+	playbackTime = $state(0);
+	/** How many times faster or slower than the default four-second replay. */
+	playbackSpeed = $state(1);
+	showVoltage = $state(true);
+	showCurrent = $state(true);
+
+	/** Simulated seconds per real second at the current speed setting. */
+	get playbackRate(): number {
+		return (this.stopTime / 4) * this.playbackSpeed;
+	}
+
+	togglePlay(): void {
+		if (!this.result) return;
+		// Restarting from the end rather than sitting there doing nothing.
+		if (!this.playing && this.playbackTime >= this.stopTime) this.playbackTime = 0;
+		this.playing = !this.playing;
+	}
+
+	seek(time: number): void {
+		this.playbackTime = Math.min(Math.max(time, 0), this.stopTime);
+	}
+
 	private past: string[] = [];
 	private future: string[] = [];
+	private clipboard: { instances: Instance[]; wires: Wire[] } | null = null;
 
 	compiled = $derived(compileSchematic(this.schematic));
 
@@ -153,13 +189,23 @@ class AppState {
 	 * the preview the user saw and the geometry that lands are the same thing.
 	 */
 	addWirePath(points: ReadonlyArray<{ x: number; y: number }>): void {
+		const already = new Set(
+			this.schematic.wires.map((w) => wireSignature(w.x1, w.y1, w.x2, w.y2))
+		);
 		const segments: Wire[] = [];
+
 		for (let i = 0; i < points.length - 1; i++) {
 			const a = points[i];
 			const b = points[i + 1];
 			if (a.x === b.x && a.y === b.y) continue;
+			// Retracing an existing wire is a no-op, not a second wire lying
+			// invisibly on top of the first.
+			const signature = wireSignature(a.x, a.y, b.x, b.y);
+			if (already.has(signature)) continue;
+			already.add(signature);
 			segments.push({ id: freshId(), x1: a.x, y1: a.y, x2: b.x, y2: b.y });
 		}
+
 		if (segments.length === 0) return;
 		this.checkpoint();
 		this.schematic.wires.push(...segments);
@@ -230,6 +276,84 @@ class AppState {
 		this.result = null;
 	}
 
+	// -- clipboard --------------------------------------------------------
+
+	/** Copy the selection. Returns false when there was nothing to copy. */
+	copySelection(): boolean {
+		const chosen = new Set(this.selection);
+		if (chosen.size === 0) return false;
+
+		this.clipboard = {
+			instances: this.schematic.instances
+				.filter((i) => chosen.has(i.id))
+				.map((i) => structuredClone($state.snapshot(i)) as Instance),
+			wires: this.schematic.wires
+				.filter((w) => chosen.has(w.id))
+				.map((w) => structuredClone($state.snapshot(w)) as Wire)
+		};
+		return true;
+	}
+
+	get hasClipboard(): boolean {
+		return this.clipboard !== null;
+	}
+
+	/**
+	 * Paste the clipboard. With `at`, the copied group's top-left corner lands
+	 * there; without, it is nudged clear of the original so the two do not sit
+	 * exactly on top of each other and look like one.
+	 */
+	paste(at?: { x: number; y: number }): void {
+		if (!this.clipboard) return;
+		const { instances, wires } = this.clipboard;
+		if (instances.length === 0 && wires.length === 0) return;
+
+		const xs = [...instances.map((i) => i.x), ...wires.flatMap((w) => [w.x1, w.x2])];
+		const ys = [...instances.map((i) => i.y), ...wires.flatMap((w) => [w.y1, w.y2])];
+		const minX = Math.min(...xs);
+		const minY = Math.min(...ys);
+		const dx = at ? snap(at.x) - snap(minX) : GRID * 3;
+		const dy = at ? snap(at.y) - snap(minY) : GRID * 3;
+
+		this.checkpoint();
+		const existing = [...this.schematic.instances];
+		const fresh: string[] = [];
+
+		for (const source of instances) {
+			// Names have to be regenerated as we go, or pasting three resistors
+			// would produce three of whatever R-number was free at the start.
+			const copy: Instance = {
+				...structuredClone(source),
+				id: freshId(),
+				name: nextName(existing, source.kind),
+				x: source.x + dx,
+				y: source.y + dy
+			};
+			existing.push(copy);
+			this.schematic.instances.push(copy);
+			fresh.push(copy.id);
+		}
+
+		for (const source of wires) {
+			const copy: Wire = {
+				id: freshId(),
+				x1: source.x1 + dx,
+				y1: source.y1 + dy,
+				x2: source.x2 + dx,
+				y2: source.y2 + dy
+			};
+			this.schematic.wires.push(copy);
+			fresh.push(copy.id);
+		}
+
+		this.selection = fresh;
+	}
+
+	duplicateSelection(): void {
+		if (!this.copySelection()) return;
+		this.paste();
+	}
+
 	// -- probes -----------------------------------------------------------
 
 	toggleProbe(key: string): void {
@@ -247,8 +371,8 @@ class AppState {
 		return this.activeProbes.some((p) => p.netIndex === netIndex);
 	}
 
-	/** Pick a few interesting nets so a freshly loaded example plots something. */
-	private autoProbe(): void {
+	/** Pick a few interesting nets so a freshly loaded circuit plots something. */
+	autoProbe(): void {
 		const compiled = compileSchematic(this.schematic);
 		const chosen: string[] = [];
 		for (const net of compiled.connectivity.nets) {
@@ -272,6 +396,19 @@ class AppState {
 		this.schematic = example.build();
 		this.stopTime = example.stopTime;
 		this.exampleId = example.id;
+		this.selection = [];
+		this.result = null;
+		this.error = null;
+		this.autoProbe();
+	}
+
+	/** Adopt a circuit that arrived in a link. */
+	loadShared(circuit: { schematic: Schematic; stopTime: number }): void {
+		this.past.length = 0;
+		this.future.length = 0;
+		this.schematic = circuit.schematic;
+		this.stopTime = circuit.stopTime;
+		this.exampleId = '';
 		this.selection = [];
 		this.result = null;
 		this.error = null;
@@ -331,6 +468,8 @@ class AppState {
 			// rather than two dots joined up.
 			this.result = await runTransient(compiled.netlist, this.stopTime, this.stopTime / 400);
 			if (this.probes.length === 0) this.autoProbe();
+			this.playbackTime = 0;
+			this.playing = true;
 		} catch (cause) {
 			this.error = cause instanceof Error ? cause.message : String(cause);
 			this.result = null;

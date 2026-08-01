@@ -146,6 +146,10 @@ pub struct TransientResult {
     pub time: Vec<f64>,
     /// One full solution vector per recorded timepoint.
     pub solution: Vec<Vec<f64>>,
+    /// Instance names, matching the inner index of `currents`.
+    pub element_names: Vec<String>,
+    /// Current through every element, per recorded timepoint.
+    pub currents: Vec<Vec<f64>>,
     pub net_names: Vec<String>,
     /// Per net, the instants at which it changed value.
     pub digital: Vec<Vec<(f64, Logic)>>,
@@ -156,6 +160,16 @@ impl TransientResult {
     /// Extract one unknown as a waveform.
     pub fn signal(&self, index: usize) -> Vec<f64> {
         self.solution.iter().map(|row| row.get(index).copied().unwrap_or(0.0)).collect()
+    }
+
+    /// One element's current across the whole run.
+    pub fn current_signal(&self, index: usize) -> Vec<f64> {
+        self.currents.iter().map(|row| row.get(index).copied().unwrap_or(0.0)).collect()
+    }
+
+    /// Position of an element by instance name, e.g. `"R1"`.
+    pub fn element_index(&self, name: &str) -> Option<usize> {
+        self.element_names.iter().position(|n| n == name)
     }
 
     /// Look up an unknown by its label, e.g. `"v(out)"`.
@@ -444,6 +458,7 @@ impl Simulator {
         let mut result = TransientResult {
             unknown_names: circuit.unknown_names(),
             node_count: circuit.node_count().saturating_sub(1),
+            element_names: circuit.element_names(),
             net_names: (0..circuit.digital.net_count())
                 .map(|n| circuit.digital.net_name(n).unwrap_or("").to_string())
                 .collect(),
@@ -673,9 +688,13 @@ impl Simulator {
         }
     }
 
-    fn record(&self, result: &mut TransientResult, _circuit: &Circuit, t: f64) {
+    fn record(&self, result: &mut TransientResult, circuit: &Circuit, t: f64) {
         result.time.push(t);
         result.solution.push(self.x.clone());
+
+        let mut currents = Vec::new();
+        circuit.collect_currents(&self.x, &mut currents);
+        result.currents.push(currents);
     }
 
     /// Convenience: the last solved unknown vector.

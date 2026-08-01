@@ -8,6 +8,7 @@
 	 * `$lib/schematic`, where it can be tested without a browser.
 	 */
 	import { CanvasEditor, type Painter } from '$lib/canvas';
+	import { createAnimationState } from '$lib/schematic/animate';
 	import {
 		drawGrid,
 		drawSchematic,
@@ -16,6 +17,8 @@
 		type SchematicView,
 		type Theme
 	} from '$lib/schematic/draw';
+	import { drawDynamic, tick, type DynamicView } from '$lib/schematic/dynamic';
+	import { prepareFlow, sampleFlow, sampleIndexAt } from '$lib/schematic/flow';
 	import { GRID } from '$lib/schematic/model';
 	import { junctionDots } from '$lib/schematic/nets';
 	import { buildSceneItems, buildSnapTargets } from '$lib/schematic/scene';
@@ -50,6 +53,17 @@
 		new Map(app.activeProbes.map((p) => [p.netIndex, p.colour] as const))
 	);
 
+	// The live overlay. Planned once per run, evaluated once per frame.
+	const animation = createAnimationState();
+	let dynamicView: DynamicView | null = null;
+
+	const flowContext = $derived.by(() => {
+		const run = app.result;
+		if (!run) return null;
+		const compiled = app.compiled;
+		return prepareFlow(app.schematic, compiled.connectivity, compiled.names, run);
+	});
+
 	function view(): SchematicView {
 		return {
 			schematic: app.schematic,
@@ -69,7 +83,7 @@
 		setCurrentTheme(theme);
 
 		const created = new CanvasEditor(host, {
-			layers: ['grid', 'schematic', 'overlay'],
+			layers: ['grid', 'schematic', 'dynamic', 'overlay'],
 			overlayLayer: 'overlay',
 			gridSize: GRID,
 			hitTolerance: 7,
@@ -78,6 +92,9 @@
 					drawGrid(painter, theme!, GRID, e.visibleBounds),
 				schematic: (painter: Painter, e: CanvasEditor) =>
 					drawSchematic(painter, view(), e.visibleBounds),
+				dynamic: (painter: Painter, e: CanvasEditor) => {
+					if (dynamicView) drawDynamic(painter, dynamicView, e.visibleBounds);
+				},
 				overlay: () => {
 					// Tool feedback is drawn by the editor after this runs.
 				}
@@ -134,6 +151,70 @@
 		queueMicrotask(() => active?.fit());
 	});
 
+	/**
+	 * The animation loop.
+	 *
+	 * Separate from the editor's invalidate-driven rendering: this is the one
+	 * thing that genuinely wants a frame every frame. It touches only the
+	 * `dynamic` layer, so the schematic underneath is never repainted for it.
+	 */
+	$effect(() => {
+		const active = editor;
+		const context = flowContext;
+		if (!active || !context) {
+			dynamicView = null;
+			return;
+		}
+
+		let frame = 0;
+		let last = performance.now();
+
+		const step = (now: number) => {
+			// Clamped so a backgrounded tab does not resume with one enormous jump.
+			const dt = Math.min((now - last) / 1000, 0.1);
+			last = now;
+
+			if (app.playing) {
+				const next = app.playbackTime + dt * app.playbackRate;
+				if (next >= app.stopTime) app.playbackTime = 0;
+				else app.playbackTime = next;
+			}
+
+			if (app.showVoltage || app.showCurrent) {
+				const index = sampleIndexAt(context.run.time, app.playbackTime);
+				dynamicView = {
+					schematic: app.schematic,
+					frame: sampleFlow(context, index),
+					context,
+					animation,
+					netOfPoint: app.compiled.connectivity.netOfPoint,
+					showVoltage: app.showVoltage,
+					showCurrent: app.showCurrent
+				};
+				tick(dynamicView, dt);
+				active.invalidate('dynamic');
+				if (import.meta.env.DEV) {
+					const handle = (window as unknown as Record<string, Record<string, unknown>>).__repath;
+					if (handle) {
+						handle.flow = context;
+						handle.frame = dynamicView.frame;
+					}
+				}
+			} else if (dynamicView) {
+				dynamicView = null;
+				active.invalidate('dynamic');
+			}
+
+			frame = requestAnimationFrame(step);
+		};
+
+		frame = requestAnimationFrame(step);
+		return () => {
+			cancelAnimationFrame(frame);
+			dynamicView = null;
+		};
+	});
+
 	export function fitToContent() {
 		editor?.fit();
 	}
@@ -142,11 +223,36 @@
 		const target = event.target as HTMLElement | null;
 		if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
 
-		if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
-			event.preventDefault();
-			if (event.shiftKey) app.redo();
-			else app.undo();
-			return;
+		if (event.ctrlKey || event.metaKey) {
+			switch (event.key.toLowerCase()) {
+				case 'z':
+					event.preventDefault();
+					if (event.shiftKey) app.redo();
+					else app.undo();
+					return;
+				case 'y':
+					event.preventDefault();
+					app.redo();
+					return;
+				case 'c':
+					if (app.copySelection()) event.preventDefault();
+					return;
+				case 'x':
+					if (app.copySelection()) {
+						app.deleteSelection();
+						event.preventDefault();
+					}
+					return;
+				case 'v':
+					event.preventDefault();
+					// Paste where the cursor is, which is where the user is looking.
+					app.paste(editor?.pointerWorld ?? undefined);
+					return;
+				case 'd':
+					event.preventDefault();
+					app.duplicateSelection();
+					return;
+			}
 		}
 
 		// The active tool gets first refusal — it may be mid-gesture.
@@ -156,6 +262,12 @@
 		}
 
 		switch (event.key) {
+			case ' ':
+				// Only reaches here when no tool claimed it — the wire tool uses
+				// Space to flip its bend while a run is in progress.
+				event.preventDefault();
+				app.togglePlay();
+				break;
 			case 'w':
 			case 'W':
 				app.tool = { mode: 'wire' };

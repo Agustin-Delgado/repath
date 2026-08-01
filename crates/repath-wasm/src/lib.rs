@@ -20,6 +20,7 @@ struct RunMeta {
     unknown_names: Vec<String>,
     node_count: usize,
     point_count: usize,
+    element_names: Vec<String>,
     net_names: Vec<String>,
     digital: Vec<Vec<DigitalTransition>>,
     stats: RunStats,
@@ -105,6 +106,7 @@ impl Simulation {
             unknown_names: result.unknown_names.clone(),
             node_count: result.node_count,
             point_count: result.time.len(),
+            element_names: result.element_names.clone(),
             net_names: result.net_names.clone(),
             digital: result
                 .digital
@@ -135,6 +137,11 @@ impl Simulation {
     /// One unknown from the last run, as a `Float64Array`.
     pub fn signal(&self, index: usize) -> Vec<f64> {
         self.result.as_ref().map(|r| r.signal(index)).unwrap_or_default()
+    }
+
+    /// Current through one element across the run, as a `Float64Array`.
+    pub fn current(&self, index: usize) -> Vec<f64> {
+        self.result.as_ref().map(|r| r.current_signal(index)).unwrap_or_default()
     }
 
     /// Index of an unknown by label, e.g. `"v(out)"`. Returns -1 if absent.
