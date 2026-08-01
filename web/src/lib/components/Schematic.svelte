@@ -265,6 +265,13 @@
 		}
 
 		switch (event.key) {
+			case 'Delete':
+			case 'Backspace':
+				// Reached only when the active tool did not claim it — the place tool
+				// does not, and "Delete does nothing" is never the right answer.
+				event.preventDefault();
+				app.deleteSelection();
+				break;
 			case ' ':
 				// Only reaches here when no tool claimed it — the wire tool uses
 				// Space to flip its bend while a run is in progress.

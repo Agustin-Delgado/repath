@@ -31,6 +31,14 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Animation | Wires closing a loop show no current | Genuinely undefined for ideal wires in parallel; shown as nothing rather than guessed |
 | Canvas | Layer-level invalidation, no dirty rectangles | A full-screen repaint per interaction on the affected layer |
 | Editor | No touch or pen input | Unusable on a tablet |
+| Editor | Rotating a multi-selection turns each part about its own centre | The group does not orbit, which is rarely what is wanted |
+| Editor | A refused rename (duplicate or blank) is silent | The field keeps the typed text while the model rejected it |
+| Editor | Negative component values are accepted | The engine uses the magnitude; the UI never objects |
+| Editor | Zero values are silently clamped (R to 1 nΩ, C to 1 aF) | The circuit simulates, but not the one that was drawn |
+| Editor | Undo clears the selection | Jarring after undoing a small edit |
+| Router | The search is bounded to ~12 grid cells beyond the endpoints | An obstacle wider than that forces the plain-elbow fallback, which may cross things |
+| Editor | Dragging re-routes with A* every frame, with no time budget | A part with many wires in a large schematic could drop frames |
+| Editor | History stores whole-document JSON snapshots, capped at 100 | Memory grows with document size times edit count |
 
 ---
 
@@ -62,7 +70,10 @@ Each one should either move into Must/Should below, or be documented in the UI.
 - [ ] **Errors that point at the circuit.** "Singular matrix near v(n3)" should
       highlight that net on the canvas, not just print a name the user never chose.
 - [ ] **Wire editing** — drag a segment sideways, add and remove corners, split and
-      join. Right now a wire can only be drawn and deleted.
+      join. Right now a wire can only be drawn, moved as a whole, and deleted.
+- [ ] **Rotate a group about its centre**, not each part about its own.
+- [ ] **Say why an edit was refused** — a duplicate name, a value that will not
+      parse, a negative resistance. Silence reads as a bug.
 - [ ] **Delete that heals.** Deleting a component should offer to reconnect the
       wires that met at it, rather than leaving two stubs.
 

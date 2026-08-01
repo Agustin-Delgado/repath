@@ -143,7 +143,7 @@ class AppState {
 		const compiled = this.compiled;
 		const out: ProbeInfo[] = [];
 		for (const key of this.probes) {
-			const netIndex = compiled.connectivity.netOfPoint.get(key);
+			const netIndex = this.netForProbe(key);
 			if (netIndex === undefined) continue;
 			const names = compiled.names.get(netIndex);
 			const label = names?.analog ?? names?.digital;
@@ -597,15 +597,42 @@ class AppState {
 
 	// -- probes -----------------------------------------------------------
 
+	/**
+	 * Resolve a probe handle to a net.
+	 *
+	 * Handles come in two forms. A pin — `pin:<instance>:<name>` — survives being
+	 * moved, rotated or re-routed, which a bare coordinate does not: drag a whole
+	 * circuit across the canvas and every point-keyed probe silently stops
+	 * matching anything. A coordinate is the fallback for a net with no pins on it.
+	 */
+	private netForProbe(key: string): number | undefined {
+		if (key.startsWith('pin:')) {
+			return this.compiled.connectivity.netOfPin.get(key.slice(4));
+		}
+		return this.compiled.connectivity.netOfPoint.get(key);
+	}
+
+	/** The most durable handle for the net at a grid point. */
+	private probeHandle(pointKeyValue: string): string | null {
+		const netIndex = this.compiled.connectivity.netOfPoint.get(pointKeyValue);
+		if (netIndex === undefined) return null;
+		const net = this.compiled.connectivity.nets[netIndex];
+		const pin = net?.pins[0];
+		return pin ? `pin:${pin.instance.id}:${pin.pin.name}` : pointKeyValue;
+	}
+
 	toggleProbe(key: string): void {
 		const netIndex = this.compiled.connectivity.netOfPoint.get(key);
 		if (netIndex === undefined) return;
 		// Probe the net, not the point: clicking anywhere on the same wire toggles
 		// the same trace.
-		const existing = this.probes.find(
-			(k) => this.compiled.connectivity.netOfPoint.get(k) === netIndex
-		);
-		this.probes = existing ? this.probes.filter((k) => k !== existing) : [...this.probes, key];
+		const existing = this.probes.find((k) => this.netForProbe(k) === netIndex);
+		if (existing) {
+			this.probes = this.probes.filter((k) => k !== existing);
+			return;
+		}
+		const handle = this.probeHandle(key);
+		if (handle) this.probes = [...this.probes, handle];
 	}
 
 	isProbed(netIndex: number): boolean {
@@ -623,7 +650,8 @@ class AppState {
 			if (!names?.analog && !names?.digital) continue;
 			// Prefer nets with a wire on them; a lone pin is rarely what you want.
 			if (net.points.length < 2) continue;
-			chosen.push(net.points[0]);
+			const pin = net.pins[0];
+			chosen.push(pin ? `pin:${pin.instance.id}:${pin.pin.name}` : net.points[0]);
 		}
 		this.probes = chosen;
 	}

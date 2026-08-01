@@ -55,7 +55,13 @@ export function createSelectTool(): Tool {
 
 	function pinUnder(pointer: EditorPointer, ctx: ToolContext): SnapTarget | null {
 		const found = ctx.snap.nearestPoint(pointer.world, ctx.tolerance * PIN_REACH);
-		return found && found.kind === 'pin' ? found : null;
+		if (!found || found.kind !== 'pin') return null;
+		// A pin belonging to something already selected is a handle for moving it,
+		// not for starting a wire. Without this a small symbol — a ground is twenty
+		// units tall with its pin on the top edge — has most of its body inside pin
+		// reach and can never be dragged at all.
+		if (found.ownerId && app.selection.includes(found.ownerId)) return null;
+		return found;
 	}
 
 	function wirePath(to: Point, ctx: ToolContext): Point[] {
