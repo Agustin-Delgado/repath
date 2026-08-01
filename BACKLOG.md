@@ -179,5 +179,6 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Canvas rewritten as an editor engine: layers, spatial index, snapping, tools.
 - Live overlay: voltage as colour, current animated from the simulation.
 - Orthogonal routing that avoids obstacles; wires as polylines; drag-from-pin to
-  connect; moving a component keeps its wires.
+  connect; moving a component or a wire keeps every connection, with the drag
+  preview and the released result computed by the same code.
 - Circuits shareable as a link; copy, cut, paste, duplicate.

@@ -25,7 +25,7 @@ import {
 } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
-import { wireEnd, wireStart, type Point, type Wire } from '../model';
+import type { Point } from '../model';
 import { routeWire } from '../route';
 import type { SchematicItem } from '../scene';
 import { netAt } from './shared';
@@ -39,10 +39,13 @@ const PIN_REACH = 1.1;
 export function createSelectTool(): Tool {
 	let mode: Mode = 'idle';
 	let marquee: Rect | null = null;
-	let anchor: Vec2 = { x: 0, y: 0 };
+	/** Where the drag started, in world units. Offsets are measured from here. */
+	let origin: Vec2 = { x: 0, y: 0 };
 	let moved = false;
 	let pressedId: string | null = null;
 	let pressedWasSelected = false;
+	/** Pin pairs the current offset would join, for the overlay to show. */
+	let pendingJoin: Vec2 | null = null;
 
 	/** Pin under the cursor, if any — the thing a drag would wire from. */
 	let hoveredPin: SnapTarget | null = null;
@@ -58,6 +61,62 @@ export function createSelectTool(): Tool {
 	function wirePath(to: Point, ctx: ToolContext): Point[] {
 		if (!wireFrom) return [];
 		return routeWire(app.schematic, wireFrom, to, { grid: ctx.gridSize });
+	}
+
+	/**
+	 * The offset a drag should actually apply.
+	 *
+	 * If the raw offset would bring a moving pin near a stationary one, it is
+	 * nudged so they land on top of each other exactly. Dragging a part until it
+	 * touches another is how people connect two things without a wire, and it has
+	 * to snap or it never quite lines up.
+	 */
+	function joinAdjusted(raw: Vec2, ctx: ToolContext): { dx: number; dy: number } {
+		const moving = new Set(app.selection);
+		let best: { dx: number; dy: number; distance: number } | null = null;
+
+		for (const pin of app.movingPinsAt(raw.x, raw.y)) {
+			const target = ctx.snap.nearestPoint(pin, ctx.tolerance * 1.2, (p) =>
+				p.kind !== 'pin' || (p.ownerId !== undefined && moving.has(p.ownerId))
+			);
+			if (!target) continue;
+			const distance = Math.hypot(target.x - pin.x, target.y - pin.y);
+			if (!best || distance < best.distance) {
+				best = { dx: raw.x + (target.x - pin.x), dy: raw.y + (target.y - pin.y), distance };
+			}
+		}
+
+		if (!best) {
+			pendingJoin = null;
+			return { dx: raw.x, dy: raw.y };
+		}
+		// Remember where the join will happen so the overlay can point at it.
+		const joined = app.movingPinsAt(best.dx, best.dy);
+		pendingJoin = joined.length > 0 ? joined[0] : null;
+		for (const pin of joined) {
+			const target = ctx.snap.nearestPoint(pin, 0.5, (p) =>
+				p.kind !== 'pin' || (p.ownerId !== undefined && moving.has(p.ownerId))
+			);
+			if (target) {
+				pendingJoin = { x: target.x, y: target.y };
+				break;
+			}
+		}
+		return { dx: best.dx, dy: best.dy };
+	}
+
+	/** Routing used both while dragging and on release — there is only one. */
+	function routeDragged(ctx: ToolContext) {
+		const moving = new Set(app.selection);
+		return (from: Point, to: Point, wireId: string) =>
+			routeWire(app.schematic, from, to, {
+				grid: ctx.gridSize,
+				// The parts on the move are not obstacles for the wire chasing them,
+				// or the route would have to detour around the very pin it is
+				// heading for.
+				ignoreInstances: moving,
+				ignoreWires: new Set([wireId])
+			});
 	}
 
 	return {
@@ -102,8 +161,9 @@ export function createSelectTool(): Tool {
 				}
 
 				mode = 'move';
-				anchor = snapPoint(pointer.world, ctx.gridSize);
+				origin = snapPoint(pointer.world, ctx.gridSize);
 				moved = false;
+				pendingJoin = null;
 				app.beginMove();
 				ctx.setCursor('grabbing');
 			} else {
@@ -124,14 +184,13 @@ export function createSelectTool(): Tool {
 
 			if (mode === 'move') {
 				const now = snapPoint(pointer.world, ctx.gridSize);
-				const dx = now.x - anchor.x;
-				const dy = now.y - anchor.y;
-				if (dx || dy) {
-					app.moveSelection(dx, dy);
-					anchor = now;
-					moved = true;
-					ctx.invalidate('schematic', 'overlay');
-				}
+				const raw = { x: now.x - origin.x, y: now.y - origin.y };
+				const offset = joinAdjusted(raw, ctx);
+				if (offset.dx || offset.dy) moved = true;
+				// Recomputed from the snapshot with the real router, so what is on
+				// screen mid-drag is exactly what releasing will leave behind.
+				app.applyMove(offset.dx, offset.dy, routeDragged(ctx));
+				ctx.invalidate('schematic', 'overlay');
 				return;
 			}
 
@@ -164,8 +223,9 @@ export function createSelectTool(): Tool {
 				wireFrom = null;
 				wireTo = null;
 			} else if (mode === 'move') {
-				// Re-route what came along for the ride, now that it has stopped.
-				app.endMove((wire) => reroute(wire, ctx));
+				// Nothing to settle: the geometry on screen is already the answer.
+				app.endMove();
+				pendingJoin = null;
 				if (!moved && pressedId && pressedWasSelected && !pointer.shift) {
 					// A click on an already-selected item narrows the selection to it,
 					// so one component can be picked out of a group.
@@ -239,6 +299,13 @@ export function createSelectTool(): Tool {
 				);
 			}
 
+			if (pendingJoin) {
+				// Ring the pin the drag is about to land on, so the join is deliberate
+				// rather than a surprise.
+				painter.dot(pendingJoin, 8, { color: theme.accent, alpha: 0.25 });
+				painter.dot(pendingJoin, 3.5, { color: theme.accent });
+			}
+
 			if (mode === 'wire' && wireFrom && wireTo) {
 				painter.polyline(wirePath({ x: wireTo.x, y: wireTo.y }, ctx), {
 					color: theme.accent,
@@ -251,22 +318,6 @@ export function createSelectTool(): Tool {
 			}
 		}
 	};
-}
-
-/**
- * Re-route a wire that was dragged along with a component.
- *
- * Only the end that moved is rebuilt; the fixed end stays put, which is what
- * keeps the rest of the circuit from rearranging itself around one nudge.
- */
-function reroute(wire: Wire, ctx: ToolContext): Point[] | null {
-	const from = wireStart(wire);
-	const to = wireEnd(wire);
-	if (from.x === to.x && from.y === to.y) return null;
-	return routeWire(app.schematic, from, to, {
-		grid: ctx.gridSize,
-		ignoreWires: new Set([wire.id])
-	});
 }
 
 /** Exposed for tests: the item a click at `point` would select. */

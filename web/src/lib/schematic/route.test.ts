@@ -131,6 +131,35 @@ describe('routeWire', () => {
 		expect(isOrthogonal(path)).toBe(true);
 	});
 
+	it('does not staircase across open space', () => {
+		// The classic A* failure: many equally short paths exist, and without a
+		// steep turn penalty the search returns whichever zigzag it expanded first.
+		const path = routeWire(empty, { x: 0, y: 0 }, { x: 200, y: 150 }, { grid: GRID });
+		expect(path).toHaveLength(3);
+	});
+
+	it('stays tidy in a crowded schematic', () => {
+		// Something like a real circuit: parts and wires between the endpoints.
+		const schematic: Schematic = {
+			instances: [
+				place('resistor', 'R1', 150, 100),
+				place('capacitor', 'C1', 250, 200, 90),
+				place('npn', 'Q1', 350, 120)
+			],
+			wires: [
+				wire({ x: 0, y: 60 }, { x: 400, y: 60 }),
+				wire({ x: 250, y: 240 }, { x: 250, y: 320 })
+			]
+		};
+		const path = routeWire(schematic, { x: 40, y: 300 }, { x: 420, y: 180 }, { grid: GRID });
+
+		expect(isOrthogonal(path)).toBe(true);
+		// A handful of corners is a route; a dozen is a tangle.
+		expect(path.length).toBeLessThanOrEqual(5);
+		// And it should not wander far: the Manhattan distance is 500.
+		expect(length(path)).toBeLessThan(500 * 1.6);
+	});
+
 	it('collapses to a single point when the ends coincide', () => {
 		const path = routeWire(empty, { x: 50, y: 50 }, { x: 50, y: 50 }, { grid: GRID });
 		expect(path).toEqual([{ x: 50, y: 50 }]);

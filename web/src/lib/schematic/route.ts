@@ -33,17 +33,34 @@ export interface RouteOptions {
 const COST = {
 	/** Per grid step travelled. */
 	step: 10,
-	/** Each corner. Enough to prefer one bend over three, not enough to detour far. */
-	turn: 12,
+	/**
+	 * Each corner.
+	 *
+	 * Deliberately steep — worth about four steps of detour. A cheap turn lets the
+	 * search staircase its way across the page, which is technically the shortest
+	 * path and reads as a tangle.
+	 */
+	turn: 42,
 	/** Passing through a point where a wire crosses this cell perpendicular. */
 	cross: 30,
 	/** Travelling along a cell an existing wire already occupies in the same axis. */
-	overlap: 260,
+	overlap: 240,
 	/** Passing over a component's body. Expensive, but not impossible. */
 	body: 400,
 	/** Landing on a pin that is not the destination. */
-	foreignPin: 600
+	foreignPin: 500
 };
+
+/**
+ * Slight over-weighting of the heuristic.
+ *
+ * Among the many equally short orthogonal paths between two points, plain A*
+ * picks whichever it happened to expand first, which is often a staircase.
+ * Leaning on the heuristic makes it commit to heading towards the goal, which
+ * produces the straight-then-turn shape a person would draw. The cost is that
+ * the route can be a few percent longer than optimal, which nobody can see.
+ */
+const GREED = 1.06;
 
 /** Blocked and discouraged cells, built once per route. */
 interface Obstacles {
@@ -174,7 +191,14 @@ export function routeWire(
 	}
 
 	const open: Node[] = [
-		{ x: start.x, y: start.y, axis: -1, cost: 0, estimate: heuristic(start.x, start.y, goal.x, goal.y), parent: null }
+		{
+			x: start.x,
+			y: start.y,
+			axis: -1,
+			cost: 0,
+			estimate: heuristic(start.x, start.y, goal.x, goal.y) * GREED,
+			parent: null
+		}
 	];
 	const best = new Map<number, number>();
 	const key = (x: number, y: number, axis: number) => cell(x, y) * 4 + (axis + 1);
@@ -238,7 +262,7 @@ export function routeWire(
 				y: ny,
 				axis,
 				cost,
-				estimate: cost + heuristic(nx, ny, goal.x, goal.y),
+				estimate: cost + heuristic(nx, ny, goal.x, goal.y) * GREED,
 				parent: node
 			});
 		}

@@ -16,6 +16,7 @@ import {
 	normaliseWire,
 	pinPosition,
 	pointKey,
+	rotatePoint,
 	simplifyPath,
 	snap,
 	type Instance,
@@ -54,26 +55,17 @@ export const TRACE_COLOURS = [
 let idCounter = 0;
 const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`;
 
-/**
- * Move one end of a wire to a new place, keeping the rest of it and staying
- * orthogonal.
- *
- * Only the last leg is rebuilt, so dragging a component does not rearrange a
- * carefully routed wire three corners away from it.
- */
-function reshapeEnd(points: readonly Point[], atStart: boolean, to: Point): Point[] {
-	const path = points.map((p) => ({ x: p.x, y: p.y }));
-	if (path.length < 2) return [{ x: to.x, y: to.y }];
+/** How a tool asks for a path between two points. */
+export type RouteBetween = (from: Point, to: Point, wireId: string) => Point[];
 
-	if (atStart) {
-		const neighbour = path[1];
-		const rebuilt = elbow(to, neighbour, false);
-		return simplifyPath([...rebuilt.slice(0, -1), ...path.slice(1)]);
-	}
-
-	const neighbour = path[path.length - 2];
-	const rebuilt = elbow(neighbour, to, false);
-	return simplifyPath([...path.slice(0, -1), ...rebuilt.slice(1)]);
+/** Everything a drag needs to recompute itself from scratch on each frame. */
+interface MoveOrigin {
+	instances: Map<string, Point>;
+	wires: Map<string, Point[]>;
+	/** Wires left in place, with the end indices riding along with the selection. */
+	followers: Map<string, Set<number>>;
+	/** Wires being dragged, with the end indices that must stay plugged in. */
+	anchors: Map<string, Set<number>>;
 }
 
 const HISTORY_LIMIT = 100;
@@ -140,8 +132,8 @@ class AppState {
 	private past: string[] = [];
 	private future: string[] = [];
 	private clipboard: { instances: Instance[]; wires: Wire[] } | null = null;
-	/** Wire ends stuck to the selection for the duration of a drag. */
-	private dragAttachments = new Map<string, Set<number>>();
+	/** Snapshot taken at the start of a drag; null when nothing is being dragged. */
+	private moveOrigin: MoveOrigin | null = null;
 	private dragStarted = false;
 
 	compiled = $derived(compileSchematic(this.schematic));
@@ -258,101 +250,177 @@ class AppState {
 	}
 
 	/**
-	 * Work out which wire ends are stuck to the selection, before it moves.
+	 * Snapshot everything a drag will touch, before it moves.
 	 *
-	 * Call once at the start of a drag. Without this, moving a component leaves
-	 * its wires behind — which is what made dragging feel like tearing the circuit
-	 * apart rather than rearranging it.
+	 * The whole gesture is then a pure function of how far the pointer has
+	 * travelled, recomputed from this snapshot each frame. That is what makes
+	 * dragging and releasing behave identically: there is only one code path, so
+	 * the shape under the cursor is the shape that lands.
 	 */
 	beginMove(): void {
 		const chosen = new Set(this.selection);
-		const attached = new Map<string, Set<number>>();
 
-		// Every point currently occupied by a pin of something that is moving.
+		// Pins are what hold a wire end in place. Kept apart from wire ends on
+		// purpose: two wires meeting on the same moving pin should both follow it,
+		// so they must not count as anchoring each other.
+		const stationaryPins = new Set<string>();
 		const movingPins = new Set<string>();
+
 		for (const instance of this.schematic.instances) {
-			if (!chosen.has(instance.id)) continue;
+			const moving = chosen.has(instance.id);
 			for (const pin of definitionOf(instance.kind).pins) {
 				const at = pinPosition(instance, pin);
-				movingPins.add(pointKey(at.x, at.y));
+				(moving ? movingPins : stationaryPins).add(pointKey(at.x, at.y));
 			}
 		}
 
+		// A wire being dragged also stays plugged into other wires it meets.
+		const stationaryWireEnds = new Set<string>();
 		for (const wire of this.schematic.wires) {
 			if (chosen.has(wire.id)) continue;
-			const ends = new Set<number>();
 			for (const index of [0, wire.points.length - 1]) {
 				const p = wire.points[index];
-				if (movingPins.has(pointKey(p.x, p.y))) ends.add(index);
+				stationaryWireEnds.add(pointKey(p.x, p.y));
 			}
-			if (ends.size > 0) attached.set(wire.id, ends);
 		}
 
-		this.dragAttachments = attached;
+		const followers = new Map<string, Set<number>>();
+		const anchors = new Map<string, Set<number>>();
+
+		for (const wire of this.schematic.wires) {
+			const ends = [0, wire.points.length - 1];
+			if (chosen.has(wire.id)) {
+				// A wire being dragged keeps hold of whatever it is plugged into.
+				const held = new Set<number>();
+				for (const index of ends) {
+					const key = pointKey(wire.points[index].x, wire.points[index].y);
+					if (stationaryPins.has(key) || stationaryWireEnds.has(key)) held.add(index);
+				}
+				if (held.size > 0) anchors.set(wire.id, held);
+				continue;
+			}
+
+			const following = new Set<number>();
+			for (const index of ends) {
+				const key = pointKey(wire.points[index].x, wire.points[index].y);
+				// Follows only if the point is leaving entirely. A point shared with a
+				// stationary pin stays put, or moving one of two parts joined
+				// pin-to-pin would take the wire off the one left behind.
+				if (movingPins.has(key) && !stationaryPins.has(key)) following.add(index);
+			}
+			if (following.size > 0) followers.set(wire.id, following);
+		}
+
+		this.moveOrigin = {
+			instances: new Map(
+				this.schematic.instances
+					.filter((i) => chosen.has(i.id))
+					.map((i) => [i.id, { x: i.x, y: i.y }] as const)
+			),
+			wires: new Map(
+				this.schematic.wires
+					.filter((w) => chosen.has(w.id) || followers.has(w.id))
+					.map((w) => [w.id, w.points.map((p) => ({ x: p.x, y: p.y }))] as const)
+			),
+			followers,
+			anchors
+		};
 		this.dragStarted = false;
 	}
 
-	/** Move the selection, dragging any wire ends attached to it along. */
-	moveSelection(dx: number, dy: number): void {
-		if (dx === 0 && dy === 0) return;
+	/**
+	 * Place the selection at `dx, dy` from where the drag began.
+	 *
+	 * Absolute rather than incremental: recomputing from the snapshot means the
+	 * result cannot drift over a long gesture, and the same call with the final
+	 * offset is what commits — so there is no "it tidied itself up on release".
+	 */
+	applyMove(dx: number, dy: number, route: RouteBetween): void {
+		const origin = this.moveOrigin;
+		if (!origin) return;
+		if (dx === 0 && dy === 0 && !this.dragStarted) return;
+
 		if (!this.dragStarted) {
 			// One history entry per gesture, taken on the first actual movement.
 			this.checkpoint();
 			this.dragStarted = true;
 		}
 
-		const chosen = new Set(this.selection);
 		for (const instance of this.schematic.instances) {
-			if (chosen.has(instance.id)) {
-				instance.x += dx;
-				instance.y += dy;
-			}
+			const from = origin.instances.get(instance.id);
+			if (!from) continue;
+			instance.x = from.x + dx;
+			instance.y = from.y + dy;
 		}
 
 		for (const wire of this.schematic.wires) {
-			if (chosen.has(wire.id)) {
-				for (const p of wire.points) {
-					p.x += dx;
-					p.y += dy;
+			const from = origin.wires.get(wire.id);
+			if (!from) continue;
+
+			const held = origin.anchors.get(wire.id);
+			const following = origin.followers.get(wire.id);
+
+			if (held) {
+				// A dragged wire: the body moves, plugged-in ends stay, and the wire
+				// grows a leg to reach back to them.
+				let path = from.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+				if (held.has(from.length - 1)) {
+					const anchor = from[from.length - 1];
+					path = [...path, ...elbow(path[path.length - 1], anchor).slice(1)];
+				}
+				if (held.has(0)) {
+					const anchor = from[0];
+					path = [...elbow(anchor, path[0]).slice(0, -1), ...path];
+				}
+				wire.points = simplifyPath(path);
+				continue;
+			}
+
+			if (following) {
+				// A wire left in place with one end riding along: re-route it.
+				const moved = new Set(following);
+				const ends = {
+					start: moved.has(0) ? { x: from[0].x + dx, y: from[0].y + dy } : from[0],
+					end: moved.has(from.length - 1)
+						? { x: from[from.length - 1].x + dx, y: from[from.length - 1].y + dy }
+						: from[from.length - 1]
+				};
+				if (moved.size === 2) {
+					wire.points = from.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+				} else {
+					wire.points = simplifyPath(route(ends.start, ends.end, wire.id));
 				}
 				continue;
 			}
 
-			const ends = this.dragAttachments.get(wire.id);
-			if (!ends) continue;
-
-			// Both ends stuck to the same moving group: translate, do not re-route.
-			if (ends.size === 2) {
-				for (const p of wire.points) {
-					p.x += dx;
-					p.y += dy;
-				}
-				continue;
-			}
-
-			const index = [...ends][0];
-			const atStart = index === 0;
-			const moved = wire.points[atStart ? 0 : wire.points.length - 1];
-			wire.points = reshapeEnd(wire.points, atStart, { x: moved.x + dx, y: moved.y + dy });
+			wire.points = from.map((p) => ({ x: p.x + dx, y: p.y + dy }));
 		}
 	}
 
-	/**
-	 * Finish a drag by re-routing the wires that were dragged along.
-	 *
-	 * The cheap elbow used during the gesture keeps the feedback instant; the real
-	 * router runs once, at the end, where a few milliseconds do not matter.
-	 */
-	endMove(route?: (wire: Wire) => Point[] | null): void {
-		if (this.dragStarted && route) {
-			for (const wire of this.schematic.wires) {
-				if (!this.dragAttachments.has(wire.id)) continue;
-				const path = route(wire);
-				if (path && path.length >= 2) wire.points = simplifyPath(path);
+	/** Release the snapshot. The geometry is already final. */
+	endMove(): void {
+		this.moveOrigin = null;
+		this.dragStarted = false;
+	}
+
+	/** Pin positions of the components a drag is carrying, at a given offset. */
+	movingPinsAt(dx: number, dy: number): Point[] {
+		const origin = this.moveOrigin;
+		if (!origin) return [];
+		const out: Point[] = [];
+		for (const instance of this.schematic.instances) {
+			const from = origin.instances.get(instance.id);
+			if (!from) continue;
+			for (const pin of definitionOf(instance.kind).pins) {
+				const at = rotatePoint(pin.x, pin.y, instance.rotation);
+				out.push({ x: from.x + dx + at.x, y: from.y + dy + at.y });
 			}
 		}
-		this.dragAttachments = new Map();
-		this.dragStarted = false;
+		return out;
+	}
+
+	get isMoving(): boolean {
+		return this.moveOrigin !== null;
 	}
 
 	setParam(id: string, key: string, value: number | string): void {

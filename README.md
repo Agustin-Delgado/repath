@@ -240,9 +240,15 @@ the same values are on the scope and in the readout.
 | Plot a net | tick it in the Signals list |
 
 Wires and pins snap: aim near a pin and the endpoint lands on it exactly, with the
-pin's name shown so you can see what you are about to connect to. Hovering
-highlights the whole net, not just the segment under the cursor. Moving a
-component keeps everything wired to it wired to it.
+pin's name shown so you can see what you are about to connect to. Dragging a part
+until one of its pins is near another's snaps them together, so two components can
+be joined without a wire between them. Hovering highlights the whole net, not just
+the segment under the cursor.
+
+Moving keeps connections. A dragged component brings its wires along and they
+re-route; a dragged *wire* stays plugged into whatever it was plugged into and
+grows legs to reach. The shape you see mid-drag is the shape you get on release —
+the same router runs in both cases, so nothing rearranges itself when you let go.
 
 Values accept engineering notation: `4k7`, `4.7k`, `10u`, `1meg`, `100n`.
 
