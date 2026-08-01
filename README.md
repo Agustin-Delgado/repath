@@ -17,8 +17,11 @@ itself.
 
 ## Status
 
-Early. The engine is solid and tested against circuits with known closed-form
-answers; the editor covers the basics. See [Roadmap](#roadmap) for what is missing.
+Usable, and honest about what it does. The engine handles DC, transient, AC and
+mixed-signal, and every claim in this file is covered by a test that checks the
+answer against something derived independently. What is not here yet — subcircuits,
+SPICE model import, a sparse solver — is in the [Roadmap](#roadmap) rather than
+half-implemented.
 
 ## Running it
 

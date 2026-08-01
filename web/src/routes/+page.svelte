@@ -117,7 +117,7 @@
 
 			<select
 				value={app.analysis}
-				onchange={(e) => (app.analysis = e.currentTarget.value as 'transient' | 'frequency')}
+				onchange={(e) => app.setAnalysis(e.currentTarget.value as 'transient' | 'frequency')}
 				aria-label="Analysis"
 				title="Which analysis Run performs"
 			>

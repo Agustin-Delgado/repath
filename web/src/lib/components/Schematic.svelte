@@ -180,7 +180,10 @@
 				else app.playbackTime = next;
 			}
 
-			if (app.showVoltage || app.showCurrent) {
+			// The live overlay belongs to the transient result. Leaving it running
+			// during a frequency sweep would show the state of a run the user is no
+			// longer looking at, which is worse than showing nothing.
+			if (app.analysis === 'transient' && (app.showVoltage || app.showCurrent)) {
 				const index = sampleIndexAt(context.run.time, app.playbackTime);
 				dynamicView = {
 					schematic: app.schematic,

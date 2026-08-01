@@ -75,6 +75,11 @@ class AppState {
 
 	/** Which analysis the Run button performs. */
 	analysis = $state<'transient' | 'frequency'>('transient');
+	/** Playback belongs to the transient result; stop it when leaving that mode. */
+	setAnalysis(mode: 'transient' | 'frequency'): void {
+		if (mode === 'frequency') this.playing = false;
+		this.analysis = mode;
+	}
 	acStart = $state(1);
 	acStop = $state(1e6);
 	acResult = $state<FrequencyRun | null>(null);
