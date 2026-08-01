@@ -84,7 +84,9 @@
 		</div>
 
 		<div class="actions">
-			<button onclick={() => app.rotateSelection()}>Rotate <kbd>R</kbd></button>
+			<button onclick={() => app.rotateSelection()} title="Turn a quarter turn; wires follow"
+				>Rotate <kbd>R</kbd></button
+			>
 			<button class="danger" onclick={() => app.deleteSelection()}>Delete <kbd>Del</kbd></button>
 		</div>
 	{/if}

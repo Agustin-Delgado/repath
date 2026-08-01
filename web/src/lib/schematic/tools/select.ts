@@ -74,9 +74,14 @@ export function createSelectTool(): Tool {
 	function joinAdjusted(raw: Vec2, ctx: ToolContext): { dx: number; dy: number } {
 		const moving = new Set(app.selection);
 		let best: { dx: number; dy: number; distance: number } | null = null;
+		// The offset is quantised to the grid before it gets here, so the nearest a
+		// drag can come without landing exactly is one whole grid step. A radius
+		// smaller than that can only ever catch the case that needed no help, which
+		// is why this used to look like it did nothing at all.
+		const radius = Math.max(ctx.tolerance * 1.2, ctx.gridSize * 1.6);
 
 		for (const pin of app.movingPinsAt(raw.x, raw.y)) {
-			const target = ctx.snap.nearestPoint(pin, ctx.tolerance * 1.2, (p) =>
+			const target = ctx.snap.nearestPoint(pin, radius, (p) =>
 				p.kind !== 'pin' || (p.ownerId !== undefined && moving.has(p.ownerId))
 			);
 			if (!target) continue;
@@ -263,7 +268,9 @@ export function createSelectTool(): Tool {
 					return true;
 				case 'r':
 				case 'R':
-					app.rotateSelection();
+					// Rotation moves pins, so the wires plugged into them re-route
+					// through the same router a drag would use.
+					app.rotateSelection(routeDragged(ctx));
 					ctx.invalidate();
 					return true;
 				case 'a':

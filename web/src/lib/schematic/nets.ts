@@ -11,6 +11,7 @@ import {
 	definitionOf,
 	pinPosition,
 	pointKey,
+	simplifyPath,
 	wireSegments,
 	type Instance,
 	type PinDef,
@@ -174,6 +175,71 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 	});
 
 	return { nets, netOfPoint, netOfPin };
+}
+
+/**
+ * Join wires that meet end to end with nothing else at the joint.
+ *
+ * Two wires touching at a bare point are one conductor drawn in two pieces, and
+ * keeping them apart has a real cost: the joint becomes a fixed endpoint that
+ * re-routing has to honour. Move a component and the wire is forced back to a
+ * corner that no longer means anything, producing a detour that looks like the
+ * router being stupid when it was only being obedient.
+ *
+ * Conservative on purpose — a point with a pin on it, or where three ends meet,
+ * is a real junction and is left alone. The drawn shape never changes; only the
+ * number of wires does.
+ */
+export function mergeWireChains(schematic: Schematic): Wire[] {
+	const pins = new Set<string>();
+	for (const instance of schematic.instances) {
+		for (const pin of definitionOf(instance.kind).pins) {
+			const at = pinPosition(instance, pin);
+			pins.add(pointKey(at.x, at.y));
+		}
+	}
+
+	const wires: Wire[] = schematic.wires.map((w) => ({
+		id: w.id,
+		points: w.points.map((p) => ({ x: p.x, y: p.y }))
+	}));
+
+	// Repeat until nothing more joins: a chain of four pieces takes three passes.
+	for (let guard = 0; guard < wires.length + 1; guard++) {
+		const ends = new Map<string, Array<{ index: number; atStart: boolean }>>();
+		wires.forEach((wire, index) => {
+			for (const atStart of [true, false]) {
+				const p = atStart ? wire.points[0] : wire.points[wire.points.length - 1];
+				const key = pointKey(p.x, p.y);
+				const list = ends.get(key);
+				if (list) list.push({ index, atStart });
+				else ends.set(key, [{ index, atStart }]);
+			}
+		});
+
+		let joined = false;
+		for (const [key, list] of ends) {
+			if (pins.has(key) || list.length !== 2) continue;
+			const [a, b] = list;
+			// A wire whose own two ends meet is a loop, not a chain.
+			if (a.index === b.index) continue;
+
+			const first = wires[a.index];
+			const second = wires[b.index];
+			// Orient both so the shared point is where they meet in the middle.
+			const head = a.atStart ? [...first.points].reverse() : first.points;
+			const tail = b.atStart ? second.points : [...second.points].reverse();
+			const combined = simplifyPath([...head, ...tail.slice(1)]);
+
+			wires[a.index] = { id: first.id, points: combined };
+			wires.splice(b.index, 1);
+			joined = true;
+			break;
+		}
+		if (!joined) break;
+	}
+
+	return wires;
 }
 
 /**

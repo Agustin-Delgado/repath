@@ -27,6 +27,7 @@ import {
 } from './schematic/model';
 import { elbow } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
+import { mergeWireChains } from './schematic/nets';
 
 export type Tool = { mode: 'select' } | { mode: 'wire' } | { mode: 'place'; kind: string };
 
@@ -228,6 +229,19 @@ class AppState {
 		if (path.length < 2) return;
 		this.checkpoint();
 		this.schematic.wires.push({ id: freshId(), points: path });
+		this.tidyWires();
+	}
+
+	/**
+	 * Fold wires that meet end to end back into single runs.
+	 *
+	 * Called after anything that changes wire structure. Never during a drag: the
+	 * shape does not change, but the identities do, and the gesture is holding a
+	 * snapshot keyed by them.
+	 */
+	private tidyWires(): void {
+		const merged = mergeWireChains(this.schematic);
+		if (merged.length !== this.schematic.wires.length) this.schematic.wires = merged;
 	}
 
 	deleteSelection(): void {
@@ -237,16 +251,70 @@ class AppState {
 		this.schematic.instances = this.schematic.instances.filter((i) => !doomed.has(i.id));
 		this.schematic.wires = this.schematic.wires.filter((w) => !doomed.has(w.id));
 		this.selection = [];
+		// Removing a component can leave two wires meeting at a bare point.
+		this.tidyWires();
 	}
 
-	rotateSelection(): void {
+	/**
+	 * Turn the selection a quarter turn, bringing its wires along.
+	 *
+	 * Rotation moves pins just as surely as dragging does, so it has to honour the
+	 * same rule: a wire plugged into a pin stays plugged into it. Unlike a drag,
+	 * every pin moves somewhere different, so the mapping is per pin rather than
+	 * one shared offset.
+	 */
+	rotateSelection(route?: RouteBetween): void {
 		if (this.selection.length === 0) return;
+		const chosen = new Set(this.selection);
+		const rotating = this.schematic.instances.filter((i) => chosen.has(i.id));
+		if (rotating.length === 0) return;
+
 		this.checkpoint();
+
+		const stationaryPins = new Set<string>();
 		for (const instance of this.schematic.instances) {
-			if (this.selection.includes(instance.id)) {
-				instance.rotation = ((instance.rotation + 90) % 360) as Rotation;
+			if (chosen.has(instance.id)) continue;
+			for (const pin of definitionOf(instance.kind).pins) {
+				const at = pinPosition(instance, pin);
+				stationaryPins.add(pointKey(at.x, at.y));
 			}
 		}
+
+		// Where each pin was, and where it is about to be.
+		const moved = new Map<string, Point>();
+		for (const instance of rotating) {
+			const before = definitionOf(instance.kind).pins.map((pin) => pinPosition(instance, pin));
+			instance.rotation = ((instance.rotation + 90) % 360) as Rotation;
+			const after = definitionOf(instance.kind).pins.map((pin) => pinPosition(instance, pin));
+			before.forEach((from, index) => {
+				const key = pointKey(from.x, from.y);
+				// A point also held by something stationary keeps its wire.
+				if (!stationaryPins.has(key)) moved.set(key, after[index]);
+			});
+		}
+
+		for (const wire of this.schematic.wires) {
+			if (chosen.has(wire.id)) continue;
+			const ends = [0, wire.points.length - 1];
+			let changed = false;
+			const points = wire.points.map((p) => ({ x: p.x, y: p.y }));
+
+			for (const index of ends) {
+				const target = moved.get(pointKey(points[index].x, points[index].y));
+				if (!target) continue;
+				points[index] = { x: target.x, y: target.y };
+				changed = true;
+			}
+			if (!changed) continue;
+
+			const from = points[0];
+			const to = points[points.length - 1];
+			wire.points = route
+				? simplifyPath(route(from, to, wire.id))
+				: simplifyPath(elbow(from, to));
+		}
+
+		this.tidyWires();
 	}
 
 	/**
@@ -399,8 +467,12 @@ class AppState {
 
 	/** Release the snapshot. The geometry is already final. */
 	endMove(): void {
+		const changed = this.dragStarted;
 		this.moveOrigin = null;
 		this.dragStarted = false;
+		// Merging only ever removes a joint, never moves a point, so nothing on
+		// screen shifts when this runs.
+		if (changed) this.tidyWires();
 	}
 
 	/** Pin positions of the components a drag is carrying, at a given offset. */
@@ -563,6 +635,7 @@ class AppState {
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = example.build();
+		this.tidyWires();
 		this.stopTime = example.stopTime;
 		this.exampleId = example.id;
 		// Each example arrives in whichever analysis actually shows it off — a
@@ -584,6 +657,7 @@ class AppState {
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = circuit.schematic;
+		this.tidyWires();
 		this.stopTime = circuit.stopTime;
 		this.exampleId = '';
 		this.selection = [];
@@ -626,6 +700,7 @@ class AppState {
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = { instances: parsed.schematic.instances, wires };
+		this.tidyWires();
 		this.stopTime = parsed.stopTime ?? 1e-3;
 		this.probes = parsed.probes ?? [];
 		this.selection = [];
