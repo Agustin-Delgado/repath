@@ -43,7 +43,15 @@ function build(parts: Placed[], wires: Array<[number, number, number, number]>):
 			rotation: p.rotation ?? 0,
 			params: { ...defaultParams(p.kind), ...(p.params ?? {}) }
 		})),
-		wires: wires.map(([x1, y1, x2, y2]) => ({ id: nextId(), x1, y1, x2, y2 }))
+		// Written as plain runs and stored as short polylines; connectivity joins
+		// them where their ends meet, exactly as if they had been drawn that way.
+		wires: wires.map(([x1, y1, x2, y2]) => ({
+			id: nextId(),
+			points: [
+				{ x: x1, y: y1 },
+				{ x: x2, y: y2 }
+			]
+		}))
 	};
 }
 

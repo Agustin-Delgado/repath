@@ -7,8 +7,18 @@
  * the convention every schematic editor uses and the one every engineer expects.
  */
 
-import { pinPosition, pointKey, type Instance, type PinDef, type Schematic } from './model';
-import { definitionOf } from './model';
+import {
+	definitionOf,
+	pinPosition,
+	pointKey,
+	wireSegments,
+	type Instance,
+	type PinDef,
+	type Point,
+	type Schematic,
+	type Wire,
+	type WireSegment
+} from './model';
 
 class DisjointSet {
 	private parent = new Map<string, string>();
@@ -65,15 +75,20 @@ export function pinKey(instanceId: string, pinName: string): string {
 	return `${instanceId}:${pinName}`;
 }
 
-/** Does `(x, y)` land strictly inside an axis-aligned wire, not on its ends? */
-function liesWithin(x: number, y: number, w: Schematic['wires'][number]): boolean {
-	if (w.x1 === w.x2 && x === w.x1) {
-		return y > Math.min(w.y1, w.y2) && y < Math.max(w.y1, w.y2);
+/** Does `(x, y)` land strictly inside an axis-aligned segment, not on its ends? */
+export function liesWithin(x: number, y: number, a: Point, b: Point): boolean {
+	if (a.x === b.x && x === a.x) {
+		return y > Math.min(a.y, b.y) && y < Math.max(a.y, b.y);
 	}
-	if (w.y1 === w.y2 && y === w.y1) {
-		return x > Math.min(w.x1, w.x2) && x < Math.max(w.x1, w.x2);
+	if (a.y === b.y && y === a.y) {
+		return x > Math.min(a.x, b.x) && x < Math.max(a.x, b.x);
 	}
 	return false;
+}
+
+/** Every segment of every wire, tagged with the wire it belongs to. */
+export function allSegments(schematic: Schematic): Array<WireSegment & { wire: Wire }> {
+	return schematic.wires.flatMap((wire) => wireSegments(wire).map((s) => ({ ...s, wire })));
 }
 
 export function buildConnectivity(schematic: Schematic): Connectivity {
@@ -88,29 +103,25 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 		}
 	}
 
-	for (const wire of schematic.wires) {
-		const a = pointKey(wire.x1, wire.y1);
-		const b = pointKey(wire.x2, wire.y2);
-		set.union(a, b);
+	// A wire is one conductor: every corner along it is the same net.
+	const segments = allSegments(schematic);
+	for (const segment of segments) {
+		set.union(pointKey(segment.a.x, segment.a.y), pointKey(segment.b.x, segment.b.y));
 	}
 
-	// Anything sitting mid-wire joins that wire: pins and other wires' endpoints.
-	const junctions: Array<{ x: number; y: number }> = [
+	// Anything sitting mid-wire joins that wire: pins and other wires' corners.
+	const touchPoints: Point[] = [
 		...pins.map((p) => ({ x: p.x, y: p.y })),
-		...schematic.wires.flatMap((w) => [
-			{ x: w.x1, y: w.y1 },
-			{ x: w.x2, y: w.y2 }
-		])
+		...schematic.wires.flatMap((w) => w.points)
 	];
-	for (const wire of schematic.wires) {
-		for (const point of junctions) {
-			if (liesWithin(point.x, point.y, wire)) {
-				set.union(pointKey(point.x, point.y), pointKey(wire.x1, wire.y1));
+	for (const segment of segments) {
+		for (const point of touchPoints) {
+			if (liesWithin(point.x, point.y, segment.a, segment.b)) {
+				set.union(pointKey(point.x, point.y), pointKey(segment.a.x, segment.a.y));
 			}
 		}
 	}
 
-	// Collect the roots into nets.
 	const byRoot = new Map<string, Net>();
 	const netOfPoint = new Map<string, number>();
 	const netOfPin = new Map<string, number>();
@@ -135,11 +146,10 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 
 	const allPoints = new Set<string>([
 		...pins.map((p) => pointKey(p.x, p.y)),
-		...schematic.wires.flatMap((w) => [pointKey(w.x1, w.y1), pointKey(w.x2, w.y2)])
+		...schematic.wires.flatMap((w) => w.points.map((p) => pointKey(p.x, p.y)))
 	]);
 	for (const key of allPoints) {
-		const net = ensure(key);
-		net.points.push(key);
+		ensure(key).points.push(key);
 	}
 
 	for (const ref of pins) {
@@ -167,39 +177,44 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 }
 
 /**
- * Points where three or more wire ends meet, which is where a junction dot has
- * to be drawn. Without the dot a reader cannot tell a T-junction from a crossing.
+ * Points where a dot has to be drawn, because otherwise a reader cannot tell a
+ * junction from a crossing.
+ *
+ * Counted in segment-ends: a bend in one wire has two and is not a junction,
+ * while a wire ending on another wire's corner has three and is.
  */
-export function junctionDots(schematic: Schematic): Array<{ x: number; y: number }> {
-	const counts = new Map<string, { x: number; y: number; n: number }>();
-	const bump = (x: number, y: number) => {
-		const key = pointKey(x, y);
-		const entry = counts.get(key) ?? { x, y, n: 0 };
-		entry.n += 1;
+export function junctionDots(schematic: Schematic): Point[] {
+	const counts = new Map<string, { point: Point; ends: number }>();
+	const bump = (point: Point) => {
+		const key = pointKey(point.x, point.y);
+		const entry = counts.get(key) ?? { point, ends: 0 };
+		entry.ends += 1;
 		counts.set(key, entry);
 	};
 
-	for (const w of schematic.wires) {
-		bump(w.x1, w.y1);
-		bump(w.x2, w.y2);
+	const segments = allSegments(schematic);
+	for (const segment of segments) {
+		bump(segment.a);
+		bump(segment.b);
 	}
-	// A wire ending on another wire's interior is always a junction.
+
+	// A wire that stops partway along another one is always a junction, however
+	// few ends meet there.
 	const midwire = new Set<string>();
-	for (const w of schematic.wires) {
-		for (const other of schematic.wires) {
-			if (other === w) continue;
-			for (const [x, y] of [
-				[other.x1, other.y1],
-				[other.x2, other.y2]
-			]) {
-				if (liesWithin(x, y, w)) midwire.add(pointKey(x, y));
+	for (const segment of segments) {
+		for (const wire of schematic.wires) {
+			if (wire === segment.wire) continue;
+			for (const point of wire.points) {
+				if (liesWithin(point.x, point.y, segment.a, segment.b)) {
+					midwire.add(pointKey(point.x, point.y));
+				}
 			}
 		}
 	}
 
-	const dots: Array<{ x: number; y: number }> = [];
+	const dots: Point[] = [];
 	for (const [key, entry] of counts) {
-		if (entry.n >= 3 || midwire.has(key)) dots.push({ x: entry.x, y: entry.y });
+		if (entry.ends >= 3 || midwire.has(key)) dots.push(entry.point);
 	}
 	return dots;
 }

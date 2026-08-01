@@ -8,7 +8,7 @@
 import { rectExpand, type Painter, type Rect, type Vec2 } from '$lib/canvas';
 import { advance, drawFlow, voltageColour, type AnimationState } from './animate';
 import type { FlowContext, FlowFrame } from './flow';
-import { pointKey, type Schematic } from './model';
+import { pointKey, wireSegments, wireStart, type Schematic } from './model';
 import { instancePins } from './scene';
 
 export interface DynamicView {
@@ -35,35 +35,38 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 
 	if (view.showVoltage) {
 		for (const wire of schematic.wires) {
-			if (!inside(wire.x1, wire.y1) && !inside(wire.x2, wire.y2)) continue;
-			const net = view.netOfPoint.get(pointKey(wire.x1, wire.y1));
+			const start = wireStart(wire);
+			const net = view.netOfPoint.get(pointKey(start.x, start.y));
 			if (net === undefined) continue;
 			const volts = frame.netVoltage.get(net);
 			if (volts === undefined) continue;
+			if (!wire.points.some((p) => inside(p.x, p.y))) continue;
 			// Drawn opaque over the static wire, replacing it rather than tinting.
-			painter.line(
-				{ x: wire.x1, y: wire.y1 },
-				{ x: wire.x2, y: wire.y2 },
-				{ color: voltageColour(volts, context.voltageRange), width: 2.5 }
-			);
+			painter.polyline(wire.points, {
+				color: voltageColour(volts, context.voltageRange),
+				width: 2.5
+			});
 		}
 	}
 
 	if (!view.showCurrent) return;
 
 	for (const wire of schematic.wires) {
-		if (!inside(wire.x1, wire.y1) && !inside(wire.x2, wire.y2)) continue;
-		const current = frame.wireCurrent.get(wire.id);
-		if (current === undefined) continue;
-		drawFlow(
-			painter,
-			{ x: wire.x1, y: wire.y1 },
-			{ x: wire.x2, y: wire.y2 },
-			current,
-			context.currentScale,
-			view.animation.phase.get(wire.id) ?? 0,
-			'#ffe9a8'
-		);
+		for (const segment of wireSegments(wire)) {
+			if (!inside(segment.a.x, segment.a.y) && !inside(segment.b.x, segment.b.y)) continue;
+			const id = `${wire.id}#${segment.index}`;
+			const current = frame.wireCurrent.get(id);
+			if (current === undefined) continue;
+			drawFlow(
+				painter,
+				segment.a,
+				segment.b,
+				current,
+				context.currentScale,
+				view.animation.phase.get(id) ?? 0,
+				'#ffe9a8'
+			);
+		}
 	}
 
 	// And through the devices themselves, so current does not appear to vanish

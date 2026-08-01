@@ -4,7 +4,7 @@
 
 import { distance, type ToolContext, type Vec2 } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
-import { pointKey } from '../model';
+import { pointKey, wireStart } from '../model';
 import type { SchematicItem } from '../scene';
 import { instancePins } from '../scene';
 
@@ -21,7 +21,8 @@ export function netAt(point: Vec2, ctx: ToolContext): number | null {
 
 	const data = item.data as SchematicItem;
 	if (data.type === 'wire') {
-		return netOfPoint.get(pointKey(data.wire.x1, data.wire.y1)) ?? null;
+		const start = wireStart(data.wire);
+		return netOfPoint.get(pointKey(start.x, start.y)) ?? null;
 	}
 
 	let nearest: { at: Vec2; d: number } | null = null;

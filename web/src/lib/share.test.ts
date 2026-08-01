@@ -24,7 +24,16 @@ function circuit(): SharedCircuit {
 				params: { resistance: 4700 }
 			}
 		],
-		wires: [{ id: 'w', x1: 100, y1: 170, x2: 170, y2: 170 }]
+		wires: [
+			{
+				id: 'w',
+				points: [
+					{ x: 100, y: 170 },
+					{ x: 170, y: 170 },
+					{ x: 170, y: 230 }
+				]
+			}
+		]
 	};
 	return { schematic, stopTime: 5e-3 };
 }
@@ -44,7 +53,12 @@ describe('circuit links', () => {
 		expect(source).toMatchObject({ kind: 'vsource', name: 'V1', x: 100, y: 200, rotation: 0 });
 		expect(source.params).toEqual({ waveform: 'sine', value: 5, frequency: 1000 });
 		expect(resistor).toMatchObject({ kind: 'resistor', name: 'R1', rotation: 90 });
-		expect(decoded.schematic.wires[0]).toMatchObject({ x1: 100, y1: 170, x2: 170, y2: 170 });
+		// Every corner survives, not just the ends.
+		expect(decoded.schematic.wires[0].points).toEqual([
+			{ x: 100, y: 170 },
+			{ x: 170, y: 170 },
+			{ x: 170, y: 230 }
+		]);
 		expect(decoded.schematic.instances[0].id).not.toBe('a');
 	});
 

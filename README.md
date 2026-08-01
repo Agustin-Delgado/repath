@@ -165,6 +165,20 @@ anywhere along an existing wire, then the grid. The radius is a screen-pixel
 tolerance converted to world units, so the feel stays constant across zoom levels
 instead of getting stickier as you zoom in.
 
+**Wires are routed connections, not loose segments.** A wire is a polyline —
+one thing you drew, one thing you select, move and delete. That is what lets two
+things work that otherwise cannot: dragging a component brings its wires with it
+and re-routes them, instead of leaving them behind holding nothing; and dragging
+off a pin draws a connection without switching tools, which is the gesture people
+reach for after dropping a part.
+
+**The router** is A* over the grid, with costs rather than walls almost
+everywhere. Only component bodies are real obstacles; crossing a wire, running
+alongside one, and turning a corner are all expensive but possible, in that order
+— running *along* an existing wire is worst, because two conductors on the same
+line cannot be told apart. A router that refuses when the ideal path is blocked is
+worse than one that produces a slightly ugly wire, so it always returns something.
+
 **Tools as state machines.** Select, wire and place are separate objects with a
 small protocol — pointer events in, overlay drawing out. None of them touches the
 DOM, which is what keeps the pointer handling from collapsing back into one
@@ -210,9 +224,9 @@ the same values are on the scope and in the readout.
 | | |
 |---|---|
 | Place a part | pick it in the palette, then click the canvas — `R` turns the ghost before you drop it |
+| Connect two things | drag from one pin to another — no tool switch needed |
 | Draw a wire | `W`, then drag; or click once per corner and finish on a pin |
-| Flip a wire's bend | `Space` while drawing |
-| Straight wire only | hold `Shift` while drawing |
+| Hand-route a wire | hold `Shift` while drawing to bypass the router |
 | Select | click, `Shift`-click to add, or drag a box around things |
 | Rotate / delete | `R` / `Del` |
 | Pan | middle-drag, or `Alt`-drag |
@@ -227,13 +241,16 @@ the same values are on the scope and in the readout.
 
 Wires and pins snap: aim near a pin and the endpoint lands on it exactly, with the
 pin's name shown so you can see what you are about to connect to. Hovering
-highlights the whole net, not just the segment under the cursor.
+highlights the whole net, not just the segment under the cursor. Moving a
+component keeps everything wired to it wired to it.
 
 Values accept engineering notation: `4k7`, `4.7k`, `10u`, `1meg`, `100n`.
 
 ## Roadmap
 
-Roughly in order of how much they would change what repath is good for:
+The full list — including every known limitation and what is deliberately out of
+scope — is in [BACKLOG.md](BACKLOG.md). The headlines, roughly in order of how
+much they would change what repath is good for:
 
 - **SPICE model import.** Reading `.model` and `.subckt` from a manufacturer's
   datasheet is the difference between a toy and a tool.

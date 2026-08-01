@@ -12,7 +12,14 @@
 
 import { rectExpand, type Painter, type Rect, type Vec2 } from '$lib/canvas';
 import { formatWithUnit } from '$lib/units';
-import { definitionOf, rotatePoint, type Instance, type Schematic, type Wire } from './model';
+import {
+	definitionOf,
+	rotatePoint,
+	wireStart,
+	type Instance,
+	type Schematic,
+	type Wire
+} from './model';
 import { instancePins } from './scene';
 import { symbolGeometry, symbolVariant, type Shape } from './symbols';
 
@@ -184,9 +191,22 @@ export interface SchematicView {
 
 const keyOf = (x: number, y: number) => `${Math.round(x)},${Math.round(y)}`;
 
+/** Cheap bounding-box cull for a wire against the visible region. */
+export function wireVisible(wire: Wire, region: Rect): boolean {
+	const xs = wire.points.map((p) => p.x);
+	const ys = wire.points.map((p) => p.y);
+	return !(
+		Math.max(...xs) < region.x ||
+		Math.min(...xs) > region.x + region.w ||
+		Math.max(...ys) < region.y ||
+		Math.min(...ys) > region.y + region.h
+	);
+}
+
 function wireColour(wire: Wire, view: SchematicView): { colour: string; width: number } {
 	if (view.selection.has(wire.id)) return { colour: view.theme.selection, width: 3 };
-	const net = view.netOfPoint.get(keyOf(wire.x1, wire.y1));
+	const start = wireStart(wire);
+	const net = view.netOfPoint.get(keyOf(start.x, start.y));
 	if (net !== undefined && net === view.hoverNet) return { colour: view.theme.accent, width: 3 };
 	const probe = net === undefined ? undefined : view.probeColours.get(net);
 	if (probe) return { colour: probe, width: 2.5 };
@@ -225,16 +245,9 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 	const region = rectExpand(visible, 60);
 
 	for (const wire of view.schematic.wires) {
-		if (
-			Math.max(wire.x1, wire.x2) < region.x ||
-			Math.min(wire.x1, wire.x2) > region.x + region.w ||
-			Math.max(wire.y1, wire.y2) < region.y ||
-			Math.min(wire.y1, wire.y2) > region.y + region.h
-		) {
-			continue;
-		}
+		if (!wireVisible(wire, region)) continue;
 		const { colour, width } = wireColour(wire, view);
-		painter.line({ x: wire.x1, y: wire.y1 }, { x: wire.x2, y: wire.y2 }, { color: colour, width });
+		painter.polyline(wire.points, { color: colour, width });
 	}
 
 	for (const dot of view.junctions) {

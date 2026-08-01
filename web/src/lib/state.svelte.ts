@@ -13,13 +13,18 @@ import {
 	defaultParams,
 	definitionOf,
 	nextName,
+	normaliseWire,
+	pinPosition,
 	pointKey,
+	simplifyPath,
 	snap,
 	type Instance,
+	type Point,
 	type Rotation,
 	type Schematic,
 	type Wire
 } from './schematic/model';
+import { elbow } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
 
 export type Tool = { mode: 'select' } | { mode: 'wire' } | { mode: 'place'; kind: string };
@@ -49,11 +54,26 @@ export const TRACE_COLOURS = [
 let idCounter = 0;
 const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`;
 
-/** Direction-independent identity for a wire, for spotting duplicates. */
-function wireSignature(x1: number, y1: number, x2: number, y2: number): string {
-	const a = `${x1},${y1}`;
-	const b = `${x2},${y2}`;
-	return a < b ? `${a}|${b}` : `${b}|${a}`;
+/**
+ * Move one end of a wire to a new place, keeping the rest of it and staying
+ * orthogonal.
+ *
+ * Only the last leg is rebuilt, so dragging a component does not rearrange a
+ * carefully routed wire three corners away from it.
+ */
+function reshapeEnd(points: readonly Point[], atStart: boolean, to: Point): Point[] {
+	const path = points.map((p) => ({ x: p.x, y: p.y }));
+	if (path.length < 2) return [{ x: to.x, y: to.y }];
+
+	if (atStart) {
+		const neighbour = path[1];
+		const rebuilt = elbow(to, neighbour, false);
+		return simplifyPath([...rebuilt.slice(0, -1), ...path.slice(1)]);
+	}
+
+	const neighbour = path[path.length - 2];
+	const rebuilt = elbow(neighbour, to, false);
+	return simplifyPath([...path.slice(0, -1), ...rebuilt.slice(1)]);
 }
 
 const HISTORY_LIMIT = 100;
@@ -120,6 +140,9 @@ class AppState {
 	private past: string[] = [];
 	private future: string[] = [];
 	private clipboard: { instances: Instance[]; wires: Wire[] } | null = null;
+	/** Wire ends stuck to the selection for the duration of a drag. */
+	private dragAttachments = new Map<string, Set<number>>();
+	private dragStarted = false;
 
 	compiled = $derived(compileSchematic(this.schematic));
 
@@ -201,32 +224,18 @@ class AppState {
 	}
 
 	/**
-	 * Commit a polyline as wires, one per segment.
+	 * Commit a routed path as one wire.
 	 *
-	 * The routing decision belongs to the tool that drew it, not here — that way
-	 * the preview the user saw and the geometry that lands are the same thing.
+	 * One wire, not one per segment: it is one thing the user drew, and it should
+	 * be one thing they can select, move and delete. The routing decision belongs
+	 * to the tool that drew it, so the preview and the committed geometry cannot
+	 * disagree.
 	 */
-	addWirePath(points: ReadonlyArray<{ x: number; y: number }>): void {
-		const already = new Set(
-			this.schematic.wires.map((w) => wireSignature(w.x1, w.y1, w.x2, w.y2))
-		);
-		const segments: Wire[] = [];
-
-		for (let i = 0; i < points.length - 1; i++) {
-			const a = points[i];
-			const b = points[i + 1];
-			if (a.x === b.x && a.y === b.y) continue;
-			// Retracing an existing wire is a no-op, not a second wire lying
-			// invisibly on top of the first.
-			const signature = wireSignature(a.x, a.y, b.x, b.y);
-			if (already.has(signature)) continue;
-			already.add(signature);
-			segments.push({ id: freshId(), x1: a.x, y1: a.y, x2: b.x, y2: b.y });
-		}
-
-		if (segments.length === 0) return;
+	addWirePath(points: ReadonlyArray<Point>): void {
+		const path = simplifyPath(points);
+		if (path.length < 2) return;
 		this.checkpoint();
-		this.schematic.wires.push(...segments);
+		this.schematic.wires.push({ id: freshId(), points: path });
 	}
 
 	deleteSelection(): void {
@@ -248,10 +257,50 @@ class AppState {
 		}
 	}
 
-	/** Move the selection. `commit` is false during a drag and true when it ends. */
-	moveSelection(dx: number, dy: number, commit: boolean): void {
+	/**
+	 * Work out which wire ends are stuck to the selection, before it moves.
+	 *
+	 * Call once at the start of a drag. Without this, moving a component leaves
+	 * its wires behind — which is what made dragging feel like tearing the circuit
+	 * apart rather than rearranging it.
+	 */
+	beginMove(): void {
+		const chosen = new Set(this.selection);
+		const attached = new Map<string, Set<number>>();
+
+		// Every point currently occupied by a pin of something that is moving.
+		const movingPins = new Set<string>();
+		for (const instance of this.schematic.instances) {
+			if (!chosen.has(instance.id)) continue;
+			for (const pin of definitionOf(instance.kind).pins) {
+				const at = pinPosition(instance, pin);
+				movingPins.add(pointKey(at.x, at.y));
+			}
+		}
+
+		for (const wire of this.schematic.wires) {
+			if (chosen.has(wire.id)) continue;
+			const ends = new Set<number>();
+			for (const index of [0, wire.points.length - 1]) {
+				const p = wire.points[index];
+				if (movingPins.has(pointKey(p.x, p.y))) ends.add(index);
+			}
+			if (ends.size > 0) attached.set(wire.id, ends);
+		}
+
+		this.dragAttachments = attached;
+		this.dragStarted = false;
+	}
+
+	/** Move the selection, dragging any wire ends attached to it along. */
+	moveSelection(dx: number, dy: number): void {
 		if (dx === 0 && dy === 0) return;
-		if (commit) this.checkpoint();
+		if (!this.dragStarted) {
+			// One history entry per gesture, taken on the first actual movement.
+			this.checkpoint();
+			this.dragStarted = true;
+		}
+
 		const chosen = new Set(this.selection);
 		for (const instance of this.schematic.instances) {
 			if (chosen.has(instance.id)) {
@@ -259,14 +308,51 @@ class AppState {
 				instance.y += dy;
 			}
 		}
+
 		for (const wire of this.schematic.wires) {
 			if (chosen.has(wire.id)) {
-				wire.x1 += dx;
-				wire.y1 += dy;
-				wire.x2 += dx;
-				wire.y2 += dy;
+				for (const p of wire.points) {
+					p.x += dx;
+					p.y += dy;
+				}
+				continue;
+			}
+
+			const ends = this.dragAttachments.get(wire.id);
+			if (!ends) continue;
+
+			// Both ends stuck to the same moving group: translate, do not re-route.
+			if (ends.size === 2) {
+				for (const p of wire.points) {
+					p.x += dx;
+					p.y += dy;
+				}
+				continue;
+			}
+
+			const index = [...ends][0];
+			const atStart = index === 0;
+			const moved = wire.points[atStart ? 0 : wire.points.length - 1];
+			wire.points = reshapeEnd(wire.points, atStart, { x: moved.x + dx, y: moved.y + dy });
+		}
+	}
+
+	/**
+	 * Finish a drag by re-routing the wires that were dragged along.
+	 *
+	 * The cheap elbow used during the gesture keeps the feedback instant; the real
+	 * router runs once, at the end, where a few milliseconds do not matter.
+	 */
+	endMove(route?: (wire: Wire) => Point[] | null): void {
+		if (this.dragStarted && route) {
+			for (const wire of this.schematic.wires) {
+				if (!this.dragAttachments.has(wire.id)) continue;
+				const path = route(wire);
+				if (path && path.length >= 2) wire.points = simplifyPath(path);
 			}
 		}
+		this.dragAttachments = new Map();
+		this.dragStarted = false;
 	}
 
 	setParam(id: string, key: string, value: number | string): void {
@@ -326,8 +412,8 @@ class AppState {
 		const { instances, wires } = this.clipboard;
 		if (instances.length === 0 && wires.length === 0) return;
 
-		const xs = [...instances.map((i) => i.x), ...wires.flatMap((w) => [w.x1, w.x2])];
-		const ys = [...instances.map((i) => i.y), ...wires.flatMap((w) => [w.y1, w.y2])];
+		const xs = [...instances.map((i) => i.x), ...wires.flatMap((w) => w.points.map((p) => p.x))];
+		const ys = [...instances.map((i) => i.y), ...wires.flatMap((w) => w.points.map((p) => p.y))];
 		const minX = Math.min(...xs);
 		const minY = Math.min(...ys);
 		const dx = at ? snap(at.x) - snap(minX) : GRID * 3;
@@ -355,10 +441,7 @@ class AppState {
 		for (const source of wires) {
 			const copy: Wire = {
 				id: freshId(),
-				x1: source.x1 + dx,
-				y1: source.y1 + dy,
-				x2: source.x2 + dx,
-				y2: source.y2 + dy
+				points: source.points.map((p) => ({ x: p.x + dx, y: p.y + dy }))
 			};
 			this.schematic.wires.push(copy);
 			fresh.push(copy.id);
@@ -466,11 +549,15 @@ class AppState {
 			instance.id = id;
 			definitionOf(instance.kind); // throws early on an unknown component
 		}
-		for (const wire of parsed.schematic.wires ?? []) wire.id = freshId();
+		// Files written before wires became polylines still load: the two-point
+		// form is upgraded rather than rejected.
+		const wires = (parsed.schematic.wires ?? [])
+			.map((wire) => normaliseWire(wire, freshId()))
+			.filter((wire): wire is Wire => wire !== null);
 
 		this.past.length = 0;
 		this.future.length = 0;
-		this.schematic = { instances: parsed.schematic.instances, wires: parsed.schematic.wires ?? [] };
+		this.schematic = { instances: parsed.schematic.instances, wires };
 		this.stopTime = parsed.stopTime ?? 1e-3;
 		this.probes = parsed.probes ?? [];
 		this.selection = [];

@@ -20,6 +20,7 @@ import {
 	definitionOf,
 	pinPosition,
 	rotatePoint,
+	wireSegments,
 	type Instance,
 	type PinDef,
 	type Rotation,
@@ -74,29 +75,34 @@ export function hitInstance(instance: Instance, point: Vec2, tolerance: number):
 }
 
 export function wireBounds(wire: Wire): Rect {
-	return rectFromBounds(
-		Math.min(wire.x1, wire.x2),
-		Math.min(wire.y1, wire.y2),
-		Math.max(wire.x1, wire.x2),
-		Math.max(wire.y1, wire.y2)
-	);
+	const xs = wire.points.map((p) => p.x);
+	const ys = wire.points.map((p) => p.y);
+	return rectFromBounds(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys));
+}
+
+/** Distance from a point to the nearest part of a wire. */
+export function distanceToWire(wire: Wire, point: Vec2): number {
+	let best = Infinity;
+	for (const segment of wireSegments(wire)) {
+		best = Math.min(best, distanceToSegment(point, segment.a, segment.b));
+	}
+	return best;
 }
 
 export function buildSceneItems(schematic: Schematic): SceneItem<SchematicItem>[] {
 	const items: SceneItem<SchematicItem>[] = [];
 
 	for (const wire of schematic.wires) {
-		const a = { x: wire.x1, y: wire.y1 };
-		const b = { x: wire.x2, y: wire.y2 };
 		items.push({
 			id: wire.id,
 			kind: 'wire',
 			bounds: wireBounds(wire),
 			z: Z_WIRE,
 			data: { type: 'wire', wire },
-			// Distance to the line, not the box: a long wire's bounding box is
-			// mostly empty space and picking it there would be maddening.
-			hit: (point, tolerance) => distanceToSegment(point, a, b) <= tolerance
+			// Distance to the wire itself, not to its box: an L-shaped run's
+			// bounding box is mostly empty space, and picking it there would be
+			// maddening.
+			hit: (point, tolerance) => distanceToWire(wire, point) <= tolerance
 		});
 	}
 
@@ -136,8 +142,11 @@ export function buildSnapTargets(schematic: Schematic): SnapTargets {
 	}
 
 	for (const wire of schematic.wires) {
-		points.push({ x: wire.x1, y: wire.y1, kind: 'wire-end', ownerId: wire.id });
-		points.push({ x: wire.x2, y: wire.y2, kind: 'wire-end', ownerId: wire.id });
+		// Corners are snappable too — carrying on from a bend is as reasonable as
+		// carrying on from an end.
+		for (const point of wire.points) {
+			points.push({ x: point.x, y: point.y, kind: 'wire-end', ownerId: wire.id });
+		}
 	}
 
 	// Junctions rank above plain wire ends, so a three-way meeting point wins
@@ -146,11 +155,9 @@ export function buildSnapTargets(schematic: Schematic): SnapTargets {
 		points.push({ x: dot.x, y: dot.y, kind: 'junction' });
 	}
 
-	const segments: SnapSegment[] = schematic.wires.map((wire) => ({
-		a: { x: wire.x1, y: wire.y1 },
-		b: { x: wire.x2, y: wire.y2 },
-		ownerId: wire.id
-	}));
+	const segments: SnapSegment[] = schematic.wires.flatMap((wire) =>
+		wireSegments(wire).map((segment) => ({ a: segment.a, b: segment.b, ownerId: wire.id }))
+	);
 
 	return { points, segments };
 }

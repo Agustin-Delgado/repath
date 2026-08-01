@@ -71,13 +71,77 @@ export interface Instance {
 	params: Record<string, number | string>;
 }
 
-/** An axis-aligned wire segment. */
+export interface Point {
+	x: number;
+	y: number;
+}
+
+/**
+ * A routed connection between two places, as a chain of corners.
+ *
+ * A polyline rather than a lone segment. A wire is one thing the user drew and
+ * one thing they expect to move, re-route and delete as a unit — modelling it as
+ * a pile of independent segments is why dragging a component used to tear it off
+ * whatever it was wired to.
+ *
+ * Consecutive points are always axis-aligned, so every segment is horizontal or
+ * vertical.
+ */
 export interface Wire {
 	id: string;
-	x1: number;
-	y1: number;
-	x2: number;
-	y2: number;
+	points: Point[];
+}
+
+export interface WireSegment {
+	a: Point;
+	b: Point;
+	/** Position along the wire, for addressing one leg of it. */
+	index: number;
+}
+
+export function wireSegments(wire: Wire): WireSegment[] {
+	const out: WireSegment[] = [];
+	for (let i = 0; i < wire.points.length - 1; i++) {
+		out.push({ a: wire.points[i], b: wire.points[i + 1], index: i });
+	}
+	return out;
+}
+
+export const wireStart = (wire: Wire): Point => wire.points[0];
+export const wireEnd = (wire: Wire): Point => wire.points[wire.points.length - 1];
+
+/** Drop corners that repeat or that sit in the middle of a straight run. */
+export function simplifyPath(points: readonly Point[]): Point[] {
+	const out: Point[] = [];
+	for (const p of points) {
+		const last = out[out.length - 1];
+		if (last && last.x === p.x && last.y === p.y) continue;
+		out.push({ x: p.x, y: p.y });
+	}
+	for (let i = out.length - 2; i > 0; i--) {
+		const [before, here, after] = [out[i - 1], out[i], out[i + 1]];
+		const straight =
+			(before.x === here.x && here.x === after.x) || (before.y === here.y && here.y === after.y);
+		if (straight) out.splice(i, 1);
+	}
+	return out;
+}
+
+/** Read a wire from either the polyline form or the older two-point one. */
+export function normaliseWire(raw: unknown, id: string): Wire | null {
+	const value = raw as Partial<Wire> & { x1?: number; y1?: number; x2?: number; y2?: number };
+	if (Array.isArray(value?.points) && value.points.length >= 2) {
+		return { id, points: simplifyPath(value.points) };
+	}
+	if (
+		typeof value?.x1 === 'number' &&
+		typeof value?.y1 === 'number' &&
+		typeof value?.x2 === 'number' &&
+		typeof value?.y2 === 'number'
+	) {
+		return { id, points: [{ x: value.x1, y: value.y1 }, { x: value.x2, y: value.y2 }] };
+	}
+	return null;
 }
 
 export interface Schematic {

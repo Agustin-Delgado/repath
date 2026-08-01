@@ -19,7 +19,7 @@
  */
 
 import type { TransientRun } from '$lib/engine';
-import { definitionOf, pointKey, type Schematic } from './model';
+import { definitionOf, pointKey, wireSegments, type Point, type Schematic } from './model';
 import type { Connectivity } from './nets';
 import type { NetNames } from './netlist';
 import { instancePins } from './scene';
@@ -46,6 +46,13 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number]>> = {
 	opamp: [['out', -1]]
 };
 
+/** One leg of one wire, as the flow graph sees it. */
+interface NetSegment {
+	id: string;
+	a: Point;
+	b: Point;
+}
+
 interface Injection {
 	/** Index into the run's element arrays. */
 	element: number;
@@ -55,8 +62,9 @@ interface Injection {
 interface PlanStep {
 	point: string;
 	parent: string | null;
-	wireId: string | null;
-	/** True when the wire runs parent -> point, so the sign has to flip. */
+	/** Addresses one leg of one wire: `wireId#segmentIndex`. */
+	segmentId: string | null;
+	/** True when the segment runs parent -> point, so the sign has to flip. */
 	reversed: boolean;
 }
 
@@ -83,7 +91,7 @@ export interface FlowContext {
 export interface FlowFrame {
 	/** Net index -> volts. */
 	netVoltage: Map<number, number>;
-	/** Wire id -> amps, positive meaning from (x1,y1) toward (x2,y2). */
+	/** `wireId#segmentIndex` -> amps, positive along the segment's own direction. */
 	wireCurrent: Map<string, number>;
 	/** Instance id -> amps through its main conduction path. */
 	instanceCurrent: Map<string, number>;
@@ -116,14 +124,21 @@ export function prepareFlow(
 		netSignal.set(netIndex, entry.analog === 'gnd' ? -1 : run.unknownNames.indexOf(`v(${entry.analog})`));
 	}
 
-	// Group wires and injections by net.
-	const wiresByNet = new Map<number, Schematic['wires']>();
+	// Group wire segments and injections by net.
+	const segmentsByNet = new Map<number, NetSegment[]>();
 	for (const wire of schematic.wires) {
-		const net = connectivity.netOfPoint.get(pointKey(wire.x1, wire.y1));
-		if (net === undefined) continue;
-		const list = wiresByNet.get(net);
-		if (list) list.push(wire);
-		else wiresByNet.set(net, [wire]);
+		for (const segment of wireSegments(wire)) {
+			const net = connectivity.netOfPoint.get(pointKey(segment.a.x, segment.a.y));
+			if (net === undefined) continue;
+			const entry: NetSegment = {
+				id: `${wire.id}#${segment.index}`,
+				a: segment.a,
+				b: segment.b
+			};
+			const list = segmentsByNet.get(net);
+			if (list) list.push(entry);
+			else segmentsByNet.set(net, [entry]);
+		}
 	}
 
 	const injectionsByNet = new Map<number, Map<string, Injection[]>>();
@@ -150,9 +165,9 @@ export function prepareFlow(
 	}
 
 	const plans: NetPlan[] = [];
-	for (const [netIndex, wires] of wiresByNet) {
+	for (const [netIndex, segments] of segmentsByNet) {
 		const injections = injectionsByNet.get(netIndex) ?? new Map();
-		const steps = planNet(wires, injections, netIndex, connectivity, schematic);
+		const steps = planNet(segments, injections, netIndex, connectivity, schematic);
 		if (steps.length > 0) plans.push({ steps, injections });
 	}
 
@@ -175,26 +190,26 @@ export function prepareFlow(
  * against.
  */
 function planNet(
-	wires: Schematic['wires'],
+	segments: NetSegment[],
 	injections: Map<string, Injection[]>,
 	netIndex: number,
 	connectivity: Connectivity,
 	schematic: Schematic
 ): PlanStep[] {
-	const adjacency = new Map<string, Array<{ to: string; wireId: string; forward: boolean }>>();
-	const link = (from: string, to: string, wireId: string, forward: boolean) => {
+	const adjacency = new Map<string, Array<{ to: string; segmentId: string; forward: boolean }>>();
+	const link = (from: string, to: string, segmentId: string, forward: boolean) => {
 		const list = adjacency.get(from);
-		const edge = { to, wireId, forward };
+		const edge = { to, segmentId, forward };
 		if (list) list.push(edge);
 		else adjacency.set(from, [edge]);
 	};
 
-	for (const wire of wires) {
-		const a = pointKey(wire.x1, wire.y1);
-		const b = pointKey(wire.x2, wire.y2);
+	for (const segment of segments) {
+		const a = pointKey(segment.a.x, segment.a.y);
+		const b = pointKey(segment.b.x, segment.b.y);
 		if (a === b) continue;
-		link(a, b, wire.id, true);
-		link(b, a, wire.id, false);
+		link(a, b, segment.id, true);
+		link(b, a, segment.id, false);
 	}
 	if (adjacency.size === 0) return [];
 
@@ -215,7 +230,7 @@ function planNet(
 
 	const order: PlanStep[] = [];
 	const seen = new Set<string>([root]);
-	const queue: PlanStep[] = [{ point: root, parent: null, wireId: null, reversed: false }];
+	const queue: PlanStep[] = [{ point: root, parent: null, segmentId: null, reversed: false }];
 
 	while (queue.length > 0) {
 		const step = queue.shift()!;
@@ -228,7 +243,7 @@ function planNet(
 			queue.push({
 				point: edge.to,
 				parent: step.point,
-				wireId: edge.wireId,
+				segmentId: edge.segmentId,
 				reversed: edge.forward
 			});
 		}
@@ -237,7 +252,7 @@ function planNet(
 	// Any point that only carries injections still needs to exist in the plan.
 	for (const key of injections.keys()) {
 		if (!seen.has(key) && adjacency.has(key)) {
-			order.push({ point: key, parent: null, wireId: null, reversed: false });
+			order.push({ point: key, parent: null, segmentId: null, reversed: false });
 		}
 	}
 
@@ -310,8 +325,8 @@ export function sampleFlow(context: FlowContext, index: number): FlowFrame {
 			for (const injection of plan.injections.get(step.point) ?? []) {
 				total += injection.sign * currentOf(injection.element);
 			}
-			if (step.wireId && step.parent) {
-				wireCurrent.set(step.wireId, step.reversed ? -total : total);
+			if (step.segmentId && step.parent) {
+				wireCurrent.set(step.segmentId, step.reversed ? -total : total);
 				accumulated.set(step.parent, (accumulated.get(step.parent) ?? 0) + total);
 			}
 		}

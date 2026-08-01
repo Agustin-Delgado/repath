@@ -63,7 +63,9 @@ function compact(circuit: SharedCircuit): unknown {
 		v: VERSION,
 		t: circuit.stopTime,
 		i: circuit.schematic.instances.map((n) => [n.kind, n.name, n.x, n.y, n.rotation, n.params]),
-		w: circuit.schematic.wires.map((w) => [w.x1, w.y1, w.x2, w.y2])
+		// Corners flattened to a number list: a wire is mostly coordinates, and
+		// every character saved here is a character of URL someone has to paste.
+		w: circuit.schematic.wires.map((w) => w.points.flatMap((p) => [p.x, p.y]))
 	};
 }
 
@@ -72,7 +74,7 @@ function expand(raw: unknown): SharedCircuit {
 		v?: number;
 		t?: number;
 		i?: Array<[string, string, number, number, number, Record<string, number | string>]>;
-		w?: Array<[number, number, number, number]>;
+		w?: number[][];
 	};
 	if (data.v !== VERSION) throw new Error('That link was made by a different version of repath.');
 
@@ -91,7 +93,15 @@ function expand(raw: unknown): SharedCircuit {
 				rotation: rotation as 0 | 90 | 180 | 270,
 				params: params ?? {}
 			})),
-			wires: (data.w ?? []).map(([x1, y1, x2, y2]) => ({ id: id(), x1, y1, x2, y2 }))
+			wires: (data.w ?? [])
+				.map((flat) => {
+					const points: Array<{ x: number; y: number }> = [];
+					for (let i = 0; i + 1 < flat.length; i += 2) {
+						points.push({ x: flat[i], y: flat[i + 1] });
+					}
+					return { id: id(), points };
+				})
+				.filter((wire) => wire.points.length >= 2)
 		}
 	};
 }

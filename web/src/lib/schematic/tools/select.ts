@@ -1,10 +1,15 @@
 /**
- * Select, move, and marquee.
+ * Select, move, marquee — and start a wire from a pin.
  *
- * The gesture is decided on press: something under the cursor means a move,
- * empty space means a rubber band. Nothing is committed to history until the
- * selection has actually moved, so a plain click never leaves an undo step
- * behind.
+ * That last one matters more than it sounds. Having to switch tools between
+ * dropping a component and connecting it is most of what made adding something
+ * to a circuit feel like work: you place a resistor, and the obvious next
+ * gesture is to drag from its pin to whatever it should join. So that gesture
+ * does exactly that, and the tool switch stops being something you have to
+ * remember.
+ *
+ * Moving keeps connections. Wire ends stuck to a component's pins travel with
+ * it and re-route, rather than being left behind holding nothing.
  */
 
 import {
@@ -13,30 +18,46 @@ import {
 	type EditorPointer,
 	type Painter,
 	type Rect,
+	type SnapTarget,
 	type Tool,
 	type ToolContext,
 	type Vec2
 } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
+import { wireEnd, wireStart, type Point, type Wire } from '../model';
+import { routeWire } from '../route';
 import type { SchematicItem } from '../scene';
 import { netAt } from './shared';
+import { drawSnapHint } from './wire';
 
-type Mode = 'idle' | 'move' | 'marquee';
+type Mode = 'idle' | 'move' | 'marquee' | 'wire';
+
+/** How close to a pin the cursor has to be for a drag to mean "start a wire". */
+const PIN_REACH = 1.1;
 
 export function createSelectTool(): Tool {
 	let mode: Mode = 'idle';
 	let marquee: Rect | null = null;
 	let anchor: Vec2 = { x: 0, y: 0 };
-	let movedDuringDrag = false;
+	let moved = false;
 	let pressedId: string | null = null;
 	let pressedWasSelected = false;
 
-	function updateHover(pointer: EditorPointer, ctx: ToolContext): boolean {
-		const net = netAt(pointer.world, ctx);
-		if (net === app.hoverNet) return false;
-		app.hoverNet = net;
-		return true;
+	/** Pin under the cursor, if any — the thing a drag would wire from. */
+	let hoveredPin: SnapTarget | null = null;
+	/** In-flight wire started by dragging off a pin. */
+	let wireFrom: Point | null = null;
+	let wireTo: SnapTarget | null = null;
+
+	function pinUnder(pointer: EditorPointer, ctx: ToolContext): SnapTarget | null {
+		const found = ctx.snap.nearestPoint(pointer.world, ctx.tolerance * PIN_REACH);
+		return found && found.kind === 'pin' ? found : null;
+	}
+
+	function wirePath(to: Point, ctx: ToolContext): Point[] {
+		if (!wireFrom) return [];
+		return routeWire(app.schematic, wireFrom, to, { grid: ctx.gridSize });
 	}
 
 	return {
@@ -46,6 +67,8 @@ export function createSelectTool(): Tool {
 		deactivate(ctx) {
 			mode = 'idle';
 			marquee = null;
+			hoveredPin = null;
+			wireFrom = null;
 			if (app.hoverNet !== null) {
 				app.hoverNet = null;
 				ctx.invalidate('schematic');
@@ -54,8 +77,18 @@ export function createSelectTool(): Tool {
 
 		pointerDown(pointer, ctx) {
 			if (pointer.button !== 0) return;
-			const item = ctx.scene.top(pointer.world, ctx.tolerance);
 
+			// A pin under the cursor means the gesture is a connection, not a move.
+			const pin = pinUnder(pointer, ctx);
+			if (pin) {
+				mode = 'wire';
+				wireFrom = { x: pin.x, y: pin.y };
+				wireTo = pin;
+				ctx.invalidate('overlay');
+				return;
+			}
+
+			const item = ctx.scene.top(pointer.world, ctx.tolerance);
 			if (item) {
 				pressedId = item.id;
 				pressedWasSelected = app.selection.includes(item.id);
@@ -70,7 +103,8 @@ export function createSelectTool(): Tool {
 
 				mode = 'move';
 				anchor = snapPoint(pointer.world, ctx.gridSize);
-				movedDuringDrag = false;
+				moved = false;
+				app.beginMove();
 				ctx.setCursor('grabbing');
 			} else {
 				pressedId = null;
@@ -82,15 +116,20 @@ export function createSelectTool(): Tool {
 		},
 
 		pointerMove(pointer, ctx) {
+			if (mode === 'wire') {
+				wireTo = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
+				ctx.invalidate('overlay');
+				return;
+			}
+
 			if (mode === 'move') {
 				const now = snapPoint(pointer.world, ctx.gridSize);
 				const dx = now.x - anchor.x;
 				const dy = now.y - anchor.y;
 				if (dx || dy) {
-					// One history entry for the whole drag, taken on the first movement.
-					app.moveSelection(dx, dy, !movedDuringDrag);
+					app.moveSelection(dx, dy);
 					anchor = now;
-					movedDuringDrag = true;
+					moved = true;
 					ctx.invalidate('schematic', 'overlay');
 				}
 				return;
@@ -102,22 +141,41 @@ export function createSelectTool(): Tool {
 				return;
 			}
 
-			if (updateHover(pointer, ctx)) ctx.invalidate('schematic');
-			const over = ctx.scene.top(pointer.world, ctx.tolerance);
-			ctx.setCursor(over ? 'pointer' : 'default');
+			// Idle: track what the cursor is over.
+			const pin = pinUnder(pointer, ctx);
+			const pinChanged = (pin?.label ?? null) !== (hoveredPin?.label ?? null);
+			hoveredPin = pin;
+
+			const net = netAt(pointer.world, ctx);
+			const netChanged = net !== app.hoverNet;
+			app.hoverNet = net;
+
+			ctx.setCursor(pin ? 'crosshair' : ctx.scene.top(pointer.world, ctx.tolerance) ? 'pointer' : 'default');
+			if (pinChanged) ctx.invalidate('overlay');
+			if (netChanged) ctx.invalidate('schematic');
 		},
 
 		pointerUp(pointer, ctx) {
-			if (mode === 'marquee' && marquee) {
+			if (mode === 'wire' && wireFrom) {
+				const to = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
+				if (to.x !== wireFrom.x || to.y !== wireFrom.y) {
+					app.addWirePath(wirePath({ x: to.x, y: to.y }, ctx));
+				}
+				wireFrom = null;
+				wireTo = null;
+			} else if (mode === 'move') {
+				// Re-route what came along for the ride, now that it has stopped.
+				app.endMove((wire) => reroute(wire, ctx));
+				if (!moved && pressedId && pressedWasSelected && !pointer.shift) {
+					// A click on an already-selected item narrows the selection to it,
+					// so one component can be picked out of a group.
+					app.selection = [pressedId];
+				}
+			} else if (mode === 'marquee' && marquee) {
 				if (marquee.w > 2 || marquee.h > 2) {
 					const hits = ctx.scene.enclosed(marquee).map((item) => item.id);
 					app.selection = pointer.shift ? [...new Set([...app.selection, ...hits])] : hits;
 				}
-			} else if (mode === 'move' && !movedDuringDrag && pressedId && pressedWasSelected) {
-				// A click on an already-selected item, with no drag, narrows the
-				// selection to just it — otherwise there is no way to pick one
-				// component out of a group without deselecting everything first.
-				if (!pointer.shift) app.selection = [pressedId];
 			}
 
 			mode = 'idle';
@@ -128,10 +186,12 @@ export function createSelectTool(): Tool {
 		},
 
 		pointerLeave(ctx) {
+			hoveredPin = null;
 			if (app.hoverNet !== null) {
 				app.hoverNet = null;
 				ctx.invalidate('schematic');
 			}
+			ctx.invalidate('overlay');
 		},
 
 		keyDown(event, ctx) {
@@ -155,6 +215,12 @@ export function createSelectTool(): Tool {
 					}
 					return false;
 				case 'Escape':
+					if (mode === 'wire') {
+						mode = 'idle';
+						wireFrom = null;
+						ctx.invalidate('overlay');
+						return true;
+					}
 					app.selection = [];
 					ctx.invalidate();
 					return true;
@@ -162,22 +228,48 @@ export function createSelectTool(): Tool {
 			return false;
 		},
 
-		drawOverlay(painter: Painter) {
-			if (!marquee) return;
+		drawOverlay(painter: Painter, ctx: ToolContext) {
 			const theme = currentTheme();
-			painter.rect(
-				marquee,
-				{ color: theme.accent, alpha: 0.12 },
-				{ color: theme.accent, width: 1, dash: [4, 3] }
-			);
+
+			if (marquee) {
+				painter.rect(
+					marquee,
+					{ color: theme.accent, alpha: 0.12 },
+					{ color: theme.accent, width: 1, dash: [4, 3] }
+				);
+			}
+
+			if (mode === 'wire' && wireFrom && wireTo) {
+				painter.polyline(wirePath({ x: wireTo.x, y: wireTo.y }, ctx), {
+					color: theme.accent,
+					width: 2
+				});
+				drawSnapHint(painter, ctx, wireTo, theme.accent);
+			} else if (hoveredPin) {
+				// Idle over a pin: show that dragging from here would draw a wire.
+				drawSnapHint(painter, ctx, hoveredPin, theme.accent);
+			}
 		}
 	};
 }
 
+/**
+ * Re-route a wire that was dragged along with a component.
+ *
+ * Only the end that moved is rebuilt; the fixed end stays put, which is what
+ * keeps the rest of the circuit from rearranging itself around one nudge.
+ */
+function reroute(wire: Wire, ctx: ToolContext): Point[] | null {
+	const from = wireStart(wire);
+	const to = wireEnd(wire);
+	if (from.x === to.x && from.y === to.y) return null;
+	return routeWire(app.schematic, from, to, {
+		grid: ctx.gridSize,
+		ignoreWires: new Set([wire.id])
+	});
+}
+
 /** Exposed for tests: the item a click at `point` would select. */
-export function selectionCandidate(
-	ctx: ToolContext,
-	point: Vec2
-): SchematicItem | undefined {
+export function selectionCandidate(ctx: ToolContext, point: Vec2): SchematicItem | undefined {
 	return ctx.scene.top(point, ctx.tolerance)?.data as SchematicItem | undefined;
 }
