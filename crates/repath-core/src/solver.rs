@@ -23,8 +23,9 @@
 
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
+use crate::complex::ComplexSystem;
 use crate::digital::{DriverId, Logic, NetId};
-use crate::element::{AcceptCtx, Integration, Mode, StampCtx};
+use crate::element::{AcCtx, AcceptCtx, Integration, Mode, StampCtx};
 use crate::linalg::{LinearSystem, SolveError};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -193,6 +194,53 @@ pub struct OperatingPoint {
     pub node_count: usize,
     pub solution: Vec<f64>,
     pub iterations: usize,
+}
+
+/// A logarithmic frequency sweep.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AcConfig {
+    pub start_hz: f64,
+    pub stop_hz: f64,
+    /// Frequencies per decade. Ten is enough for a smooth Bode plot.
+    pub points_per_decade: usize,
+}
+
+impl AcConfig {
+    pub fn new(start_hz: f64, stop_hz: f64) -> Self {
+        Self { start_hz: start_hz.max(1e-9), stop_hz: stop_hz.max(1e-9), points_per_decade: 20 }
+    }
+
+    /// The frequencies this configuration sweeps, logarithmically spaced.
+    pub fn frequencies(&self) -> Vec<f64> {
+        let (lo, hi) = (self.start_hz.min(self.stop_hz), self.start_hz.max(self.stop_hz));
+        let decades = (hi / lo).log10();
+        let steps = ((decades * self.points_per_decade as f64).round() as usize).max(1);
+        (0..=steps).map(|k| lo * 10f64.powf(decades * k as f64 / steps as f64)).collect()
+    }
+}
+
+/// Result of an AC sweep. Columnar: one array per unknown, indexed by frequency,
+/// because a Bode plot asks for one signal across the sweep, never for every
+/// signal at one frequency.
+#[derive(Debug, Clone, Default)]
+pub struct AcResult {
+    pub frequencies: Vec<f64>,
+    pub unknown_names: Vec<String>,
+    pub node_count: usize,
+    /// Magnitude, linear — the caller decides whether to show decibels.
+    pub magnitude: Vec<Vec<f64>>,
+    /// Phase in degrees, unwrapped so a plot does not jump by 360.
+    pub phase: Vec<Vec<f64>>,
+}
+
+impl AcResult {
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.unknown_names.iter().position(|n| n == name)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.frequencies.is_empty()
+    }
 }
 
 /// Holds the scratch buffers so repeated runs do not reallocate.
@@ -443,6 +491,58 @@ impl Simulator {
             out.push(self.x.clone());
         }
         Ok(out)
+    }
+
+    /// Sweep frequency and report how a small signal propagates.
+    ///
+    /// The operating point is solved first and every nonlinear device linearizes
+    /// around it, which is what makes this a *small-signal* analysis: it says how
+    /// a wiggle behaves, not what the circuit does when driven hard. An amplifier
+    /// biased into cutoff will correctly report no gain.
+    ///
+    /// The drive comes from whichever sources were given an AC magnitude; with
+    /// none, everything is zero and the answer is uninteresting rather than wrong.
+    pub fn ac_sweep(&mut self, circuit: &mut Circuit, cfg: AcConfig) -> Result<AcResult, SimError> {
+        let n = self.prepare(circuit)?;
+        circuit.reset();
+
+        let mut stats = Stats::default();
+        self.solve_operating_point(circuit, &mut stats)?;
+
+        let frequencies = cfg.frequencies();
+        let unknown_names = circuit.unknown_names();
+        let mut magnitude = vec![Vec::with_capacity(frequencies.len()); n];
+        let mut phase = vec![Vec::with_capacity(frequencies.len()); n];
+
+        let mut sys = ComplexSystem::new(n);
+        let mut x = Vec::new();
+
+        for &hz in &frequencies {
+            sys.clear();
+            let ctx = AcCtx { omega: std::f64::consts::TAU * hz, gmin: self.config.gmin };
+            circuit.ac_stamp_all(&mut sys, &ctx);
+
+            sys.solve_into(&mut x).map_err(|e| SimError::Singular {
+                unknown: unknown_names.get(e.row).cloned().unwrap_or_else(|| format!("#{}", e.row)),
+            })?;
+
+            for i in 0..n {
+                magnitude[i].push(x[i].abs());
+                phase[i].push(x[i].arg().to_degrees());
+            }
+        }
+
+        for series in &mut phase {
+            unwrap_phase(series);
+        }
+
+        Ok(AcResult {
+            frequencies,
+            unknown_names,
+            node_count: circuit.node_count().saturating_sub(1),
+            magnitude,
+            phase,
+        })
     }
 
     /// Run a mixed-signal transient analysis.
@@ -700,6 +800,24 @@ impl Simulator {
     /// Convenience: the last solved unknown vector.
     pub fn solution(&self) -> &[f64] {
         &self.x
+    }
+}
+
+/// Remove the 360-degree jumps `atan2` introduces.
+///
+/// A phase response that slides past -180 belongs below it on the plot, not
+/// teleported to +180. Without this an ordinary two-pole rolloff looks like it
+/// has a discontinuity in the middle of it.
+fn unwrap_phase(series: &mut [f64]) {
+    let mut offset = 0.0;
+    for i in 1..series.len() {
+        let delta = (series[i] + offset) - series[i - 1];
+        if delta > 180.0 {
+            offset -= 360.0;
+        } else if delta < -180.0 {
+            offset += 360.0;
+        }
+        series[i] += offset;
     }
 }
 

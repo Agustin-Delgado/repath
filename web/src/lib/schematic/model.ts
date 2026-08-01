@@ -32,6 +32,8 @@ export interface ParamDef {
 	choices?: Array<{ value: string; label: string }>;
 	/** Only show this parameter when another parameter has one of these values. */
 	visibleWhen?: { key: string; values: string[] };
+	/** Longer explanation, shown under the field. */
+	description?: string;
 }
 
 export type Group = 'passive' | 'sources' | 'semiconductor' | 'analog' | 'logic';
@@ -183,6 +185,15 @@ const SOURCE_PARAMS: ParamDef[] = [
 		unit: '',
 		default: 0.5,
 		visibleWhen: { key: 'waveform', values: ['pulse'] }
+	},
+	{
+		key: 'ac',
+		label: 'AC drive',
+		unit: '',
+		default: 0,
+		// Only the source being swept carries a drive; a supply rail should not
+		// also inject a signal, or the frequency response is of the wrong circuit.
+		description: 'Amplitude used by the frequency sweep. Set one source to 1.'
 	}
 ];
 

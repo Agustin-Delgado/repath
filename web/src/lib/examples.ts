@@ -13,6 +13,10 @@ export interface Example {
 	name: string;
 	description: string;
 	stopTime: number;
+	/** Which analysis shows this circuit off. Defaults to transient. */
+	analysis?: 'transient' | 'frequency';
+	/** Sweep range, for the ones meant to be looked at in the frequency domain. */
+	frequencyRange?: { start: number; stop: number };
 	build: () => Schematic;
 }
 
@@ -235,6 +239,47 @@ export const EXAMPLES: Example[] = [
 					[400, 310, 480, 310],
 					[440, 310, 440, 320],
 					[90, 250, 90, 310]
+				]
+			)
+	},
+	{
+		id: 'rlc-bandpass',
+		name: 'RLC band-pass',
+		description:
+			'A series resonant circuit, meant to be looked at in the frequency domain. V1 carries the AC drive, so the sweep measures the response from it.',
+		stopTime: 2e-3,
+		analysis: 'frequency',
+		frequencyRange: { start: 10, stop: 1e6 },
+		build: () =>
+			build(
+				[
+					{
+						kind: 'vsource',
+						name: 'V1',
+						x: 100,
+						y: 200,
+						params: { waveform: 'sine', value: 1, offset: 0, frequency: 1590, ac: 1 }
+					},
+					{ kind: 'resistor', name: 'R1', x: 200, y: 170, params: { resistance: 50 } },
+					{ kind: 'inductor', name: 'L1', x: 320, y: 170, params: { inductance: 10e-3 } },
+					{
+						kind: 'capacitor',
+						name: 'C1',
+						x: 420,
+						y: 230,
+						rotation: 90,
+						params: { capacitance: 1e-6 }
+					},
+					{ kind: 'ground', name: 'GND1', x: 100, y: 300 }
+				],
+				[
+					[100, 170, 170, 170],
+					[230, 170, 290, 170],
+					[350, 170, 420, 170],
+					[420, 170, 420, 200],
+					[420, 260, 420, 290],
+					[100, 290, 420, 290],
+					[100, 230, 100, 290]
 				]
 			)
 	},

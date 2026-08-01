@@ -11,6 +11,9 @@ itself.
 - **Real SPICE-class analysis.** Modified nodal analysis, Newton-Raphson, companion
   models, adaptive timestepping, and the convergence aids that make nonlinear
   circuits actually solve.
+- **You can watch it work.** Wires coloured by voltage and current animated along
+  them, derived from the simulation rather than decorated on top of it.
+- **Shareable.** The whole circuit fits in a URL, so a link is a working circuit.
 
 ## Status
 
@@ -93,6 +96,23 @@ The loop never steps *over* a discontinuity. Before each step it takes the minim
 of the error budget, the shortest feature of any source waveform, the next waveform
 corner, the next digital event, and the end of any digital-to-analog ramp in flight.
 
+### The frequency domain
+
+AC analysis is a *small-signal* analysis. The operating point is solved first,
+every nonlinear device linearizes around it, and the sweep then describes how a
+small wiggle propagates — not what the circuit does when driven hard. An
+amplifier biased into cutoff correctly reports no gain, which is the whole point
+of doing it this way: the answer depends on the bias the circuit actually settled
+at.
+
+Each frequency builds a complex matrix — a capacitor stamps `jωC`, an inductor
+`jωL`, a transistor the conductances it computed at the operating point — and
+solves it. Phase is unwrapped afterwards, so a two-pole rolloff walks past −180°
+instead of teleporting to +180° in the middle of the plot.
+
+Set one source's **AC drive** to 1 to make it the input; everything else supplies
+bias only.
+
 ### The digital side
 
 Nothing steps through time. Devices run only when an input changes, and schedule
@@ -124,10 +144,11 @@ digital pins point.
 The canvas is its own small engine (`web/src/lib/canvas`), deliberately ignorant of
 circuits so it can be tested without a browser and reused for anything else.
 
-**Layered canvases.** Grid, schematic and overlay each get their own canvas.
-Dragging a selection rectangle repaints the overlay alone; the schematic
-underneath — which may hold thousands of components — is never re-rasterized.
-Nothing repaints at all until something calls `invalidate`.
+**Layered canvases.** Grid, schematic, live overlay and tool feedback each get
+their own canvas. Dragging a selection rectangle repaints only the top one; a
+playing animation repaints only the live one; the schematic underneath — which
+may hold thousands of components — is never re-rasterized for either. Nothing
+repaints at all until something calls `invalidate`.
 
 **A spatial index.** Every question the editor asks is a spatial one: what is on
 screen, what is under the cursor, what falls inside the marquee. A uniform grid
@@ -149,6 +170,27 @@ function full of mode flags.
 Text is drawn in screen space rather than scaled with the world: rasterizing a
 glyph and then magnifying it is what makes canvas text look muddy.
 
+### The live layer
+
+A net has one voltage, so colouring wires by it is exact. Current is harder: the
+engine knows what flows through each device, but a wire is only a connection, and
+a net with several branches does not assign a current to each segment on its own.
+
+It does once you look at the topology. Cut a wire in a tree-shaped net and the net
+falls into two halves; that wire must carry whatever is injected on one side. So
+each net gets a spanning tree, rooted at ground where there is one, and the device
+currents accumulate from the leaves inward. That is exact for trees, which nets
+nearly always are. Wires that close a loop are genuinely ambiguous — ideal wires in
+parallel share current in no defined ratio — and are left alone rather than guessed
+at.
+
+Voltage uses a diverging scale: two hues with a neutral grey midpoint, no rainbow
+and no hue in the middle. Zero volts is drawn in the ordinary wire grey, so colour
+appears only where there is something to say. The poles were checked rather than
+eyeballed — ΔE 22 under protanopia, 32 under tritanopia, 32 with normal vision,
+all clearing 3:1 against the canvas — and colour is never the only channel, since
+the same values are on the scope and in the readout.
+
 ## What is in the box
 
 | | |
@@ -158,7 +200,7 @@ glyph and then magnifying it is what makes canvas text look muddy.
 | **Semiconductors** | diode (silicon, LED, zener), NMOS, PMOS, NPN, PNP |
 | **Analog** | op-amp with finite gain and rail saturation, voltage-controlled switch, VCVS, VCCS |
 | **Logic** | AND, NAND, OR, NOR, XOR, NOT, D flip-flop, tri-state buffer, clock |
-| **Analyses** | DC operating point, DC sweep, mixed-signal transient |
+| **Analyses** | DC operating point, DC sweep, mixed-signal transient, AC frequency sweep |
 
 ## Using the editor
 
@@ -174,7 +216,10 @@ glyph and then magnifying it is what makes canvas text look muddy.
 | Zoom | scroll — `Shift`-scroll pans sideways |
 | Fit to the drawing | `F` |
 | Back to selecting | `V` or `Esc` |
+| Copy / cut / paste | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` — paste lands at the cursor |
+| Duplicate | `Ctrl+D` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
+| Play / pause the overlay | `Space` |
 | Plot a net | tick it in the Signals list |
 
 Wires and pins snap: aim near a pin and the endpoint lands on it exactly, with the
@@ -187,19 +232,15 @@ Values accept engineering notation: `4k7`, `4.7k`, `10u`, `1meg`, `100n`.
 
 Roughly in order of how much they would change what repath is good for:
 
-- **AC / frequency-domain analysis.** Bode plots are table stakes for filter work.
 - **SPICE model import.** Reading `.model` and `.subckt` from a manufacturer's
   datasheet is the difference between a toy and a tool.
 - **Subcircuits.** Draw a block once, use it everywhere, nest it.
 - **Sparse matrix solver.** The dense LU is fine to a few hundred nodes and then it
   is not.
-- **Live animation.** The canvas already has a spare layer for it: current shown
-  flowing along the wires, and wires tinted by voltage, driven from the simulation
-  results. This is the strongest visual differentiator over what else is free.
 - **Dirty-rectangle repaint.** Layer-level invalidation plus viewport culling
   covers most of the benefit today; per-region repaint is the next step up.
+- **Noise and distortion analysis**, once AC has proved itself.
 - **Netlist import/export** in SPICE format.
-- **Sharing by URL**, so a circuit can be pasted into a forum answer.
 - **Richer device models** — Early effect on the BJT, MOSFET levels beyond
   Shichman-Hodges, temperature sweeps.
 - **More logic**: counters, registers, decoders, memory.
@@ -217,6 +258,13 @@ RC and RL step responses against the closed-form exponential, an LC tank against
 conservation of energy, a MOSFET's saturation current against the Shichman-Hodges
 equation, a BJT's operating point against hand analysis, and a NAND gate's output
 against its truth table at every sampled instant.
+
+The frequency-domain tests are the same idea: an RC low-pass has to be −3 dB and
+exactly −45° at its corner, roll off 20 dB per decade, and settle at −90°; a
+series RLC has to peak at its resonant frequency with the Q its component values
+imply; and a common-emitter amplifier has to lose its gain when its base bias is
+taken away — which only happens if the sweep really is linearizing around the
+operating point.
 
 ## Contributing
 

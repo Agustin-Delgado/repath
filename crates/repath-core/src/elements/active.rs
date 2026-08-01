@@ -6,7 +6,8 @@
 //! everywhere, so the Jacobian never lies, and with a high enough gain the
 //! difference from an ideal clamp is microvolts.
 
-use crate::element::{Element, NodeId, StampCtx, StampReport, node_index};
+use crate::complex::{C64, ComplexSystem};
+use crate::element::{AcCtx, Element, NodeId, StampCtx, StampReport, node_index};
 use crate::linalg::LinearSystem;
 use serde::{Deserialize, Serialize};
 
@@ -23,12 +24,26 @@ pub struct OpAmp {
     pub gain: f64,
     pub vmax: f64,
     pub vmin: f64,
+    /// Differential gain at the operating point. Near zero once the output is
+    /// against a rail, which is exactly right: a saturated op-amp passes no
+    /// signal, and AC analysis should say so.
+    op_gain: f64,
     branch: usize,
 }
 
 impl OpAmp {
     pub fn new(name: impl Into<String>, out: NodeId, np: NodeId, nn: NodeId) -> Self {
-        Self { name: name.into(), out, np, nn, gain: 1e5, vmax: 15.0, vmin: -15.0, branch: 0 }
+        Self {
+            name: name.into(),
+            out,
+            np,
+            nn,
+            gain: 1e5,
+            vmax: 15.0,
+            vmin: -15.0,
+            op_gain: 1e5,
+            branch: 0,
+        }
     }
 
     pub fn with_rails(mut self, vmin: f64, vmax: f64) -> Self {
@@ -71,6 +86,7 @@ impl Element for OpAmp {
     fn stamp(&mut self, sys: &mut LinearSystem, ctx: &StampCtx) -> StampReport {
         let vd = ctx.voltage(self.np) - ctx.voltage(self.nn);
         let (vout, a) = self.transfer(vd);
+        self.op_gain = a;
 
         let (out, np, nn, k) =
             (node_index(self.out), node_index(self.np), node_index(self.nn), Some(self.branch));
@@ -84,6 +100,15 @@ impl Element for OpAmp {
         sys.add_rhs(k, vout - a * vd);
 
         StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        let (out, np, nn, k) =
+            (node_index(self.out), node_index(self.np), node_index(self.nn), Some(self.branch));
+        sys.add(out, k, C64::ONE);
+        sys.add(k, out, C64::ONE);
+        sys.add(k, np, C64::real(-self.op_gain));
+        sys.add(k, nn, C64::real(self.op_gain));
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {
@@ -116,6 +141,8 @@ pub struct Switch {
     pub cp: NodeId,
     pub cm: NodeId,
     pub model: SwitchModel,
+    /// Conductance at the operating point.
+    op_g: f64,
 }
 
 impl Switch {
@@ -127,7 +154,7 @@ impl Switch {
         cm: NodeId,
         model: SwitchModel,
     ) -> Self {
-        Self { name: name.into(), p, m, cp, cm, model }
+        Self { name: name.into(), p, m, cp, cm, model, op_g: 0.0 }
     }
 
     /// Conductance and its derivative with respect to the control voltage.
@@ -165,6 +192,7 @@ impl Element for Switch {
         let vc = ctx.voltage(self.cp) - ctx.voltage(self.cm);
         let vsw = ctx.voltage(self.p) - ctx.voltage(self.m);
         let (g, dgdv) = self.conductance(vc);
+        self.op_g = g;
 
         let (p, m) = (node_index(self.p), node_index(self.m));
         let (cp, cm) = (node_index(self.cp), node_index(self.cm));
@@ -185,6 +213,12 @@ impl Element for Switch {
         sys.add_current(p, m, ieq);
 
         StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        // The control input is a bias, not a signal path: a switch being nudged
+        // is not something AC analysis has anything useful to say about.
+        sys.add_admittance(node_index(self.p), node_index(self.m), C64::real(self.op_g));
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {

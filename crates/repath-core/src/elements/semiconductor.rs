@@ -8,8 +8,9 @@
 //! Every exponential junction runs through `limit_junction` first. Without it a
 //! single overshooting iterate produces `exp(500)` and the solve dies.
 
+use crate::complex::{C64, ComplexSystem};
 use crate::element::{
-    Element, NodeId, StampCtx, StampReport, critical_voltage, limit_junction, node_index,
+    AcCtx, Element, NodeId, StampCtx, StampReport, critical_voltage, limit_junction, node_index,
 };
 use crate::linalg::LinearSystem;
 use serde::{Deserialize, Serialize};
@@ -76,11 +77,13 @@ pub struct Diode {
     pub m: NodeId,
     pub model: DiodeModel,
     v_prev_iter: f64,
+    /// Small-signal conductance at the operating point, kept for AC analysis.
+    gd_op: f64,
 }
 
 impl Diode {
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, model: DiodeModel) -> Self {
-        Self { name: name.into(), p, m, model, v_prev_iter: 0.0 }
+        Self { name: name.into(), p, m, model, v_prev_iter: 0.0, gd_op: 0.0 }
     }
 
     /// Current and conductance at a given junction voltage.
@@ -132,6 +135,7 @@ impl Element for Diode {
 
         let (id, gd) = self.evaluate(vd);
         let gd = gd + ctx.gmin;
+        self.gd_op = gd;
         let ieq = id - gd * vd;
 
         let (p, m) = (node_index(self.p), node_index(self.m));
@@ -141,8 +145,20 @@ impl Element for Diode {
         if limited { StampReport::LIMITED } else { StampReport::CLEAN }
     }
 
+    fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
+        // A forward-biased junction is a small resistance, a reverse-biased one is
+        // effectively open. Both fall out of the conductance the operating point
+        // already computed.
+        sys.add_admittance(
+            node_index(self.p),
+            node_index(self.m),
+            C64::real(self.gd_op.max(ctx.gmin)),
+        );
+    }
+
     fn reset(&mut self) {
         self.v_prev_iter = 0.0;
+        self.gd_op = 0.0;
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {
@@ -219,6 +235,13 @@ pub struct Mosfet {
     pub g: NodeId,
     pub s: NodeId,
     pub model: MosfetModel,
+    /// Transconductance and output conductance at the operating point, with the
+    /// terminals as they resolved there — a MOSFET is symmetric and the drain and
+    /// source swap when the bias reverses.
+    op_gm: f64,
+    op_gds: f64,
+    op_drain: NodeId,
+    op_source: NodeId,
 }
 
 /// Drain current and its derivatives, all in n-channel normalized form.
@@ -236,7 +259,17 @@ impl Mosfet {
         s: NodeId,
         model: MosfetModel,
     ) -> Self {
-        Self { name: name.into(), d, g, s, model }
+        Self {
+            name: name.into(),
+            d,
+            g,
+            s,
+            model,
+            op_gm: 0.0,
+            op_gds: 0.0,
+            op_drain: d,
+            op_source: s,
+        }
     }
 
     /// Evaluate with `vgs`/`vds` already normalized to the n-channel convention
@@ -297,6 +330,10 @@ impl Element for Mosfet {
         // Map back to the real terminals.
         let (dn, sn) = if swapped { (self.s, self.d) } else { (self.d, self.s) };
         let (d, g, s) = (node_index(dn), node_index(self.g), node_index(sn));
+        self.op_gm = op.gm;
+        self.op_gds = op.gds;
+        self.op_drain = dn;
+        self.op_source = sn;
 
         // ids = gm*vgs + gds*vds + ieq, with vgs = vg - vs and vds = vd - vs.
         let vgs = vg - vlo;
@@ -323,6 +360,25 @@ impl Element for Mosfet {
         // Keep the drain and source tied to something even in cutoff.
         sys.add_conductance(d, s, ctx.gmin);
         StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
+        let (d, g, s) = (node_index(self.op_drain), node_index(self.g), node_index(self.op_source));
+        // The channel-type sign cancels in the derivatives: both the current and
+        // the controlling voltage are mirrored, so gm and gds are the same in the
+        // real frame as in the normalized one.
+        let gm = C64::real(self.op_gm);
+        let gds = C64::real(self.op_gds);
+
+        sys.add(d, g, gm);
+        sys.add(d, s, -gm);
+        sys.add(d, d, gds);
+        sys.add(d, s, -gds);
+        sys.add(s, g, -gm);
+        sys.add(s, s, gm);
+        sys.add(s, d, -gds);
+        sys.add(s, s, gds);
+        sys.add_admittance(d, s, C64::real(ctx.gmin));
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {
@@ -395,11 +451,29 @@ pub struct Bjt {
     pub model: BjtModel,
     vbe_prev: f64,
     vbc_prev: f64,
+    /// Small-signal conductances at the operating point: the two junction
+    /// conductances and the two transport transconductances.
+    op_gif: f64,
+    op_gir: f64,
+    op_gbe: f64,
+    op_gbc: f64,
 }
 
 impl Bjt {
     pub fn new(name: impl Into<String>, c: NodeId, b: NodeId, e: NodeId, model: BjtModel) -> Self {
-        Self { name: name.into(), c, b, e, model, vbe_prev: 0.0, vbc_prev: 0.0 }
+        Self {
+            name: name.into(),
+            c,
+            b,
+            e,
+            model,
+            vbe_prev: 0.0,
+            vbc_prev: 0.0,
+            op_gif: 0.0,
+            op_gir: 0.0,
+            op_gbe: 0.0,
+            op_gbc: 0.0,
+        }
     }
 }
 
@@ -448,6 +522,11 @@ impl Element for Bjt {
         let gbe = gif / m.bf + ctx.gmin;
         let gbc = gir / m.br + ctx.gmin;
 
+        self.op_gif = gif;
+        self.op_gir = gir;
+        self.op_gbe = gbe;
+        self.op_gbc = gbc;
+
         let ic = (i_f - i_r) - ibc;
         let ib = ibe + ibc;
 
@@ -481,9 +560,36 @@ impl Element for Bjt {
         if lim_e || lim_c { StampReport::LIMITED } else { StampReport::CLEAN }
     }
 
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        let (cn, bn, en) = (node_index(self.c), node_index(self.b), node_index(self.e));
+        // The same rows as the DC stamp, without the constant terms: a small
+        // signal has no operating point of its own to correct for.
+        let g_cc = C64::real(self.op_gir + self.op_gbc);
+        let gif = C64::real(self.op_gif);
+        let gir = C64::real(self.op_gir);
+        let gbe = C64::real(self.op_gbe);
+        let gbc = C64::real(self.op_gbc);
+
+        sys.add(cn, bn, gif - g_cc);
+        sys.add(cn, en, -gif);
+        sys.add(cn, cn, g_cc);
+
+        sys.add(bn, bn, gbe + gbc);
+        sys.add(bn, en, -gbe);
+        sys.add(bn, cn, -gbc);
+
+        sys.add(en, bn, -(gif - gir + gbe));
+        sys.add(en, en, gif + gbe);
+        sys.add(en, cn, -gir);
+    }
+
     fn reset(&mut self) {
         self.vbe_prev = 0.0;
         self.vbc_prev = 0.0;
+        self.op_gif = 0.0;
+        self.op_gir = 0.0;
+        self.op_gbe = 0.0;
+        self.op_gbc = 0.0;
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {

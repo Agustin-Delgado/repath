@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 
 use crate::bridge::{AdcBridge, DacBridge, LogicFamily};
+use crate::complex::{C64, ComplexSystem};
 use crate::digital::{DigitalDevice, DigitalDomain, Logic, NetId};
-use crate::element::{Element, NodeId, StampCtx};
+use crate::element::{AcCtx, Element, NodeId, StampCtx};
 use crate::linalg::LinearSystem;
 
 /// Everything the simulator is asked to solve.
@@ -205,6 +206,21 @@ impl Circuit {
             sys.add(Some(i), Some(i), ctx.gmin);
         }
         limited
+    }
+
+    /// Stamp every element's small-signal contribution at one frequency.
+    pub(crate) fn ac_stamp_all(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
+        for element in &self.elements {
+            element.ac_stamp(sys, ctx);
+        }
+        for dac in &self.dacs {
+            dac.ac_stamp(sys, ctx);
+        }
+
+        let node_rows = self.node_names.len().saturating_sub(1);
+        for i in 0..node_rows {
+            sys.add(Some(i), Some(i), C64::real(ctx.gmin));
+        }
     }
 
     /// Mutable access to the elements, for editing values between runs.

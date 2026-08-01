@@ -6,7 +6,7 @@
  * simulation that produced them.
  */
 
-import init, { Simulation, version } from './wasm/repath.js';
+import init, { Simulation, runFrequencySweep as sweep, version } from './wasm/repath.js';
 
 export type LogicState = 'low' | 'high' | 'unknown' | 'highz';
 
@@ -129,6 +129,51 @@ export async function runTransient(
 		throw toEngineError(cause);
 	} finally {
 		simulation.free();
+	}
+}
+
+export interface FrequencyRun {
+	frequencies: Float64Array;
+	unknownNames: string[];
+	nodeCount: number;
+	/** Linear magnitude per unknown, indexed by frequency. */
+	magnitude: Float64Array[];
+	/** Phase in degrees per unknown, already unwrapped. */
+	phase: Float64Array[];
+	elapsedMs: number;
+}
+
+export async function runFrequencySweep(
+	netlist: unknown,
+	startHz: number,
+	stopHz: number,
+	pointsPerDecade = 20
+): Promise<FrequencyRun> {
+	await ensureEngine();
+
+	let run;
+	try {
+		const started = performance.now();
+		run = sweep(JSON.stringify(netlist), startHz, stopHz, pointsPerDecade);
+		const elapsedMs = performance.now() - started;
+
+		const meta = JSON.parse(run.meta()) as {
+			names: string[];
+			node_count: number;
+			point_count: number;
+		};
+		return {
+			frequencies: run.frequencies(),
+			unknownNames: meta.names,
+			nodeCount: meta.node_count,
+			magnitude: meta.names.map((_, i) => run!.magnitude(i)),
+			phase: meta.names.map((_, i) => run!.phase(i)),
+			elapsedMs
+		};
+	} catch (cause) {
+		throw toEngineError(cause);
+	} finally {
+		run?.free();
 	}
 }
 

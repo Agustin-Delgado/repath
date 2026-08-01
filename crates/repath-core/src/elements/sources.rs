@@ -5,7 +5,8 @@
 //! exactly on those instants instead of stepping over them, which is the
 //! difference between a clean square wave and one with rounded, jittery edges.
 
-use crate::element::{AcceptCtx, Element, NodeId, StampCtx, StampReport, node_index};
+use crate::complex::{C64, ComplexSystem};
+use crate::element::{AcCtx, AcceptCtx, Element, NodeId, StampCtx, StampReport, node_index};
 use crate::linalg::LinearSystem;
 use serde::{Deserialize, Serialize};
 
@@ -168,6 +169,13 @@ impl Waveform {
     }
 }
 
+/// Magnitude and phase in degrees as a complex phasor.
+#[inline]
+fn phasor(magnitude: f64, phase_degrees: f64) -> C64 {
+    let radians = phase_degrees.to_radians();
+    C64::new(magnitude * radians.cos(), magnitude * radians.sin())
+}
+
 #[inline]
 fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t.clamp(0.0, 1.0)
@@ -180,12 +188,24 @@ pub struct VoltageSource {
     pub p: NodeId,
     pub m: NodeId,
     pub waveform: Waveform,
+    /// Small-signal drive amplitude for AC analysis. Zero for a source that is
+    /// only supplying a bias — a rail should not also inject a signal.
+    pub ac_magnitude: f64,
+    /// Phase of that drive, in degrees.
+    pub ac_phase: f64,
     branch: usize,
 }
 
 impl VoltageSource {
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, waveform: Waveform) -> Self {
-        Self { name: name.into(), p, m, waveform, branch: 0 }
+        Self { name: name.into(), p, m, waveform, ac_magnitude: 0.0, ac_phase: 0.0, branch: 0 }
+    }
+
+    /// Mark this source as the input for AC analysis.
+    pub fn with_ac(mut self, magnitude: f64, phase_degrees: f64) -> Self {
+        self.ac_magnitude = magnitude;
+        self.ac_phase = phase_degrees;
+        self
     }
 
     pub fn dc(name: impl Into<String>, p: NodeId, m: NodeId, v: f64) -> Self {
@@ -221,6 +241,15 @@ impl Element for VoltageSource {
         StampReport::CLEAN
     }
 
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        let (p, m, k) = (node_index(self.p), node_index(self.m), Some(self.branch));
+        sys.add(p, k, C64::ONE);
+        sys.add(m, k, -C64::ONE);
+        sys.add(k, p, C64::ONE);
+        sys.add(k, m, -C64::ONE);
+        sys.add_rhs(k, phasor(self.ac_magnitude, self.ac_phase));
+    }
+
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
         self.waveform.max_timestep(ctx.time)
     }
@@ -242,6 +271,10 @@ pub struct CurrentSource {
     pub p: NodeId,
     pub m: NodeId,
     pub waveform: Waveform,
+    /// Small-signal drive amplitude for AC analysis.
+    pub ac_magnitude: f64,
+    /// Phase of that drive, in degrees.
+    pub ac_phase: f64,
     /// Value last stamped. A current source has no branch unknown to read the
     /// answer back from, so it remembers what it injected.
     last: f64,
@@ -249,7 +282,7 @@ pub struct CurrentSource {
 
 impl CurrentSource {
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, waveform: Waveform) -> Self {
-        Self { name: name.into(), p, m, waveform, last: 0.0 }
+        Self { name: name.into(), p, m, waveform, ac_magnitude: 0.0, ac_phase: 0.0, last: 0.0 }
     }
 }
 
@@ -266,6 +299,14 @@ impl Element for CurrentSource {
         self.last = i;
         sys.add_current(node_index(self.p), node_index(self.m), i);
         StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        sys.add_current(
+            node_index(self.p),
+            node_index(self.m),
+            phasor(self.ac_magnitude, self.ac_phase),
+        );
     }
 
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
@@ -337,6 +378,17 @@ impl Element for Vcvs {
         StampReport::CLEAN
     }
 
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        let (p, m, k) = (node_index(self.p), node_index(self.m), Some(self.branch));
+        let (cp, cm) = (node_index(self.cp), node_index(self.cm));
+        sys.add(p, k, C64::ONE);
+        sys.add(m, k, -C64::ONE);
+        sys.add(k, p, C64::ONE);
+        sys.add(k, m, -C64::ONE);
+        sys.add(k, cp, C64::real(-self.gain));
+        sys.add(k, cm, C64::real(self.gain));
+    }
+
     fn current(&self, x: &[f64]) -> Option<f64> {
         x.get(self.branch).copied()
     }
@@ -382,6 +434,16 @@ impl Element for Vccs {
         sys.add(m, cp, -self.gm);
         sys.add(m, cm, self.gm);
         StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        let (p, m) = (node_index(self.p), node_index(self.m));
+        let (cp, cm) = (node_index(self.cp), node_index(self.cm));
+        let gm = C64::real(self.gm);
+        sys.add(p, cp, gm);
+        sys.add(p, cm, -gm);
+        sys.add(m, cp, -gm);
+        sys.add(m, cm, gm);
     }
 }
 

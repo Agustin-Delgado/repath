@@ -75,6 +75,9 @@
 								{#if param.unit}<span class="unit">{param.unit}</span>{/if}
 							</span>
 						{/if}
+						{#if param.description}
+							<span class="description">{param.description}</span>
+						{/if}
 					</label>
 				{/if}
 			{/each}
@@ -164,6 +167,13 @@
 	.field-label {
 		font-size: 0.7rem;
 		color: var(--label-dim);
+	}
+
+	.description {
+		font-size: 0.66rem;
+		color: var(--label-dim);
+		line-height: 1.4;
+		opacity: 0.85;
 	}
 
 	.value-field {

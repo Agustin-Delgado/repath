@@ -2,6 +2,7 @@
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
 	import type { DigitalTransition } from '$lib/engine';
+	import BodePlot from './BodePlot.svelte';
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let host = $state<HTMLDivElement | null>(null);
@@ -298,6 +299,9 @@
 </script>
 
 <div class="scope">
+	{#if app.analysis === 'frequency'}
+		<BodePlot />
+	{:else}
 	<div class="plot" bind:this={host}>
 		<canvas
 			bind:this={canvas}
@@ -327,6 +331,7 @@
 			</div>
 		{/if}
 	</div>
+	{/if}
 
 	<aside class="signals">
 		<h3>Signals</h3>
@@ -358,7 +363,12 @@
 			{/each}
 		</ul>
 
-		{#if app.result}
+		{#if app.analysis === 'frequency' && app.acResult}
+			<footer>
+				{app.acResult.frequencies.length} points ·
+				{app.acResult.elapsedMs.toFixed(0)} ms
+			</footer>
+		{:else if app.analysis === 'transient' && app.result}
 			<footer>
 				{app.result.stats.accepted_steps} steps ·
 				{app.result.stats.newton_iterations} iterations ·

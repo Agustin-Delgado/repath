@@ -12,6 +12,8 @@
 
 	let version = $state('');
 	let stopField = $state(formatValue(app.stopTime, 3));
+	let acStartField = $state(formatValue(app.acStart, 3));
+	let acStopField = $state(formatValue(app.acStop, 3));
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let shareState = $state<'idle' | 'copied' | 'failed'>('idle');
 
@@ -60,6 +62,16 @@
 		stopField = formatValue(app.stopTime, 3);
 	}
 
+	function commitAc(which: 'start' | 'stop', value: string) {
+		const parsed = parseValue(value);
+		if (parsed !== null && parsed > 0) {
+			if (which === 'start') app.acStart = parsed;
+			else app.acStop = parsed;
+		}
+		acStartField = formatValue(app.acStart, 3);
+		acStopField = formatValue(app.acStop, 3);
+	}
+
 	function save() {
 		const blob = new Blob([app.toJSON()], { type: 'application/json' });
 		const url = URL.createObjectURL(blob);
@@ -103,18 +115,52 @@
 				{app.running ? 'Running…' : 'Run'}
 			</button>
 
-			<label class="stop">
-				<span>for</span>
-				<input
-					bind:value={stopField}
-					onblur={(e) => commitStopTime(e.currentTarget.value)}
-					onkeydown={(e) => {
-						if (e.key === 'Enter') e.currentTarget.blur();
-					}}
-					aria-label="Simulation length"
-				/>
-				<span class="unit">s</span>
-			</label>
+			<select
+				value={app.analysis}
+				onchange={(e) => (app.analysis = e.currentTarget.value as 'transient' | 'frequency')}
+				aria-label="Analysis"
+				title="Which analysis Run performs"
+			>
+				<option value="transient">Transient</option>
+				<option value="frequency">Frequency</option>
+			</select>
+
+			{#if app.analysis === 'frequency'}
+				<label class="stop">
+					<span>from</span>
+					<input
+						bind:value={acStartField}
+						onblur={(e) => commitAc('start', e.currentTarget.value)}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') e.currentTarget.blur();
+						}}
+						aria-label="Sweep start frequency"
+					/>
+					<span>to</span>
+					<input
+						bind:value={acStopField}
+						onblur={(e) => commitAc('stop', e.currentTarget.value)}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') e.currentTarget.blur();
+						}}
+						aria-label="Sweep stop frequency"
+					/>
+					<span class="unit">Hz</span>
+				</label>
+			{:else}
+				<label class="stop">
+					<span>for</span>
+					<input
+						bind:value={stopField}
+						onblur={(e) => commitStopTime(e.currentTarget.value)}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') e.currentTarget.blur();
+						}}
+						aria-label="Simulation length"
+					/>
+					<span class="unit">s</span>
+				</label>
+			{/if}
 
 			<span class="divider"></span>
 
@@ -171,8 +217,10 @@
 	</main>
 
 	<section class="bottom">
-		<Playback />
-		<Scope />
+		{#if app.analysis === 'transient'}
+			<Playback />
+		{/if}
+		<div class="scope-host"><Scope /></div>
 	</section>
 </div>
 
@@ -347,11 +395,19 @@
 		min-height: 0;
 	}
 
+	/* Flex rather than fixed grid rows: the transport bar is conditional, and with
+	   `grid-template-rows` its absence would hand the scope an auto-sized row and
+	   collapse it to nothing. */
 	.bottom {
 		border-top: 1px solid var(--border);
 		min-height: 0;
-		display: grid;
-		grid-template-rows: auto minmax(0, 1fr);
+		display: flex;
+		flex-direction: column;
+	}
+
+	.scope-host {
+		flex: 1;
+		min-height: 0;
 	}
 
 	@media (max-width: 900px) {

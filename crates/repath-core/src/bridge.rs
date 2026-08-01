@@ -10,8 +10,9 @@
 //!   voltage crosses a threshold, interpolates the crossing instant and schedules
 //!   the digital event *there* rather than at the end of the step.
 
+use crate::complex::{C64, ComplexSystem};
 use crate::digital::{DriverId, Logic, NetId};
-use crate::element::{Element, NodeId, StampCtx, StampReport, node_index};
+use crate::element::{AcCtx, Element, NodeId, StampCtx, StampReport, node_index};
 use crate::linalg::LinearSystem;
 use serde::{Deserialize, Serialize};
 
@@ -198,6 +199,13 @@ impl Element for DacBridge {
         // Norton current source pushing the node toward `v`.
         sys.add_current(node, None, -g * v);
         StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        // A driven digital output is a low impedance to ground as far as a small
+        // signal is concerned; a released one is not there at all.
+        let g = if self.driving { 1.0 / self.family.r_out.max(1e-6) } else { 1e-12 };
+        sys.add_admittance(node_index(self.node), None, C64::real(g));
     }
 }
 

@@ -366,6 +366,171 @@ fn dc_sweep_traces_a_diode_iv_curve() {
 }
 
 // ---------------------------------------------------------------------------
+// Frequency domain
+// ---------------------------------------------------------------------------
+
+/// Magnitude and phase of an unknown at the frequency nearest `hz`.
+fn at_frequency(result: &AcResult, name: &str, hz: f64) -> (f64, f64) {
+    let signal = result.index_of(name).unwrap_or_else(|| panic!("no unknown named {name}"));
+    let mut best = 0;
+    for (i, f) in result.frequencies.iter().enumerate() {
+        if (f.ln() - hz.ln()).abs() < (result.frequencies[best].ln() - hz.ln()).abs() {
+            best = i;
+        }
+    }
+    (result.magnitude[signal][best], result.phase[signal][best])
+}
+
+#[test]
+fn rc_low_pass_has_the_textbook_response() {
+    let (r, cap) = (1_000.0, 1e-7);
+    let cutoff = 1.0 / (std::f64::consts::TAU * r * cap);
+
+    let mut c = Circuit::new();
+    let vin = c.node("vin");
+    let out = c.node("out");
+    c.add(Box::new(
+        VoltageSource::new("V1", vin, Circuit::GROUND, Waveform::Dc { value: 0.0 })
+            .with_ac(1.0, 0.0),
+    ));
+    c.add(Box::new(Resistor::new("R1", vin, out, r)));
+    c.add(Box::new(Capacitor::new("C1", out, Circuit::GROUND, cap)));
+
+    let result = Simulator::default()
+        .ac_sweep(&mut c, AcConfig::new(cutoff / 1000.0, cutoff * 1000.0))
+        .unwrap();
+
+    // Passband: unity gain, no phase shift.
+    let (low_mag, low_phase) = at_frequency(&result, "v(out)", cutoff / 1000.0);
+    assert!((low_mag - 1.0).abs() < 1e-4, "passband gain was {low_mag}");
+    assert!(low_phase.abs() < 0.2, "passband phase was {low_phase}");
+
+    // At the corner: -3 dB and exactly -45 degrees. This is the single number
+    // that says whether the complex stamping is right.
+    let (corner_mag, corner_phase) = at_frequency(&result, "v(out)", cutoff);
+    assert!(
+        (corner_mag - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.01,
+        "corner gain was {corner_mag}, expected 0.7071"
+    );
+    assert!((corner_phase + 45.0).abs() < 1.0, "corner phase was {corner_phase}");
+
+    // Stopband: a single pole rolls off at 20 dB per decade, and one decade past
+    // the corner the gain is a tenth.
+    let (decade_mag, _) = at_frequency(&result, "v(out)", cutoff * 10.0);
+    assert!((decade_mag - 0.1).abs() < 0.005, "a decade out the gain was {decade_mag}");
+
+    // And the phase keeps going to -90, rather than wrapping back to +180.
+    let (_, far_phase) = at_frequency(&result, "v(out)", cutoff * 1000.0);
+    assert!((far_phase + 90.0).abs() < 1.0, "asymptotic phase was {far_phase}");
+}
+
+#[test]
+fn series_rlc_peaks_at_its_resonant_frequency() {
+    let (l, cap, r): (f64, f64, f64) = (10e-3, 1e-6, 5.0);
+    let resonance = 1.0 / (std::f64::consts::TAU * (l * cap).sqrt());
+
+    let mut c = Circuit::new();
+    let vin = c.node("vin");
+    let mid = c.node("mid");
+    let out = c.node("out");
+    c.add(Box::new(
+        VoltageSource::new("V1", vin, Circuit::GROUND, Waveform::Dc { value: 0.0 })
+            .with_ac(1.0, 0.0),
+    ));
+    c.add(Box::new(Resistor::new("R1", vin, mid, r)));
+    c.add(Box::new(Inductor::new("L1", mid, out, l)));
+    c.add(Box::new(Capacitor::new("C1", out, Circuit::GROUND, cap)));
+
+    let result = Simulator::default()
+        .ac_sweep(&mut c, AcConfig::new(resonance / 100.0, resonance * 100.0))
+        .unwrap();
+
+    let index = result.index_of("v(out)").unwrap();
+    let peak = result.magnitude[index]
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(i, v)| (result.frequencies[i], *v))
+        .unwrap();
+
+    // The peak lands at the resonant frequency, within the sweep's resolution.
+    assert!(
+        (peak.0 / resonance - 1.0).abs() < 0.15,
+        "peak at {:.1} Hz, expected {resonance:.1} Hz",
+        peak.0
+    );
+    // And it is a real peak: Q = (1/R)*sqrt(L/C) = 20 here, so the gain well
+    // exceeds unity.
+    let expected_q = (1.0 / r) * (l / cap).sqrt();
+    assert!(peak.1 > expected_q * 0.7, "peak gain {} against Q {expected_q}", peak.1);
+}
+
+#[test]
+fn inverting_opamp_gain_is_flat_and_inverted() {
+    let mut c = Circuit::new();
+    let vin = c.node("vin");
+    let inv = c.node("inv");
+    let out = c.node("out");
+    c.add(Box::new(
+        VoltageSource::new("V1", vin, Circuit::GROUND, Waveform::Dc { value: 0.0 })
+            .with_ac(1.0, 0.0),
+    ));
+    c.add(Box::new(Resistor::new("R1", vin, inv, 1_000.0)));
+    c.add(Box::new(Resistor::new("RF", inv, out, 22_000.0)));
+    c.add(Box::new(OpAmp::new("U1", out, Circuit::GROUND, inv).with_rails(-15.0, 15.0)));
+
+    let result = Simulator::default().ac_sweep(&mut c, AcConfig::new(1.0, 1e5)).unwrap();
+
+    for hz in [10.0, 1_000.0, 50_000.0] {
+        let (mag, phase) = at_frequency(&result, "v(out)", hz);
+        assert!((mag - 22.0).abs() < 0.1, "gain at {hz} Hz was {mag}, expected 22");
+        // Inverting: 180 degrees out, whichever way the unwrapper walked to it.
+        assert!((phase.abs() - 180.0).abs() < 1.0, "phase at {hz} Hz was {phase}, expected ±180");
+    }
+}
+
+#[test]
+fn ac_analysis_linearizes_around_the_operating_point() {
+    // A common-emitter stage: the gain AC reports must come from the bias the DC
+    // solution actually settled at, not from an idealisation.
+    let build = |rb: f64| {
+        let mut c = Circuit::new();
+        let vcc = c.node("vcc");
+        let base = c.node("base");
+        let col = c.node("col");
+        let input = c.node("in");
+        c.add(Box::new(VoltageSource::dc("V1", vcc, Circuit::GROUND, 12.0)));
+        c.add(Box::new(Resistor::new("RB", vcc, base, rb)));
+        c.add(Box::new(Resistor::new("RC", vcc, col, 2_200.0)));
+        c.add(Box::new(Bjt::new("Q1", col, base, Circuit::GROUND, BjtModel::npn())));
+        c.add(Box::new(
+            VoltageSource::new("V2", input, Circuit::GROUND, Waveform::Dc { value: 0.0 })
+                .with_ac(1.0, 0.0),
+        ));
+        c.add(Box::new(Capacitor::new("CIN", input, base, 10e-6)));
+        c
+    };
+
+    let mut biased = build(470_000.0);
+    let result =
+        Simulator::default().ac_sweep(&mut biased, AcConfig::new(100.0, 100_000.0)).unwrap();
+    let (gain, phase) = at_frequency(&result, "v(col)", 10_000.0);
+
+    // gm = Ic/Vt with Ic near 5 mA gives a gain of roughly gm * Rc — hundreds,
+    // and inverted.
+    assert!(gain > 50.0, "expected real voltage gain, got {gain}");
+    assert!((phase.abs() - 180.0).abs() < 25.0, "a common emitter inverts; phase was {phase}");
+
+    // Starve the base and the transistor falls out of conduction, so the gain
+    // has to collapse. An analysis that ignored the operating point would report
+    // the same number as before.
+    let mut starved = build(1e9);
+    let off = Simulator::default().ac_sweep(&mut starved, AcConfig::new(100.0, 100_000.0)).unwrap();
+    let (off_gain, _) = at_frequency(&off, "v(col)", 10_000.0);
+    assert!(off_gain < gain / 100.0, "cut off, the gain was still {off_gain}");
+}
+
+// ---------------------------------------------------------------------------
 // Digital
 // ---------------------------------------------------------------------------
 

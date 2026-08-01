@@ -151,6 +151,66 @@ impl Simulation {
     }
 }
 
+/// A frequency-domain run, kept separate from the transient one so switching
+/// between analyses does not throw away the other's results.
+#[wasm_bindgen]
+pub struct FrequencyRun {
+    result: AcResult,
+}
+
+#[wasm_bindgen]
+impl FrequencyRun {
+    /// Swept frequencies in hertz, as a `Float64Array`.
+    pub fn frequencies(&self) -> Vec<f64> {
+        self.result.frequencies.clone()
+    }
+
+    /// Linear magnitude of one unknown across the sweep.
+    pub fn magnitude(&self, index: usize) -> Vec<f64> {
+        self.result.magnitude.get(index).cloned().unwrap_or_default()
+    }
+
+    /// Phase of one unknown across the sweep, in degrees, already unwrapped.
+    pub fn phase(&self, index: usize) -> Vec<f64> {
+        self.result.phase.get(index).cloned().unwrap_or_default()
+    }
+
+    /// `{ names, node_count, point_count }` as JSON.
+    pub fn meta(&self) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct Meta<'a> {
+            names: &'a [String],
+            node_count: usize,
+            point_count: usize,
+        }
+        serde_json::to_string(&Meta {
+            names: &self.result.unknown_names,
+            node_count: self.result.node_count,
+            point_count: self.result.frequencies.len(),
+        })
+        .map_err(to_js_error)
+    }
+}
+
+/// Sweep a circuit's frequency response.
+#[wasm_bindgen(js_name = runFrequencySweep)]
+pub fn run_frequency_sweep(
+    netlist_json: &str,
+    start_hz: f64,
+    stop_hz: f64,
+    points_per_decade: usize,
+) -> Result<FrequencyRun, JsError> {
+    let netlist: Netlist = serde_json::from_str(netlist_json).map_err(to_js_error)?;
+    let mut circuit = netlist.compile().map_err(to_js_error)?;
+
+    let mut config = AcConfig::new(start_hz, stop_hz);
+    if points_per_decade > 0 {
+        config.points_per_decade = points_per_decade;
+    }
+    let result = Simulator::default().ac_sweep(&mut circuit, config).map_err(to_js_error)?;
+    Ok(FrequencyRun { result })
+}
+
 /// Engine version, so the UI can report which build it is running.
 #[wasm_bindgen]
 pub fn version() -> String {

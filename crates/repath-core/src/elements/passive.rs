@@ -5,8 +5,9 @@
 //! carrying the element's history. That is what turns a differential equation
 //! into the plain linear system the solver already knows how to handle.
 
+use crate::complex::{C64, ComplexSystem};
 use crate::element::{
-    AcceptCtx, Element, Integration, Mode, NodeId, StampCtx, StampReport, node_index,
+    AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, StampCtx, StampReport, node_index,
 };
 use crate::linalg::LinearSystem;
 use crate::lte::Trace;
@@ -43,6 +44,10 @@ impl Element for Resistor {
     fn stamp(&mut self, sys: &mut LinearSystem, _ctx: &StampCtx) -> StampReport {
         sys.add_conductance(node_index(self.p), node_index(self.m), self.conductance());
         StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        sys.add_admittance(node_index(self.p), node_index(self.m), C64::real(self.conductance()));
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {
@@ -168,6 +173,15 @@ impl Element for Capacitor {
         self.charge.suggested_step()
     }
 
+    fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
+        // Y = j*omega*C. At DC this is zero, which is an open circuit — correct.
+        sys.add_admittance(
+            node_index(self.p),
+            node_index(self.m),
+            C64::imaginary(ctx.omega * self.c),
+        );
+    }
+
     fn current(&self, _x: &[f64]) -> Option<f64> {
         Some(self.i_prev)
     }
@@ -285,6 +299,16 @@ impl Element for Inductor {
         self.flux.suggested_step()
     }
 
+    fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
+        let (p, m, k) = (node_index(self.p), node_index(self.m), Some(self.branch));
+        sys.add(p, k, C64::ONE);
+        sys.add(m, k, -C64::ONE);
+        sys.add(k, p, C64::ONE);
+        sys.add(k, m, -C64::ONE);
+        // v(p) - v(m) - j*omega*L*i = 0
+        sys.add(k, k, -C64::imaginary(ctx.omega * self.l));
+    }
+
     fn current(&self, x: &[f64]) -> Option<f64> {
         x.get(self.branch).copied()
     }
@@ -304,6 +328,11 @@ impl VariableResistor {
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, r: f64) -> Self {
         Self { name: name.into(), p, m, r }
     }
+
+    #[inline]
+    fn conductance(&self) -> f64 {
+        1.0 / self.r.abs().clamp(1e-6, 1e12)
+    }
 }
 
 impl Element for VariableResistor {
@@ -315,8 +344,11 @@ impl Element for VariableResistor {
     }
 
     fn stamp(&mut self, sys: &mut LinearSystem, _ctx: &StampCtx) -> StampReport {
-        let g = 1.0 / self.r.abs().clamp(1e-6, 1e12);
-        sys.add_conductance(node_index(self.p), node_index(self.m), g);
+        sys.add_conductance(node_index(self.p), node_index(self.m), self.conductance());
         StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        sys.add_admittance(node_index(self.p), node_index(self.m), C64::real(self.conductance()));
     }
 }

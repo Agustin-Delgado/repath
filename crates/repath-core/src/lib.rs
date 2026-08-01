@@ -29,6 +29,7 @@
 
 pub mod bridge;
 pub mod circuit;
+pub mod complex;
 pub mod digital;
 pub mod element;
 pub mod elements;
@@ -52,6 +53,7 @@ pub mod prelude {
     };
     pub use crate::netlist::{Netlist, NetlistError};
     pub use crate::solver::{
-        OperatingPoint, SimError, Simulator, SolverConfig, TransientConfig, TransientResult,
+        AcConfig, AcResult, OperatingPoint, SimError, Simulator, SolverConfig, TransientConfig,
+        TransientResult,
     };
 }

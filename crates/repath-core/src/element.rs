@@ -4,6 +4,7 @@
 //! eliminated from the MNA system, the matrix index of a node is simply
 //! `node - 1`, and ground maps to `None` — see [`node_index`].
 
+use crate::complex::ComplexSystem;
 use crate::linalg::LinearSystem;
 
 /// A circuit node. Node 0 is ground by definition.
@@ -75,6 +76,19 @@ impl StampCtx<'_> {
     pub fn unknown(&self, index: usize) -> f64 {
         self.x.get(index).copied().unwrap_or(0.0)
     }
+}
+
+/// What an element needs to stamp itself at one frequency.
+///
+/// AC analysis is a *small-signal* analysis: the circuit is linearized once at
+/// its operating point, and the result describes how a small wiggle propagates,
+/// not what the circuit does when driven hard. Nonlinear devices therefore stamp
+/// the conductances they computed during the operating point rather than
+/// recomputing anything here.
+pub struct AcCtx {
+    /// Angular frequency, radians per second.
+    pub omega: f64,
+    pub gmin: f64,
 }
 
 /// Context for rolling element state forward after a timepoint converges.
@@ -165,6 +179,14 @@ pub trait Element: std::fmt::Debug + Send + AsAny {
 
     /// Add this element's contribution to the linearized system.
     fn stamp(&mut self, sys: &mut LinearSystem, ctx: &StampCtx) -> StampReport;
+
+    /// Add this element's small-signal contribution at one frequency.
+    ///
+    /// The default contributes nothing, which makes the element an open circuit
+    /// in AC analysis. Every element that can carry a signal implements it.
+    fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
+        let _ = (sys, ctx);
+    }
 
     /// Commit state after a timepoint has converged.
     fn accept(&mut self, ctx: &AcceptCtx) {

@@ -6,7 +6,7 @@
  * simulator quietly runs the circuit you drew a minute ago.
  */
 
-import { runTransient, type TransientRun } from './engine';
+import { runFrequencySweep, runTransient, type FrequencyRun, type TransientRun } from './engine';
 import { EXAMPLES, exampleById } from './examples';
 import {
 	GRID,
@@ -72,6 +72,19 @@ class AppState {
 	running = $state(false);
 	result = $state<TransientRun | null>(null);
 	error = $state<string | null>(null);
+
+	/** Which analysis the Run button performs. */
+	analysis = $state<'transient' | 'frequency'>('transient');
+	acStart = $state(1);
+	acStop = $state(1e6);
+	acResult = $state<FrequencyRun | null>(null);
+
+	/** Whether any source is set up to drive the frequency sweep. */
+	hasAcDrive = $derived(
+		this.schematic.instances.some(
+			(i) => (i.kind === 'vsource' || i.kind === 'isource') && Number(i.params.ac) > 0
+		)
+	);
 
 	// -- playback ---------------------------------------------------------
 
@@ -396,8 +409,16 @@ class AppState {
 		this.schematic = example.build();
 		this.stopTime = example.stopTime;
 		this.exampleId = example.id;
+		// Each example arrives in whichever analysis actually shows it off — a
+		// resonant filter has nothing to say in the time domain.
+		this.analysis = example.analysis ?? 'transient';
+		if (example.frequencyRange) {
+			this.acStart = example.frequencyRange.start;
+			this.acStop = example.frequencyRange.stop;
+		}
 		this.selection = [];
 		this.result = null;
+		this.acResult = null;
 		this.error = null;
 		this.autoProbe();
 	}
@@ -464,15 +485,26 @@ class AppState {
 		this.running = true;
 		this.error = null;
 		try {
-			// At least a few hundred points, so a flat trace still looks like a line
-			// rather than two dots joined up.
-			this.result = await runTransient(compiled.netlist, this.stopTime, this.stopTime / 400);
-			if (this.probes.length === 0) this.autoProbe();
-			this.playbackTime = 0;
-			this.playing = true;
+			if (this.analysis === 'frequency') {
+				if (!this.hasAcDrive) {
+					throw new Error(
+						'No source is driving the sweep. Set a voltage source’s AC drive to 1 to make it the input.'
+					);
+				}
+				this.acResult = await runFrequencySweep(compiled.netlist, this.acStart, this.acStop);
+				if (this.probes.length === 0) this.autoProbe();
+			} else {
+				// At least a few hundred points, so a flat trace still looks like a
+				// line rather than two dots joined up.
+				this.result = await runTransient(compiled.netlist, this.stopTime, this.stopTime / 400);
+				if (this.probes.length === 0) this.autoProbe();
+				this.playbackTime = 0;
+				this.playing = true;
+			}
 		} catch (cause) {
 			this.error = cause instanceof Error ? cause.message : String(cause);
-			this.result = null;
+			if (this.analysis === 'frequency') this.acResult = null;
+			else this.result = null;
 		} finally {
 			this.running = false;
 		}

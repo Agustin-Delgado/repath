@@ -167,7 +167,9 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 					name,
 					plus: analogOf(instance, 'plus'),
 					minus: analogOf(instance, 'minus'),
-					waveform: waveform(instance)
+					waveform: waveform(instance),
+					ac_magnitude: num(instance, 'ac', 0),
+					ac_phase: 0
 				});
 				break;
 			case 'isource':
@@ -176,7 +178,9 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 					name,
 					plus: analogOf(instance, 'plus'),
 					minus: analogOf(instance, 'minus'),
-					waveform: waveform(instance)
+					waveform: waveform(instance),
+					ac_magnitude: num(instance, 'ac', 0),
+					ac_phase: 0
 				});
 				break;
 			case 'diode':

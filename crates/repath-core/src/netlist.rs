@@ -81,12 +81,23 @@ pub enum Component {
         plus: String,
         minus: String,
         waveform: Waveform,
+        /// Small-signal drive for AC analysis. Absent or zero means this source
+        /// supplies bias only — a rail should not also inject a signal.
+        #[serde(default)]
+        ac_magnitude: f64,
+        /// Phase of that drive, in degrees.
+        #[serde(default)]
+        ac_phase: f64,
     },
     CurrentSource {
         name: String,
         plus: String,
         minus: String,
         waveform: Waveform,
+        #[serde(default)]
+        ac_magnitude: f64,
+        #[serde(default)]
+        ac_phase: f64,
     },
     Diode {
         name: String,
@@ -343,13 +354,19 @@ impl Netlist {
                 }
                 c.add(Box::new(ind));
             }
-            Component::VoltageSource { name, plus, minus, waveform } => {
+            Component::VoltageSource { name, plus, minus, waveform, ac_magnitude, ac_phase } => {
                 let (p, m) = (self.node(c, plus), self.node(c, minus));
-                c.add(Box::new(VoltageSource::new(name, p, m, waveform.clone())));
+                let mut source = VoltageSource::new(name, p, m, waveform.clone());
+                source.ac_magnitude = *ac_magnitude;
+                source.ac_phase = *ac_phase;
+                c.add(Box::new(source));
             }
-            Component::CurrentSource { name, plus, minus, waveform } => {
+            Component::CurrentSource { name, plus, minus, waveform, ac_magnitude, ac_phase } => {
                 let (p, m) = (self.node(c, plus), self.node(c, minus));
-                c.add(Box::new(CurrentSource::new(name, p, m, waveform.clone())));
+                let mut source = CurrentSource::new(name, p, m, waveform.clone());
+                source.ac_magnitude = *ac_magnitude;
+                source.ac_phase = *ac_phase;
+                c.add(Box::new(source));
             }
             Component::Diode { name, anode, cathode, model } => {
                 let (a, k) = (self.node(c, anode), self.node(c, cathode));
@@ -472,6 +489,8 @@ mod tests {
                     plus: "in".into(),
                     minus: "gnd".into(),
                     waveform: Waveform::Dc { value: 10.0 },
+                    ac_magnitude: 0.0,
+                    ac_phase: 0.0,
                 },
                 Component::Resistor {
                     name: "R1".into(),
