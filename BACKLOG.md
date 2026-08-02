@@ -67,8 +67,6 @@ Each one should either move into Must/Should below, or be documented in the UI.
       highlight that net on the canvas, not just print a name the user never chose.
 - [ ] **Wire editing, the rest of it** — splitting a run in two, and deleting a
       single corner. Dragging a leg to reshape a wire is done; these are not.
-- [ ] **Delete that heals.** Deleting a component should offer to reconnect the
-      wires that met at it, rather than leaving two stubs.
 
 ### Product
 
@@ -186,3 +184,6 @@ Kept short — it is here to show the direction, not to be a changelog.
   connect; moving a component or a wire keeps every connection, with the drag
   preview and the released result computed by the same code.
 - Circuits shareable as a link; copy, cut, paste, duplicate.
+- Edits that refuse say why; undo restores the selection; a group rotates about
+  its own centre; deleting a two-pin part closes the gap; wires reshape by
+  dragging a leg; routes keep clear of the symbols they connect to.
