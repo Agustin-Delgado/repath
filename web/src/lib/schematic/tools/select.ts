@@ -186,8 +186,16 @@ export function createSelectTool(): Tool {
 		cursor: 'default',
 
 		deactivate(ctx) {
+			// Switching tools with the pointer still down: settle the drag where it
+			// is rather than walking away from it. The geometry on screen is already
+			// final, so committing is what the user last saw — and leaving the
+			// snapshot held would strand it, since no pointer-up is coming.
+			if (mode === 'move') app.endMove();
 			mode = 'idle';
 			marquee = null;
+			pressedId = null;
+			pressedSegment = null;
+			pendingJoin = null;
 			hoveredPin = null;
 			wireFrom = null;
 			if (app.hoverNet !== null) {
@@ -355,9 +363,28 @@ export function createSelectTool(): Tool {
 					}
 					return false;
 				case 'Escape':
+					// Escape belongs to whatever gesture is in flight, and only falls
+					// through to clearing the selection when nothing is.
 					if (mode === 'wire') {
 						mode = 'idle';
 						wireFrom = null;
+						ctx.invalidate('overlay');
+						return true;
+					}
+					if (mode === 'move') {
+						app.cancelMove();
+						mode = 'idle';
+						pressedId = null;
+						pressedSegment = null;
+						pendingJoin = null;
+						moved = false;
+						ctx.setCursor('default');
+						ctx.invalidate();
+						return true;
+					}
+					if (mode === 'marquee') {
+						mode = 'idle';
+						marquee = null;
 						ctx.invalidate('overlay');
 						return true;
 					}

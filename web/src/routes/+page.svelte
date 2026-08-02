@@ -32,7 +32,11 @@
 				try {
 					app.loadShared(await decodeCircuit(location.hash));
 				} catch (cause) {
-					app.error = cause instanceof Error ? cause.message : String(cause);
+					// A notice, not an error: the default circuit is about to load and
+					// simulate, and someone who followed a link needs to be told that
+					// what they are looking at is not what they were sent.
+					const why = cause instanceof Error ? cause.message : String(cause);
+					app.notice = `That link could not be read, so this is the default circuit instead. ${why}`;
 				}
 			}
 			// Show a working circuit rather than an empty scope on first load.
@@ -89,7 +93,7 @@
 			app.fromJSON(await file.text());
 			app.run();
 		} catch (cause) {
-			app.error = cause instanceof Error ? cause.message : String(cause);
+			app.notice = cause instanceof Error ? cause.message : String(cause);
 		}
 		if (fileInput) fileInput.value = '';
 	}
@@ -201,7 +205,12 @@
 		</div>
 	</header>
 
-	{#if app.error}
+	{#if app.notice}
+		<div class="banner warn" role="alert">
+			{app.notice}
+			<button class="dismiss" onclick={() => (app.notice = null)} aria-label="Dismiss">×</button>
+		</div>
+	{:else if app.error}
 		<div class="banner error" role="alert">
 			<strong>Could not simulate.</strong>
 			{app.error}
@@ -349,9 +358,27 @@
 	}
 
 	.banner {
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem;
 		padding: 0.4rem 0.75rem;
 		font-size: 0.78rem;
 		border-bottom: 1px solid var(--border);
+	}
+
+	.dismiss {
+		margin-left: auto;
+		border: none;
+		background: none;
+		color: var(--label-dim);
+		font-size: 1rem;
+		line-height: 1;
+		cursor: pointer;
+		padding: 0 0.25rem;
+	}
+
+	.dismiss:hover {
+		color: var(--text);
 	}
 
 	.banner.error {

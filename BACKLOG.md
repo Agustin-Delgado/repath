@@ -187,3 +187,5 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Edits that refuse say why; undo restores the selection; a group rotates about
   its own centre; deleting a two-pin part closes the gap; wires reshape by
   dragging a leg; routes keep clear of the symbols they connect to.
+- Escape cancels whatever gesture is in flight; a link that cannot be read says
+  so instead of quietly showing the default circuit.

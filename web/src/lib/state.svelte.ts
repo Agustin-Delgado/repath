@@ -68,6 +68,8 @@ interface MoveOrigin {
 	followers: Map<string, Set<number>>;
 	/** Wires being dragged, with the end indices that must stay plugged in. */
 	anchors: Map<string, Set<number>>;
+	/** The redo stack as it was, so cancelling the drag can hand it back. */
+	future: HistoryEntry[];
 }
 
 /** A point on the undo stack: the drawing, and what was selected at the time. */
@@ -101,6 +103,17 @@ class AppState {
 	running = $state(false);
 	result = $state<TransientRun | null>(null);
 	error = $state<string | null>(null);
+	/**
+	 * Something the user needs to know that is not a simulation failure — a share
+	 * link that could not be read, a file that would not open.
+	 *
+	 * Separate from `error` because a run clears that one on success, which is
+	 * right for "could not simulate" and quietly wrong for "the link you followed
+	 * was broken": the default circuit would load, simulate happily, wipe the
+	 * message, and leave someone looking at a circuit that is not the one they
+	 * were sent.
+	 */
+	notice = $state<string | null>(null);
 
 	/** Which analysis the Run button performs. */
 	analysis = $state<'transient' | 'frequency'>('transient');
@@ -505,7 +518,8 @@ class AppState {
 					.map((w) => [w.id, w.points.map((p) => ({ x: p.x, y: p.y }))] as const)
 			),
 			followers,
-			anchors
+			anchors,
+			future: [...this.future]
 		};
 		this.dragStarted = false;
 	}
@@ -627,6 +641,41 @@ class AppState {
 		if (index + 1 === last && held.has(last)) points.push({ x: from[last].x, y: from[last].y });
 
 		wire.points = simplifyPath(points);
+	}
+
+	/**
+	 * Abandon the drag and put everything back where it started.
+	 *
+	 * Escape means cancel, everywhere. Without this the gesture carried on to
+	 * completion with the selection torn out from under it, so the parts landed
+	 * wherever the pointer happened to stop and nothing was left selected to undo
+	 * it with — the one outcome nobody wants from pressing Escape.
+	 */
+	cancelMove(): void {
+		const origin = this.moveOrigin;
+		if (!origin) return;
+
+		for (const instance of this.schematic.instances) {
+			const from = origin.instances.get(instance.id);
+			if (!from) continue;
+			instance.x = from.x;
+			instance.y = from.y;
+		}
+		for (const wire of this.schematic.wires) {
+			const from = origin.wires.get(wire.id);
+			if (from) wire.points = from.map((p) => ({ x: p.x, y: p.y }));
+		}
+
+		if (this.dragStarted) {
+			// The checkpoint was taken on the first movement. There is nothing left to
+			// undo, so it goes, and the redo stack it cleared comes back.
+			const dropped = this.past.pop();
+			if (dropped) this.historyBytes -= dropped.document.length;
+			this.future = origin.future;
+		}
+
+		this.moveOrigin = null;
+		this.dragStarted = false;
 	}
 
 	/** Release the snapshot. The geometry is already final. */
@@ -860,6 +909,7 @@ class AppState {
 		this.result = null;
 		this.acResult = null;
 		this.error = null;
+		this.notice = null;
 		this.autoProbe();
 	}
 
@@ -874,6 +924,7 @@ class AppState {
 		this.selection = [];
 		this.result = null;
 		this.error = null;
+		this.notice = null;
 		this.autoProbe();
 	}
 
@@ -917,6 +968,7 @@ class AppState {
 		this.selection = [];
 		this.result = null;
 		this.error = null;
+		this.notice = null;
 	}
 
 	// -- simulation -------------------------------------------------------

@@ -411,3 +411,70 @@ describe('reshaping a wire', () => {
 		expect(shapes()).toEqual(['200,220 470,220']);
 	});
 });
+
+describe('abandoning a drag', () => {
+	beforeEach(() => {
+		app.place('vsource', 200, 250, 0); // plus (200,220)
+		app.place('resistor', 500, 220, 0); // pin a (470,220)
+		app.addWirePath([
+			{ x: 200, y: 220 },
+			{ x: 470, y: 220 }
+		]);
+	});
+
+	it('puts the component back where it started', () => {
+		app.selection = [find('R1').id];
+		app.beginMove();
+		app.applyMove(140, 90, routeFor(new Set(app.selection)));
+		expect(find('R1').x).toBe(640);
+
+		app.cancelMove();
+		expect({ x: find('R1').x, y: find('R1').y }).toEqual({ x: 500, y: 220 });
+		expect(shapes()).toEqual(['200,220 470,220']);
+		expect(netOf('V1', 'plus')).toBe(netOf('R1', 'a'));
+	});
+
+	it('puts a reshaped wire back', () => {
+		const id = app.schematic.wires[0].id;
+		app.selection = [id];
+		app.beginMove();
+		app.applySegmentMove(id, 0, 0, 80);
+		expect(app.schematic.wires[0].points.length).toBeGreaterThan(2);
+
+		app.cancelMove();
+		expect(shapes()).toEqual(['200,220 470,220']);
+	});
+
+	it('costs no undo step, and hands back the redo stack', () => {
+		app.selection = [find('R1').id];
+		// Something to redo: an edit, undone.
+		app.setParam(find('R1').id, 'resistance', 4700);
+		app.undo();
+		expect(find('R1').params.resistance).toBe(1000);
+
+		app.beginMove();
+		app.applyMove(100, 0, routeFor(new Set(app.selection)));
+		app.cancelMove();
+
+		// The cancelled drag left no trace in either direction.
+		app.redo();
+		expect(find('R1').params.resistance).toBe(4700);
+		expect(find('R1').x).toBe(500);
+	});
+
+	it('does nothing when no drag is running', () => {
+		const before = shapes();
+		app.cancelMove();
+		expect(shapes()).toEqual(before);
+		expect(app.isMoving).toBe(false);
+	});
+
+	it('leaves nothing running', () => {
+		app.selection = [find('R1').id];
+		app.beginMove();
+		app.applyMove(50, 50, routeFor(new Set(app.selection)));
+		expect(app.isMoving).toBe(true);
+		app.cancelMove();
+		expect(app.isMoving).toBe(false);
+	});
+});
