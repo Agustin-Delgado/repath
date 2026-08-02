@@ -435,3 +435,63 @@ describe('no route wanders', () => {
 		expect(strays).toEqual([]);
 	});
 });
+
+describe('which way a route commits first', () => {
+	/**
+	 * Between two points there are usually several routes of the same length with
+	 * the same number of corners, and A* takes whichever it expanded first. These
+	 * pin down which one it should take: the one that carries on out of the
+	 * terminal before turning, so the wire reads as coming out of the part.
+	 */
+	it('leaves a terminal along its lead when that heads towards the goal', () => {
+		// The source's plus terminal points up, and the resistor is up and to the
+		// right. Up-then-across and across-then-up are the same length with the same
+		// single corner; the first is the one anyone would draw.
+		const schematic: Schematic = {
+			instances: [place('vsource', 'V1', 100, 200), place('resistor', 'R1', 290, 110)],
+			wires: []
+		};
+		const path = routeWire(schematic, { x: 100, y: 170 }, { x: 260, y: 110 }, { grid: GRID });
+		expect(path).toEqual([
+			{ x: 100, y: 170 },
+			{ x: 100, y: 110 },
+			{ x: 260, y: 110 }
+		]);
+	});
+
+	it('does not hook out of a lead that points away from the goal', () => {
+		// The guard on the rule. A resistor pin points sideways and the target is
+		// straight above it, so following the lead gains nothing on that axis. An
+		// earlier version of this rule had no such condition and produced a little
+		// hook — out along the lead, up, and back — on every wire drawn this way.
+		const schematic: Schematic = { instances: [place('resistor', 'R1', 300, 300)], wires: [] };
+		const path = routeWire(schematic, { x: 330, y: 300 }, { x: 330, y: 100 }, { grid: GRID });
+		expect(path).toEqual([
+			{ x: 330, y: 300 },
+			{ x: 330, y: 100 }
+		]);
+	});
+
+	it('never buys a corner to satisfy the preference', () => {
+		// The other guard, and the reason the cost sits below `turn`. Reaching this
+		// pin end-on would need an extra bend, and a bend is the more visible cost.
+		const schematic: Schematic = {
+			instances: [place('vsource', 'V1', 100, 200), place('resistor', 'R1', 270, 210)],
+			wires: []
+		};
+		const path = routeWire(schematic, { x: 100, y: 170 }, { x: 240, y: 210 }, { grid: GRID });
+		expect(path).toHaveLength(3);
+		expect(length(path)).toBe(180);
+	});
+
+	it('leaves a source terminal sideways when the goal is level with it', () => {
+		// Nothing to gain on the terminal's own axis, so no stepping out and back —
+		// the jog that had to be reverted once already.
+		const schematic: Schematic = { instances: [place('vsource', 'V1', 300, 300)], wires: [] };
+		const path = routeWire(schematic, { x: 300, y: 270 }, { x: 600, y: 270 }, { grid: GRID });
+		expect(path).toEqual([
+			{ x: 300, y: 270 },
+			{ x: 600, y: 270 }
+		]);
+	});
+});

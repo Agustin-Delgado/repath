@@ -49,6 +49,26 @@ const COST = {
 	body: 400,
 	/** Landing on a pin that is not the destination. */
 	foreignPin: 500,
+	/**
+	 * Leaving or meeting a pin across its lead instead of along it.
+	 *
+	 * Between two points there are usually several routes of the same length with
+	 * the same number of corners, and the search takes whichever it expanded first.
+	 * This settles those draws the way a person would draw them: carry on out of
+	 * the terminal before turning, so the wire reads as coming *out* of the part
+	 * rather than clipping past it.
+	 *
+	 * Charged only when travelling along the lead closes distance to the other end.
+	 * That condition is the whole difference between this and an earlier attempt
+	 * that had to be reverted: without it, a wire drawn straight up off a sideways
+	 * pin would hook out and back to obey the rule, which is worse than the draw it
+	 * was settling.
+	 *
+	 * Deliberately below `turn`. It decides a draw and nothing more: a route that
+	 * would have to add a corner to leave or arrive along a lead should not bother,
+	 * because a corner is the more visible cost of the two.
+	 */
+	stub: 30
 };
 
 /*
@@ -100,6 +120,27 @@ interface Obstacles {
 	vertical: Set<number>;
 	/** Cells occupied by a pin. */
 	pins: Set<number>;
+	/**
+	 * Which way each pin's lead points, by cell.
+	 *
+	 * Built from every instance, including any a drag is ignoring as obstacles: a
+	 * part on the move still has leads that point somewhere, and the wire chasing
+	 * it should still meet them end on.
+	 */
+	leads: Map<number, { x: number; y: number }>;
+}
+
+/**
+ * Which way a pin's lead points, before rotation.
+ *
+ * The dominant axis of its offset from the body origin. Every pin in the catalog
+ * sits at the end of a lead running along one axis — a MOSFET's drain at
+ * (10, -30) hangs off the top, an op-amp input at (-30, -10) off the left — so
+ * the larger component says which way it faces.
+ */
+function leadDirection(pin: { x: number; y: number }): { x: number; y: number } {
+	if (Math.abs(pin.x) >= Math.abs(pin.y)) return { x: Math.sign(pin.x), y: 0 };
+	return { x: 0, y: Math.sign(pin.y) };
 }
 
 /** The four ways a route may step, and the four cells that touch a cell. */
@@ -119,8 +160,24 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 		body: new Set(),
 		horizontal: new Set(),
 		vertical: new Set(),
-		pins: new Set()
+		pins: new Set(),
+		leads: new Map()
 	};
+
+	for (const instance of schematic.instances) {
+		for (const pin of definitionOf(instance.kind).pins) {
+			const offset = rotatePoint(pin.x, pin.y, instance.rotation);
+			const lead = leadDirection(pin);
+			const facing = rotatePoint(lead.x, lead.y, instance.rotation);
+			obstacles.leads.set(
+				cell(
+					Math.round((instance.x + offset.x) / grid),
+					Math.round((instance.y + offset.y) / grid)
+				),
+				{ x: Math.round(facing.x), y: Math.round(facing.y) }
+			);
+		}
+	}
 
 	for (const instance of schematic.instances) {
 		if (options.ignoreInstances?.has(instance.id)) continue;
@@ -202,6 +259,27 @@ export function routeWire(
 
 	const obstacles = buildObstacles(schematic, options);
 	const effort = options.effort ?? 20_000;
+
+	/**
+	 * The leads at either end, and whether following them gets anywhere.
+	 *
+	 * A lead only earns its tie-break when travelling along it closes distance to
+	 * the other end. Leaving a sideways pin to reach something directly above it
+	 * gains nothing on that axis, so the wire is free to turn at the tip instead of
+	 * hooking out and back — and a pin whose lead points away from the goal is left
+	 * alone entirely.
+	 */
+	const productive = (lead: { x: number; y: number } | undefined, dx: number, dy: number) =>
+		lead !== undefined && lead.x * dx + lead.y * dy > 0;
+
+	const startLead = obstacles.leads.get(cell(start.x, start.y));
+	const goalLead = obstacles.leads.get(cell(goal.x, goal.y));
+	const leaveAlong = productive(startLead, goal.x - start.x, goal.y - start.y)
+		? startLead
+		: undefined;
+	const arriveAlong = productive(goalLead, start.x - goal.x, start.y - goal.y)
+		? goalLead
+		: undefined;
 
 
 	// The search is bounded — unbounded A* on an open grid wanders — but a bound
@@ -322,6 +400,14 @@ export function routeWire(
 					const across = axis === 0 ? obstacles.vertical : obstacles.horizontal;
 					if (along.has(here)) step += COST.overlap;
 					else if (across.has(here)) step += COST.cross;
+				}
+
+				// Break a tie towards leaving and meeting each pin along its lead.
+				if (node.axis === -1 && leaveAlong && (dx !== leaveAlong.x || dy !== leaveAlong.y)) {
+					step += COST.stub;
+				}
+				if (isGoal && arriveAlong && (dx !== -arriveAlong.x || dy !== -arriveAlong.y)) {
+					step += COST.stub;
 				}
 
 				const cost = node.cost + step;
