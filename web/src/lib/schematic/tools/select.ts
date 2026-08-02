@@ -163,7 +163,7 @@ export function createSelectTool(): Tool {
 		// re-route — `endMove` keeps the geometry the last frame produced — so this
 		// cannot make the committed shape differ from the previewed one.
 		const deadline = performance.now() + FRAME_ROUTING_MS;
-		return (from: Point, to: Point, wireId: string) => {
+		return (from: Point, to: Point, settling: ReadonlySet<string>) => {
 			if (performance.now() > deadline) return elbow(from, to);
 			return routeWire(app.schematic, from, to, {
 				grid: ctx.gridSize,
@@ -171,7 +171,7 @@ export function createSelectTool(): Tool {
 				// or the route would have to detour around the very pin it is
 				// heading for.
 				ignoreInstances: moving,
-				ignoreWires: new Set([wireId]),
+				ignoreWires: settling,
 				// Deliberately below the default. A drag routes every frame, and a
 				// bound that depends only on the geometry keeps each frame's result
 				// identical to the last — a time-based one would let the same shape

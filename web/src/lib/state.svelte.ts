@@ -57,8 +57,16 @@ export const TRACE_COLOURS = [
 let idCounter = 0;
 const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`;
 
-/** How a tool asks for a path between two points. */
-export type RouteBetween = (from: Point, to: Point, wireId: string) => Point[];
+/**
+ * How a tool asks for a path between two points.
+ *
+ * `settling` is every wire whose shape this same operation is about to change.
+ * All of them are excluded as obstacles, not just the one being routed: a gesture
+ * recomputes wires one at a time, so the ones not reached yet are still sitting
+ * where they used to be. Treating those as obstacles makes a route dodge a wire
+ * that is about to move — a detour around a state that never appears on screen.
+ */
+export type RouteBetween = (from: Point, to: Point, settling: ReadonlySet<string>) => Point[];
 
 /** Everything a drag needs to recompute itself from scratch on each frame. */
 interface MoveOrigin {
@@ -305,6 +313,15 @@ class AppState {
 	 * snapshot keyed by them.
 	 */
 	private tidyWires(): void {
+		// A wire whose ends have arrived at the same point is not a wire any more.
+		// Dragging a component until one of its pins touches another is a supported
+		// way to connect two parts, and when a wire already ran between those two
+		// pins it collapses to nothing: the connection is now the pins themselves.
+		// Left in the document it is invisible but real — selectable, saved to file,
+		// carried in a share link.
+		const real = this.schematic.wires.filter((w) => w.points.length >= 2);
+		if (real.length !== this.schematic.wires.length) this.schematic.wires = real;
+
 		const merged = mergeWireChains(this.schematic);
 		if (merged.length !== this.schematic.wires.length) this.schematic.wires = merged;
 	}
@@ -345,13 +362,15 @@ class AppState {
 		this.schematic.wires = survivingWires;
 		this.selection = [];
 
-		for (const [a, b] of gaps) {
+		const healing = new Set(gaps.map(() => freshId()));
+		const ids = [...healing];
+		gaps.forEach(([a, b], index) => {
 			// Routed after the removal, so the path may run through where the
 			// component used to be — which is exactly where it should go.
-			const id = freshId();
-			const path = simplifyPath(route ? route(a, b, id) : elbow(a, b));
+			const id = ids[index];
+			const path = simplifyPath(route ? route(a, b, healing) : elbow(a, b));
 			if (path.length >= 2) this.schematic.wires.push({ id, points: path });
-		}
+		});
 
 		// Removing a component can leave two wires meeting at a bare point.
 		this.tidyWires();
@@ -420,6 +439,9 @@ class AppState {
 		// Wires in the selection turn with it, keeping the group's shape.
 		for (const wire of turning) wire.points = simplifyPath(wire.points.map(orbit));
 
+		// Worked out in full before any of it is routed, so each wire is routed
+		// against where everything is going rather than where half of it was.
+		const pending: Array<{ wire: Wire; from: Point; to: Point }> = [];
 		for (const wire of this.schematic.wires) {
 			if (chosen.has(wire.id)) continue;
 			const ends = [0, wire.points.length - 1];
@@ -432,13 +454,12 @@ class AppState {
 				points[index] = { x: target.x, y: target.y };
 				changed = true;
 			}
-			if (!changed) continue;
+			if (changed) pending.push({ wire, from: points[0], to: points[points.length - 1] });
+		}
 
-			const from = points[0];
-			const to = points[points.length - 1];
-			wire.points = route
-				? simplifyPath(route(from, to, wire.id))
-				: simplifyPath(elbow(from, to));
+		const settling = new Set([...turning.map((w) => w.id), ...pending.map((p) => p.wire.id)]);
+		for (const { wire, from, to } of pending) {
+			wire.points = route ? simplifyPath(route(from, to, settling)) : simplifyPath(elbow(from, to));
 		}
 
 		this.tidyWires();
@@ -549,6 +570,10 @@ class AppState {
 			instance.y = from.y + dy;
 		}
 
+		// Every wire this move rewrites. None of them is an obstacle for the
+		// others: their positions are all in mid-air until the pass finishes.
+		const settling = new Set(origin.wires.keys());
+
 		for (const wire of this.schematic.wires) {
 			const from = origin.wires.get(wire.id);
 			if (!from) continue;
@@ -584,7 +609,7 @@ class AppState {
 				if (moved.size === 2) {
 					wire.points = from.map((p) => ({ x: p.x + dx, y: p.y + dy }));
 				} else {
-					wire.points = simplifyPath(route(ends.start, ends.end, wire.id));
+					wire.points = simplifyPath(route(ends.start, ends.end, settling));
 				}
 				continue;
 			}

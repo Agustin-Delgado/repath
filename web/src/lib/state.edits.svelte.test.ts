@@ -13,11 +13,11 @@ import { routeWire } from './schematic/route';
 import { pinKey } from './schematic/nets';
 import type { Point } from './schematic/model';
 
-const routeFor = (moving: Set<string>) => (from: Point, to: Point, wireId: string) =>
+const routeFor = (moving: Set<string>) => (from: Point, to: Point, settling: ReadonlySet<string>) =>
 	routeWire(app.schematic, from, to, {
 		grid: 10,
 		ignoreInstances: moving,
-		ignoreWires: new Set([wireId])
+		ignoreWires: settling
 	});
 
 const find = (name: string) => app.schematic.instances.find((i) => i.name === name)!;
@@ -476,5 +476,113 @@ describe('abandoning a drag', () => {
 		expect(app.isMoving).toBe(true);
 		app.cancelMove();
 		expect(app.isMoving).toBe(false);
+	});
+});
+
+describe('the first drag', () => {
+	/**
+	 * The one that gave this away: drag a part and the wires come out with a jog,
+	 * drag it again and they tidy themselves up. Both drags ask the same question
+	 * about the same schematic, so both have to give the same answer — and if the
+	 * second one is better, the first one was wrong.
+	 *
+	 * The cause was that a gesture rewrites its wires one at a time, and the ones
+	 * it had not reached yet were still sitting where they used to be. So the first
+	 * wire routed around a second wire that was about to move: a detour around a
+	 * state that never appears on screen. By the second drag everything had already
+	 * settled, which is why it looked fine.
+	 */
+	beforeEach(() => {
+		// The RC low-pass, as it ships.
+		app.place('vsource', 100, 200, 0); // plus (100,170)
+		app.place('resistor', 200, 170, 0); // pins (170,170), (230,170)
+		app.place('capacitor', 300, 230, 90); // pins (300,200), (300,260)
+		app.addWirePath([
+			{ x: 100, y: 170 },
+			{ x: 170, y: 170 }
+		]);
+		app.addWirePath([
+			{ x: 230, y: 170 },
+			{ x: 300, y: 170 },
+			{ x: 300, y: 200 }
+		]);
+	});
+
+	function dragTo(dx: number, dy: number) {
+		const moving = new Set(app.selection);
+		app.beginMove();
+		app.applyMove(dx, dy, routeFor(moving));
+		app.endMove();
+		return shapes();
+	}
+
+	it('settles on the first pass, not the second', () => {
+		app.selection = [find('R1').id];
+		const first = dragTo(40, 40);
+		const again = dragTo(0, 0);
+		expect(again).toEqual(first);
+	});
+
+	it('routes each wire against where everything is going, not where half of it was', () => {
+		app.selection = [find('R1').id];
+		dragTo(40, 40);
+		// R1's left pin lands at (210,210). The wire from the source reaches it
+		// straight across and straight down — it used to turn a column early to
+		// dodge the other wire's old position.
+		expect(shapes()[0]).toBe('100,170 210,170 210,210');
+		expect(netOf('V1', 'plus')).toBe(netOf('R1', 'a'));
+		expect(orthogonal()).toBe(true);
+	});
+
+	it('stays settled over a run of different drags', () => {
+		app.selection = [find('R1').id];
+		for (const [dx, dy] of [
+			[30, 0],
+			[0, 50],
+			[-20, -40],
+			[60, 20]
+		]) {
+			const first = dragTo(dx, dy);
+			// Re-route in place — a second gesture that moves nothing, which is the
+			// same question over again.
+			expect(dragTo(0, 0)).toEqual(first);
+		}
+	});
+});
+
+describe('dragging two pins together', () => {
+	it('drops the wire that used to run between them', () => {
+		// Dragging a part until one of its pins touches another is how two things
+		// get connected without a wire. When a wire already ran between exactly
+		// those two pins it has nowhere left to be, and it used to survive as a
+		// single point: invisible, but selectable, saved to file and carried in a
+		// share link.
+		app.place('vsource', 100, 200, 0); // plus (100,170)
+		app.place('resistor', 200, 170, 0); // pins (170,170), (230,170)
+		app.place('capacitor', 300, 230, 90); // pins (300,200), (300,260)
+		app.addWirePath([
+			{ x: 100, y: 170 },
+			{ x: 170, y: 170 }
+		]);
+		app.addWirePath([
+			{ x: 230, y: 170 },
+			{ x: 300, y: 170 },
+			{ x: 300, y: 200 }
+		]);
+
+		// The far pins are deliberately bare in this fixture, so count the loose
+		// ends rather than expecting none.
+		const looseBefore = app.compiled.warnings.length;
+
+		app.selection = [find('R1').id];
+		app.beginMove();
+		// R1's right pin lands exactly on the capacitor's top pin.
+		app.applyMove(70, 30, routeFor(new Set(app.selection)));
+		app.endMove();
+
+		expect(app.schematic.wires.every((w) => w.points.length >= 2)).toBe(true);
+		// The connection is now the pins touching, so it must still be one net.
+		expect(netOf('R1', 'b')).toBe(netOf('C1', 'a'));
+		expect(app.compiled.warnings.length).toBe(looseBefore);
 	});
 });

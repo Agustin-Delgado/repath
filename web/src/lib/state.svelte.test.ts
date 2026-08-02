@@ -14,11 +14,11 @@ import { pinKey } from './schematic/nets';
 import type { Point } from './schematic/model';
 
 /** The router the tools use, wired the way the select tool wires it. */
-const routeFor = (moving: Set<string>) => (from: Point, to: Point, wireId: string) =>
+const routeFor = (moving: Set<string>) => (from: Point, to: Point, settling: ReadonlySet<string>) =>
 	routeWire(app.schematic, from, to, {
 		grid: 10,
 		ignoreInstances: moving,
-		ignoreWires: new Set([wireId])
+		ignoreWires: settling
 	});
 
 const find = (name: string) => app.schematic.instances.find((i) => i.name === name)!;
