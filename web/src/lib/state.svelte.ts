@@ -28,7 +28,7 @@ import {
 } from './schematic/model';
 import { elbow } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
-import { mergeWireChains } from './schematic/nets';
+import { mergeWireChains, trimOverlaps } from './schematic/nets';
 
 /**
  * Wiring used to be a mode of its own. It is not any more: dragging off a pin or
@@ -341,6 +341,19 @@ class AppState {
 
 		const merged = mergeWireChains(this.schematic);
 		if (merged.length !== this.schematic.wires.length) this.schematic.wires = merged;
+
+		// A wire that ends up running along another one is two conductors on the
+		// same line — the thing the router pays most to avoid. Moving a wire whose
+		// end is pinned somewhere can produce exactly that, doubling back along a
+		// neighbour to reach where it was plugged in.
+		const trimmed = trimOverlaps(this.schematic);
+		if (trimmed.some((w, i) => w !== this.schematic.wires[i]) || trimmed.length !== this.schematic.wires.length) {
+			this.schematic.wires = trimmed;
+			// Trimming can leave two wires meeting end to end, which is a joint worth
+			// folding away for the same reasons as any other.
+			const refolded = mergeWireChains(this.schematic);
+			if (refolded.length !== this.schematic.wires.length) this.schematic.wires = refolded;
+		}
 	}
 
 	/**

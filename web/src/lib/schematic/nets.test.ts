@@ -4,7 +4,8 @@ import {
 	junctionDots,
 	liesWithin,
 	mergeWireChains,
-	pinKey
+	pinKey,
+	trimOverlaps
 } from './nets';
 import { defaultParams, type Instance, type Point, type Schematic, type Wire } from './model';
 
@@ -228,5 +229,108 @@ describe('mergeWireChains', () => {
 		const once = mergeWireChains(schematic);
 		const twice = mergeWireChains({ ...schematic, wires: once });
 		expect(twice).toEqual(once);
+	});
+});
+
+describe('trimOverlaps', () => {
+	const shapes = (wires: Wire[]) => wires.map((w) => w.points.map((p) => `${p.x},${p.y}`).join(' '));
+
+	it('cuts back a wire that doubles along its neighbour', () => {
+		// Reported by moving a ground rail up: its end stayed pinned where it was
+		// plugged in, so the wire reached back down alongside the wire it was
+		// plugged into. Two conductors on the same line, which is the thing the
+		// router pays most to avoid.
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'moved', points: [{ x: 300, y: 260 }, { x: 100, y: 260 }, { x: 100, y: 290 }] },
+				{ id: 'rail', points: [{ x: 100, y: 230 }, { x: 100, y: 290 }] }
+			]
+		};
+		expect(shapes(trimOverlaps(schematic))).toEqual(['300,260 100,260', '100,230 100,290']);
+	});
+
+	it('leaves a wire that merely touches another', () => {
+		// Meeting at a point is a junction, not an overlap, and must survive.
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'a', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+				{ id: 'b', points: [{ x: 100, y: 0 }, { x: 100, y: 100 }] }
+			]
+		};
+		expect(shapes(trimOverlaps(schematic))).toEqual(['0,0 100,0', '100,0 100,100']);
+	});
+
+	it('leaves a wire that crosses another', () => {
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'a', points: [{ x: 0, y: 50 }, { x: 200, y: 50 }] },
+				{ id: 'b', points: [{ x: 100, y: 0 }, { x: 100, y: 100 }] }
+			]
+		};
+		expect(shapes(trimOverlaps(schematic))).toEqual(['0,50 200,50', '100,0 100,100']);
+	});
+
+	it('leaves a partial overlap alone', () => {
+		// Cutting here would move a corner rather than remove one, and changing the
+		// drawn shape is not what this is for.
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'a', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+				{ id: 'b', points: [{ x: 50, y: 0 }, { x: 200, y: 0 }] }
+			]
+		};
+		expect(shapes(trimOverlaps(schematic))).toEqual(['0,0 100,0', '50,0 200,0']);
+	});
+
+	it('removes a wire that is entirely covered', () => {
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'long', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] },
+				{ id: 'duplicate', points: [{ x: 50, y: 0 }, { x: 150, y: 0 }] }
+			]
+		};
+		expect(shapes(trimOverlaps(schematic))).toEqual(['0,0 200,0']);
+	});
+
+	it('does not cut both halves of a mutual overlap', () => {
+		// The bug in the first version of this. Checking every wire against the
+		// original set looks equivalent to checking against the current one and is
+		// not: two wires that cover each other were both cut, and the connection
+		// they shared went with them. It cost twenty-nine connections across a
+		// sweep of the examples before it was measured.
+		const schematic: Schematic = {
+			instances: [part('resistor', 'R1', 0, 0), part('resistor', 'R2', 200, 0)],
+			wires: [
+				{ id: 'a', points: [{ x: 30, y: 0 }, { x: 170, y: 0 }] },
+				{ id: 'b', points: [{ x: 30, y: 0 }, { x: 170, y: 0 }] }
+			]
+		};
+		const trimmed = trimOverlaps(schematic);
+		// One of them goes; the other has to stay, or the two resistors part company.
+		expect(trimmed).toHaveLength(1);
+		expect(buildConnectivity({ ...schematic, wires: trimmed }).nets.length).toBe(
+			buildConnectivity(schematic).nets.length
+		);
+	});
+
+	it('keeps every connection it had', () => {
+		// The segment removed is covered along its whole length, so the wire doing
+		// the covering reaches whatever the trimmed part reached. That is what makes
+		// this safe rather than merely tidy.
+		const schematic: Schematic = {
+			instances: [part('resistor', 'R1', 100, 290)],
+			wires: [
+				{ id: 'moved', points: [{ x: 300, y: 260 }, { x: 100, y: 260 }, { x: 100, y: 290 }] },
+				{ id: 'rail', points: [{ x: 100, y: 230 }, { x: 100, y: 290 }] }
+			]
+		};
+		const before = buildConnectivity(schematic).nets.length;
+		const after = buildConnectivity({ ...schematic, wires: trimOverlaps(schematic) }).nets.length;
+		expect(after).toBe(before);
 	});
 });
