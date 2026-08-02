@@ -791,3 +791,86 @@ describe('what moves when one thing moves', () => {
 		}
 	});
 });
+
+describe('a pin leaving a junction', () => {
+	/**
+	 * Where two or more wires meet a pin, they are joined to each other as much as
+	 * to the pin. Dragging the part cannot take them all with it — that pulls the
+	 * junction apart and bends every wire in it. They stay, and a short wire goes
+	 * out to fetch the pin.
+	 */
+	function lowPass() {
+		app.place('vsource', 100, 200, 0); // minus (100,230)
+		app.place('resistor', 200, 170, 0);
+		app.place('capacitor', 300, 230, 90); // b (300,260)
+		app.place('ground', 100, 300, 0); // pin (100,290)
+		app.addWirePath([
+			{ x: 100, y: 170 },
+			{ x: 170, y: 170 }
+		]);
+		app.addWirePath([
+			{ x: 230, y: 170 },
+			{ x: 300, y: 170 },
+			{ x: 300, y: 200 }
+		]);
+		// Both of these end on the ground pin: that point is a junction.
+		app.addWirePath([
+			{ x: 300, y: 260 },
+			{ x: 300, y: 290 },
+			{ x: 100, y: 290 }
+		]);
+		app.addWirePath([
+			{ x: 100, y: 230 },
+			{ x: 100, y: 290 }
+		]);
+	}
+
+	function drag(name: string, dx: number, dy: number) {
+		app.selection = [find(name).id];
+		app.beginMove();
+		app.applyMove(dx, dy, routeFor(new Set(app.selection)));
+		app.endMove();
+	}
+
+	it('leaves the wires where they were and reaches out for the pin', () => {
+		lowPass();
+		drag('GND1', 40, 40);
+
+		// The rail is still along y = 290 and the source still drops straight to it.
+		expect(shapes().some((s) => s.startsWith('300,260 300,290'))).toBe(true);
+		expect(shapes().some((s) => s.includes('100,290 100,230') || s.includes('100,230 100,290'))).toBe(
+			true
+		);
+		// And the ground hangs off the rail directly above it, not back at the
+		// corner it used to be attached to.
+		expect(shapes()).toContain('140,330 140,290');
+		expect(netOf('GND1', 'g')).toBe(netOf('C1', 'b'));
+		expect(netOf('GND1', 'g')).toBe(netOf('V1', 'minus'));
+	});
+
+	it('drops straight down when the ground moves straight down', () => {
+		lowPass();
+		drag('GND1', 0, 60);
+		expect(shapes()).toContain('300,260 300,290 100,290');
+		expect(netOf('GND1', 'g')).toBe(netOf('V1', 'minus'));
+	});
+
+	it('takes its stub away again when the drag is abandoned', () => {
+		lowPass();
+		const before = shapes();
+		app.selection = [find('GND1').id];
+		app.beginMove();
+		app.applyMove(40, 40, routeFor(new Set(app.selection)));
+		app.cancelMove();
+		expect(shapes()).toEqual(before);
+	});
+
+	it('costs one undo, stub included', () => {
+		lowPass();
+		const before = shapes();
+		drag('GND1', 40, 40);
+		expect(shapes()).not.toEqual(before);
+		app.undo();
+		expect(shapes()).toEqual(before);
+	});
+});

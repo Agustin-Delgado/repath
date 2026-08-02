@@ -19,6 +19,7 @@ import {
 	rotatePoint,
 	simplifyPath,
 	snap,
+	wireSegments,
 	validateParam,
 	type Instance,
 	type Point,
@@ -74,6 +75,29 @@ const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`
  */
 export type RouteBetween = (from: Point, to: Point, settling: ReadonlySet<string>) => Point[];
 
+/** The closest point on any of these wires, on the lattice they are drawn on. */
+function nearestPointOn(wires: readonly Wire[], at: Point): Point | null {
+	let best: { point: Point; distance: number } | null = null;
+	for (const wire of wires) {
+		for (const segment of wireSegments(wire)) {
+			// Axis-aligned, so the projection is a clamp on one coordinate.
+			const point =
+				segment.a.x === segment.b.x
+					? {
+							x: segment.a.x,
+							y: Math.min(Math.max(at.y, Math.min(segment.a.y, segment.b.y)), Math.max(segment.a.y, segment.b.y))
+						}
+					: {
+							x: Math.min(Math.max(at.x, Math.min(segment.a.x, segment.b.x)), Math.max(segment.a.x, segment.b.x)),
+							y: segment.a.y
+						};
+			const distance = Math.abs(point.x - at.x) + Math.abs(point.y - at.y);
+			if (!best || distance < best.distance) best = { point, distance };
+		}
+	}
+	return best?.point ?? null;
+}
+
 /**
  * Move one end of a wire and leave the rest of it alone.
  *
@@ -102,6 +126,16 @@ interface MoveOrigin {
 	followers: Map<string, Set<number>>;
 	/** Wires being dragged, with the end indices that must stay plugged in. */
 	anchors: Map<string, Set<number>>;
+	/**
+	 * Junctions a moving pin is leaving behind, and the wire that will reach back
+	 * to them.
+	 *
+	 * Where two or more wire ends meet a pin, dragging the part cannot simply take
+	 * them all with it: they are joined to each other as much as to the pin, and
+	 * pulling each one towards the new position tears the junction apart. They stay
+	 * put and a short wire goes out to fetch the pin instead.
+	 */
+	stubs: Array<{ id: string; from: Point; junction: Point; holding: string[] }>;
 	/** The redo stack as it was, so cancelling the drag can hand it back. */
 	future: HistoryEntry[];
 }
@@ -573,8 +607,21 @@ class AppState {
 			}
 		}
 
+		// How many wire ends meet at each point, so a junction can be told from a
+		// wire that simply happens to end on a pin.
+		const endsAt = new Map<string, number>();
+		for (const wire of this.schematic.wires) {
+			if (chosen.has(wire.id)) continue;
+			for (const index of [0, wire.points.length - 1]) {
+				const key = pointKey(wire.points[index].x, wire.points[index].y);
+				endsAt.set(key, (endsAt.get(key) ?? 0) + 1);
+			}
+		}
+
 		const followers = new Map<string, Set<number>>();
 		const anchors = new Map<string, Set<number>>();
+		const stubs: MoveOrigin['stubs'] = [];
+		const stubbed = new Set<string>();
 
 		for (const wire of this.schematic.wires) {
 			const ends = [0, wire.points.length - 1];
@@ -591,11 +638,38 @@ class AppState {
 
 			const following = new Set<number>();
 			for (const index of ends) {
-				const key = pointKey(wire.points[index].x, wire.points[index].y);
+				const at = wire.points[index];
+				const key = pointKey(at.x, at.y);
 				// Follows only if the point is leaving entirely. A point shared with a
 				// stationary pin stays put, or moving one of two parts joined
 				// pin-to-pin would take the wire off the one left behind.
-				if (movingPins.has(key) && !stationaryPins.has(key)) following.add(index);
+				if (!movingPins.has(key) || stationaryPins.has(key)) continue;
+
+				// Several wires meeting the pin are joined to each other as well as to
+				// it. Dragging them all towards the new position pulls that junction
+				// apart and bends every one of them; leaving them alone and sending a
+				// stub out to the pin keeps the drawing and moves only what moved.
+				if ((endsAt.get(key) ?? 0) >= 2) {
+					if (!stubbed.has(key)) {
+						stubbed.add(key);
+						stubs.push({
+							id: freshId(),
+							from: { x: at.x, y: at.y },
+							junction: { x: at.x, y: at.y },
+							holding: this.schematic.wires
+								.filter(
+									(w) =>
+										!chosen.has(w.id) &&
+										[0, w.points.length - 1].some(
+											(i) => pointKey(w.points[i].x, w.points[i].y) === key
+										)
+								)
+								.map((w) => w.id)
+						});
+					}
+					continue;
+				}
+				following.add(index);
 			}
 			if (following.size > 0) followers.set(wire.id, following);
 		}
@@ -613,6 +687,7 @@ class AppState {
 			),
 			followers,
 			anchors,
+			stubs,
 			future: [...this.future]
 		};
 		this.dragStarted = false;
@@ -711,6 +786,21 @@ class AppState {
 
 			wire.points = from.map((p) => ({ x: p.x + dx, y: p.y + dy }));
 		}
+
+		// The wires that stayed behind are still joined to each other; these reach
+		// out to collect the pin that left them.
+		for (const stub of origin.stubs) {
+			const to = { x: stub.from.x + dx, y: stub.from.y + dy };
+			// To the nearest point of what stayed, not back to the corner the pin
+			// happened to be sitting on. A ground dragged sideways along a rail should
+			// drop straight onto it, not run back to where it used to be attached.
+			const held = this.schematic.wires.filter((w) => stub.holding.includes(w.id));
+			const meet = nearestPointOn(held, to) ?? stub.junction;
+			const points = simplifyPath(route(to, meet, settling));
+			const existing = this.schematic.wires.find((w) => w.id === stub.id);
+			if (existing) existing.points = points;
+			else if (points.length >= 2) this.schematic.wires.push({ id: stub.id, points });
+		}
 	}
 
 	/**
@@ -784,6 +874,12 @@ class AppState {
 		for (const wire of this.schematic.wires) {
 			const from = origin.wires.get(wire.id);
 			if (from) wire.points = from.map((p) => ({ x: p.x, y: p.y }));
+		}
+
+		// Anything the gesture drew to reach a departing pin goes with it.
+		const drawn = new Set(origin.stubs.map((s) => s.id));
+		if (drawn.size > 0) {
+			this.schematic.wires = this.schematic.wires.filter((w) => !drawn.has(w.id));
 		}
 
 		if (this.dragStarted) {

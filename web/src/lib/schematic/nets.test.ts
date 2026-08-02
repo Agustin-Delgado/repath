@@ -8,7 +8,14 @@ import {
 	splitAtJunctions,
 	trimOverlaps
 } from './nets';
-import { defaultParams, type Instance, type Point, type Schematic, type Wire } from './model';
+import {
+	defaultParams,
+	simplifyPath,
+	type Instance,
+	type Point,
+	type Schematic,
+	type Wire
+} from './model';
 
 let counter = 0;
 const id = () => `n${++counter}`;
@@ -439,5 +446,36 @@ describe('splitAtJunctions', () => {
 		};
 		const split = splitAtJunctions(schematic, fresh);
 		expect(mergeWireChains({ ...schematic, wires: split })).toHaveLength(split.length);
+	});
+});
+
+describe('simplifyPath and loops', () => {
+	it('cuts out an excursion that returns to where it started', () => {
+		// A wire dragged while both ends are pinned grows a leg at each end to reach
+		// back, and pushed far enough those legs cross: the path leaves a point and
+		// later returns to it. Everything in between carries no current and draws as
+		// a knot.
+		expect(
+			simplifyPath([
+				{ x: 390, y: 260 },
+				{ x: 350, y: 260 },
+				{ x: 350, y: 280 },
+				{ x: 390, y: 280 },
+				{ x: 390, y: 260 },
+				{ x: 330, y: 260 }
+			])
+		).toEqual([
+			{ x: 390, y: 260 },
+			{ x: 330, y: 260 }
+		]);
+	});
+
+	it('leaves an honest path alone', () => {
+		const path = [
+			{ x: 0, y: 0 },
+			{ x: 100, y: 0 },
+			{ x: 100, y: 100 }
+		];
+		expect(simplifyPath(path)).toEqual(path);
 	});
 });

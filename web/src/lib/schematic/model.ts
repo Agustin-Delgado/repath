@@ -139,12 +139,28 @@ export function wireSegments(wire: Wire): WireSegment[] {
 export const wireStart = (wire: Wire): Point => wire.points[0];
 export const wireEnd = (wire: Wire): Point => wire.points[wire.points.length - 1];
 
-/** Drop corners that repeat or that sit in the middle of a straight run. */
+/**
+ * Drop corners that repeat, sit in the middle of a straight run, or close a loop.
+ *
+ * The loops are the interesting case. A wire dragged while both its ends are
+ * pinned grows a leg at each end to reach back, and pushed far enough those legs
+ * cross: the path leaves a point and later returns to it, curling round on
+ * itself. Everything between the two visits carries no current and is drawn as a
+ * knot, so it goes.
+ */
 export function simplifyPath(points: readonly Point[]): Point[] {
 	const out: Point[] = [];
 	for (const p of points) {
 		const last = out[out.length - 1];
 		if (last && last.x === p.x && last.y === p.y) continue;
+
+		// Been here before: cut out the excursion rather than draw it.
+		const seen = out.findIndex((q) => q.x === p.x && q.y === p.y);
+		if (seen !== -1) {
+			out.length = seen + 1;
+			continue;
+		}
+
 		out.push({ x: p.x, y: p.y });
 	}
 	for (let i = out.length - 2; i > 0; i--) {
