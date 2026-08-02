@@ -34,6 +34,8 @@ export interface Theme {
 	selection: string;
 	labelStrong: string;
 	labelDim: string;
+	/** For showing that something is not going to be accepted. */
+	danger: string;
 }
 
 const FALLBACK: Theme = {
@@ -46,7 +48,8 @@ const FALLBACK: Theme = {
 	accent: '#4ea8ff',
 	selection: '#ffb454',
 	labelStrong: '#cdd5e2',
-	labelDim: '#7c8496'
+	labelDim: '#7c8496',
+	danger: '#ff6b7a'
 };
 
 /**
@@ -76,7 +79,8 @@ export function readTheme(element: HTMLElement): Theme {
 		accent: read('--accent', FALLBACK.accent),
 		selection: read('--selection', FALLBACK.selection),
 		labelStrong: read('--label-strong', FALLBACK.labelStrong),
-		labelDim: read('--label-dim', FALLBACK.labelDim)
+		labelDim: read('--label-dim', FALLBACK.labelDim),
+		danger: read('--danger', FALLBACK.danger)
 	};
 }
 

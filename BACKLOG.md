@@ -188,3 +188,5 @@ Kept short — it is here to show the direction, not to be a changelog.
   dragging a leg.
 - Escape cancels whatever gesture is in flight; a link that cannot be read says
   so instead of quietly showing the default circuit.
+- A wire that would end in mid-air is turned away, shown as such while it is
+  being drawn rather than only after.

@@ -29,7 +29,7 @@ import { currentTheme } from '../draw';
 import { wireSegments, type Point } from '../model';
 import { elbow, routeWire } from '../route';
 import type { SchematicItem } from '../scene';
-import { netAt } from './shared';
+import { connectsAt, DANGLING_NOTICE, netAt } from './shared';
 import { drawSnapHint } from './wire';
 
 type Mode = 'idle' | 'move' | 'marquee' | 'wire';
@@ -301,7 +301,13 @@ export function createSelectTool(): Tool {
 			if (mode === 'wire' && wireFrom) {
 				const to = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
 				if (to.x !== wireFrom.x || to.y !== wireFrom.y) {
-					app.addWirePath(wirePath({ x: to.x, y: to.y }, ctx));
+					// Dragged from a pin, so the far end is the one that can be adrift.
+					if (connectsAt({ x: to.x, y: to.y })) {
+						app.notice = null;
+						app.addWirePath(wirePath({ x: to.x, y: to.y }, ctx));
+					} else {
+						app.notice = DANGLING_NOTICE;
+					}
 				}
 				wireFrom = null;
 				wireTo = null;
@@ -414,11 +420,16 @@ export function createSelectTool(): Tool {
 			}
 
 			if (mode === 'wire' && wireFrom && wireTo) {
+				// Same feedback as the wire tool: a run that would end on nothing is
+				// shown as one that will not be accepted.
+				const adrift = !connectsAt({ x: wireTo.x, y: wireTo.y });
+				const colour = adrift ? theme.danger : theme.accent;
 				painter.polyline(wirePath({ x: wireTo.x, y: wireTo.y }, ctx), {
-					color: theme.accent,
-					width: 2
+					color: colour,
+					width: 2,
+					dash: adrift ? [6, 4] : undefined
 				});
-				drawSnapHint(painter, ctx, wireTo, theme.accent);
+				drawSnapHint(painter, ctx, wireTo, colour);
 			} else if (hoveredPin) {
 				// Idle over a pin: show that dragging from here would draw a wire.
 				drawSnapHint(painter, ctx, hoveredPin, theme.accent);

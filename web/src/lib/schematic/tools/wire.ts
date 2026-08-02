@@ -23,7 +23,7 @@ import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
 import type { Point } from '../model';
 import { elbow, onGrid, routeWire } from '../route';
-import { constrainToAxis } from './shared';
+import { connectsAt, constrainToAxis, DANGLING_NOTICE } from './shared';
 
 /** Slightly more generous than picking: you aim at pins deliberately. */
 const SNAP_FACTOR = 1.4;
@@ -53,6 +53,26 @@ export function createWireTool(): Tool {
 			// The corners already committed are ours, not obstacles to dodge.
 			allow: new Set(corners.map((p) => `${Math.round(p.x / ctx.gridSize)},${Math.round(p.y / ctx.gridSize)}`))
 		});
+	}
+
+	/**
+	 * Commit a run, unless it would leave an end in mid-air.
+	 *
+	 * Checked here rather than in the model: a file or a shared link has to be able
+	 * to carry whatever it carries, but the editor should decline to draw a wire
+	 * that conducts nothing. The message matters as much as the refusal — a
+	 * gesture that silently does nothing reads as the app being broken.
+	 */
+	function commit(path: Point[]): boolean {
+		if (path.length < 2) return false;
+		const ends = [path[0], path[path.length - 1]];
+		if (!ends.every(connectsAt)) {
+			app.notice = DANGLING_NOTICE;
+			return false;
+		}
+		app.notice = null;
+		app.addWirePath(path);
+		return true;
 	}
 
 	function finish(ctx: ToolContext): void {
@@ -89,7 +109,7 @@ export function createWireTool(): Tool {
 			corners = [...corners.slice(0, -1), ...leg(at, ctx)];
 			anchor = at;
 			if (snapped.kind === 'pin') {
-				app.addWirePath(corners);
+				commit(corners);
 				finish(ctx);
 			} else {
 				ctx.invalidate('overlay');
@@ -109,7 +129,7 @@ export function createWireTool(): Tool {
 			const snapped = resolve(pointer, ctx);
 			const at: Point = { x: snapped.x, y: snapped.y };
 			if (at.x !== anchor.x || at.y !== anchor.y) {
-				app.addWirePath([...corners.slice(0, -1), ...leg(at, ctx)]);
+				commit([...corners.slice(0, -1), ...leg(at, ctx)]);
 			}
 			finish(ctx);
 		},
@@ -121,7 +141,7 @@ export function createWireTool(): Tool {
 			}
 			if (event.key === 'Enter' && anchor && corners.length >= 2) {
 				// Finish a chained run where it stands, rather than on a pin.
-				app.addWirePath(corners);
+				commit(corners);
 				finish(ctx);
 				return true;
 			}
@@ -133,14 +153,18 @@ export function createWireTool(): Tool {
 
 			if (anchor && target) {
 				const path = [...corners.slice(0, -1), ...leg({ x: target.x, y: target.y }, ctx)];
-				painter.polyline(path, { color: theme.accent, width: 2 });
+				// Drawn in the refusal colour while the far end is on nothing, so the
+				// answer is visible before releasing rather than after.
+				const adrift = !connectsAt({ x: target.x, y: target.y });
+				const colour = adrift ? theme.danger : theme.accent;
+				painter.polyline(path, { color: colour, width: 2, dash: adrift ? [6, 4] : undefined });
 				for (const corner of path.slice(1, -1)) {
-					painter.dot(corner, 2.5, { color: theme.accent });
+					painter.dot(corner, 2.5, { color: colour });
 				}
 			}
 
 			if (!target) return;
-			drawSnapHint(painter, ctx, target, theme.accent);
+			drawSnapHint(painter, ctx, target, connectsAt({ x: target.x, y: target.y }) ? theme.accent : theme.danger);
 		}
 	};
 }
