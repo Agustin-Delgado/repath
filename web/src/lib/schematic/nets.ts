@@ -8,6 +8,7 @@
  */
 
 import {
+	GRID,
 	definitionOf,
 	pinPosition,
 	pointKey,
@@ -359,6 +360,83 @@ function findCut(wires: readonly Wire[]): { index: number; points: Point[] } | n
 		const first = segments[0];
 		if (elsewhere.some((other) => covers(first, other))) {
 			return { index, points: wire.points.slice(1) };
+		}
+	}
+	return null;
+}
+
+/**
+ * Split a wire wherever another one ends partway along it.
+ *
+ * A branch meeting a wire in the middle is a real junction, but as a bare point
+ * on someone else's segment it is a fragile one: move the host and the branch is
+ * left behind holding nothing, because only *pins* are tracked as things a wire
+ * end follows. That is how a circuit comes apart over a few drags, with every pin
+ * still attached to a wire and no warning to show for it.
+ *
+ * Splitting the host turns that into three wire ends meeting at a point, which is
+ * the case the editor already handles — each of them anchors the others. The
+ * drawn shape never changes; only the number of wires does.
+ *
+ * `mergeWireChains` will not undo this, because it only folds a point where
+ * exactly two ends meet.
+ */
+export function splitAtJunctions(schematic: Schematic, nextId: () => string): Wire[] {
+	const ends = new Set<string>();
+	for (const wire of schematic.wires) {
+		for (const index of [0, wire.points.length - 1]) {
+			ends.add(pointKey(wire.points[index].x, wire.points[index].y));
+		}
+	}
+
+	const out: Wire[] = [];
+	for (const wire of schematic.wires) {
+		let rest = wire;
+		let first = true;
+
+		for (;;) {
+			const at = firstJunctionWithin(rest, ends);
+			if (!at) break;
+
+			out.push({ id: first ? wire.id : nextId(), points: at.before });
+			rest = { id: nextId(), points: at.after };
+			first = false;
+		}
+
+		out.push(first ? wire : rest);
+	}
+	return out;
+}
+
+/** Where another wire ends strictly inside this one, and the two halves it makes. */
+function firstJunctionWithin(
+	wire: Wire,
+	ends: ReadonlySet<string>
+): { before: Point[]; after: Point[] } | null {
+	for (let i = 0; i < wire.points.length - 1; i++) {
+		const a = wire.points[i];
+		const b = wire.points[i + 1];
+
+		// A corner counts. A branch can land on a bend as easily as on a straight,
+		// and a bend is not an interior point of either segment that meets there —
+		// so walking segments alone steps right over it.
+		if (i > 0 && ends.has(pointKey(a.x, a.y))) {
+			return { before: wire.points.slice(0, i + 1), after: wire.points.slice(i) };
+		}
+
+		const vertical = a.x === b.x;
+		const from = vertical ? a.y : a.x;
+		const to = vertical ? b.y : b.x;
+		const step = Math.sign(to - from) * GRID;
+		if (step === 0) continue;
+
+		for (let v = from + step; step > 0 ? v < to : v > to; v += step) {
+			const at = vertical ? { x: a.x, y: v } : { x: v, y: a.y };
+			if (!ends.has(pointKey(at.x, at.y))) continue;
+			return {
+				before: [...wire.points.slice(0, i + 1), at],
+				after: [at, ...wire.points.slice(i + 1)]
+			};
 		}
 	}
 	return null;

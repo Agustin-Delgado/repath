@@ -5,6 +5,7 @@ import {
 	liesWithin,
 	mergeWireChains,
 	pinKey,
+	splitAtJunctions,
 	trimOverlaps
 } from './nets';
 import { defaultParams, type Instance, type Point, type Schematic, type Wire } from './model';
@@ -332,5 +333,97 @@ describe('trimOverlaps', () => {
 		const before = buildConnectivity(schematic).nets.length;
 		const after = buildConnectivity({ ...schematic, wires: trimOverlaps(schematic) }).nets.length;
 		expect(after).toBe(before);
+	});
+});
+
+describe('splitAtJunctions', () => {
+	let n = 0;
+	const fresh = () => `s${++n}`;
+	const shapes = (wires: Wire[]) => wires.map((w) => w.points.map((p) => `${p.x},${p.y}`).join(' '));
+
+	it('splits a wire where another one ends partway along it', () => {
+		// Until it is split, that junction is a bare point on someone else's
+		// segment: move the host and the branch is left holding nothing, with every
+		// pin still attached to a wire and no warning to show for it.
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'host', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] },
+				{ id: 'branch', points: [{ x: 100, y: 0 }, { x: 100, y: 80 }] }
+			]
+		};
+		expect(shapes(splitAtJunctions(schematic, fresh)).sort()).toEqual(
+			['0,0 100,0', '100,0 100,80', '100,0 200,0'].sort()
+		);
+	});
+
+	it('splits at a corner too', () => {
+		// A branch can land on a bend as easily as on a straight, and a bend is not
+		// an interior point of either segment meeting there — walking segments alone
+		// steps straight over it.
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'host', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }] },
+				{ id: 'branch', points: [{ x: 100, y: 0 }, { x: 200, y: 0 }] }
+			]
+		};
+		expect(shapes(splitAtJunctions(schematic, fresh)).sort()).toEqual(
+			['0,0 100,0', '100,0 100,100', '100,0 200,0'].sort()
+		);
+	});
+
+	it('leaves a wire alone when nothing ends on it', () => {
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'a', points: [{ x: 0, y: 50 }, { x: 200, y: 50 }] },
+				{ id: 'b', points: [{ x: 100, y: 0 }, { x: 100, y: 20 }] }
+			]
+		};
+		expect(shapes(splitAtJunctions(schematic, fresh))).toEqual(['0,50 200,50', '100,0 100,20']);
+	});
+
+	it('leaves two wires that merely meet end to end', () => {
+		// Nothing lands *inside* anything here, so there is nothing to split.
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'a', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+				{ id: 'b', points: [{ x: 100, y: 0 }, { x: 100, y: 100 }] }
+			]
+		};
+		expect(shapes(splitAtJunctions(schematic, fresh))).toEqual(['0,0 100,0', '100,0 100,100']);
+	});
+
+	it('does not change what is drawn, only how many wires draw it', () => {
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'host', points: [{ x: 0, y: 0 }, { x: 300, y: 0 }] },
+				{ id: 'one', points: [{ x: 100, y: 0 }, { x: 100, y: 80 }] },
+				{ id: 'two', points: [{ x: 200, y: 0 }, { x: 200, y: 80 }] }
+			]
+		};
+		const split = splitAtJunctions(schematic, fresh);
+		// Two branches cut the host into three, and the branches are still two.
+		expect(split).toHaveLength(5);
+		expect(buildConnectivity({ ...schematic, wires: split }).nets.length).toBe(
+			buildConnectivity(schematic).nets.length
+		);
+	});
+
+	it('is not undone by folding chains back together', () => {
+		// Three ends meeting is a junction, and merging only folds a point where
+		// exactly two do — so the split survives the next tidy.
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				{ id: 'host', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] },
+				{ id: 'branch', points: [{ x: 100, y: 0 }, { x: 100, y: 80 }] }
+			]
+		};
+		const split = splitAtJunctions(schematic, fresh);
+		expect(mergeWireChains({ ...schematic, wires: split })).toHaveLength(split.length);
 	});
 });

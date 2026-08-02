@@ -28,7 +28,7 @@ import {
 } from './schematic/model';
 import { elbow } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
-import { mergeWireChains, trimOverlaps } from './schematic/nets';
+import { mergeWireChains, splitAtJunctions, trimOverlaps } from './schematic/nets';
 
 /**
  * Wiring used to be a mode of its own. It is not any more: dragging off a pin or
@@ -363,6 +363,12 @@ class AppState {
 			const refolded = mergeWireChains(this.schematic);
 			if (refolded.length !== this.schematic.wires.length) this.schematic.wires = refolded;
 		}
+
+		// Last, because trimming is what creates most of these: a wire cut back to
+		// where it meets another one now ends partway along it, and a branch resting
+		// on someone else's segment is not carried when that segment moves.
+		const split = splitAtJunctions(this.schematic, freshId);
+		if (split.length !== this.schematic.wires.length) this.schematic.wires = split;
 	}
 
 	/**

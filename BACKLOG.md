@@ -31,6 +31,8 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Animation | Wires closing a loop show no current | Genuinely undefined for ideal wires in parallel; shown as nothing rather than guessed |
 | Canvas | Layer-level invalidation, no dirty rectangles | A full-screen repaint per interaction on the affected layer |
 | Editor | No touch or pen input | Unusable on a tablet |
+| Editor | A circuit can still come apart over a long run of drags | 14 of 180 random eight-drag sequences, down from 108; cause not yet identified |
+| Editor | Moving a part re-routes its wires rather than keeping their shape | Move a ground and the rail it feeds moves with it, when only the ground was asked to move |
 | Editor | Deleting heals a gap only for a two-pin part wired on both sides | Anything with three pins leaves stubs, since no pairing is obviously right |
 | Editor | History still stores whole-document snapshots | Bounded now (100 entries or 8 MB, whichever comes first) but not a delta log |
 | Router | Widening the search box is a fixed ladder (12 then 40 cells) | An obstacle wider than 40 cells is still routed through rather than around |
