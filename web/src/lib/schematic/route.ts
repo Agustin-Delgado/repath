@@ -62,6 +62,16 @@ const COST = {
  */
 const GREED = 1.06;
 
+/**
+ * Search box sizes, in grid cells beyond the endpoints.
+ *
+ * Twelve covers essentially every route on a normal schematic and keeps the
+ * common case cheap. Forty is for the rarer case where the obstacle is wider
+ * than the detour room, and is only ever tried when the cheap box came back with
+ * a route that paid to cross something.
+ */
+const SEARCH_MARGINS = [12, 40];
+
 /** Blocked and discouraged cells, built once per route. */
 interface Obstacles {
 	/** Cells covered by a component body. */
@@ -174,11 +184,31 @@ export function routeWire(
 	const obstacles = buildObstacles(schematic, options);
 	const effort = options.effort ?? 20_000;
 
-	// The search bounds: the box between the endpoints plus room to detour around
-	// whatever is in the way. Unbounded A* on an open grid wanders.
-	const margin = 12;
-	const lo = { x: Math.min(start.x, goal.x) - margin, y: Math.min(start.y, goal.y) - margin };
-	const hi = { x: Math.max(start.x, goal.x) + margin, y: Math.max(start.y, goal.y) + margin };
+	// The search is bounded — unbounded A* on an open grid wanders — but a bound
+	// that is too tight hides the cheap way round. Nothing here is a hard wall, so
+	// a clipped search still returns *a* route; it just settles for barging through
+	// a component body when the detour around it lies outside the box.
+	//
+	// So: try a cheap box, and widen only when the result shows it paid a penalty
+	// and the walls were in its way. The common route never pays for the retry.
+	const bend = start.x !== goal.x && start.y !== goal.y ? COST.turn : 0;
+	// The ideal L, plus one corner's slack. A route at or under this went straight
+	// there and stepped over nothing; no wider box could improve on it.
+	const clean = heuristic(start.x, start.y, goal.x, goal.y) + bend + COST.turn;
+
+	let best: { path: Point[]; cost: number } | null = null;
+	for (const margin of SEARCH_MARGINS) {
+		const attempt = search(margin);
+		if (attempt.path && (!best || attempt.cost < best.cost)) {
+			best = { path: attempt.path, cost: attempt.cost };
+		}
+		if (attempt.exhausted) break;
+		if (best && best.cost <= clean) break;
+		// The bounds never turned anything away, so they are not what is costing it.
+		if (!attempt.clipped) break;
+	}
+
+	return best ? best.path : elbow(from, to);
 
 	interface Node {
 		x: number;
@@ -190,85 +220,109 @@ export function routeWire(
 		parent: Node | null;
 	}
 
-	const open: Node[] = [
-		{
-			x: start.x,
-			y: start.y,
-			axis: -1,
-			cost: 0,
-			estimate: heuristic(start.x, start.y, goal.x, goal.y) * GREED,
-			parent: null
-		}
-	];
-	const best = new Map<number, number>();
-	const key = (x: number, y: number, axis: number) => cell(x, y) * 4 + (axis + 1);
-	best.set(key(start.x, start.y, -1), 0);
+	/** One bounded pass. Reports *why* it failed, so the caller knows to widen. */
+	function search(margin: number): {
+		path?: Point[];
+		/** Total cost of `path`, for comparing one box against another. */
+		cost: number;
+		/** The bounds turned a neighbour away — a wider box might get through. */
+		clipped: boolean;
+		/** Ran out of explored-cell budget. Widening would only cost more. */
+		exhausted: boolean;
+	} {
+		const lo = { x: Math.min(start.x, goal.x) - margin, y: Math.min(start.y, goal.y) - margin };
+		const hi = { x: Math.max(start.x, goal.x) + margin, y: Math.max(start.y, goal.y) + margin };
+		let clipped = false;
 
-	let explored = 0;
-	while (open.length > 0 && explored < effort) {
-		// A linear scan is fine at this size — a schematic route explores hundreds
-		// of cells, and a heap would cost more in bookkeeping than it saves.
-		let bestIndex = 0;
-		for (let i = 1; i < open.length; i++) {
-			if (open[i].estimate < open[bestIndex].estimate) bestIndex = i;
-		}
-		const node = open.splice(bestIndex, 1)[0];
-		explored++;
-
-		if (node.x === goal.x && node.y === goal.y) {
-			const path: Point[] = [];
-			for (let n: Node | null = node; n; n = n.parent) {
-				path.push({ x: n.x * grid, y: n.y * grid });
+		const open: Node[] = [
+			{
+				x: start.x,
+				y: start.y,
+				axis: -1,
+				cost: 0,
+				estimate: heuristic(start.x, start.y, goal.x, goal.y) * GREED,
+				parent: null
 			}
-			path.reverse();
-			// Anchor the ends exactly where they were asked for, in case a pin sits
-			// off-lattice.
-			path[0] = { x: from.x, y: from.y };
-			path[path.length - 1] = { x: to.x, y: to.y };
-			return collapse(path);
-		}
+		];
+		const best = new Map<number, number>();
+		const key = (x: number, y: number, axis: number) => cell(x, y) * 4 + (axis + 1);
+		best.set(key(start.x, start.y, -1), 0);
 
-		for (const [dx, dy] of DIRECTIONS) {
-			const nx = node.x + dx;
-			const ny = node.y + dy;
-			if (nx < lo.x || nx > hi.x || ny < lo.y || ny > hi.y) continue;
-
-			const axis = dx === 0 ? 1 : 0;
-			const here = cell(nx, ny);
-			const isGoal = nx === goal.x && ny === goal.y;
-			const permitted = options.allow?.has(`${nx},${ny}`) ?? false;
-
-			let step = COST.step;
-			if (node.axis !== -1 && node.axis !== axis) step += COST.turn;
-			if (!isGoal && !permitted) {
-				if (obstacles.body.has(here)) step += COST.body;
-				if (obstacles.pins.has(here)) step += COST.foreignPin;
+		let explored = 0;
+		while (open.length > 0 && explored < effort) {
+			// A linear scan is fine at this size — a schematic route explores hundreds
+			// of cells, and a heap would cost more in bookkeeping than it saves.
+			let bestIndex = 0;
+			for (let i = 1; i < open.length; i++) {
+				if (open[i].estimate < open[bestIndex].estimate) bestIndex = i;
 			}
-			// Running along a wire is much worse than crossing it: two conductors
-			// drawn on the same line cannot be told apart.
-			const along = axis === 0 ? obstacles.horizontal : obstacles.vertical;
-			const across = axis === 0 ? obstacles.vertical : obstacles.horizontal;
-			if (along.has(here)) step += COST.overlap;
-			else if (across.has(here)) step += COST.cross;
+			const node = open.splice(bestIndex, 1)[0];
+			explored++;
 
-			const cost = node.cost + step;
-			const k = key(nx, ny, axis);
-			const known = best.get(k);
-			if (known !== undefined && known <= cost) continue;
+			if (node.x === goal.x && node.y === goal.y) {
+				const path: Point[] = [];
+				for (let n: Node | null = node; n; n = n.parent) {
+					path.push({ x: n.x * grid, y: n.y * grid });
+				}
+				path.reverse();
+				// Anchor the ends exactly where they were asked for, in case a pin sits
+				// off-lattice.
+				path[0] = { x: from.x, y: from.y };
+				path[path.length - 1] = { x: to.x, y: to.y };
+				return { path: collapse(path), cost: node.cost, clipped, exhausted: false };
+			}
 
-			best.set(k, cost);
-			open.push({
-				x: nx,
-				y: ny,
-				axis,
-				cost,
-				estimate: cost + heuristic(nx, ny, goal.x, goal.y) * GREED,
-				parent: node
-			});
+			for (const [dx, dy] of DIRECTIONS) {
+				const nx = node.x + dx;
+				const ny = node.y + dy;
+				if (nx < lo.x || nx > hi.x || ny < lo.y || ny > hi.y) {
+					clipped = true;
+					continue;
+				}
+
+				const axis = dx === 0 ? 1 : 0;
+				const here = cell(nx, ny);
+				const isGoal = nx === goal.x && ny === goal.y;
+				const permitted = options.allow?.has(`${nx},${ny}`) ?? false;
+
+				let step = COST.step;
+				if (node.axis !== -1 && node.axis !== axis) step += COST.turn;
+				if (!isGoal && !permitted) {
+					if (obstacles.body.has(here)) step += COST.body;
+					if (obstacles.pins.has(here)) step += COST.foreignPin;
+
+					// Running along a wire is much worse than crossing it: two conductors
+					// drawn on the same line cannot be told apart.
+					//
+					// Charged only for cells the route passes *through*. The destination
+					// is where it stops, so landing on the end of an existing wire is a
+					// junction, not an overlap — and charging for it made every join onto
+					// a wire end jog sideways and back to approach from a free direction.
+					const along = axis === 0 ? obstacles.horizontal : obstacles.vertical;
+					const across = axis === 0 ? obstacles.vertical : obstacles.horizontal;
+					if (along.has(here)) step += COST.overlap;
+					else if (across.has(here)) step += COST.cross;
+				}
+
+				const cost = node.cost + step;
+				const k = key(nx, ny, axis);
+				const known = best.get(k);
+				if (known !== undefined && known <= cost) continue;
+
+				best.set(k, cost);
+				open.push({
+					x: nx,
+					y: ny,
+					axis,
+					cost,
+					estimate: cost + heuristic(nx, ny, goal.x, goal.y) * GREED,
+					parent: node
+				});
+			}
 		}
+
+		return { cost: Infinity, clipped, exhausted: explored >= effort };
 	}
-
-	return elbow(from, to);
 }
 
 /** Remove the interior points of straight runs, leaving only corners. */

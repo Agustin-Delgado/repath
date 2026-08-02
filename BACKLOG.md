@@ -31,14 +31,9 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Animation | Wires closing a loop show no current | Genuinely undefined for ideal wires in parallel; shown as nothing rather than guessed |
 | Canvas | Layer-level invalidation, no dirty rectangles | A full-screen repaint per interaction on the affected layer |
 | Editor | No touch or pen input | Unusable on a tablet |
-| Editor | Rotating a multi-selection turns each part about its own centre | The group does not orbit, which is rarely what is wanted |
-| Editor | A refused rename (duplicate or blank) is silent | The field keeps the typed text while the model rejected it |
-| Editor | Negative component values are accepted | The engine uses the magnitude; the UI never objects |
-| Editor | Zero values are silently clamped (R to 1 nΩ, C to 1 aF) | The circuit simulates, but not the one that was drawn |
-| Editor | Undo clears the selection | Jarring after undoing a small edit |
-| Router | The search is bounded to ~12 grid cells beyond the endpoints | An obstacle wider than that forces the plain-elbow fallback, which may cross things |
-| Editor | Dragging re-routes with A* every frame, with no time budget | A part with many wires in a large schematic could drop frames |
-| Editor | History stores whole-document JSON snapshots, capped at 100 | Memory grows with document size times edit count |
+| Editor | Deleting heals a gap only for a two-pin part wired on both sides | Anything with three pins leaves stubs, since no pairing is obviously right |
+| Editor | History still stores whole-document snapshots | Bounded now (100 entries or 8 MB, whichever comes first) but not a delta log |
+| Router | Widening the search box is a fixed ladder (12 then 40 cells) | An obstacle wider than 40 cells is still routed through rather than around |
 
 ---
 
@@ -69,11 +64,8 @@ Each one should either move into Must/Should below, or be documented in the UI.
       selection, edit values from the inspector without a mouse.
 - [ ] **Errors that point at the circuit.** "Singular matrix near v(n3)" should
       highlight that net on the canvas, not just print a name the user never chose.
-- [ ] **Wire editing** — drag a segment sideways, add and remove corners, split and
-      join. Right now a wire can only be drawn, moved as a whole, and deleted.
-- [ ] **Rotate a group about its centre**, not each part about its own.
-- [ ] **Say why an edit was refused** — a duplicate name, a value that will not
-      parse, a negative resistance. Silence reads as a bug.
+- [ ] **Wire editing, the rest of it** — splitting a run in two, and deleting a
+      single corner. Dragging a leg to reshape a wire is done; these are not.
 - [ ] **Delete that heals.** Deleting a component should offer to reconnect the
       wires that met at it, rather than leaving two stubs.
 

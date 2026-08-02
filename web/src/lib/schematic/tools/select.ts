@@ -13,6 +13,7 @@
  */
 
 import {
+	distanceToSegment,
 	rectFromPoints,
 	snapPoint,
 	type EditorPointer,
@@ -25,8 +26,8 @@ import {
 } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
-import type { Point } from '../model';
-import { routeWire } from '../route';
+import { wireSegments, type Point } from '../model';
+import { elbow, routeWire } from '../route';
 import type { SchematicItem } from '../scene';
 import { netAt } from './shared';
 import { drawSnapHint } from './wire';
@@ -36,6 +37,18 @@ type Mode = 'idle' | 'move' | 'marquee' | 'wire';
 /** How close to a pin the cursor has to be for a drag to mean "start a wire". */
 const PIN_REACH = 1.1;
 
+/**
+ * Explored-cell cap for a route computed mid-drag.
+ *
+ * Enough for any route on a page-sized schematic — a normal one explores a few
+ * hundred cells — while bounding the pathological case to something that fits in
+ * a frame. Beyond it the route falls back to an elbow.
+ */
+const DRAG_EFFORT = 4000;
+
+/** Milliseconds of routing a single drag frame may spend across all its wires. */
+const FRAME_ROUTING_MS = 8;
+
 export function createSelectTool(): Tool {
 	let mode: Mode = 'idle';
 	let marquee: Rect | null = null;
@@ -44,6 +57,8 @@ export function createSelectTool(): Tool {
 	let moved = false;
 	let pressedId: string | null = null;
 	let pressedWasSelected = false;
+	/** Which leg of a wire the press landed on, when the press was on a wire. */
+	let pressedSegment: { wireId: string; index: number } | null = null;
 	/** Pin pairs the current offset would join, for the overlay to show. */
 	let pendingJoin: Vec2 | null = null;
 
@@ -52,6 +67,29 @@ export function createSelectTool(): Tool {
 	/** In-flight wire started by dragging off a pin. */
 	let wireFrom: Point | null = null;
 	let wireTo: SnapTarget | null = null;
+
+	/**
+	 * The leg of a wire nearest the cursor.
+	 *
+	 * Dragging edits *that* leg rather than sliding the whole wire. For a straight
+	 * two-point wire the leg is the wire, so the familiar behaviour is the
+	 * degenerate case — which means a wire with corners becomes reshapeable
+	 * without any new gesture to discover.
+	 */
+	function segmentUnder(id: string, at: Vec2): { wireId: string; index: number } | null {
+		const wire = app.schematic.wires.find((w) => w.id === id);
+		if (!wire) return null;
+		let best: { wireId: string; index: number } | null = null;
+		let closest = Infinity;
+		for (const segment of wireSegments(wire)) {
+			const d = distanceToSegment(at, segment.a, segment.b);
+			if (d < closest) {
+				closest = d;
+				best = { wireId: id, index: segment.index };
+			}
+		}
+		return best;
+	}
 
 	function pinUnder(pointer: EditorPointer, ctx: ToolContext): SnapTarget | null {
 		const found = ctx.snap.nearestPoint(pointer.world, ctx.tolerance * PIN_REACH);
@@ -119,15 +157,28 @@ export function createSelectTool(): Tool {
 	/** Routing used both while dragging and on release — there is only one. */
 	function routeDragged(ctx: ToolContext) {
 		const moving = new Set(app.selection);
-		return (from: Point, to: Point, wireId: string) =>
-			routeWire(app.schematic, from, to, {
+		// A hard backstop on the frame, for the case the per-route cap does not
+		// cover: dragging a part with a dozen wires on a crowded page. Past it the
+		// remaining wires take the plain elbow, which is instant. Releasing does not
+		// re-route — `endMove` keeps the geometry the last frame produced — so this
+		// cannot make the committed shape differ from the previewed one.
+		const deadline = performance.now() + FRAME_ROUTING_MS;
+		return (from: Point, to: Point, wireId: string) => {
+			if (performance.now() > deadline) return elbow(from, to);
+			return routeWire(app.schematic, from, to, {
 				grid: ctx.gridSize,
 				// The parts on the move are not obstacles for the wire chasing them,
 				// or the route would have to detour around the very pin it is
 				// heading for.
 				ignoreInstances: moving,
-				ignoreWires: new Set([wireId])
+				ignoreWires: new Set([wireId]),
+				// Deliberately below the default. A drag routes every frame, and a
+				// bound that depends only on the geometry keeps each frame's result
+				// identical to the last — a time-based one would let the same shape
+				// flicker between routed and fallback as the machine breathes.
+				effort: DRAG_EFFORT
 			});
+		};
 	}
 
 	return {
@@ -172,6 +223,12 @@ export function createSelectTool(): Tool {
 				}
 
 				mode = 'move';
+				// Only when the wire is the whole selection: dragging a group that
+				// happens to contain wires should translate it, not reshape one leg.
+				pressedSegment =
+					app.selection.length === 1 && app.selection[0] === item.id
+						? segmentUnder(item.id, pointer.world)
+						: null;
 				origin = snapPoint(pointer.world, ctx.gridSize);
 				moved = false;
 				pendingJoin = null;
@@ -196,6 +253,13 @@ export function createSelectTool(): Tool {
 			if (mode === 'move') {
 				const now = snapPoint(pointer.world, ctx.gridSize);
 				const raw = { x: now.x - origin.x, y: now.y - origin.y };
+				if (pressedSegment) {
+					// Reshaping one wire: no join snapping, since no pin is travelling.
+					if (raw.x || raw.y) moved = true;
+					app.applySegmentMove(pressedSegment.wireId, pressedSegment.index, raw.x, raw.y);
+					ctx.invalidate('schematic', 'overlay');
+					return;
+				}
 				const offset = joinAdjusted(raw, ctx);
 				if (offset.dx || offset.dy) moved = true;
 				// Recomputed from the snapshot with the real router, so what is on
@@ -252,6 +316,7 @@ export function createSelectTool(): Tool {
 			mode = 'idle';
 			marquee = null;
 			pressedId = null;
+			pressedSegment = null;
 			ctx.setCursor('default');
 			ctx.invalidate('schematic', 'overlay');
 		},
@@ -269,7 +334,9 @@ export function createSelectTool(): Tool {
 			switch (event.key) {
 				case 'Delete':
 				case 'Backspace':
-					app.deleteSelection();
+					// Routed, so pulling a part out of a series chain closes the gap
+					// along a sensible path rather than a bare diagonal-free guess.
+					app.deleteSelection(routeDragged(ctx));
 					ctx.invalidate();
 					return true;
 				case 'r':

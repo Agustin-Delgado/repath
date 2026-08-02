@@ -8,18 +8,71 @@
 
 	/** Text currently in each field, so a half-typed value is not clobbered. */
 	let editing = $state<Record<string, string>>({});
+	/**
+	 * Why the last edit to each field was refused.
+	 *
+	 * A refusal with no explanation is indistinguishable from a bug: the field
+	 * kept whatever was typed while the model had rejected it, so the drawing and
+	 * the screen disagreed and nothing said so.
+	 */
+	let problems = $state<Record<string, string>>({});
 
-	function commit(key: string, raw: string) {
+	function commit(key: string, raw: string, field: HTMLInputElement) {
 		if (!instance) return;
+
+		/**
+		 * Put the value that is actually in effect back in the box.
+		 *
+		 * Written to the element rather than left to the binding: the rendered
+		 * expression has not changed — the model refused the edit, so the value is
+		 * what it always was — and Svelte will not touch a DOM node to set it to
+		 * what it already believes is there. The typed text would sit in the field
+		 * looking accepted.
+		 */
+		const restore = () => {
+			delete editing[key];
+			const current = instance.params[key];
+			field.value = typeof current === 'number' ? formatValue(current, 4) : String(current);
+		};
+
 		const parsed = parseValue(raw);
 		if (parsed === null) {
-			// Unparseable: put the real value back rather than silently zeroing it.
-			delete editing[key];
+			problems[key] = `“${raw.trim()}” is not a value. Try 4k7, 100n, or 2.2e-3.`;
+			restore();
 			return;
 		}
-		app.setParam(instance.id, key, parsed);
+		const refusal = app.setParam(instance.id, key, parsed);
+		if (refusal) {
+			problems[key] = refusal;
+			restore();
+			return;
+		}
+		delete problems[key];
 		delete editing[key];
 	}
+
+	function commitName(raw: string, field: HTMLInputElement) {
+		if (!instance) return;
+		const refusal = app.rename(instance.id, raw);
+		if (refusal) {
+			problems.name = refusal;
+			// Put the name that is actually in effect back in the field, so what is
+			// on screen is what the circuit says.
+			field.value = instance.name;
+			return;
+		}
+		delete problems.name;
+	}
+
+	// A different component means a clean slate; the old messages were about it.
+	// Keyed on the id rather than the instance, so an unrelated edit elsewhere does
+	// not wipe a message the moment it appears.
+	const selectedId = $derived(instance?.id ?? null);
+	$effect(() => {
+		void selectedId;
+		problems = {};
+		editing = {};
+	});
 
 	function displayed(key: string, value: number | string): string {
 		if (editing[key] !== undefined) return editing[key];
@@ -41,12 +94,16 @@
 		<header>
 			<input
 				class="ref"
+				class:rejected={problems.name}
 				value={instance.name}
-				onchange={(e) => app.rename(instance.id, e.currentTarget.value)}
+				onchange={(e) => commitName(e.currentTarget.value, e.currentTarget)}
 				aria-label="Reference designator"
 			/>
 			<span class="kind">{def.label}</span>
 		</header>
+		{#if problems.name}
+			<p class="problem" role="alert">{problems.name}</p>
+		{/if}
 
 		<div class="fields">
 			{#each def.params as param (param.key)}
@@ -63,11 +120,11 @@
 								{/each}
 							</select>
 						{:else}
-							<span class="value-field">
+							<span class="value-field" class:rejected={problems[param.key]}>
 								<input
 									value={displayed(param.key, instance.params[param.key])}
 									oninput={(e) => (editing[param.key] = e.currentTarget.value)}
-									onblur={(e) => commit(param.key, e.currentTarget.value)}
+									onblur={(e) => commit(param.key, e.currentTarget.value, e.currentTarget)}
 									onkeydown={(e) => {
 										if (e.key === 'Enter') e.currentTarget.blur();
 									}}
@@ -75,7 +132,9 @@
 								{#if param.unit}<span class="unit">{param.unit}</span>{/if}
 							</span>
 						{/if}
-						{#if param.description}
+						{#if problems[param.key]}
+							<span class="problem" role="alert">{problems[param.key]}</span>
+						{:else if param.description}
 							<span class="description">{param.description}</span>
 						{/if}
 					</label>
@@ -189,6 +248,18 @@
 
 	.value-field:focus-within {
 		border-color: var(--accent);
+	}
+
+	.rejected,
+	.value-field.rejected {
+		border-color: var(--danger);
+	}
+
+	.problem {
+		margin: 0;
+		font-size: 0.66rem;
+		line-height: 1.4;
+		color: var(--danger);
 	}
 
 	.value-field input {

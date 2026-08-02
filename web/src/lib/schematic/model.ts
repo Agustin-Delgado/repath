@@ -34,6 +34,31 @@ export interface ParamDef {
 	visibleWhen?: { key: string; values: string[] };
 	/** Longer explanation, shown under the field. */
 	description?: string;
+	/**
+	 * Range this value has to fall in.
+	 *
+	 * A resistance of zero is a short and a negative one is not a thing; the engine
+	 * would take the magnitude of one and clamp the other, quietly simulating a
+	 * circuit nobody drew. Better to refuse the value and say why.
+	 */
+	min?: number;
+	max?: number;
+	/** Refuse exactly zero, for quantities a zero would make degenerate. */
+	nonZero?: boolean;
+}
+
+/** Why a value was refused, or null when it is fine. */
+export function validateParam(param: ParamDef, value: number | string): string | null {
+	if (typeof value !== 'number') return null;
+	if (!Number.isFinite(value)) return `${param.label} must be a number.`;
+	if (param.nonZero && value === 0) return `${param.label} cannot be zero.`;
+	if (param.min !== undefined && value < param.min) {
+		return `${param.label} cannot be below ${param.min}${param.unit ? ' ' + param.unit : ''}.`;
+	}
+	if (param.max !== undefined && value > param.max) {
+		return `${param.label} cannot be above ${param.max}${param.unit ? ' ' + param.unit : ''}.`;
+	}
+	return null;
 }
 
 export type Group = 'passive' | 'sources' | 'semiconductor' | 'analog' | 'logic';
@@ -207,7 +232,13 @@ const digitalOut = (name: string, x: number, y: number): PinDef => ({
 	direction: 'out'
 });
 
-const DELAY_PARAM: ParamDef = { key: 'delay', label: 'Propagation delay', unit: 's', default: 1e-9 };
+const DELAY_PARAM: ParamDef = {
+	key: 'delay',
+	label: 'Propagation delay',
+	unit: 's',
+	default: 1e-9,
+	min: 0
+};
 
 /** Two inputs on the left, one output on the right — the shape every gate shares. */
 const gatePins = (): PinDef[] => [
@@ -241,6 +272,8 @@ const SOURCE_PARAMS: ParamDef[] = [
 		label: 'Frequency',
 		unit: 'Hz',
 		default: 1000,
+		min: 0,
+		nonZero: true,
 		visibleWhen: { key: 'waveform', values: ['sine', 'pulse'] }
 	},
 	{
@@ -248,6 +281,10 @@ const SOURCE_PARAMS: ParamDef[] = [
 		label: 'Duty cycle',
 		unit: '',
 		default: 0.5,
+		// A pulse that is never high, or never low, is a DC source drawn as a pulse.
+		min: 0,
+		max: 1,
+		nonZero: true,
 		visibleWhen: { key: 'waveform', values: ['pulse'] }
 	},
 	{
@@ -255,6 +292,7 @@ const SOURCE_PARAMS: ParamDef[] = [
 		label: 'AC drive',
 		unit: '',
 		default: 0,
+		min: 0,
 		// Only the source being swept carries a drive; a supply rail should not
 		// also inject a signal, or the frequency response is of the wrong circuit.
 		description: 'Amplitude used by the frequency sweep. Set one source to 1.'
@@ -269,7 +307,7 @@ export const CATALOG: ComponentDef[] = [
 		group: 'passive',
 		prefix: 'R',
 		pins: [analog('a', -30, 0), analog('b', 30, 0)],
-		params: [{ key: 'resistance', label: 'Resistance', unit: 'Ω', default: 1000 }]
+		params: [{ key: 'resistance', label: 'Resistance', unit: 'Ω', default: 1000, min: 0, nonZero: true }]
 	},
 	{
 		kind: 'capacitor',
@@ -278,7 +316,7 @@ export const CATALOG: ComponentDef[] = [
 		group: 'passive',
 		prefix: 'C',
 		pins: [analog('a', -30, 0), analog('b', 30, 0)],
-		params: [{ key: 'capacitance', label: 'Capacitance', unit: 'F', default: 1e-6 }]
+		params: [{ key: 'capacitance', label: 'Capacitance', unit: 'F', default: 1e-6, min: 0, nonZero: true }]
 	},
 	{
 		kind: 'inductor',
@@ -287,7 +325,7 @@ export const CATALOG: ComponentDef[] = [
 		group: 'passive',
 		prefix: 'L',
 		pins: [analog('a', -30, 0), analog('b', 30, 0)],
-		params: [{ key: 'inductance', label: 'Inductance', unit: 'H', default: 1e-3 }]
+		params: [{ key: 'inductance', label: 'Inductance', unit: 'H', default: 1e-3, min: 0, nonZero: true }]
 	},
 	{
 		kind: 'ground',
@@ -342,6 +380,10 @@ export const CATALOG: ComponentDef[] = [
 				label: 'Breakdown',
 				unit: 'V',
 				default: 5.1,
+				// Quoted as a magnitude, the way a datasheet does; the model applies
+				// it in reverse. A negative here would mean a zener conducting forward.
+				min: 0,
+				nonZero: true,
 				visibleWhen: { key: 'model', values: ['zener'] }
 			}
 		]
@@ -355,8 +397,8 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('gate', -30, 0), analog('drain', 10, -30), analog('source', 10, 30)],
 		params: [
 			{ key: 'vto', label: 'Threshold', unit: 'V', default: 2 },
-			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5 },
-			{ key: 'ratio', label: 'W/L', unit: '', default: 10 }
+			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5, min: 0, nonZero: true },
+			{ key: 'ratio', label: 'W/L', unit: '', default: 10, min: 0, nonZero: true }
 		]
 	},
 	{
@@ -380,8 +422,8 @@ export const CATALOG: ComponentDef[] = [
 		prefix: 'Q',
 		pins: [analog('base', -30, 0), analog('collector', 10, -30), analog('emitter', 10, 30)],
 		params: [
-			{ key: 'bf', label: 'Forward gain β', unit: '', default: 200 },
-			{ key: 'is', label: 'Saturation current', unit: 'A', default: 6.73e-15 }
+			{ key: 'bf', label: 'Forward gain β', unit: '', default: 200, min: 0, nonZero: true },
+			{ key: 'is', label: 'Saturation current', unit: 'A', default: 6.73e-15, min: 0, nonZero: true }
 		]
 	},
 	{
@@ -404,7 +446,7 @@ export const CATALOG: ComponentDef[] = [
 		prefix: 'U',
 		pins: [analog('plus', -30, -10), analog('minus', -30, 10), analog('out', 30, 0)],
 		params: [
-			{ key: 'gain', label: 'Open-loop gain', unit: '', default: 1e5 },
+			{ key: 'gain', label: 'Open-loop gain', unit: '', default: 1e5, min: 0, nonZero: true },
 			{ key: 'v_max', label: 'Positive rail', unit: 'V', default: 15 },
 			{ key: 'v_min', label: 'Negative rail', unit: 'V', default: -15 }
 		]

@@ -194,3 +194,89 @@ describe('wireSegments', () => {
 		expect(segments[1]).toMatchObject({ a: { x: 100, y: 0 }, b: { x: 100, y: 80 }, index: 1 });
 	});
 });
+
+describe('the search bounds', () => {
+	/** A run of touching resistor bodies, forming one continuous barrier. */
+	function barrier(count: number): Schematic {
+		return {
+			instances: Array.from({ length: count }, (_, i) => place('resistor', `R${i}`, i * 50, 0)),
+			wires: []
+		};
+	}
+
+	/** Does the path pass through the body of any component? */
+	function throughABody(path: Point[], schematic: Schematic): boolean {
+		const visited = cells(path);
+		for (const instance of schematic.instances) {
+			// The drawn body, inset the way the router insets it so a pin stays
+			// reachable — this is the region a route is supposed to avoid.
+			for (let x = instance.x - 20; x <= instance.x + 20; x += GRID) {
+				if (visited.has(`${x},${instance.y}`)) return true;
+			}
+		}
+		return false;
+	}
+
+	it('widen far enough to find the way around a wide obstacle', () => {
+		// The wall runs from x=-30 to x=230. Getting round it means reaching x=240,
+		// which is 140 units from the endpoints — beyond the tight first box. The
+		// router used to give up on that and drive straight through the middle.
+		const schematic = barrier(5);
+		const path = routeWire(schematic, { x: 100, y: -120 }, { x: 100, y: 120 }, { grid: GRID });
+
+		expect(throughABody(path, schematic)).toBe(false);
+		expect(Math.max(...path.map((p) => p.x))).toBeGreaterThan(230);
+		expect(isOrthogonal(path)).toBe(true);
+	});
+
+	it('still cut straight through when going around would cost more', () => {
+		// Twenty-one bodies wide: the detour is now over a thousand units, which is
+		// dearer than stepping over one component. Widening the box must not turn
+		// the router into something that always takes the scenic route.
+		const schematic = barrier(21);
+		const path = routeWire(schematic, { x: 500, y: -120 }, { x: 500, y: 120 }, { grid: GRID });
+		expect(length(path)).toBe(240);
+	});
+
+	it('leave an unobstructed route exactly as it was', () => {
+		// The widening must never fire when the first box already found a clean
+		// path, or every route pays for a second search.
+		const path = routeWire(empty, { x: 0, y: 0 }, { x: 200, y: 100 }, { grid: GRID });
+		expect(path).toHaveLength(3);
+		expect(length(path)).toBe(300);
+	});
+});
+
+describe('arriving at the destination', () => {
+	it('does not jog sideways to join the end of a wire', () => {
+		// Two runs facing each other with a gap. Joining them is a straight line;
+		// charging the overlap penalty on the destination cell used to make the
+		// router step off the line and back on again to approach from a free
+		// direction, which is what pulling a part out of a chain looked like.
+		const schematic: Schematic = {
+			instances: [],
+			wires: [
+				wire({ x: 0, y: 0 }, { x: 200, y: 0 }),
+				wire({ x: 300, y: 0 }, { x: 500, y: 0 })
+			]
+		};
+		const path = routeWire(schematic, { x: 200, y: 0 }, { x: 300, y: 0 }, { grid: GRID });
+		expect(path).toEqual([
+			{ x: 200, y: 0 },
+			{ x: 300, y: 0 }
+		]);
+	});
+
+	it('still refuses to run along a wire on the way there', () => {
+		// The exemption is for the destination only. Passing *through* a wire's
+		// cells on the same axis is still what the penalty exists to prevent.
+		const schematic: Schematic = {
+			instances: [],
+			wires: [wire({ x: 100, y: 0 }, { x: 400, y: 0 })]
+		};
+		const path = routeWire(schematic, { x: 100, y: 0 }, { x: 500, y: 0 }, { grid: GRID });
+		expect(isOrthogonal(path)).toBe(true);
+		// It has to leave the line rather than ride along it for 300 units.
+		expect(path.some((p) => p.y !== 0)).toBe(true);
+	});
+});

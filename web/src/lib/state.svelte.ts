@@ -19,6 +19,7 @@ import {
 	rotatePoint,
 	simplifyPath,
 	snap,
+	validateParam,
 	type Instance,
 	type Point,
 	type Rotation,
@@ -69,7 +70,22 @@ interface MoveOrigin {
 	anchors: Map<string, Set<number>>;
 }
 
+/** A point on the undo stack: the drawing, and what was selected at the time. */
+interface HistoryEntry {
+	document: string;
+	selection: string[];
+}
+
 const HISTORY_LIMIT = 100;
+/**
+ * Ceiling on the serialized undo stack.
+ *
+ * A hundred snapshots of a large schematic is tens of megabytes held for the
+ * whole session. Eight is generous for any circuit that fits on a screen and
+ * still bounds the worst case; the oldest entries are the first to go, being the
+ * ones least likely to be wanted.
+ */
+const HISTORY_BYTES = 8 * 1024 * 1024;
 
 class AppState {
 	schematic = $state<Schematic>(EXAMPLES[0].build());
@@ -130,8 +146,10 @@ class AppState {
 		this.playbackTime = Math.min(Math.max(time, 0), this.stopTime);
 	}
 
-	private past: string[] = [];
-	private future: string[] = [];
+	private past: HistoryEntry[] = [];
+	private future: HistoryEntry[] = [];
+	/** Running total of the serialized history, so it can be capped by size. */
+	private historyBytes = 0;
 	private clipboard: { instances: Instance[]; wires: Wire[] } | null = null;
 	/** Snapshot taken at the start of a drag; null when nothing is being dragged. */
 	private moveOrigin: MoveOrigin | null = null;
@@ -168,27 +186,61 @@ class AppState {
 
 	// -- history ----------------------------------------------------------
 
+	private snapshot(): HistoryEntry {
+		return {
+			document: JSON.stringify($state.snapshot(this.schematic)),
+			selection: [...this.selection]
+		};
+	}
+
 	/** Call immediately *before* mutating the schematic. */
 	private checkpoint(): void {
-		this.past.push(JSON.stringify(this.schematic));
-		if (this.past.length > HISTORY_LIMIT) this.past.shift();
+		const entry = this.snapshot();
+		// An operation that changed nothing should not cost an undo press.
+		if (this.past[this.past.length - 1]?.document === entry.document) return;
+
+		this.past.push(entry);
+		this.historyBytes += entry.document.length;
+		// Capped by size as well as by count: a hundred snapshots of a large
+		// schematic is megabytes, and the oldest of them are worth the least.
+		while (
+			this.past.length > HISTORY_LIMIT ||
+			(this.historyBytes > HISTORY_BYTES && this.past.length > 1)
+		) {
+			const dropped = this.past.shift();
+			if (!dropped) break;
+			this.historyBytes -= dropped.document.length;
+		}
 		this.future.length = 0;
+	}
+
+	/** Ids that still exist, so a restored selection cannot point at nothing. */
+	private stillPresent(ids: readonly string[]): string[] {
+		const present = new Set([
+			...this.schematic.instances.map((i) => i.id),
+			...this.schematic.wires.map((w) => w.id)
+		]);
+		return ids.filter((id) => present.has(id));
 	}
 
 	undo(): void {
 		const previous = this.past.pop();
 		if (!previous) return;
-		this.future.push(JSON.stringify(this.schematic));
-		this.schematic = JSON.parse(previous) as Schematic;
-		this.selection = [];
+		this.historyBytes -= previous.document.length;
+		this.future.push(this.snapshot());
+		this.schematic = JSON.parse(previous.document) as Schematic;
+		// Put the selection back too: undoing a nudge and finding nothing selected
+		// means re-picking the thing you were working on every single time.
+		this.selection = this.stillPresent(previous.selection);
 	}
 
 	redo(): void {
 		const next = this.future.pop();
 		if (!next) return;
-		this.past.push(JSON.stringify(this.schematic));
-		this.schematic = JSON.parse(next) as Schematic;
-		this.selection = [];
+		this.past.push(this.snapshot());
+		this.historyBytes += this.past[this.past.length - 1].document.length;
+		this.schematic = JSON.parse(next.document) as Schematic;
+		this.selection = this.stillPresent(next.selection);
 	}
 
 	// -- editing ----------------------------------------------------------
@@ -244,13 +296,50 @@ class AppState {
 		if (merged.length !== this.schematic.wires.length) this.schematic.wires = merged;
 	}
 
-	deleteSelection(): void {
+	/**
+	 * Delete the selection, closing the gap where that is unambiguous.
+	 *
+	 * Pulling a resistor out of a series chain used to leave two wires reaching
+	 * for a component that no longer existed — two loose ends and a broken net,
+	 * where the obvious reading is "join what it was between". So a two-pin part
+	 * with wires on both pins is healed with a route across the gap. Anything with
+	 * three or more pins is left alone: there is no one right answer for which of
+	 * them should be joined to which.
+	 */
+	deleteSelection(route?: RouteBetween): void {
 		if (this.selection.length === 0) return;
 		this.checkpoint();
 		const doomed = new Set(this.selection);
+
+		const survivingWires = this.schematic.wires.filter((w) => !doomed.has(w.id));
+		const wireEnds = new Set<string>();
+		for (const wire of survivingWires) {
+			for (const index of [0, wire.points.length - 1]) {
+				wireEnds.add(pointKey(wire.points[index].x, wire.points[index].y));
+			}
+		}
+
+		const gaps: Array<[Point, Point]> = [];
+		for (const instance of this.schematic.instances) {
+			if (!doomed.has(instance.id)) continue;
+			const pins = definitionOf(instance.kind).pins;
+			if (pins.length !== 2) continue;
+			const [a, b] = pins.map((pin) => pinPosition(instance, pin));
+			if (wireEnds.has(pointKey(a.x, a.y)) && wireEnds.has(pointKey(b.x, b.y))) gaps.push([a, b]);
+		}
+
 		this.schematic.instances = this.schematic.instances.filter((i) => !doomed.has(i.id));
-		this.schematic.wires = this.schematic.wires.filter((w) => !doomed.has(w.id));
+		this.schematic.wires = survivingWires;
 		this.selection = [];
+
+		for (const [a, b] of gaps) {
+			// Routed after the removal, so the path may run through where the
+			// component used to be — which is exactly where it should go.
+			const id = freshId();
+			const path = simplifyPath(route ? route(a, b, id) : elbow(a, b));
+			if (path.length >= 2) this.schematic.wires.push({ id, points: path });
+		}
+
 		// Removing a component can leave two wires meeting at a bare point.
 		this.tidyWires();
 	}
@@ -258,18 +347,37 @@ class AppState {
 	/**
 	 * Turn the selection a quarter turn, bringing its wires along.
 	 *
-	 * Rotation moves pins just as surely as dragging does, so it has to honour the
-	 * same rule: a wire plugged into a pin stays plugged into it. Unlike a drag,
-	 * every pin moves somewhere different, so the mapping is per pin rather than
-	 * one shared offset.
+	 * The whole selection orbits its own centre, rather than each part spinning
+	 * where it stands: turning a sub-circuit should turn the *arrangement*, not
+	 * scramble it in place. For a single component the centre is its own origin,
+	 * so a lone part still rotates on the spot.
+	 *
+	 * Rotation moves pins just as surely as dragging does, so it honours the same
+	 * rule: a wire plugged into a pin stays plugged into it. Unlike a drag, every
+	 * pin moves somewhere different, so the mapping is per pin rather than one
+	 * shared offset.
 	 */
 	rotateSelection(route?: RouteBetween): void {
 		if (this.selection.length === 0) return;
 		const chosen = new Set(this.selection);
 		const rotating = this.schematic.instances.filter((i) => chosen.has(i.id));
-		if (rotating.length === 0) return;
+		const turning = this.schematic.wires.filter((w) => chosen.has(w.id));
+		if (rotating.length === 0 && turning.length === 0) return;
 
 		this.checkpoint();
+
+		// Snapped, so an odd-sized group still lands on the lattice.
+		const xs = [...rotating.map((i) => i.x), ...turning.flatMap((w) => w.points.map((p) => p.x))];
+		const ys = [...rotating.map((i) => i.y), ...turning.flatMap((w) => w.points.map((p) => p.y))];
+		const pivot = {
+			x: snap((Math.min(...xs) + Math.max(...xs)) / 2),
+			y: snap((Math.min(...ys) + Math.max(...ys)) / 2)
+		};
+		/** A quarter turn about the pivot, matching `rotatePoint`'s direction. */
+		const orbit = (p: Point): Point => ({
+			x: pivot.x - (p.y - pivot.y),
+			y: pivot.y + (p.x - pivot.x)
+		});
 
 		const stationaryPins = new Set<string>();
 		for (const instance of this.schematic.instances) {
@@ -284,6 +392,9 @@ class AppState {
 		const moved = new Map<string, Point>();
 		for (const instance of rotating) {
 			const before = definitionOf(instance.kind).pins.map((pin) => pinPosition(instance, pin));
+			const at = orbit({ x: instance.x, y: instance.y });
+			instance.x = at.x;
+			instance.y = at.y;
 			instance.rotation = ((instance.rotation + 90) % 360) as Rotation;
 			const after = definitionOf(instance.kind).pins.map((pin) => pinPosition(instance, pin));
 			before.forEach((from, index) => {
@@ -292,6 +403,9 @@ class AppState {
 				if (!stationaryPins.has(key)) moved.set(key, after[index]);
 			});
 		}
+
+		// Wires in the selection turn with it, keeping the group's shape.
+		for (const wire of turning) wire.points = simplifyPath(wire.points.map(orbit));
 
 		for (const wire of this.schematic.wires) {
 			if (chosen.has(wire.id)) continue;
@@ -465,6 +579,56 @@ class AppState {
 		}
 	}
 
+	/**
+	 * Drag one leg of a wire, leaving the rest of it where it is.
+	 *
+	 * This is how a wire's shape gets edited. Dragging a two-point wire moves the
+	 * whole thing, because the whole thing *is* one leg — so the old behaviour is
+	 * the degenerate case of this one, and a wire with corners becomes editable
+	 * without a second gesture to learn.
+	 *
+	 * A leg only moves across itself: sliding it along its own axis would shuffle
+	 * its corners and change nothing anyone can see.
+	 */
+	applySegmentMove(wireId: string, index: number, dx: number, dy: number): void {
+		const origin = this.moveOrigin;
+		if (!origin) return;
+		const from = origin.wires.get(wireId);
+		if (!from || index < 0 || index + 1 >= from.length) return;
+		if (dx === 0 && dy === 0 && !this.dragStarted) return;
+
+		if (!this.dragStarted) {
+			this.checkpoint();
+			this.dragStarted = true;
+		}
+
+		const wire = this.schematic.wires.find((w) => w.id === wireId);
+		if (!wire) return;
+
+		const held = origin.anchors.get(wireId);
+		if (!held || held.size === 0) {
+			// Plugged into nothing, so there is no shape to preserve: it all slides.
+			wire.points = from.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+			return;
+		}
+
+		const last = from.length - 1;
+		const horizontal = from[index].y === from[index + 1].y;
+		const shift = horizontal ? { x: 0, y: dy } : { x: dx, y: 0 };
+
+		const points = from.map((p) => ({ x: p.x, y: p.y }));
+		points[index] = { x: from[index].x + shift.x, y: from[index].y + shift.y };
+		points[index + 1] = { x: from[index + 1].x + shift.x, y: from[index + 1].y + shift.y };
+
+		// An end that is plugged in stays plugged in: the wire grows a corner
+		// rather than pulling off the pin. Dragging the same leg back straightens
+		// it out again, since `simplifyPath` drops the corner once it is collinear.
+		if (index === 0 && held.has(0)) points.unshift({ x: from[0].x, y: from[0].y });
+		if (index + 1 === last && held.has(last)) points.push({ x: from[last].x, y: from[last].y });
+
+		wire.points = simplifyPath(points);
+	}
+
 	/** Release the snapshot. The geometry is already final. */
 	endMove(): void {
 		const changed = this.dragStarted;
@@ -495,21 +659,40 @@ class AppState {
 		return this.moveOrigin !== null;
 	}
 
-	setParam(id: string, key: string, value: number | string): void {
+	/**
+	 * Set a parameter. Returns why it was refused, or null on success.
+	 *
+	 * Refusing rather than clamping, and saying so rather than not: a zero
+	 * resistance used to become 1 nΩ and a negative one its own magnitude, both
+	 * silently, so the circuit that ran was not the circuit on screen.
+	 */
+	setParam(id: string, key: string, value: number | string): string | null {
 		const instance = this.schematic.instances.find((i) => i.id === id);
-		if (!instance || instance.params[key] === value) return;
+		if (!instance) return null;
+
+		const param = definitionOf(instance.kind).params.find((p) => p.key === key);
+		const refusal = param ? validateParam(param, value) : null;
+		if (refusal) return refusal;
+
+		if (instance.params[key] === value) return null;
 		this.checkpoint();
 		instance.params[key] = value;
+		return null;
 	}
 
-	rename(id: string, name: string): void {
+	/** Rename a component. Returns why it was refused, or null on success. */
+	rename(id: string, name: string): string | null {
 		const trimmed = name.trim();
-		if (!trimmed) return;
 		const instance = this.schematic.instances.find((i) => i.id === id);
-		if (!instance || instance.name === trimmed) return;
-		if (this.schematic.instances.some((i) => i.id !== id && i.name === trimmed)) return;
+		if (!instance) return null;
+		if (!trimmed) return 'A component needs a name.';
+		if (this.schematic.instances.some((i) => i.id !== id && i.name === trimmed)) {
+			return `${trimmed} is already taken.`;
+		}
+		if (instance.name === trimmed) return null;
 		this.checkpoint();
 		instance.name = trimmed;
+		return null;
 	}
 
 	clear(): void {
