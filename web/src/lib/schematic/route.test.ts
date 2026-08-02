@@ -281,24 +281,29 @@ describe('arriving at the destination', () => {
 	});
 });
 
-describe('keeping clear of a symbol', () => {
-	it('steps out of a source terminal before running sideways', () => {
-		// The plus terminal is a short spur off a fat circle. A wire leaving it
-		// horizontally passes within a few units of the symbol and reads as going
-		// past the source rather than connecting to it.
-		const schematic: Schematic = { instances: [place('vsource', 'V1', 300, 300)], wires: [] };
-		const path = routeWire(schematic, { x: 300, y: 270 }, { x: 600, y: 270 }, { grid: GRID });
-
-		expect(path.length).toBeGreaterThan(2);
-		// It leaves along the terminal, away from the circle, before turning.
-		expect(path[1]).toEqual({ x: 300, y: 260 });
-		expect(isOrthogonal(path)).toBe(true);
+describe('leaving a pin', () => {
+	it('goes straight when straight is available', () => {
+		// The RC low-pass, exactly as it ships: a source terminal and the resistor
+		// beside it at the same height, nothing in between. This came out as
+		// 100,170 → 100,160 → 170,160 → 170,170 for a while — a step up and back
+		// down for no reason — because routes were charged for passing near a body,
+		// including the body their own pin belongs to. A pointless jog in the
+		// plainest wiring there is.
+		const schematic: Schematic = {
+			instances: [place('vsource', 'V1', 100, 200), place('resistor', 'R1', 200, 170)],
+			wires: []
+		};
+		const path = routeWire(schematic, { x: 100, y: 170 }, { x: 170, y: 170 }, { grid: GRID });
+		expect(path).toEqual([
+			{ x: 100, y: 170 },
+			{ x: 170, y: 170 }
+		]);
 	});
 
-	it('turns at the tip of a long lead without stepping out first', () => {
-		// The counterpart. A resistor pin sits at the end of a lead well clear of
-		// the body, so a corner right at the tip is fine — and forcing a stub here
-		// would put a little hook on every wire drawn straight up off a pin.
+	it('turns at a pin without stepping out first', () => {
+		// The same rule seen from the other side: a corner right at the tip of a
+		// lead is what anyone would draw, and forcing a stub would put a little
+		// hook on every wire taken straight up off a pin.
 		const schematic: Schematic = { instances: [place('resistor', 'R1', 300, 300)], wires: [] };
 		const path = routeWire(schematic, { x: 330, y: 300 }, { x: 330, y: 100 }, { grid: GRID });
 		expect(path).toEqual([
@@ -307,14 +312,22 @@ describe('keeping clear of a symbol', () => {
 		]);
 	});
 
-	it('is a cost, not a wall', () => {
-		// Boxed in on both sides with nowhere clear to go, a route still comes back
-		// rather than failing — the whole router is built this way.
+	it('runs alongside a symbol rather than around it', () => {
+		// Wires next to symbols are ordinary in a schematic. Only the body itself
+		// is expensive, and a lane beside it should cost nothing.
+		const schematic: Schematic = { instances: [place('resistor', 'R1', 300, 300)], wires: [] };
+		const path = routeWire(schematic, { x: 100, y: 290 }, { x: 600, y: 290 }, { grid: GRID });
+		expect(path).toEqual([
+			{ x: 100, y: 290 },
+			{ x: 600, y: 290 }
+		]);
+	});
+
+	it('still finds a way out of a tight spot', () => {
+		// Boxed in on both sides, a route still comes back rather than failing —
+		// the whole router is built on costs, not walls.
 		const schematic: Schematic = {
-			instances: [
-				place('resistor', 'R1', 300, 280, 90),
-				place('resistor', 'R2', 300, 320, 90)
-			],
+			instances: [place('resistor', 'R1', 300, 280, 90), place('resistor', 'R2', 300, 320, 90)],
 			wires: []
 		};
 		const path = routeWire(schematic, { x: 200, y: 300 }, { x: 400, y: 300 }, { grid: GRID });
@@ -322,18 +335,5 @@ describe('keeping clear of a symbol', () => {
 		expect(path[0]).toEqual({ x: 200, y: 300 });
 		expect(path[path.length - 1]).toEqual({ x: 400, y: 300 });
 		expect(isOrthogonal(path)).toBe(true);
-	});
-
-	it('does not widen a symbol into a halo at its corners', () => {
-		// Edge-adjacent only. A route clipping past a corner diagonally is not
-		// grazing anything, and charging for it would make every part feel bigger
-		// than it looks.
-		const schematic: Schematic = { instances: [place('resistor', 'R1', 300, 300)], wires: [] };
-		// A lane one cell above the body, starting well past its right-hand edge.
-		const path = routeWire(schematic, { x: 400, y: 290 }, { x: 600, y: 290 }, { grid: GRID });
-		expect(path).toEqual([
-			{ x: 400, y: 290 },
-			{ x: 600, y: 290 }
-		]);
 	});
 });

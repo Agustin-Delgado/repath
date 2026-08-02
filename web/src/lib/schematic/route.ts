@@ -49,29 +49,25 @@ const COST = {
 	body: 400,
 	/** Landing on a pin that is not the destination. */
 	foreignPin: 500,
-	/**
-	 * Running through the ring of cells immediately around a body.
-	 *
-	 * Borrowed from the flow-chart routers, which wrap each shape in a protected
-	 * rectangle a route may follow but not enter. The effect worth having is that
-	 * a wire cannot graze a symbol: it is clearest on a voltage source, whose
-	 * terminal is a short spur off a fat circle, where a wire leaving sideways
-	 * passes within a few units of the circle and reads as going past the source
-	 * rather than connecting to it.
-	 *
-	 * A ring rather than a rule about which way pins face, because those two look
-	 * identical from the route's point of view — both are a right-angle exit — and
-	 * differ only in how much clear lead the symbol draws. A resistor's pin sits at
-	 * the end of a long lead, so turning at its tip is fine and stays free; the
-	 * source's does not, so the same turn is charged. The geometry answers the
-	 * question that a direction rule can only guess at.
-	 *
-	 * Priced above two corners and a short jog, so stepping out and back to avoid
-	 * it is worth doing, and well below `body`, so it never pushes a route through
-	 * a component to keep its distance from one.
-	 */
-	clearance: 120
 };
+
+/*
+ * There was a clearance ring here — a charge for running through the cells
+ * immediately around a component body, borrowed from the flow-chart routers that
+ * wrap each shape in a protected rectangle.
+ *
+ * It is gone because it was answering a question nobody had asked. The case that
+ * motivated it was a wire leaving a voltage source's terminal sideways, close to
+ * the circle, which I judged from a synthetic test to look like it was passing the
+ * source rather than connecting to it. The cost of that judgement showed up in the
+ * plainest wiring there is: a source terminal at the same height as the part next
+ * to it, where the straight wire pays for hugging its own symbol and the router
+ * steps up and back down to avoid it. A pointless jog in the common case is far
+ * worse than a slightly tight wire in a rare one.
+ *
+ * Wires running alongside symbols is normal in a schematic. Bodies are still
+ * expensive to cross, which is the part that was ever in question.
+ */
 
 /**
  * Slight over-weighting of the heuristic.
@@ -104,8 +100,6 @@ interface Obstacles {
 	vertical: Set<number>;
 	/** Cells occupied by a pin. */
 	pins: Set<number>;
-	/** The ring of cells touching a body, which a route should keep out of. */
-	clearance: Set<number>;
 }
 
 /** The four ways a route may step, and the four cells that touch a cell. */
@@ -125,8 +119,7 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 		body: new Set(),
 		horizontal: new Set(),
 		vertical: new Set(),
-		pins: new Set(),
-		clearance: new Set()
+		pins: new Set()
 	};
 
 	for (const instance of schematic.instances) {
@@ -151,10 +144,6 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 		for (let x = Math.ceil(minX / grid); x <= Math.floor(maxX / grid); x++) {
 			for (let y = Math.ceil(minY / grid); y <= Math.floor(maxY / grid); y++) {
 				obstacles.body.add(cell(x, y));
-				// Edge-adjacent, not corner-adjacent: a route that clips the diagonal
-				// past a corner is not grazing anything, and charging for it would
-				// wrap every symbol in a wider halo than it looks like it has.
-				for (const [dx, dy] of DIRECTIONS) obstacles.clearance.add(cell(x + dx, y + dy));
 			}
 		}
 
@@ -165,11 +154,6 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 			);
 		}
 	}
-
-	// A pin is where a wire is *supposed* to arrive, so it is never in the ring,
-	// even when the symbol wraps around it.
-	for (const key of obstacles.pins) obstacles.clearance.delete(key);
-	for (const key of obstacles.body) obstacles.clearance.delete(key);
 
 	for (const wire of schematic.wires) {
 		if (options.ignoreWires?.has(wire.id)) continue;
@@ -325,7 +309,6 @@ export function routeWire(
 				if (node.axis !== -1 && node.axis !== axis) step += COST.turn;
 				if (!isGoal && !permitted) {
 					if (obstacles.body.has(here)) step += COST.body;
-					else if (obstacles.clearance.has(here)) step += COST.clearance;
 					if (obstacles.pins.has(here)) step += COST.foreignPin;
 
 					// Running along a wire is much worse than crossing it: two conductors

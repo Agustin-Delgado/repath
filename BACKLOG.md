@@ -34,7 +34,6 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Editor | Deleting heals a gap only for a two-pin part wired on both sides | Anything with three pins leaves stubs, since no pairing is obviously right |
 | Editor | History still stores whole-document snapshots | Bounded now (100 entries or 8 MB, whichever comes first) but not a delta log |
 | Router | Widening the search box is a fixed ladder (12 then 40 cells) | An obstacle wider than 40 cells is still routed through rather than around |
-| Router | Clearance is one grid cell, the same for every symbol | Right for the current catalog; a much larger part would want a wider ring |
 
 ---
 
@@ -186,6 +185,6 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Circuits shareable as a link; copy, cut, paste, duplicate.
 - Edits that refuse say why; undo restores the selection; a group rotates about
   its own centre; deleting a two-pin part closes the gap; wires reshape by
-  dragging a leg; routes keep clear of the symbols they connect to.
+  dragging a leg.
 - Escape cancels whatever gesture is in flight; a link that cannot be read says
   so instead of quietly showing the default circuit.
