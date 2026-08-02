@@ -145,7 +145,7 @@ export const wireEnd = (wire: Wire): Point => wire.points[wire.points.length - 1
  * The loops are the interesting case. A wire dragged while both its ends are
  * pinned grows a leg at each end to reach back, and pushed far enough those legs
  * cross: the path leaves a point and later returns to it, curling round on
- * itself. Everything between the two visits carries no current and is drawn as a
+ * itself. Everything between the two visits carries no current and draws as a
  * knot, so it goes.
  */
 export function simplifyPath(points: readonly Point[]): Point[] {
