@@ -27,9 +27,9 @@ import {
 	type Schematic,
 	type Wire
 } from './schematic/model';
-import { crossesBody, elbow } from './schematic/route';
+import { elbow } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
-import { buildConnectivity, mergeWireChains, splitAtJunctions, trimOverlaps } from './schematic/nets';
+import { buildConnectivity, mergeWireChains, splitAtJunctions } from './schematic/nets';
 
 /**
  * Wiring used to be a mode of its own. It is not any more: dragging off a pin or
@@ -75,49 +75,6 @@ const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`
  */
 export type RouteBetween = (from: Point, to: Point, settling: ReadonlySet<string>) => Point[];
 
-/** The closest point on any of these wires, on the lattice they are drawn on. */
-function nearestPointOn(wires: readonly Wire[], at: Point): Point | null {
-	let best: { point: Point; distance: number } | null = null;
-	for (const wire of wires) {
-		for (const segment of wireSegments(wire)) {
-			// Axis-aligned, so the projection is a clamp on one coordinate.
-			const point =
-				segment.a.x === segment.b.x
-					? {
-							x: segment.a.x,
-							y: Math.min(Math.max(at.y, Math.min(segment.a.y, segment.b.y)), Math.max(segment.a.y, segment.b.y))
-						}
-					: {
-							x: Math.min(Math.max(at.x, Math.min(segment.a.x, segment.b.x)), Math.max(segment.a.x, segment.b.x)),
-							y: segment.a.y
-						};
-			const distance = Math.abs(point.x - at.x) + Math.abs(point.y - at.y);
-			if (!best || distance < best.distance) best = { point, distance };
-		}
-	}
-	return best?.point ?? null;
-}
-
-/**
- * Move one end of a wire and leave the rest of it alone.
- *
- * The end travels, and a single corner is inserted so the run it belonged to
- * keeps the direction it was drawn in. Re-routing instead would be free to
- * redraw the whole wire, which is how lowering a ground used to bring the rail
- * it feeds down with it — a part of the picture nobody asked to move.
- */
-function stretchEnd(points: readonly Point[], end: number, dx: number, dy: number): Point[] {
-	const moved = { x: points[end].x + dx, y: points[end].y + dy };
-	const neighbour = points[end === 0 ? 1 : points.length - 2];
-	// Preserve the axis of the segment that reached this end, so the wire still
-	// arrives at its neighbour the way it did before.
-	const horizontal = points[end].y === neighbour.y;
-	const corner = horizontal ? { x: moved.x, y: neighbour.y } : { x: neighbour.x, y: moved.y };
-
-	const rest = end === 0 ? points.slice(1) : points.slice(0, -1);
-	return simplifyPath(end === 0 ? [moved, corner, ...rest] : [...rest, corner, moved]);
-}
-
 /** Everything a drag needs to recompute itself from scratch on each frame. */
 interface MoveOrigin {
 	instances: Map<string, Point>;
@@ -126,16 +83,6 @@ interface MoveOrigin {
 	followers: Map<string, Set<number>>;
 	/** Wires being dragged, with the end indices that must stay plugged in. */
 	anchors: Map<string, Set<number>>;
-	/**
-	 * Junctions a moving pin is leaving behind, and the wire that will reach back
-	 * to them.
-	 *
-	 * Where two or more wire ends meet a pin, dragging the part cannot simply take
-	 * them all with it: they are joined to each other as much as to the pin, and
-	 * pulling each one towards the new position tears the junction apart. They stay
-	 * put and a short wire goes out to fetch the pin instead.
-	 */
-	stubs: Array<{ id: string; from: Point; junction: Point; holding: string[] }>;
 	/** The redo stack as it was, so cancelling the drag can hand it back. */
 	future: HistoryEntry[];
 }
@@ -408,18 +355,10 @@ class AppState {
 		step(wires.filter((w) => w.points.length >= 2));
 		step(mergeWireChains({ ...this.schematic, wires }));
 
-		// A wire that ends up running along another one is two conductors on the
-		// same line — the thing the router pays most to avoid. Moving a wire whose
-		// end is pinned somewhere can produce exactly that, doubling back along a
-		// neighbour to reach where it was plugged in.
-		step(trimOverlaps({ ...this.schematic, wires }));
-		// Trimming can leave two wires meeting end to end, which is a joint worth
-		// folding away for the same reasons as any other.
-		step(mergeWireChains({ ...this.schematic, wires }));
-
-		// Last, because trimming is what creates most of these: a wire cut back to
-		// where it meets another one now ends partway along it, and a branch resting
-		// on someone else's segment is not carried when that segment moves.
+		// A branch or a pin meeting a wire partway along it is a real junction, and
+		// as a bare point on someone else's segment a fragile one — only wire *ends*
+		// are tracked as things that follow. Splitting makes it an end like any
+		// other, which is what stops a circuit coming apart over a run of drags.
 		step(splitAtJunctions({ ...this.schematic, wires }, freshId));
 
 		// Tidying rearranges wires without ever meaning to change what is joined to
@@ -607,21 +546,8 @@ class AppState {
 			}
 		}
 
-		// How many wire ends meet at each point, so a junction can be told from a
-		// wire that simply happens to end on a pin.
-		const endsAt = new Map<string, number>();
-		for (const wire of this.schematic.wires) {
-			if (chosen.has(wire.id)) continue;
-			for (const index of [0, wire.points.length - 1]) {
-				const key = pointKey(wire.points[index].x, wire.points[index].y);
-				endsAt.set(key, (endsAt.get(key) ?? 0) + 1);
-			}
-		}
-
 		const followers = new Map<string, Set<number>>();
 		const anchors = new Map<string, Set<number>>();
-		const stubs: MoveOrigin['stubs'] = [];
-		const stubbed = new Set<string>();
 
 		for (const wire of this.schematic.wires) {
 			const ends = [0, wire.points.length - 1];
@@ -643,33 +569,7 @@ class AppState {
 				// Follows only if the point is leaving entirely. A point shared with a
 				// stationary pin stays put, or moving one of two parts joined
 				// pin-to-pin would take the wire off the one left behind.
-				if (!movingPins.has(key) || stationaryPins.has(key)) continue;
-
-				// Several wires meeting the pin are joined to each other as well as to
-				// it. Dragging them all towards the new position pulls that junction
-				// apart and bends every one of them; leaving them alone and sending a
-				// stub out to the pin keeps the drawing and moves only what moved.
-				if ((endsAt.get(key) ?? 0) >= 2) {
-					if (!stubbed.has(key)) {
-						stubbed.add(key);
-						stubs.push({
-							id: freshId(),
-							from: { x: at.x, y: at.y },
-							junction: { x: at.x, y: at.y },
-							holding: this.schematic.wires
-								.filter(
-									(w) =>
-										!chosen.has(w.id) &&
-										[0, w.points.length - 1].some(
-											(i) => pointKey(w.points[i].x, w.points[i].y) === key
-										)
-								)
-								.map((w) => w.id)
-						});
-					}
-					continue;
-				}
-				following.add(index);
+				if (movingPins.has(key) && !stationaryPins.has(key)) following.add(index);
 			}
 			if (following.size > 0) followers.set(wire.id, following);
 		}
@@ -687,7 +587,6 @@ class AppState {
 			),
 			followers,
 			anchors,
-			stubs,
 			future: [...this.future]
 		};
 		this.dragStarted = false;
@@ -746,61 +645,28 @@ class AppState {
 			}
 
 			if (following) {
+				// A wire left in place with one end riding along: re-route it. One
+				// mechanism, and the router already knows what a tidy path looks like.
+				// Trying to second-guess it here — preserving old shapes, stretching
+				// ends, sending out stubs — produced geometry nobody designed, because
+				// each rule was written for one report and they all fire at once.
 				const moved = new Set(following);
-				if (moved.size === 2) {
-					// Both ends riding along: the whole thing travels, shape intact.
-					wire.points = from.map((p) => ({ x: p.x + dx, y: p.y + dy }));
-					continue;
-				}
-
-				// One end riding along. Two ways to answer, and they disagree.
-				//
-				// Stretching that end leaves the rest of the wire where it was drawn,
-				// which is what lowering a ground should do — lower the ground, not
-				// carry the rail it feeds down with it. Re-routing is free to redraw
-				// the whole run, which is right when the old shape has stopped making
-				// sense: a wire that used to run along the row above both its ends
-				// should not still climb up there to do it.
-				//
-				// So: keep the drawing unless keeping it costs more than one extra
-				// bend. That is the line between a wire the move stretched and a wire
-				// the move made obsolete.
-				const end = moved.has(0) ? 0 : from.length - 1;
-				const stretched = stretchEnd(from, end, dx, dy);
 				const ends = {
 					start: moved.has(0) ? { x: from[0].x + dx, y: from[0].y + dy } : from[0],
 					end: moved.has(from.length - 1)
 						? { x: from[from.length - 1].x + dx, y: from[from.length - 1].y + dy }
 						: from[from.length - 1]
 				};
-				const routed = simplifyPath(route(ends.start, ends.end, settling));
-
-				const throughSomething = crossesBody(this.schematic, stretched, {
-					grid: GRID,
-					ignoreInstances: new Set(this.selection)
-				});
-				const tooCrooked = stretched.length > routed.length + 1;
-				wire.points = throughSomething || tooCrooked ? routed : stretched;
+				wire.points =
+					moved.size === 2
+						? from.map((p) => ({ x: p.x + dx, y: p.y + dy }))
+						: simplifyPath(route(ends.start, ends.end, settling));
 				continue;
 			}
 
 			wire.points = from.map((p) => ({ x: p.x + dx, y: p.y + dy }));
 		}
 
-		// The wires that stayed behind are still joined to each other; these reach
-		// out to collect the pin that left them.
-		for (const stub of origin.stubs) {
-			const to = { x: stub.from.x + dx, y: stub.from.y + dy };
-			// To the nearest point of what stayed, not back to the corner the pin
-			// happened to be sitting on. A ground dragged sideways along a rail should
-			// drop straight onto it, not run back to where it used to be attached.
-			const held = this.schematic.wires.filter((w) => stub.holding.includes(w.id));
-			const meet = nearestPointOn(held, to) ?? stub.junction;
-			const points = simplifyPath(route(to, meet, settling));
-			const existing = this.schematic.wires.find((w) => w.id === stub.id);
-			if (existing) existing.points = points;
-			else if (points.length >= 2) this.schematic.wires.push({ id: stub.id, points });
-		}
 	}
 
 	/**
@@ -874,12 +740,6 @@ class AppState {
 		for (const wire of this.schematic.wires) {
 			const from = origin.wires.get(wire.id);
 			if (from) wire.points = from.map((p) => ({ x: p.x, y: p.y }));
-		}
-
-		// Anything the gesture drew to reach a departing pin goes with it.
-		const drawn = new Set(origin.stubs.map((s) => s.id));
-		if (drawn.size > 0) {
-			this.schematic.wires = this.schematic.wires.filter((w) => !drawn.has(w.id));
 		}
 
 		if (this.dragStarted) {

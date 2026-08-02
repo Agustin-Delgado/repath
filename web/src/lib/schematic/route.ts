@@ -455,30 +455,3 @@ export function elbow(from: Point, to: Point, verticalFirst = false): Point[] {
 export function onGrid(p: Vec2, grid: number): Point {
 	return { x: snapTo(p.x, grid), y: snapTo(p.y, grid) };
 }
-
-/**
- * Does this path run through a component body?
- *
- * For deciding whether a shape that was arrived at some other way is good
- * enough, or whether the router should be asked instead. Bodies only: crossing a
- * wire is untidy, running through a symbol is wrong.
- */
-export function crossesBody(schematic: Schematic, path: readonly Point[], options: RouteOptions): boolean {
-	if (path.length < 2) return false;
-	const { grid } = options;
-	const obstacles = buildObstacles(schematic, options);
-
-	for (let i = 0; i < path.length - 1; i++) {
-		const a = path[i];
-		const b = path[i + 1];
-		const steps = Math.round((Math.abs(b.x - a.x) + Math.abs(b.y - a.y)) / grid);
-		const dx = Math.sign(b.x - a.x);
-		const dy = Math.sign(b.y - a.y);
-		for (let k = 0; k <= steps; k++) {
-			const x = Math.round(a.x / grid) + dx * k;
-			const y = Math.round(a.y / grid) + dy * k;
-			if (obstacles.body.has(cell(x, y))) return true;
-		}
-	}
-	return false;
-}
