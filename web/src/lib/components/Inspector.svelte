@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { app } from '$lib/state.svelte';
 	import { definitionOf, isParamVisible } from '$lib/schematic/model';
-	import { formatValue, parseValue } from '$lib/units';
+	import {
+		joinValue,
+		parseValue,
+		PREFIX_OPTIONS,
+		splitValue,
+		stepValue,
+		type SplitValue
+	} from '$lib/units';
 
 	const instance = $derived(app.selectedInstances.length === 1 ? app.selectedInstances[0] : null);
 	const def = $derived(instance ? definitionOf(instance.kind) : null);
@@ -17,6 +24,35 @@
 	 */
 	let problems = $state<Record<string, string>>({});
 
+	/** Parameters shown as a plain number keep their own, no prefix beside them. */
+	function isPlain(key: string): boolean {
+		return def?.params.find((p) => p.key === key)?.plain === true;
+	}
+
+	/** The number and the decade shown for a parameter right now. */
+	function split(key: string, value: number | string): SplitValue {
+		if (typeof value !== 'number') return { mantissa: 0, prefix: '' };
+		if (isPlain(key)) return { mantissa: value, prefix: '' };
+		return splitValue(value, 4);
+	}
+
+	/**
+	 * Apply a value, reporting anything the model turns away.
+	 *
+	 * Returns whether it went in, so callers can decide whether to put the field
+	 * back to what is actually in effect.
+	 */
+	function apply(key: string, value: number): boolean {
+		if (!instance) return false;
+		const refusal = app.setParam(instance.id, key, value);
+		if (refusal) {
+			problems[key] = refusal;
+			return false;
+		}
+		delete problems[key];
+		return true;
+	}
+
 	function commit(key: string, raw: string, field: HTMLInputElement) {
 		if (!instance) return;
 
@@ -31,24 +67,64 @@
 		 */
 		const restore = () => {
 			delete editing[key];
-			const current = instance.params[key];
-			field.value = typeof current === 'number' ? formatValue(current, 4) : String(current);
+			field.value = String(split(key, instance.params[key]).mantissa);
 		};
 
-		const parsed = parseValue(raw);
-		if (parsed === null) {
-			problems[key] = `“${raw.trim()}” is not a value. Try 4k7, 100n, or 2.2e-3.`;
+		// The field takes a plain number now, but someone with the habit will still
+		// type `4k7`, and there is no reason to punish them for it — it parses, and
+		// the prefix beside the field moves to match.
+		const typed = parseValue(raw);
+		if (typed === null) {
+			problems[key] = `“${raw.trim()}” is not a number.`;
 			restore();
 			return;
 		}
-		const refusal = app.setParam(instance.id, key, parsed);
-		if (refusal) {
-			problems[key] = refusal;
-			restore();
-			return;
+		const hasOwnPrefix = /[fpnuµμmkKMGT]|meg/i.test(raw.trim());
+		const value = hasOwnPrefix ? typed : joinValue(typed, split(key, instance.params[key]).prefix);
+
+		if (!apply(key, value)) restore();
+		else delete editing[key];
+	}
+
+	/**
+	 * Nudge a value with the arrow keys, applied as it moves.
+	 *
+	 * Stepping the number being read rather than the underlying value keeps a
+	 * nudge meaning the same thing at every scale, and re-splitting afterwards is
+	 * what lets 999 Ω step up to 1 kΩ instead of growing a fourth digit.
+	 *
+	 * Shift takes ten at a time and Alt a tenth, so a coarse sweep and a fine
+	 * adjustment are the same key.
+	 */
+	function nudge(event: KeyboardEvent, key: string, field: HTMLInputElement) {
+		if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+		if (!instance || typeof instance.params[key] !== 'number') return;
+
+		event.preventDefault();
+		const param = def?.params.find((p) => p.key === key);
+		const unit = param?.plain ? (param.step ?? 1) : 1;
+		const size = unit * (event.shiftKey ? 10 : event.altKey ? 0.1 : 1);
+		const by = event.key === 'ArrowUp' ? size : -size;
+		const current = instance.params[key] as number;
+		const next = param?.plain
+			? Number((current + by).toPrecision(12))
+			: stepValue(current, by, 4);
+
+		if (apply(key, next)) {
+			delete editing[key];
+			// The binding will not rewrite a field whose rendered value it thinks is
+			// unchanged, and after a re-split it often is — 1000 and 1 both read as a
+			// mantissa the expression already produced.
+			field.value = String(split(key, instance.params[key]).mantissa);
 		}
-		delete problems[key];
-		delete editing[key];
+	}
+
+	function setPrefix(key: string, prefix: string) {
+		if (!instance || typeof instance.params[key] !== 'number') return;
+		// Picking a prefix changes the value, which is the whole point of picking
+		// one; keeping the value and restating it would just be a different way of
+		// writing the same number.
+		apply(key, joinValue(split(key, instance.params[key]).mantissa, prefix));
 	}
 
 	function commitName(raw: string, field: HTMLInputElement) {
@@ -76,7 +152,7 @@
 
 	function displayed(key: string, value: number | string): string {
 		if (editing[key] !== undefined) return editing[key];
-		return typeof value === 'number' ? formatValue(value, 4) : String(value);
+		return typeof value === 'number' ? String(split(key, value).mantissa) : String(value);
 	}
 </script>
 
@@ -122,13 +198,29 @@
 						{:else}
 							<span class="value-field" class:rejected={problems[param.key]}>
 								<input
+									class="number"
+									inputmode="decimal"
+									title="Arrow keys step the value — Shift for ten at a time, Alt for a tenth"
 									value={displayed(param.key, instance.params[param.key])}
 									oninput={(e) => (editing[param.key] = e.currentTarget.value)}
 									onblur={(e) => commit(param.key, e.currentTarget.value, e.currentTarget)}
 									onkeydown={(e) => {
 										if (e.key === 'Enter') e.currentTarget.blur();
+										else nudge(e, param.key, e.currentTarget);
 									}}
 								/>
+								{#if typeof instance.params[param.key] === 'number' && !param.plain}
+									<select
+										class="prefix"
+										aria-label="{param.label} scale"
+										value={splitValue(instance.params[param.key] as number, 4).prefix}
+										onchange={(e) => setPrefix(param.key, e.currentTarget.value)}
+									>
+										{#each PREFIX_OPTIONS as option (option.prefix)}
+											<option value={option.prefix}>{option.label}</option>
+										{/each}
+									</select>
+								{/if}
 								{#if param.unit}<span class="unit">{param.unit}</span>{/if}
 							</span>
 						{/if}
@@ -275,6 +367,23 @@
 
 	.value-field input:focus {
 		outline: none;
+	}
+
+	.prefix {
+		border: none;
+		border-left: 1px solid var(--border);
+		border-radius: 0;
+		background: transparent;
+		color: var(--text);
+		font-family: var(--font-mono);
+		font-size: 0.8rem;
+		padding: 0 0.15rem 0 0.3rem;
+		align-self: stretch;
+		cursor: pointer;
+	}
+
+	.prefix:hover {
+		background: var(--hover);
 	}
 
 	.unit {

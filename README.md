@@ -277,7 +277,11 @@ re-route; a dragged *wire* stays plugged into whatever it was plugged into and
 grows legs to reach. The shape you see mid-drag is the shape you get on release —
 the same router runs in both cases, so nothing rearranges itself when you let go.
 
-Values accept engineering notation: `4k7`, `4.7k`, `10u`, `1meg`, `100n`.
+Values are a number and a scale, side by side, so digits and letters never share
+a box. The arrow keys nudge the number and apply it as they go — `Shift` for ten
+at a time, `Alt` for a tenth — and it settles into the right decade on its own, so
+1 kΩ steps down to 999 Ω rather than to nothing. Typing engineering notation
+still works if that is the habit you have: `4k7`, `10u`, `1meg`, `100n`.
 
 ## Roadmap
 

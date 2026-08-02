@@ -45,6 +45,15 @@ export interface ParamDef {
 	max?: number;
 	/** Refuse exactly zero, for quantities a zero would make degenerate. */
 	nonZero?: boolean;
+	/**
+	 * Show the number as it is, with no engineering prefix beside it.
+	 *
+	 * For quantities that live near one and mean nothing scaled: a duty cycle of
+	 * 0.5 is not "500 milli", however true that is arithmetically.
+	 */
+	plain?: boolean;
+	/** How far one arrow-key press moves a `plain` value. */
+	step?: number;
 }
 
 /** Why a value was refused, or null when it is fine. */
@@ -280,6 +289,8 @@ const SOURCE_PARAMS: ParamDef[] = [
 		min: 0,
 		max: 1,
 		nonZero: true,
+		plain: true,
+		step: 0.05,
 		visibleWhen: { key: 'waveform', values: ['pulse'] }
 	},
 	{
