@@ -373,6 +373,20 @@ describe('splitAtJunctions', () => {
 		);
 	});
 
+	it('splits where a pin sits partway along a wire', () => {
+		// The mirror image, and the one that cost the most. A wire is not a follower
+		// of a pin in its middle, because following is decided by looking at a
+		// wire's two ends — so move the part, or re-route the wire, and the pin is
+		// left behind with no warning to show for it.
+		const schematic: Schematic = {
+			instances: [part('resistor', 'R1', 100, 0, 90)], // pins (100,-30) and (100,30)
+			wires: [{ id: 'run', points: [{ x: 0, y: 30 }, { x: 200, y: 30 }] }]
+		};
+		expect(shapes(splitAtJunctions(schematic, fresh)).sort()).toEqual(
+			['0,30 100,30', '100,30 200,30'].sort()
+		);
+	});
+
 	it('leaves a wire alone when nothing ends on it', () => {
 		const schematic: Schematic = {
 			instances: [],

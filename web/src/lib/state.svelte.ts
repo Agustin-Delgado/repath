@@ -28,7 +28,7 @@ import {
 } from './schematic/model';
 import { elbow } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
-import { mergeWireChains, splitAtJunctions, trimOverlaps } from './schematic/nets';
+import { buildConnectivity, mergeWireChains, splitAtJunctions, trimOverlaps } from './schematic/nets';
 
 /**
  * Wiring used to be a mode of its own. It is not any more: dragging off a pin or
@@ -339,36 +339,44 @@ class AppState {
 	 * snapshot keyed by them.
 	 */
 	private tidyWires(): void {
+		const original = this.schematic.wires;
+		let wires = original;
+		const step = (next: Wire[]) => {
+			wires = next;
+		};
+
 		// A wire whose ends have arrived at the same point is not a wire any more.
 		// Dragging a component until one of its pins touches another is a supported
 		// way to connect two parts, and when a wire already ran between those two
 		// pins it collapses to nothing: the connection is now the pins themselves.
 		// Left in the document it is invisible but real — selectable, saved to file,
 		// carried in a share link.
-		const real = this.schematic.wires.filter((w) => w.points.length >= 2);
-		if (real.length !== this.schematic.wires.length) this.schematic.wires = real;
-
-		const merged = mergeWireChains(this.schematic);
-		if (merged.length !== this.schematic.wires.length) this.schematic.wires = merged;
+		step(wires.filter((w) => w.points.length >= 2));
+		step(mergeWireChains({ ...this.schematic, wires }));
 
 		// A wire that ends up running along another one is two conductors on the
 		// same line — the thing the router pays most to avoid. Moving a wire whose
 		// end is pinned somewhere can produce exactly that, doubling back along a
 		// neighbour to reach where it was plugged in.
-		const trimmed = trimOverlaps(this.schematic);
-		if (trimmed.some((w, i) => w !== this.schematic.wires[i]) || trimmed.length !== this.schematic.wires.length) {
-			this.schematic.wires = trimmed;
-			// Trimming can leave two wires meeting end to end, which is a joint worth
-			// folding away for the same reasons as any other.
-			const refolded = mergeWireChains(this.schematic);
-			if (refolded.length !== this.schematic.wires.length) this.schematic.wires = refolded;
-		}
+		step(trimOverlaps({ ...this.schematic, wires }));
+		// Trimming can leave two wires meeting end to end, which is a joint worth
+		// folding away for the same reasons as any other.
+		step(mergeWireChains({ ...this.schematic, wires }));
 
 		// Last, because trimming is what creates most of these: a wire cut back to
 		// where it meets another one now ends partway along it, and a branch resting
 		// on someone else's segment is not carried when that segment moves.
-		const split = splitAtJunctions(this.schematic, freshId);
-		if (split.length !== this.schematic.wires.length) this.schematic.wires = split;
+		step(splitAtJunctions({ ...this.schematic, wires }, freshId));
+
+		// Tidying rearranges wires without ever meaning to change what is joined to
+		// what. Each step argues it cannot; between them the arguments have failed
+		// before, and a silent disconnection is the worst thing this editor can do.
+		// So the claim is checked rather than trusted, and a tidy that would break
+		// the circuit is dropped instead — the drawing stays untidy, which is a far
+		// smaller problem than a wire that stopped conducting without saying so.
+		const before = buildConnectivity(this.schematic).nets.length;
+		const after = buildConnectivity({ ...this.schematic, wires }).nets.length;
+		this.schematic.wires = after > before ? original : wires;
 	}
 
 	/**

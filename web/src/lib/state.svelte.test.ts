@@ -136,7 +136,10 @@ describe('moving a wire', () => {
 
 	it('keeps it plugged in at both ends', () => {
 		app.selection = [app.schematic.wires[0].id];
-		dragBy(0, 80);
+		// Upwards on purpose. Downwards the wire would pass over the source's own
+		// minus pin at (200,280), which shorts the source — true before this was
+		// written and merely invisible, and nothing to do with what is being tested.
+		dragBy(0, -80);
 
 		expect(netOf('V1', 'plus')).toBe(netOf('R1', 'a'));
 		// The ends stayed on the pins; the body moved and grew legs to reach back.

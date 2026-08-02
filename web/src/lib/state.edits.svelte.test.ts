@@ -345,7 +345,9 @@ describe('reshaping a wire', () => {
 			{ x: 200, y: 220 },
 			{ x: 470, y: 220 }
 		]);
-		dragLeg(app.schematic.wires[0].id, 0, 0, 70);
+		// Upwards: dragging down would take the leg over the source's own minus pin
+		// at (200,280), which shorts it — a real connection, and not the subject.
+		dragLeg(app.schematic.wires[0].id, 0, 0, -70);
 
 		const points = app.schematic.wires[0].points;
 		expect(points[0]).toEqual({ x: 200, y: 220 });
@@ -387,11 +389,11 @@ describe('reshaping a wire', () => {
 		const id = app.schematic.wires[0].id;
 		app.selection = [id];
 		app.beginMove();
-		for (let i = 1; i <= 20; i++) app.applySegmentMove(id, 0, 0, i * 5);
-		app.applySegmentMove(id, 0, 0, 80);
+		for (let i = 1; i <= 20; i++) app.applySegmentMove(id, 0, 0, -i * 5);
+		app.applySegmentMove(id, 0, 0, -80);
 		app.endMove();
 		// Absolute, not incremental, so only the last call decides where it lands.
-		expect(app.schematic.wires[0].points[1]).toEqual({ x: 200, y: 300 });
+		expect(app.schematic.wires[0].points[1]).toEqual({ x: 200, y: 140 });
 	});
 
 	it('slides a wire attached to nothing, in both directions at once', () => {
@@ -658,5 +660,52 @@ describe('when the simulator runs', () => {
 		app.loadExample('rc-lowpass');
 		expect(app.live).toBe(false);
 		expect(app.playing).toBe(false);
+	});
+});
+
+describe('tidying wires', () => {
+	/**
+	 * Tidying rearranges wires without ever meaning to change what is joined to
+	 * what. Every step of it argues that it cannot; between them the arguments
+	 * have failed before, and a disconnection that says nothing is the worst thing
+	 * this editor can do. So the claim is checked rather than trusted.
+	 */
+	it('never leaves a circuit more divided than it found it', () => {
+		app.place('vsource', 100, 200, 0);
+		app.place('resistor', 200, 170, 0);
+		app.place('ground', 100, 300, 0);
+		app.addWirePath([
+			{ x: 100, y: 170 },
+			{ x: 170, y: 170 }
+		]);
+		app.addWirePath([
+			{ x: 230, y: 170 },
+			{ x: 300, y: 170 },
+			{ x: 300, y: 290 },
+			{ x: 100, y: 290 }
+		]);
+		app.addWirePath([
+			{ x: 100, y: 230 },
+			{ x: 100, y: 290 }
+		]);
+
+		const nets = () => app.compiled.connectivity.nets.length;
+		const before = nets();
+
+		// A long run of moves, each of which tidies afterwards.
+		for (const [name, dx, dy] of [
+			['R1', 40, 30],
+			['V1', -20, 20],
+			['GND1', 0, 40],
+			['R1', -60, -10],
+			['V1', 30, -30],
+			['GND1', 20, -20]
+		] as const) {
+			app.selection = [find(name).id];
+			app.beginMove();
+			app.applyMove(dx, dy, routeFor(new Set(app.selection)));
+			app.endMove();
+			expect(nets()).toBeLessThanOrEqual(before);
+		}
 	});
 });

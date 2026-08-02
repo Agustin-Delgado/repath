@@ -366,26 +366,40 @@ function findCut(wires: readonly Wire[]): { index: number; points: Point[] } | n
 }
 
 /**
- * Split a wire wherever another one ends partway along it.
+ * Split a wire wherever something else meets it partway along.
  *
- * A branch meeting a wire in the middle is a real junction, but as a bare point
- * on someone else's segment it is a fragile one: move the host and the branch is
- * left behind holding nothing, because only *pins* are tracked as things a wire
- * end follows. That is how a circuit comes apart over a few drags, with every pin
- * still attached to a wire and no warning to show for it.
+ * Two shapes of the same problem, and they are mirror images.
  *
- * Splitting the host turns that into three wire ends meeting at a point, which is
- * the case the editor already handles — each of them anchors the others. The
- * drawn shape never changes; only the number of wires does.
+ * A branch ending in the middle of a wire is a real junction, but as a bare point
+ * on someone else's segment it is a fragile one: only the *ends* of a wire are
+ * tracked as things that follow, so moving the host leaves the branch holding
+ * nothing.
  *
- * `mergeWireChains` will not undo this, because it only folds a point where
- * exactly two ends meet.
+ * A pin sitting in the middle of a wire has the same trouble from the other side.
+ * The wire is not a follower of that pin, because following is decided by looking
+ * at a wire's two ends — so move the part, or re-route the wire, and the pin is
+ * left behind. That is how a circuit comes apart over a run of drags with every
+ * pin still attached to something and no warning to show for it.
+ *
+ * Splitting turns both into wire ends meeting at a point, which is the case the
+ * editor already handles: each of them anchors the others, and a pin at the end
+ * of a wire is followed like any other. What is drawn never changes; only the
+ * number of wires does.
+ *
+ * `mergeWireChains` will not undo this — it only folds a point where exactly two
+ * ends meet, and it leaves anything with a pin on it alone.
  */
 export function splitAtJunctions(schematic: Schematic, nextId: () => string): Wire[] {
 	const ends = new Set<string>();
 	for (const wire of schematic.wires) {
 		for (const index of [0, wire.points.length - 1]) {
 			ends.add(pointKey(wire.points[index].x, wire.points[index].y));
+		}
+	}
+	for (const instance of schematic.instances) {
+		for (const pin of definitionOf(instance.kind).pins) {
+			const at = pinPosition(instance, pin);
+			ends.add(pointKey(at.x, at.y));
 		}
 	}
 
