@@ -1036,3 +1036,11 @@ class AppState {
 
 export const app = new AppState();
 export { pointKey };
+
+// The whole editor hangs off this one object, so a hot reload that swaps the
+// module leaves the running page holding the old instance — old rules, old bugs,
+// with the source on disk saying otherwise. That turns "I fixed it" into "it
+// still does it", which is a miserable thing to debug. Reload the page instead.
+if (import.meta.hot) {
+	import.meta.hot.accept(() => import.meta.hot?.invalidate());
+}

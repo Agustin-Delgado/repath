@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { defaultParams, wireSegments, type Instance, type Point, type Schematic } from './model';
+import {
+	defaultParams,
+	definitionOf,
+	rotatePoint,
+	wireSegments,
+	type Instance,
+	type Point,
+	type Schematic
+} from './model';
 import { elbow, routeWire } from './route';
 
 const GRID = 10;
@@ -335,5 +343,95 @@ describe('leaving a pin', () => {
 		expect(path[0]).toEqual({ x: 200, y: 300 });
 		expect(path[path.length - 1]).toEqual({ x: 400, y: 300 });
 		expect(isOrthogonal(path)).toBe(true);
+	});
+});
+
+describe('no route wanders', () => {
+	/**
+	 * The property that a pile of individual cases kept failing to pin down: a
+	 * route may not leave the rectangle its own two endpoints define unless
+	 * something inside that rectangle forces it out. Going up, across and back
+	 * down over empty grid is the shape that keeps getting reported, and it is
+	 * exactly this property being violated.
+	 *
+	 * The obstacle check here rotates each component's box, which an earlier probe
+	 * of mine did not — so it reported a rotated capacitor's body as clear space
+	 * and blamed the router for avoiding it.
+	 */
+	function bodyCells(schematic: Schematic, ignore: ReadonlySet<string>): Set<string> {
+		const out = new Set<string>();
+		for (const instance of schematic.instances) {
+			if (ignore.has(instance.id)) continue;
+			const { box } = definitionOf(instance.kind);
+			const corners = [
+				{ x: box.x, y: box.y },
+				{ x: box.x + box.w, y: box.y },
+				{ x: box.x, y: box.y + box.h },
+				{ x: box.x + box.w, y: box.y + box.h }
+			].map((c) => rotatePoint(c.x, c.y, instance.rotation));
+			const inset = GRID * 0.5;
+			const lo = {
+				x: Math.min(...corners.map((c) => c.x)) + instance.x + inset,
+				y: Math.min(...corners.map((c) => c.y)) + instance.y + inset
+			};
+			const hi = {
+				x: Math.max(...corners.map((c) => c.x)) + instance.x - inset,
+				y: Math.max(...corners.map((c) => c.y)) + instance.y - inset
+			};
+			for (let x = Math.ceil(lo.x / GRID) * GRID; x <= hi.x; x += GRID)
+				for (let y = Math.ceil(lo.y / GRID) * GRID; y <= hi.y; y += GRID) out.add(`${x},${y}`);
+		}
+		return out;
+	}
+
+	/** Every grid point inside the rectangle the two endpoints define. */
+	function insideBox(a: Point, b: Point): Point[] {
+		const out: Point[] = [];
+		for (let x = Math.min(a.x, b.x); x <= Math.max(a.x, b.x); x += GRID)
+			for (let y = Math.min(a.y, b.y); y <= Math.max(a.y, b.y); y += GRID) out.push({ x, y });
+		return out;
+	}
+
+	it('stays inside the box its endpoints define when that box is clear', () => {
+		// A resistor and a capacitor at every relative offset a drag can produce,
+		// routed between the pins that a real circuit would wire together.
+		const strays: string[] = [];
+		let checked = 0;
+
+		for (let x = 100; x <= 500; x += 50) {
+			for (let y = 100; y <= 400; y += 50) {
+				for (const rotation of [0, 90] as const) {
+					const schematic: Schematic = {
+						instances: [place('resistor', 'R1', x, y, rotation), place('capacitor', 'C1', 400, 300, 90)],
+						wires: []
+					};
+					const moving = new Set(['R1']);
+					const a = rotation === 0 ? { x: x + 30, y } : { x, y: y + 30 };
+					const b = { x: 400, y: 270 };
+					if (a.x === b.x && a.y === b.y) continue;
+
+					const bodies = bodyCells(schematic, moving);
+					// Only judge the cases where the box really is clear; anything else
+					// has an honest reason to leave it.
+					if (insideBox(a, b).some((p) => bodies.has(`${p.x},${p.y}`))) continue;
+
+					checked++;
+					const path = routeWire(schematic, a, b, { grid: GRID, ignoreInstances: moving });
+					const outside = path.filter(
+						(p) =>
+							p.x < Math.min(a.x, b.x) ||
+							p.x > Math.max(a.x, b.x) ||
+							p.y < Math.min(a.y, b.y) ||
+							p.y > Math.max(a.y, b.y)
+					);
+					if (outside.length > 0) {
+						strays.push(`${a.x},${a.y} → ${b.x},${b.y}: ${path.map((p) => `${p.x},${p.y}`).join(' → ')}`);
+					}
+				}
+			}
+		}
+
+		expect(checked).toBeGreaterThan(20);
+		expect(strays).toEqual([]);
 	});
 });

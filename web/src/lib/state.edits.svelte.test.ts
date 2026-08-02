@@ -13,11 +13,19 @@ import { routeWire } from './schematic/route';
 import { pinKey } from './schematic/nets';
 import type { Point } from './schematic/model';
 
+/**
+ * The router, wired exactly the way the select tool wires it.
+ *
+ * `effort` included. It was missing here, so the tests were exercising a
+ * different search budget from the one a real drag uses — a gap that would hide
+ * any bug living in the fallback.
+ */
 const routeFor = (moving: Set<string>) => (from: Point, to: Point, settling: ReadonlySet<string>) =>
 	routeWire(app.schematic, from, to, {
 		grid: 10,
 		ignoreInstances: moving,
-		ignoreWires: settling
+		ignoreWires: settling,
+		effort: 4000
 	});
 
 const find = (name: string) => app.schematic.instances.find((i) => i.name === name)!;
