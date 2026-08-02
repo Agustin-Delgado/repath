@@ -2,7 +2,7 @@
  * Helpers shared between tools.
  */
 
-import { distance, type ToolContext, type Vec2 } from '$lib/canvas';
+import { distance, type Painter, type SnapTarget, type ToolContext, type Vec2 } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
 import { definitionOf, pinPosition, pointKey, wireSegments, wireStart } from '../model';
 import type { SchematicItem } from '../scene';
@@ -89,3 +89,33 @@ export function connectsAt(at: Vec2): boolean {
 /** What to say when a wire is turned away for going nowhere. */
 export const DANGLING_NOTICE =
 	'A wire needs something at both ends — a pin, or another wire. That one would not have carried anything.';
+
+/**
+ * Show what an endpoint would attach to.
+ *
+ * The same hint whether the endpoint is being dragged or merely hovered — the
+ * feedback should not change depending on how you got there.
+ */
+export function drawSnapHint(
+	painter: Painter,
+	ctx: ToolContext,
+	target: SnapTarget,
+	colour: string
+): void {
+	const at: Vec2 = { x: target.x, y: target.y };
+	if (target.kind === 'pin' || target.kind === 'junction') {
+		painter.dot(at, 7, { color: colour, alpha: 0.22 });
+		painter.dot(at, 3.5, { color: colour });
+		if (target.label) {
+			painter.text(
+				target.label,
+				{ x: at.x, y: at.y - 14 * ctx.unit },
+				{ size: 11, color: colour, align: 'center', baseline: 'bottom' }
+			);
+		}
+	} else if (target.kind === 'wire') {
+		painter.dot(at, 4, { color: colour });
+	} else {
+		painter.dot(at, 2.5, { color: colour, alpha: 0.7 });
+	}
+}

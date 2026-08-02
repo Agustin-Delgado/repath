@@ -30,7 +30,13 @@ import { elbow } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
 import { mergeWireChains } from './schematic/nets';
 
-export type Tool = { mode: 'select' } | { mode: 'wire' } | { mode: 'place'; kind: string };
+/**
+ * Wiring used to be a mode of its own. It is not any more: dragging off a pin or
+ * off an existing wire draws one, which is the gesture people reached for
+ * anyway, and a wire has to land on something at both ends regardless — so a
+ * mode whose whole job was drawing freely had nothing left to do.
+ */
+export type Tool = { mode: 'select' } | { mode: 'place'; kind: string };
 
 export interface ProbeInfo {
 	/** Stable handle: a grid point the net passes through. */

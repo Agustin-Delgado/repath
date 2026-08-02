@@ -29,8 +29,7 @@ import { currentTheme } from '../draw';
 import { wireSegments, type Point } from '../model';
 import { elbow, routeWire } from '../route';
 import type { SchematicItem } from '../scene';
-import { connectsAt, DANGLING_NOTICE, netAt } from './shared';
-import { drawSnapHint } from './wire';
+import { connectsAt, DANGLING_NOTICE, drawSnapHint, netAt } from './shared';
 
 type Mode = 'idle' | 'move' | 'marquee' | 'wire';
 
@@ -59,13 +58,24 @@ export function createSelectTool(): Tool {
 	let pressedWasSelected = false;
 	/** Which leg of a wire the press landed on, when the press was on a wire. */
 	let pressedSegment: { wireId: string; index: number } | null = null;
+	/**
+	 * A press on a wire that has not been selected yet, waiting to find out which
+	 * gesture it is.
+	 *
+	 * Moving turns it into a new wire tapped off that one; releasing without moving
+	 * selects it, which is the other thing a click on a wire has always meant. The
+	 * decision cannot be made on the press, so it is deferred by one event.
+	 */
+	let tapping: { id: string; from: Point } | null = null;
 	/** Pin pairs the current offset would join, for the overlay to show. */
 	let pendingJoin: Vec2 | null = null;
 
 	/** Pin under the cursor, if any — the thing a drag would wire from. */
 	let hoveredPin: SnapTarget | null = null;
-	/** In-flight wire started by dragging off a pin. */
+	/** In-flight wire started by dragging off a pin or an existing wire. */
 	let wireFrom: Point | null = null;
+	/** Shift was held: skip the router and draw the plain elbow. */
+	let handRouted = false;
 	let wireTo: SnapTarget | null = null;
 
 	/**
@@ -102,8 +112,13 @@ export function createSelectTool(): Tool {
 		return found;
 	}
 
+	/**
+	 * The path a new wire would take. Shift falls back to a plain elbow, for when
+	 * the router's idea of tidy is not yours.
+	 */
 	function wirePath(to: Point, ctx: ToolContext): Point[] {
 		if (!wireFrom) return [];
+		if (handRouted) return elbow(wireFrom, to);
 		return routeWire(app.schematic, wireFrom, to, { grid: ctx.gridSize });
 	}
 
@@ -196,6 +211,7 @@ export function createSelectTool(): Tool {
 			pressedId = null;
 			pressedSegment = null;
 			pendingJoin = null;
+			tapping = null;
 			hoveredPin = null;
 			wireFrom = null;
 			if (app.hoverNet !== null) {
@@ -213,11 +229,26 @@ export function createSelectTool(): Tool {
 				mode = 'wire';
 				wireFrom = { x: pin.x, y: pin.y };
 				wireTo = pin;
+				handRouted = pointer.shift;
 				ctx.invalidate('overlay');
 				return;
 			}
 
 			const item = ctx.scene.top(pointer.world, ctx.tolerance);
+
+			// Pressing an unselected wire is ambiguous: it could be a click to select
+			// it, or the start of a branch off it. Hold both open until the pointer
+			// says which. This is the same rule the pins follow — something already
+			// selected is a handle for editing, anything else is a place to wire from.
+			if (item && item.kind === 'wire' && !app.selection.includes(item.id)) {
+				const on = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
+				tapping = { id: item.id, from: { x: on.x, y: on.y } };
+				pressedId = item.id;
+				moved = false;
+				ctx.invalidate('overlay');
+				return;
+			}
+
 			if (item) {
 				pressedId = item.id;
 				pressedWasSelected = app.selection.includes(item.id);
@@ -252,7 +283,23 @@ export function createSelectTool(): Tool {
 		},
 
 		pointerMove(pointer, ctx) {
+			// The deferred decision: the pointer has moved, so that press on a wire
+			// was the start of a branch rather than a click to select it.
+			if (tapping) {
+				const now = snapPoint(pointer.world, ctx.gridSize);
+				if (now.x !== tapping.from.x || now.y !== tapping.from.y) {
+					mode = 'wire';
+					wireFrom = tapping.from;
+					handRouted = pointer.shift;
+					wireTo = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
+					tapping = null;
+					ctx.invalidate('overlay');
+				}
+				return;
+			}
+
 			if (mode === 'wire') {
+				handRouted = pointer.shift;
 				wireTo = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
 				ctx.invalidate('overlay');
 				return;
@@ -298,6 +345,17 @@ export function createSelectTool(): Tool {
 		},
 
 		pointerUp(pointer, ctx) {
+			// Pressed and released on a wire without moving: that was a click, so
+			// select it, which is what it did before branching was possible.
+			if (tapping) {
+				app.selection = pointer.shift ? [...new Set([...app.selection, tapping.id])] : [tapping.id];
+				tapping = null;
+				pressedId = null;
+				mode = 'idle';
+				ctx.invalidate('schematic', 'overlay');
+				return;
+			}
+
 			if (mode === 'wire' && wireFrom) {
 				const to = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
 				if (to.x !== wireFrom.x || to.y !== wireFrom.y) {
@@ -311,6 +369,7 @@ export function createSelectTool(): Tool {
 				}
 				wireFrom = null;
 				wireTo = null;
+				handRouted = false;
 			} else if (mode === 'move') {
 				// Nothing to settle: the geometry on screen is already the answer.
 				app.endMove();

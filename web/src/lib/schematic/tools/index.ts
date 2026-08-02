@@ -1,4 +1,3 @@
 export { createSelectTool } from './select';
-export { createWireTool } from './wire';
 export { createPlaceTool } from './place';
-export { constrainToAxis, netAt, routeL } from './shared';
+export { connectsAt, constrainToAxis, drawSnapHint, netAt, routeL } from './shared';

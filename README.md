@@ -190,6 +190,10 @@ and re-routes them, instead of leaving them behind holding nothing; and dragging
 off a pin draws a connection without switching tools, which is the gesture people
 reach for after dropping a part.
 
+There is no wire mode, for the same reason. Dragging off a pin or off an existing
+wire draws one, both ends have to land on something anyway, so a mode whose whole
+job was drawing freely had nothing left to do.
+
 **The router** is A* over the grid, with costs rather than walls almost
 everywhere. Only component bodies are real obstacles; crossing a wire, running
 alongside one, and turning a corner are all expensive but possible, in that order
@@ -242,9 +246,10 @@ the same values are on the scope and in the readout.
 | | |
 |---|---|
 | Place a part | pick it in the palette, then click the canvas — `R` turns the ghost before you drop it |
-| Connect two things | drag from one pin to another — no tool switch needed |
-| Draw a wire | `W`, then drag; or click once per corner and finish on a pin |
+| Connect two things | drag from one pin to another — there is no wire mode to switch to |
+| Branch off a wire | drag from any point on it; that is how a junction is made |
 | Hand-route a wire | hold `Shift` while drawing to bypass the router |
+| Reshape a wire | select it, then drag the leg you want to move |
 | Select | click, `Shift`-click to add, or drag a box around things |
 | Rotate / delete | `R` / `Del` |
 | Pan | middle-drag, or `Alt`-drag |
@@ -256,6 +261,10 @@ the same values are on the scope and in the readout.
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Play / pause the overlay | `Space` |
 | Plot a net | tick it in the Signals list |
+
+A wire has to land on something at both ends — a pin, or another wire. A run that
+would finish in mid-air is drawn in red as you make it and declined on release,
+because in a simulator a free end conducts nothing.
 
 Wires and pins snap: aim near a pin and the endpoint lands on it exactly, with the
 pin's name shown so you can see what you are about to connect to. Dragging a part

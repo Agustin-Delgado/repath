@@ -20,23 +20,6 @@
 </script>
 
 <div class="palette">
-	<div class="tools">
-		<button
-			class:active={app.tool.mode === 'select'}
-			onclick={() => (app.tool = { mode: 'select' })}
-			title="Select and move (Esc)"
-		>
-			Select
-		</button>
-		<button
-			class:active={app.tool.mode === 'wire'}
-			onclick={() => (app.tool = { mode: 'wire' })}
-			title="Draw wires (W)"
-		>
-			Wire
-		</button>
-	</div>
-
 	{#each GROUPS as group (group.id)}
 		<section>
 			<h3>{group.label}</h3>
@@ -70,31 +53,6 @@
 		gap: 0.5rem;
 	}
 
-	.tools {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 0.35rem;
-	}
-
-	.tools button {
-		padding: 0.4rem;
-		font-size: 0.8rem;
-		border-radius: 5px;
-		border: 1px solid var(--border);
-		background: var(--control-bg);
-		color: var(--text);
-		cursor: pointer;
-	}
-
-	.tools button:hover {
-		background: var(--hover);
-	}
-
-	.tools button.active {
-		background: var(--accent);
-		border-color: var(--accent);
-		color: var(--accent-text);
-	}
 
 	h3 {
 		margin: 0.4rem 0 0.3rem;

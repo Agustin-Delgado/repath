@@ -22,7 +22,7 @@
 	import { GRID } from '$lib/schematic/model';
 	import { junctionDots } from '$lib/schematic/nets';
 	import { buildSceneItems, buildSnapTargets } from '$lib/schematic/scene';
-	import { createPlaceTool, createSelectTool, createWireTool } from '$lib/schematic/tools';
+	import { createPlaceTool, createSelectTool } from '$lib/schematic/tools';
 	import { app } from '$lib/state.svelte';
 
 	let host = $state<HTMLDivElement | null>(null);
@@ -34,7 +34,6 @@
 	let editor = $state.raw<CanvasEditor | null>(null);
 	let theme: Theme | null = null;
 	const selectTool = createSelectTool();
-	const wireTool = createWireTool();
 	// Built once per kind and kept. A tool holds in-flight gesture state, so
 	// rebuilding one mid-interaction quietly discards it.
 	const placeTools = new Map<string, ReturnType<typeof createPlaceTool>>();
@@ -133,9 +132,7 @@
 		const active = editor;
 		const tool = app.tool;
 		if (!active) return;
-		active.setTool(
-			tool.mode === 'wire' ? wireTool : tool.mode === 'place' ? placeTool(tool.kind) : selectTool
-		);
+		active.setTool(tool.mode === 'place' ? placeTool(tool.kind) : selectTool);
 	});
 
 	// Appearance-only changes: repaint the schematic, leave the index alone.
@@ -277,10 +274,6 @@
 				// Space to flip its bend while a run is in progress.
 				event.preventDefault();
 				app.togglePlay();
-				break;
-			case 'w':
-			case 'W':
-				app.tool = { mode: 'wire' };
 				break;
 			case 'v':
 			case 'V':
