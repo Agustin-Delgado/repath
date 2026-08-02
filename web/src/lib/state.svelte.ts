@@ -105,6 +105,17 @@ class AppState {
 	stopTime = $state(EXAMPLES[0].stopTime);
 	exampleId = $state(EXAMPLES[0].id);
 
+	constructor() {
+		// The circuit the app opens with is assigned to the field above, which is
+		// the one way into the editor that skipped this. Loading an example, opening
+		// a file and following a link all tidy first; the default did not, so the
+		// schematic everybody sees on arrival was the only one still carrying wires
+		// drawn in pieces — and a bare corner where two of them meet is a fixed
+		// point that any re-route has to honour, which is what made dragging a part
+		// send its wire up and over for no visible reason.
+		this.tidyWires();
+	}
+
 	/** Net under the cursor, highlighted across every wire that carries it. */
 	hoverNet = $state<number | null>(null);
 
