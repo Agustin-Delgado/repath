@@ -16,7 +16,9 @@ import {
 	definitionOf,
 	rotatePoint,
 	wireStart,
+	type ComponentDef,
 	type Instance,
+	type Rotation,
 	type Schematic,
 	type Wire
 } from './model';
@@ -64,6 +66,34 @@ export function currentTheme(): Theme {
 
 export function setCurrentTheme(theme: Theme): void {
 	active = theme;
+}
+
+/**
+ * Clear space between a symbol and its labels.
+ *
+ * One number for every part, applied to what each part actually draws, so a
+ * resistor and a transistor sit the same distance from their names however
+ * differently sized their symbols are.
+ */
+const LABEL_GAP = 5;
+
+/**
+ * How far a symbol reaches from its origin, on each axis, once rotated.
+ *
+ * The catalog box is in the symbol's own frame; turning a part swaps which of
+ * its dimensions faces the label.
+ */
+export function drawnReach(def: ComponentDef, rotation: Rotation): { x: number; y: number } {
+	const corners = [
+		{ x: def.box.x, y: def.box.y },
+		{ x: def.box.x + def.box.w, y: def.box.y },
+		{ x: def.box.x, y: def.box.y + def.box.h },
+		{ x: def.box.x + def.box.w, y: def.box.y + def.box.h }
+	].map((c) => rotatePoint(c.x, c.y, rotation));
+	return {
+		x: Math.max(...corners.map((c) => Math.abs(c.x))),
+		y: Math.max(...corners.map((c) => Math.abs(c.y)))
+	};
 }
 
 export function readTheme(element: HTMLElement): Theme {
@@ -319,14 +349,22 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 		}
 
 		if (showLabels && instance.kind !== 'ground') {
-			const extent = def.bodyExtent ?? 30;
+			// Measured off what is actually drawn, rotation included, rather than one
+			// number for every part. A single default has to suit the tallest symbol,
+			// which left a resistor's name floating twenty units above a body that
+			// stops at nine — the label reads as belonging to nothing in particular.
+			const reach = drawnReach(def, instance.rotation);
+			// Upright, the labels sit above and below; turned, they stack to the
+			// right, because a part on its side is tall and thin and there is no
+			// room over it.
 			const upright = instance.rotation === 0 || instance.rotation === 180;
-			const tx = upright ? instance.x : instance.x + extent - 6;
+			const clear = (upright ? reach.y : reach.x) + LABEL_GAP;
+			const tx = upright ? instance.x : instance.x + clear;
 			const align = upright ? 'center' : 'left';
 
 			painter.text(
 				instance.name,
-				{ x: tx, y: upright ? instance.y - extent - 2 : instance.y - 6 },
+				{ x: tx, y: upright ? instance.y - clear : instance.y - 6 },
 				{ size: labelSize, color: theme.labelStrong, align, baseline: 'bottom', minSize: 6 }
 			);
 
@@ -334,7 +372,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			if (value) {
 				painter.text(
 					value,
-					{ x: tx, y: upright ? instance.y + extent + 4 : instance.y + 8 },
+					{ x: tx, y: upright ? instance.y + clear : instance.y + 8 },
 					{ size: labelSize, color: theme.labelDim, align, baseline: 'top', minSize: 6 }
 				);
 			}

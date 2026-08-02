@@ -72,11 +72,6 @@ export interface ComponentDef {
 	pins: PinDef[];
 	params: ParamDef[];
 	/**
-	 * Half-height of the drawn body, used to keep the reference designator and
-	 * value clear of it. Defaults to 30, which suits the two-terminal parts.
-	 */
-	bodyExtent?: number;
-	/**
 	 * Local, unrotated bounding box of everything drawn, leads included.
 	 *
 	 * Used for culling and for hit testing, so it wants to be tight: a square
@@ -518,7 +513,6 @@ export const CATALOG: ComponentDef[] = [
 			digitalOut('qn', 30, 20)
 		],
 		params: [DELAY_PARAM],
-		bodyExtent: 44
 	},
 	{
 		kind: 'clock',
