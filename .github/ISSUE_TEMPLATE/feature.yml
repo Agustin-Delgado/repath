@@ -1,0 +1,28 @@
+name: Feature or component request
+description: Something missing that you want to use
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Worth a look at [BACKLOG.md](../../blob/main/BACKLOG.md) first — it lists
+        everything already planned, plus a "Won't" section with the reasoning, so
+        you can see whether this is coming, deliberately out of scope, or genuinely
+        new.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What you want
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: What you are trying to build
+      description: >
+        The circuit or workflow behind the request. It often points at a simpler
+        answer than the one being asked for.
+    validations:
+      required: true

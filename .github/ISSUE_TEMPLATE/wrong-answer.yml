@@ -1,0 +1,52 @@
+name: Wrong answer
+description: The simulator produced a result you believe is incorrect
+labels: [engine, correctness]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most valuable kind of report a simulator can get, so thank you
+        for taking the time.
+
+        If you can, paste a **share link** — the Share button puts the whole
+        circuit in a URL, which means whoever picks this up starts from exactly
+        the circuit you were looking at.
+
+  - type: input
+    id: link
+    attributes:
+      label: Share link
+      description: The Share button copies one to your clipboard.
+      placeholder: https://…/#cq…
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should it be, and how do you know?
+      description: >
+        Hand analysis, a closed-form solution, a datasheet figure, another
+        simulator, a measurement on the bench — whatever you are comparing
+        against. Knowing the source matters as much as the number.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What did repath give you?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: analysis
+    attributes:
+      label: Which analysis
+      options:
+        - Transient
+        - Frequency sweep
+        - Operating point
+        - Not sure
+    validations:
+      required: true

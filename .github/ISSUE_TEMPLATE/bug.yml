@@ -1,0 +1,36 @@
+name: Bug
+description: Something in the editor or the app misbehaves
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: >
+        If it involves dragging, routing or selection, the exact sequence of
+        clicks matters — those bugs live in the details of the gesture.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: input
+    id: link
+    attributes:
+      label: Share link
+      description: If a specific circuit is involved, the Share button copies one.
+    validations:
+      required: false
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and OS
+      placeholder: Firefox 141 on Windows 11
+    validations:
+      required: false

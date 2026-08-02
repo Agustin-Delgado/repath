@@ -9,3 +9,6 @@
 .env
 .env.*
 !.env.example
+
+# Scratch output from driving the app in a browser during development.
+**/.playwright-mcp

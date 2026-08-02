@@ -2,9 +2,21 @@
 
 A free, open source, mixed-signal circuit simulator that runs entirely in your browser.
 
+[![CI](https://github.com/Agustin-Delgado/repath/actions/workflows/ci.yml/badge.svg)](https://github.com/Agustin-Delgado/repath/actions/workflows/ci.yml)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+[![Engine: Rust + WebAssembly](https://img.shields.io/badge/engine-Rust%20%2B%20WebAssembly-orange.svg)](crates/repath-core)
+
 Analog and digital in the same schematic. Draw a comparator into a NAND gate and it
 works — repath figures out where the two domains meet and inserts the converters
 itself.
+
+![A sine wave driving an inverter, whose output drives an RC network. Wires are
+coloured by voltage; the scope below shows both analog traces and the digital
+rails they resolve to, with a playhead partway through the
+run.](docs/screenshot.png)
+
+<sub>A 10 kHz sine into a logic inverter, its output filtered by an RC. One
+schematic, both domains, no converters placed by hand.</sub>
 
 - **MIT licensed.** Every feature, no accounts, no paywall.
 - **No server.** The engine is WebAssembly; your circuits never leave your machine.
@@ -14,6 +26,12 @@ itself.
 - **You can watch it work.** Wires coloured by voltage and current animated along
   them, derived from the simulation rather than decorated on top of it.
 - **Shareable.** The whole circuit fits in a URL, so a link is a working circuit.
+
+## Contents
+
+- [Status](#status) · [Running it](#running-it) · [How it works](#how-it-works)
+- [What is in the box](#what-is-in-the-box) · [Using the editor](#using-the-editor)
+- [Roadmap](#roadmap) · [Testing](#testing) · [Contributing](#contributing)
 
 ## Status
 
@@ -29,7 +47,7 @@ You need [Rust](https://rustup.rs), [Node](https://nodejs.org) 20+, and
 [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) (`cargo install wasm-pack`).
 
 ```sh
-git clone https://github.com/repath/repath
+git clone https://github.com/Agustin-Delgado/repath.git
 cd repath
 
 # Build the engine into the web app
@@ -294,9 +312,19 @@ operating point.
 
 ## Contributing
 
-Issues and pull requests welcome. The engine is deliberately independent of the web
-app — `repath-core` is a normal Rust crate with no web dependencies, so it can be
-used on its own or wrapped in a different front end.
+Issues and pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how
+the project is laid out, what the tests expect, and the one rule that matters most
+here: a wrong answer delivered confidently is worse than no answer, so anything
+touching the engine needs a test that checks it against something derived
+independently.
+
+The engine is deliberately independent of the web app — `repath-core` is a normal
+Rust crate with no web dependencies, so it can be used on its own or wrapped in a
+different front end.
+
+If you are looking for somewhere to start, [BACKLOG.md](BACKLOG.md) is the whole
+list, sorted, with the reasoning for each item and an honest table of what is
+deliberately simplified.
 
 ## Licence
 
