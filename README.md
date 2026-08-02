@@ -260,7 +260,13 @@ the same values are on the scope and in the readout.
 | Duplicate | `Ctrl+D` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Play / pause the overlay | `Space` |
+| Simulate | press Run — nothing runs until you ask |
 | Plot a net | tick it in the Signals list |
+
+Nothing simulates on load. Press **Run** once and the results then follow the
+circuit: change a value and it re-simulates on its own, keeping the playhead where
+it was. Moving a part around does not count as a change, since the circuit it
+describes has not changed.
 
 A wire has to land on something at both ends — a pin, or another wire. A run that
 would finish in mid-air is drawn in red as you make it and declined on release,

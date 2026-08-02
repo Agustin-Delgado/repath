@@ -594,3 +594,69 @@ describe('dragging two pins together', () => {
 		expect(app.compiled.warnings.length).toBe(looseBefore);
 	});
 });
+
+describe('when the simulator runs', () => {
+	it('is not running until it is asked', () => {
+		// Opening on a circuit that is already moving gives no moment to look at it,
+		// and the first thing anyone does is change something anyway.
+		app.place('resistor', 200, 200, 0);
+		expect(app.live).toBe(false);
+		expect(app.result).toBeNull();
+		expect(app.playing).toBe(false);
+	});
+
+	/** A circuit that actually compiles, so the signature is a netlist not an error. */
+	function complete() {
+		app.place('vsource', 100, 200, 0); // plus (100,170), minus (100,230)
+		app.place('resistor', 200, 170, 0); // pins (170,170), (230,170)
+		app.place('ground', 100, 300, 0); // pin (100,290)
+		app.addWirePath([
+			{ x: 100, y: 170 },
+			{ x: 170, y: 170 }
+		]);
+		app.addWirePath([
+			{ x: 230, y: 170 },
+			{ x: 300, y: 170 },
+			{ x: 300, y: 290 },
+			{ x: 100, y: 290 }
+		]);
+		app.addWirePath([
+			{ x: 100, y: 230 },
+			{ x: 100, y: 290 }
+		]);
+		expect(app.compiled.netlist).toBeTruthy();
+	}
+
+	it('notices a value change and ignores a move', () => {
+		complete();
+		const before = app.netlistSignature;
+
+		// Moving a part redraws its wires on every frame of the drag; the circuit
+		// those wires describe does not change, and re-simulating for that would be
+		// a lot of work to arrive at the same answer.
+		app.selection = [find('R1').id];
+		app.beginMove();
+		app.applyMove(0, 40, routeFor(new Set(app.selection)));
+		app.endMove();
+		expect(app.netlistSignature).toBe(before);
+
+		app.setParam(find('R1').id, 'resistance', 4700);
+		expect(app.netlistSignature).not.toBe(before);
+	});
+
+	it('notices the time range', () => {
+		complete();
+		const before = app.netlistSignature;
+
+		app.stopTime = app.stopTime * 2;
+		expect(app.netlistSignature).not.toBe(before);
+	});
+
+	it('stops following a circuit that has been replaced', () => {
+		app.place('resistor', 200, 200, 0);
+		app.live = true;
+		app.loadExample('rc-lowpass');
+		expect(app.live).toBe(false);
+		expect(app.playing).toBe(false);
+	});
+});

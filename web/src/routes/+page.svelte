@@ -39,9 +39,40 @@
 					app.notice = `That link could not be read, so this is the default circuit instead. ${why}`;
 				}
 			}
-			// Show a working circuit rather than an empty scope on first load.
-			app.run();
+			// Nothing simulates until it is asked to. Opening on a circuit that is
+			// already running gives no moment to look at it before it moves.
 		});
+	});
+
+	/**
+	 * Keep the results in step with the circuit, once there are results.
+	 *
+	 * Only after a deliberate Run — before that the scope is empty on purpose —
+	 * and only when the netlist really differs, since the drawing changes on every
+	 * frame of a drag while the circuit it describes usually does not.
+	 *
+	 * Debounced, or turning a value with the arrow keys would queue a simulation
+	 * per keystroke and the answers would arrive behind the input.
+	 */
+	let lastSignature = '';
+	let pending: ReturnType<typeof setTimeout> | undefined;
+
+	$effect(() => {
+		const signature = app.netlistSignature;
+		if (!app.live) {
+			lastSignature = signature;
+			return;
+		}
+		if (signature === lastSignature) return;
+
+		clearTimeout(pending);
+		pending = setTimeout(() => {
+			if (!app.live || app.running) return;
+			lastSignature = app.netlistSignature;
+			app.run({ keepPlayback: true });
+		}, 120);
+
+		return () => clearTimeout(pending);
 	});
 
 	async function share() {

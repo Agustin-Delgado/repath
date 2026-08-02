@@ -129,6 +129,15 @@ class AppState {
 	result = $state<TransientRun | null>(null);
 	error = $state<string | null>(null);
 	/**
+	 * Whether results are being kept up to date with the circuit.
+	 *
+	 * Set by pressing Run and cleared by anything that replaces the whole drawing.
+	 * Nothing simulates before that: opening the app on a circuit that is already
+	 * running gives no moment to look at it before it moves, and the first thing
+	 * anyone does is change something anyway.
+	 */
+	live = $state(false);
+	/**
 	 * Something the user needs to know that is not a simulation failure — a share
 	 * link that could not be read, a file that would not open.
 	 *
@@ -965,6 +974,8 @@ class AppState {
 		this.acResult = null;
 		this.error = null;
 		this.notice = null;
+		this.live = false;
+		this.playing = false;
 		this.autoProbe();
 	}
 
@@ -980,6 +991,8 @@ class AppState {
 		this.result = null;
 		this.error = null;
 		this.notice = null;
+		this.live = false;
+		this.playing = false;
 		this.autoProbe();
 	}
 
@@ -1024,11 +1037,33 @@ class AppState {
 		this.result = null;
 		this.error = null;
 		this.notice = null;
+		this.live = false;
+		this.playing = false;
 	}
 
 	// -- simulation -------------------------------------------------------
 
-	async run(): Promise<void> {
+	/**
+	 * A fingerprint of what the engine would actually be given.
+	 *
+	 * Only the netlist, so moving a part around does not count as a change: the
+	 * drawing shifts on every frame of a drag, and re-simulating for that would be
+	 * a lot of work to arrive at the same answer.
+	 */
+	get netlistSignature(): string {
+		const compiled = this.compiled;
+		if (!compiled.netlist) return `error:${compiled.errors.join('|')}`;
+		return JSON.stringify([compiled.netlist, this.stopTime, this.analysis, this.acStart, this.acStop]);
+	}
+
+	/**
+	 * Simulate.
+	 *
+	 * `keepPlayback` is for a re-run that follows an edit rather than a press:
+	 * restarting the animation every time a value moves would make the overlay
+	 * unwatchable while you are turning a knob.
+	 */
+	async run(options: { keepPlayback?: boolean } = {}): Promise<void> {
 		const compiled = this.compiled;
 		if (!compiled.netlist) {
 			this.error = compiled.errors.join(' ');
@@ -1037,6 +1072,7 @@ class AppState {
 		}
 		this.running = true;
 		this.error = null;
+		this.live = true;
 		try {
 			if (this.analysis === 'frequency') {
 				if (!this.hasAcDrive) {
@@ -1049,10 +1085,16 @@ class AppState {
 			} else {
 				// At least a few hundred points, so a flat trace still looks like a
 				// line rather than two dots joined up.
+				const was = { time: this.playbackTime, playing: this.playing };
 				this.result = await runTransient(compiled.netlist, this.stopTime, this.stopTime / 400);
 				if (this.probes.length === 0) this.autoProbe();
-				this.playbackTime = 0;
-				this.playing = true;
+				if (options.keepPlayback) {
+					this.playbackTime = Math.min(was.time, this.stopTime);
+					this.playing = was.playing;
+				} else {
+					this.playbackTime = 0;
+					this.playing = true;
+				}
 			}
 		} catch (cause) {
 			this.error = cause instanceof Error ? cause.message : String(cause);
