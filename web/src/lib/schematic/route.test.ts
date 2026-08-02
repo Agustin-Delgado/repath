@@ -280,3 +280,60 @@ describe('arriving at the destination', () => {
 		expect(path.some((p) => p.y !== 0)).toBe(true);
 	});
 });
+
+describe('keeping clear of a symbol', () => {
+	it('steps out of a source terminal before running sideways', () => {
+		// The plus terminal is a short spur off a fat circle. A wire leaving it
+		// horizontally passes within a few units of the symbol and reads as going
+		// past the source rather than connecting to it.
+		const schematic: Schematic = { instances: [place('vsource', 'V1', 300, 300)], wires: [] };
+		const path = routeWire(schematic, { x: 300, y: 270 }, { x: 600, y: 270 }, { grid: GRID });
+
+		expect(path.length).toBeGreaterThan(2);
+		// It leaves along the terminal, away from the circle, before turning.
+		expect(path[1]).toEqual({ x: 300, y: 260 });
+		expect(isOrthogonal(path)).toBe(true);
+	});
+
+	it('turns at the tip of a long lead without stepping out first', () => {
+		// The counterpart. A resistor pin sits at the end of a lead well clear of
+		// the body, so a corner right at the tip is fine — and forcing a stub here
+		// would put a little hook on every wire drawn straight up off a pin.
+		const schematic: Schematic = { instances: [place('resistor', 'R1', 300, 300)], wires: [] };
+		const path = routeWire(schematic, { x: 330, y: 300 }, { x: 330, y: 100 }, { grid: GRID });
+		expect(path).toEqual([
+			{ x: 330, y: 300 },
+			{ x: 330, y: 100 }
+		]);
+	});
+
+	it('is a cost, not a wall', () => {
+		// Boxed in on both sides with nowhere clear to go, a route still comes back
+		// rather than failing — the whole router is built this way.
+		const schematic: Schematic = {
+			instances: [
+				place('resistor', 'R1', 300, 280, 90),
+				place('resistor', 'R2', 300, 320, 90)
+			],
+			wires: []
+		};
+		const path = routeWire(schematic, { x: 200, y: 300 }, { x: 400, y: 300 }, { grid: GRID });
+		expect(path.length).toBeGreaterThanOrEqual(2);
+		expect(path[0]).toEqual({ x: 200, y: 300 });
+		expect(path[path.length - 1]).toEqual({ x: 400, y: 300 });
+		expect(isOrthogonal(path)).toBe(true);
+	});
+
+	it('does not widen a symbol into a halo at its corners', () => {
+		// Edge-adjacent only. A route clipping past a corner diagonally is not
+		// grazing anything, and charging for it would make every part feel bigger
+		// than it looks.
+		const schematic: Schematic = { instances: [place('resistor', 'R1', 300, 300)], wires: [] };
+		// A lane one cell above the body, starting well past its right-hand edge.
+		const path = routeWire(schematic, { x: 400, y: 290 }, { x: 600, y: 290 }, { grid: GRID });
+		expect(path).toEqual([
+			{ x: 400, y: 290 },
+			{ x: 600, y: 290 }
+		]);
+	});
+});

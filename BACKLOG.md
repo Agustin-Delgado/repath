@@ -34,6 +34,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Editor | Deleting heals a gap only for a two-pin part wired on both sides | Anything with three pins leaves stubs, since no pairing is obviously right |
 | Editor | History still stores whole-document snapshots | Bounded now (100 entries or 8 MB, whichever comes first) but not a delta log |
 | Router | Widening the search box is a fixed ladder (12 then 40 cells) | An obstacle wider than 40 cells is still routed through rather than around |
+| Router | Clearance is one grid cell, the same for every symbol | Right for the current catalog; a much larger part would want a wider ring |
 
 ---
 

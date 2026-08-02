@@ -48,7 +48,29 @@ const COST = {
 	/** Passing over a component's body. Expensive, but not impossible. */
 	body: 400,
 	/** Landing on a pin that is not the destination. */
-	foreignPin: 500
+	foreignPin: 500,
+	/**
+	 * Running through the ring of cells immediately around a body.
+	 *
+	 * Borrowed from the flow-chart routers, which wrap each shape in a protected
+	 * rectangle a route may follow but not enter. The effect worth having is that
+	 * a wire cannot graze a symbol: it is clearest on a voltage source, whose
+	 * terminal is a short spur off a fat circle, where a wire leaving sideways
+	 * passes within a few units of the circle and reads as going past the source
+	 * rather than connecting to it.
+	 *
+	 * A ring rather than a rule about which way pins face, because those two look
+	 * identical from the route's point of view — both are a right-angle exit — and
+	 * differ only in how much clear lead the symbol draws. A resistor's pin sits at
+	 * the end of a long lead, so turning at its tip is fine and stays free; the
+	 * source's does not, so the same turn is charged. The geometry answers the
+	 * question that a direction rule can only guess at.
+	 *
+	 * Priced above two corners and a short jog, so stepping out and back to avoid
+	 * it is worth doing, and well below `body`, so it never pushes a route through
+	 * a component to keep its distance from one.
+	 */
+	clearance: 120
 };
 
 /**
@@ -82,7 +104,17 @@ interface Obstacles {
 	vertical: Set<number>;
 	/** Cells occupied by a pin. */
 	pins: Set<number>;
+	/** The ring of cells touching a body, which a route should keep out of. */
+	clearance: Set<number>;
 }
+
+/** The four ways a route may step, and the four cells that touch a cell. */
+const DIRECTIONS = [
+	[1, 0],
+	[-1, 0],
+	[0, 1],
+	[0, -1]
+] as const;
 
 /** Pack grid coordinates into one integer key. */
 const cell = (gx: number, gy: number) => ((gx + 0x8000) << 16) | ((gy + 0x8000) & 0xffff);
@@ -93,7 +125,8 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 		body: new Set(),
 		horizontal: new Set(),
 		vertical: new Set(),
-		pins: new Set()
+		pins: new Set(),
+		clearance: new Set()
 	};
 
 	for (const instance of schematic.instances) {
@@ -118,6 +151,10 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 		for (let x = Math.ceil(minX / grid); x <= Math.floor(maxX / grid); x++) {
 			for (let y = Math.ceil(minY / grid); y <= Math.floor(maxY / grid); y++) {
 				obstacles.body.add(cell(x, y));
+				// Edge-adjacent, not corner-adjacent: a route that clips the diagonal
+				// past a corner is not grazing anything, and charging for it would
+				// wrap every symbol in a wider halo than it looks like it has.
+				for (const [dx, dy] of DIRECTIONS) obstacles.clearance.add(cell(x + dx, y + dy));
 			}
 		}
 
@@ -128,6 +165,11 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 			);
 		}
 	}
+
+	// A pin is where a wire is *supposed* to arrive, so it is never in the ring,
+	// even when the symbol wraps around it.
+	for (const key of obstacles.pins) obstacles.clearance.delete(key);
+	for (const key of obstacles.body) obstacles.clearance.delete(key);
 
 	for (const wire of schematic.wires) {
 		if (options.ignoreWires?.has(wire.id)) continue;
@@ -154,13 +196,6 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 const heuristic = (ax: number, ay: number, bx: number, by: number) =>
 	(Math.abs(ax - bx) + Math.abs(ay - by)) * COST.step;
 
-const DIRECTIONS = [
-	[1, 0],
-	[-1, 0],
-	[0, 1],
-	[0, -1]
-] as const;
-
 /**
  * Route from `from` to `to`, orthogonally, avoiding what it reasonably can.
  *
@@ -183,6 +218,7 @@ export function routeWire(
 
 	const obstacles = buildObstacles(schematic, options);
 	const effort = options.effort ?? 20_000;
+
 
 	// The search is bounded — unbounded A* on an open grid wanders — but a bound
 	// that is too tight hides the cheap way round. Nothing here is a hard wall, so
@@ -289,6 +325,7 @@ export function routeWire(
 				if (node.axis !== -1 && node.axis !== axis) step += COST.turn;
 				if (!isGoal && !permitted) {
 					if (obstacles.body.has(here)) step += COST.body;
+					else if (obstacles.clearance.has(here)) step += COST.clearance;
 					if (obstacles.pins.has(here)) step += COST.foreignPin;
 
 					// Running along a wire is much worse than crossing it: two conductors
