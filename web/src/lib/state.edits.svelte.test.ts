@@ -709,3 +709,85 @@ describe('tidying wires', () => {
 		}
 	});
 });
+
+describe('what moves when one thing moves', () => {
+	/** The RC low-pass, laid out as it ships. */
+	function lowPass() {
+		app.place('vsource', 100, 200, 0); // plus (100,170), minus (100,230)
+		app.place('resistor', 200, 170, 0); // pins (170,170), (230,170)
+		app.place('capacitor', 300, 230, 90); // pins (300,200), (300,260)
+		app.place('ground', 100, 300, 0); // pin (100,290)
+		app.addWirePath([
+			{ x: 100, y: 170 },
+			{ x: 170, y: 170 }
+		]);
+		app.addWirePath([
+			{ x: 230, y: 170 },
+			{ x: 300, y: 170 },
+			{ x: 300, y: 200 }
+		]);
+		app.addWirePath([
+			{ x: 300, y: 260 },
+			{ x: 300, y: 290 },
+			{ x: 100, y: 290 }
+		]);
+		app.addWirePath([
+			{ x: 100, y: 230 },
+			{ x: 100, y: 290 }
+		]);
+	}
+
+	function drag(name: string, dx: number, dy: number) {
+		app.selection = [find(name).id];
+		app.beginMove();
+		app.applyMove(dx, dy, routeFor(new Set(app.selection)));
+		app.endMove();
+	}
+
+	it('lowers only the ground when the ground is lowered', () => {
+		// Reported: dragging the ground down took the rail it feeds with it. The
+		// rail is a long line across the drawing, and nobody asked it to move.
+		lowPass();
+		drag('GND1', 0, 60);
+
+		// The rail is still where it was drawn, at y = 290.
+		expect(shapes()).toContain('300,260 300,290 100,290');
+		expect(netOf('GND1', 'g')).toBe(netOf('C1', 'b'));
+		expect(netOf('GND1', 'g')).toBe(netOf('V1', 'minus'));
+		expect(orthogonal()).toBe(true);
+	});
+
+	it('still redraws a wire the move has made nonsense of', () => {
+		// The other side of it, and the reason this is a judgement rather than a
+		// rule: a wire that used to run along the row above both its ends should
+		// not still climb up there to do it. Keeping the old shape is worth one
+		// extra bend, not two.
+		lowPass();
+		drag('R1', 0, 30);
+
+		expect(shapes()).toContain('230,200 300,200');
+		for (const wire of app.schematic.wires) {
+			const ends = [wire.points[0], wire.points[wire.points.length - 1]];
+			const top = Math.min(...ends.map((p) => p.y));
+			const bottom = Math.max(...ends.map((p) => p.y));
+			for (const p of wire.points) {
+				expect(p.y).toBeGreaterThanOrEqual(top);
+				expect(p.y).toBeLessThanOrEqual(bottom);
+			}
+		}
+	});
+
+	it('keeps every connection either way', () => {
+		lowPass();
+		const before = app.compiled.connectivity.nets.length;
+		for (const [name, dx, dy] of [
+			['GND1', 0, 60],
+			['R1', 0, 30],
+			['C1', 40, 0],
+			['V1', -20, -20]
+		] as const) {
+			drag(name, dx, dy);
+			expect(app.compiled.connectivity.nets.length).toBeLessThanOrEqual(before);
+		}
+	});
+});
