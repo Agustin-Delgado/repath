@@ -566,13 +566,35 @@ pub struct BjtModel {
     pub bf: f64,
     /// Reverse current gain.
     pub br: f64,
+    /// Forward Early voltage, volts. `None` for none, which is a perfect device.
+    ///
+    /// Base-width modulation: raising the collector widens the depletion region
+    /// into the base, shortening it, and more carriers cross. So the collector
+    /// current is not flat against `Vce` after all — it climbs with a slope of
+    /// `Ic / VAF`, and that slope *is* the output conductance.
+    ///
+    /// Leaving it out does not make an amplifier slightly optimistic, it makes it
+    /// wrong in kind: with zero output conductance the gain of a stage into a high
+    /// impedance is bounded by nothing at all.
+    #[serde(default)]
+    pub vaf: Option<f64>,
     pub temp: f64,
 }
 
 impl Default for BjtModel {
     fn default() -> Self {
         // Roughly a 2N3904.
-        Self { polarity: Polarity::Npn, is: 6.73e-15, bf: 200.0, br: 4.0, temp: TNOM }
+        // Roughly a 2N3904. A hundred volts is where a small-signal NPN's Early
+        // voltage lives, and having one by default is the point: a device with
+        // none is not a simpler transistor, it is an impossible one.
+        Self {
+            polarity: Polarity::Npn,
+            is: 6.73e-15,
+            bf: 200.0,
+            br: 4.0,
+            vaf: Some(100.0),
+            temp: TNOM,
+        }
     }
 }
 
@@ -660,6 +682,22 @@ impl Element for Bjt {
         let gif = m.is * ef / vt;
         let gir = m.is * er / vt;
 
+        // Base-width modulation. Gummel-Poon's base charge factor with high-level
+        // injection left out, which is the term that matters here: the transport
+        // current is divided by `qb`, and `1/qb` grows as the collector rises.
+        //
+        // Clamped away from zero because the factor goes through it in hard
+        // saturation, where the model has nothing useful to say anyway and an
+        // unclamped value would flip the sign of the transport current.
+        let (early, d_early) = match m.vaf {
+            Some(vaf) if vaf > 0.0 => ((1.0 - vbc / vaf).max(0.01), -1.0 / vaf),
+            _ => (1.0, 0.0),
+        };
+        let ict = i_f - i_r;
+        // d(ict * early)/d(vbe) and −d(ict * early)/d(vbc).
+        let gif = gif * early;
+        let gir = gir * early - ict * d_early;
+
         // Base recombination currents.
         let ibe = i_f / m.bf;
         let ibc = i_r / m.br;
@@ -671,7 +709,7 @@ impl Element for Bjt {
         self.op_gbe = gbe;
         self.op_gbc = gbc;
 
-        let ic = (i_f - i_r) - ibc;
+        let ic = ict * early - ibc;
         let ib = ibe + ibc;
 
         // Linearized: ic = gif*vbe - (gir+gbc)*vbc + iceq

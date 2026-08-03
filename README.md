@@ -337,8 +337,10 @@ much they would change what repath is good for:
   covers most of the benefit today; per-region repaint is the next step up.
 - **Noise and distortion analysis**, once AC has proved itself.
 - **Netlist import/export** in SPICE format.
-- **Richer device models** — Early effect on the BJT, MOSFET levels beyond
-  Shichman-Hodges, temperature sweeps.
+- **Richer device models** — junction and gate capacitances, so an AC sweep has a
+  rolloff to show; diode series resistance; MOSFET levels beyond Shichman-Hodges.
+  The Early effect and channel-length modulation are in, which is what stopped a
+  stage into a high impedance amplifying without limit.
 - **More logic**: counters, registers, decoders, memory.
 
 ## Testing

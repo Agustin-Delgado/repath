@@ -19,9 +19,8 @@ Each one should either move into Must/Should below, or be documented in the UI.
 
 | Area | Limitation | Impact |
 |---|---|---|
-| BJT | Ebers-Moll with no Early effect (`VAF`) | Output conductance is zero, so gain is overestimated in high-impedance loads |
 | BJT | No junction capacitances (`CJE`, `CJC`) | AC response has no transistor rolloff; bandwidth looks infinite |
-| MOSFET | Shichman-Hodges (level 1) only, bulk tied to source | No body effect, no subthreshold conduction, no short-channel behaviour |
+| MOSFET | Shichman-Hodges (level 1) only, bulk tied to source, no gate capacitances | No body effect, no subthreshold conduction, no short-channel behaviour |
 | Diode | No series resistance or junction capacitance | Forward drop at high current is optimistic; switching is instantaneous |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Op-amp | Single-pole-free: infinite bandwidth, no slew limit, no input offset | An op-amp circuit will look better than the real one |
@@ -40,6 +39,31 @@ Each one should either move into Must/Should below, or be documented in the UI.
 
 ---
 
+## The direction
+
+Towards a simulator someone would check a design against, not one they would
+play with. The bottleneck for that is not the editor — it is how much of a real
+device the models know about, and how many real devices there are. In order,
+because each step is what makes the next one worth having:
+
+1. **Parasitics in the devices already here.** Early voltage, junction and gate
+   capacitances, diode series resistance. Cheapest credibility per line of code,
+   and it is what the rows above are mostly complaining about. *(Early effect and
+   channel-length modulation done; the capacitances are next, and they are what
+   gives an AC sweep its rolloff.)*
+2. **`.model` import.** A SPICE model card is one line of the parameters step 1
+   adds, so a real 1N4148 or 2N3904 becomes a paste from the manufacturer rather
+   than a part someone has to hand-write here.
+3. **Subcircuits**, then `.subckt` import. This is what turns "has an op-amp"
+   into "has the op-amp you are going to buy", with its bandwidth and its slew
+   rate, and it is the only way a library grows past what fits in one file.
+4. **Sparse solver.** Dense LU is fine to a few hundred nodes and quadratic-ish
+   past that. It matters once steps 2 and 3 bring circuits big enough to feel it,
+   which is why it is fourth and not first.
+5. **Measurement.** Parameter sweep, noise, Fourier and THD, and a scope with
+   triggering and cursors that reports rise time and RMS rather than leaving them
+   to be eyeballed.
+
 ## Must
 
 ### Engine
@@ -51,8 +75,13 @@ Each one should either move into Must/Should below, or be documented in the UI.
       circuit larger than a page is bearable.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
       pivoting). The `LinearSystem` interface was kept narrow for this.
-- [ ] **BJT Early effect and junction capacitances.** Without `VAF` the DC gain is
-      wrong; without `CJE`/`CJC` every AC answer above a few hundred kHz is wrong.
+- [ ] **Junction and gate capacitances** on every nonlinear device — `CJE`/`CJC`
+      on the BJT, `CGS`/`CGD` on the MOSFET, `CJ0` on the diode. Without them every
+      AC answer above a few hundred kHz is wrong and switching is instantaneous.
+      Needs charge-based integration on a device that is already nonlinear, which
+      is the part that makes it a job rather than a parameter.
+- [ ] **Diode series resistance** (`RS`). Solved against the junction rather than
+      given an internal node, so the element count stays put.
 - [ ] **Op-amp with a finite gain-bandwidth product.** The current ideal model
       makes unstable circuits look stable, which is actively misleading.
 - [ ] **Convergence diagnostics** — when a solve fails, say *which node* and *which

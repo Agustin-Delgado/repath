@@ -236,7 +236,7 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 						channel: instance.kind === 'nmos' ? 'n' : 'p',
 						vto: num(instance, 'vto', 2),
 						kp: num(instance, 'kp', 2e-5),
-						lambda: 0,
+						lambda: num(instance, 'lambda', 0.02),
 						// Only the ratio matters at this model level.
 						w: num(instance, 'ratio', 10),
 						l: 1
@@ -256,6 +256,7 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 						is: num(instance, 'is', 6.73e-15),
 						bf: num(instance, 'bf', 200),
 						br: 4,
+						vaf: num(instance, 'vaf', 100),
 						temp: 300.15
 					}
 				});

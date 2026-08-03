@@ -450,7 +450,15 @@ export const CATALOG: ComponentDef[] = [
 		params: [
 			{ key: 'vto', label: 'Threshold', unit: 'V', default: 2 },
 			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5, min: 0, nonZero: true },
-			{ key: 'ratio', label: 'W/L', unit: '', default: 10, min: 0, nonZero: true }
+			{ key: 'ratio', label: 'W/L', unit: '', default: 10, min: 0, nonZero: true },
+			{
+				key: 'lambda',
+				label: 'Channel-length modulation',
+				unit: '1/V',
+				default: 0.02,
+				min: 0,
+				description: 'The drain current keeps climbing in saturation. Zero makes the device a perfect current source, which nothing is.'
+			}
 		]
 	},
 	{
@@ -463,7 +471,15 @@ export const CATALOG: ComponentDef[] = [
 		params: [
 			{ key: 'vto', label: 'Threshold', unit: 'V', default: 2 },
 			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5 },
-			{ key: 'ratio', label: 'W/L', unit: '', default: 10 }
+			{ key: 'ratio', label: 'W/L', unit: '', default: 10 },
+			{
+				key: 'lambda',
+				label: 'Channel-length modulation',
+				unit: '1/V',
+				default: 0.02,
+				min: 0,
+				description: 'The drain current keeps climbing in saturation. Zero makes the device a perfect current source, which nothing is.'
+			}
 		]
 	},
 	{
@@ -475,7 +491,16 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('base', -30, 0), analog('collector', 10, -30), analog('emitter', 10, 30)],
 		params: [
 			{ key: 'bf', label: 'Forward gain β', unit: '', default: 200, min: 0, nonZero: true },
-			{ key: 'is', label: 'Saturation current', unit: 'A', default: 6.73e-15, min: 0, nonZero: true }
+			{ key: 'is', label: 'Saturation current', unit: 'A', default: 6.73e-15, min: 0, nonZero: true },
+			{
+				key: 'vaf',
+				label: 'Early voltage',
+				unit: 'V',
+				default: 100,
+				min: 0,
+				description:
+					'Base-width modulation. Sets the output resistance to about VAF/Ic — zero here would make a stage into a high impedance amplify without limit.'
+			}
 		]
 	},
 	{
@@ -487,6 +512,15 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('base', -30, 0), analog('collector', 10, 30), analog('emitter', 10, -30)],
 		params: [
 			{ key: 'bf', label: 'Forward gain β', unit: '', default: 200 },
+			{
+				key: 'vaf',
+				label: 'Early voltage',
+				unit: 'V',
+				default: 100,
+				min: 0,
+				description:
+					'Base-width modulation. Sets the output resistance to about VAF/Ic — zero here would make a stage into a high impedance amplify without limit.'
+			},
 			{ key: 'is', label: 'Saturation current', unit: 'A', default: 6.73e-15 }
 		]
 	},

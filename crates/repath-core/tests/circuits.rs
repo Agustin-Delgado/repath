@@ -870,3 +870,48 @@ fn re_running_gives_the_part_its_life_back() {
     let second = sim.transient(&mut c, TransientConfig::new(2e-3)).unwrap();
     assert!(second.failures.is_empty(), "still failing: {:?}", second.failures);
 }
+
+#[test]
+fn collector_current_climbs_with_vce_by_the_early_voltage() {
+    // Base-width modulation, measured the way a curve tracer would: hold the base
+    // current and sweep the collector. Without it the two readings are identical
+    // and the output conductance is exactly zero, which is what made every gain
+    // into a high impedance come out unbounded.
+    let collector_current_at = |vce: f64| {
+        let mut c = Circuit::new();
+        let b = c.node("b");
+        let col = c.node("c");
+        c.add(Box::new(CurrentSource::new(
+            "IB",
+            Circuit::GROUND,
+            b,
+            Waveform::Dc { value: 10e-6 },
+        )));
+        c.add(Box::new(VoltageSource::dc("VC", col, Circuit::GROUND, vce)));
+        c.add(Box::new(Bjt::new("Q1", col, b, Circuit::GROUND, BjtModel::npn())));
+
+        let op = Simulator::default().operating_point(&mut c).unwrap();
+        let i = op.unknown_names.iter().position(|n| n == "i(VC)").unwrap();
+        // Out of the source's positive terminal and into the collector.
+        -op.solution[i]
+    };
+
+    let low = collector_current_at(2.0);
+    let high = collector_current_at(10.0);
+    assert!(high > low, "collector current did not climb: {low:.6} then {high:.6}");
+
+    // Early voltage of 100 V: eight more volts across the device should add about
+    // 8/102 of the current it was already passing.
+    let expected = low * 8.0 / 102.0;
+    let climb = high - low;
+    assert!(
+        (climb - expected).abs() < 0.25 * expected,
+        "climbed by {climb:.3e} A, expected about {expected:.3e} A"
+    );
+
+    // And the slope is the output conductance, which is what a stage's gain is
+    // eventually limited by. Ten microamps of base at a gain of 200 is 2 mA of
+    // collector, so `ro = (VAF + Vce) / Ic` is about 51 kilohms.
+    let ro = 8.0 / climb;
+    assert!((40_000.0..65_000.0).contains(&ro), "output resistance came to {ro:.0} ohms");
+}
