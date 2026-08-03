@@ -196,8 +196,14 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 				components.push({
 					type: 'current_source',
 					name,
-					plus: analogOf(instance, 'plus'),
-					minus: analogOf(instance, 'minus'),
+					// Crossed on purpose. The engine follows SPICE, where current runs
+					// from `plus` to `minus` *through* the source — so it drains the
+					// terminal it is named after. The symbol draws an arrow pointing at
+					// our `plus` pin, and an arrow on a current source means the way the
+					// current is delivered. Reading them together, a 3 A source with its
+					// arrow pointing up would have pushed the node above it negative.
+					plus: analogOf(instance, 'minus'),
+					minus: analogOf(instance, 'plus'),
 					waveform: waveform(instance),
 					ac_magnitude: num(instance, 'ac', 0),
 					ac_phase: 0

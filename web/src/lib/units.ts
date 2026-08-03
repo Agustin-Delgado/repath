@@ -82,7 +82,18 @@ export function formatValue(value: number, digits = 4): string {
 	if (value === 0) return '0';
 
 	const magnitude = Math.abs(value);
-	const [scale, suffix] = SCALE.find(([s]) => magnitude >= s) ?? SCALE[SCALE.length - 1];
+	let index = SCALE.findIndex(([s]) => magnitude >= s);
+	if (index === -1) index = SCALE.length - 1;
+
+	// Rounding can push a value up out of the decade it was picked for: 0.9999 A
+	// lands on the milli step, and three significant figures round it to 1000 —
+	// which `toPrecision` then writes as `1.00e+3`, so the reading came out as
+	// `1.00e+3 mA` instead of `1 A`. Step up and try again.
+	while (index > 0 && Math.abs(Number((value / SCALE[index][0]).toPrecision(digits))) >= 1000) {
+		index--;
+	}
+
+	const [scale, suffix] = SCALE[index];
 	const scaled = value / scale;
 	// Trim trailing zeros — 4.7000k reads worse than 4.7k — but only after a
 	// decimal point. Stripping them unconditionally turns 400µ into 4µ.

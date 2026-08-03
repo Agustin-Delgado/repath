@@ -6,7 +6,14 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { formatValue, joinValue, parseValue, splitValue, stepValue } from './units';
+import {
+	formatValue,
+	formatWithUnit,
+	joinValue,
+	parseValue,
+	splitValue,
+	stepValue
+} from './units';
 
 describe('parseValue', () => {
 	it('reads the forms people actually type', () => {
@@ -104,5 +111,31 @@ describe('formatValue', () => {
 	it('keeps the zeros that are part of the number', () => {
 		// Stripping trailing zeros unconditionally turns 400µ into 4µ.
 		expect(formatValue(400e-6)).toBe('400µ');
+	});
+});
+
+describe('a value that rounds up out of its decade', () => {
+	it('steps up the prefix instead of writing a thousand of the smaller one', () => {
+		// Reported from a canvas reading: 999.9995 mA came out as `1.00e+3 mA`,
+		// which is both the wrong prefix and exponential notation nobody asked for.
+		expect(formatValue(0.9999995, 3)).toBe('1');
+		expect(formatWithUnit(0.9999995, 'A', 3)).toBe('1 A');
+	});
+
+	it('does the same at every step of the ladder', () => {
+		expect(formatWithUnit(999.9995, 'Ω', 3)).toBe('1 kΩ');
+		expect(formatWithUnit(0.0009999995, 'A', 3)).toBe('1 mA');
+		expect(formatWithUnit(999999.5, 'Hz', 3)).toBe('1 MHz');
+	});
+
+	it('never reaches for exponential notation', () => {
+		for (const value of [0.9999995, 999.9995, 1.0000001e-6, 12345, 0.000123456]) {
+			expect(formatValue(value, 3)).not.toMatch(/e[+-]/);
+		}
+	});
+
+	it('leaves a value that does not round up alone', () => {
+		expect(formatWithUnit(0.994, 'A', 3)).toBe('994 mA');
+		expect(formatWithUnit(0.5, 'A', 3)).toBe('500 mA');
 	});
 });
