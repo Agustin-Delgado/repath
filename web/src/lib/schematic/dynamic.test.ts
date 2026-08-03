@@ -166,3 +166,79 @@ describe('drawDynamic', () => {
 		expect(calls).not.toContain('glow');
 	});
 });
+
+describe('which way the dots travel', () => {
+	/** Every dot the layer drew, in the order it drew them. */
+	function dotted(view: DynamicView) {
+		const dots: Array<{ x: number; y: number }> = [];
+		const painter = {
+			polyline() {},
+			line() {},
+			circle(centre: { x: number; y: number }) {
+				dots.push({ x: centre.x, y: centre.y });
+			},
+			dot(centre: { x: number; y: number }) {
+				dots.push({ x: centre.x, y: centre.y });
+			},
+			glow() {},
+			strokePath() {},
+			fillPath() {},
+			transformed(_at: unknown, _rotation: unknown, draw: () => void) {
+				draw();
+			},
+			viewport: { scale: 1 }
+		} as unknown as Parameters<typeof drawDynamic>[0];
+		drawDynamic(painter, view, { x: -500, y: -500, w: 1000, h: 1000 });
+		return dots;
+	}
+
+	it('sends a part the same way as the wire feeding it', () => {
+		// Reported: the dots crossing a resistor ran one way and the dots on the
+		// wires at either end ran the other, on what is electrically one path.
+		//
+		// Upright, a resistor has `a` on top, and the engine reports the current
+		// flowing *into* `a` — so a positive reading is current heading downwards,
+		// and so is the wire above delivering it. At a phase of zero the first dot
+		// of a run sits on the end it starts from, which is what pins the order.
+		const resistor = {
+			id: 'r1',
+			kind: 'resistor',
+			name: 'R1',
+			x: 100,
+			y: 100,
+			rotation: 90 as const,
+			params: {}
+		};
+
+		const dots = dotted(
+			view({
+				schematic: {
+					instances: [resistor],
+					// The wire above it, carrying the same current down into the pin.
+					wires: [{ id: 'w', points: [{ x: 100, y: 20 }, { x: 100, y: 70 }] }]
+				},
+				context: {
+					currentScale: 1,
+					instanceFlow: new Map([['r1', { from: 'a', to: 'b' }]])
+				} as unknown as DynamicView['context'],
+				frame: {
+					netVoltage: new Map(),
+					wireCurrent: new Map([['w#0', 0.5]]),
+					instanceCurrent: new Map([['r1', 0.5]])
+				}
+			})
+		);
+
+		const onTheWire = dots.filter((d) => d.y < 70);
+		const throughThePart = dots.filter((d) => d.y >= 70);
+		expect(onTheWire.length).toBeGreaterThan(0);
+		expect(throughThePart.length).toBeGreaterThan(0);
+
+		// Both runs start at their upper end and step downwards.
+		expect(onTheWire[0]).toEqual({ x: 100, y: 20 });
+		expect(throughThePart[0]).toEqual({ x: 100, y: 70 });
+		for (const run of [onTheWire, throughThePart]) {
+			for (let i = 1; i < run.length; i++) expect(run[i].y).toBeGreaterThan(run[i - 1].y);
+		}
+	});
+});

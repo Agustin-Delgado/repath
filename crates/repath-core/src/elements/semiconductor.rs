@@ -10,7 +10,7 @@
 
 use crate::complex::{C64, ComplexSystem};
 use crate::element::{
-    AcCtx, AcceptCtx, Element, Mode, NodeId, StampCtx, StampReport, critical_voltage,
+    AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, StampCtx, StampReport, critical_voltage,
     limit_junction, node_index,
 };
 use crate::linalg::LinearSystem;
@@ -27,6 +27,22 @@ pub fn thermal_voltage(temp_k: f64) -> f64 {
 
 /// Room temperature, 27 °C, the SPICE default.
 pub const TNOM: f64 = 300.15;
+
+fn default_vj() -> f64 {
+    1.0
+}
+
+fn default_grading() -> f64 {
+    0.5
+}
+
+/// Where the depletion capacitance stops being evaluated and starts being
+/// extrapolated, as a fraction of the junction potential.
+///
+/// SPICE's `FC`. The exact expression runs away as the bias approaches `vj`, and
+/// a capacitance that goes to infinity is worse than one that is slightly wrong,
+/// so past this point it continues along its own tangent.
+const FORWARD_CAP_LIMIT: f64 = 0.5;
 
 /// Current at which a diode's breakdown voltage is defined, amps.
 ///
@@ -57,6 +73,22 @@ pub struct DiodeModel {
     pub bv: Option<f64>,
     /// Temperature in kelvin.
     pub temp: f64,
+    /// Zero-bias junction capacitance, farads.
+    ///
+    /// Charge stored in the depletion region. It is what stops a diode turning
+    /// off the instant the voltage across it reverses: the stored charge has to
+    /// go somewhere first, and until it does the device conducts backwards.
+    #[serde(default)]
+    pub cj0: f64,
+    /// Junction potential, volts. The knee the depletion capacitance climbs to.
+    #[serde(default = "default_vj")]
+    pub vj: f64,
+    /// Grading coefficient. A half for an abrupt junction, a third for a graded one.
+    #[serde(default = "default_grading")]
+    pub m: f64,
+    /// Transit time, seconds — the diffusion charge carried while conducting.
+    #[serde(default)]
+    pub tt: f64,
     /// Continuous forward current the part is rated for, amps.
     ///
     /// `None` makes it indestructible, which is the right default: a rating is a
@@ -69,7 +101,17 @@ pub struct DiodeModel {
 impl Default for DiodeModel {
     fn default() -> Self {
         // Roughly a 1N4148.
-        Self { is: 2.52e-9, n: 1.752, bv: None, temp: TNOM, rated: None }
+        Self {
+            is: 2.52e-9,
+            n: 1.752,
+            bv: None,
+            cj0: 4e-12,
+            vj: default_vj(),
+            m: default_grading(),
+            tt: 5e-9,
+            temp: TNOM,
+            rated: None,
+        }
     }
 }
 
@@ -108,12 +150,17 @@ impl DiodeModel {
     pub fn led(vf: f64, rated: f64) -> Self {
         let n = 2.0;
         let is = rated * (-vf / (n * thermal_voltage(TNOM))).exp();
-        Self { is, n, bv: None, temp: TNOM, rated: Some(rated) }
+        Self { is, n, bv: None, tt: 0.0, ..Self::default() }.with_rating(rated)
     }
 
     /// A zener with the given breakdown voltage.
     pub fn zener(bv: f64) -> Self {
-        Self { is: 2.52e-9, n: 1.752, bv: Some(bv.abs()), temp: TNOM, rated: None }
+        Self { bv: Some(bv.abs()), ..Self::default() }
+    }
+
+    fn with_rating(mut self, rated: f64) -> Self {
+        self.rated = Some(rated);
+        self
     }
 }
 
@@ -126,6 +173,11 @@ pub struct Diode {
     v_prev_iter: f64,
     /// Small-signal conductance at the operating point, kept for AC analysis.
     gd_op: f64,
+    /// Junction capacitance at the operating point, likewise.
+    cd_op: f64,
+    /// Voltage and capacitive current at the last accepted timepoint.
+    v_prev: f64,
+    ic_prev: f64,
     /// Accumulated overcurrent in amp-seconds. Only tracked with a rating.
     dose: f64,
     /// Forward current at the last accepted timepoint, for the trapezoid.
@@ -145,6 +197,9 @@ impl Diode {
             model,
             v_prev_iter: 0.0,
             gd_op: 0.0,
+            cd_op: 0.0,
+            v_prev: 0.0,
+            ic_prev: 0.0,
             dose: 0.0,
             i_accepted: 0.0,
             peak: 0.0,
@@ -160,6 +215,27 @@ impl Diode {
             peak: self.peak,
             rated: self.model.rated.unwrap_or(0.0),
         })
+    }
+
+    /// Charge storage at a given junction voltage, as a capacitance.
+    ///
+    /// Two parts, and which one matters depends on the bias. Reverse or lightly
+    /// forward, it is the depletion region widening and narrowing. Conducting, it
+    /// is the carriers in transit, which is `tt` times the small-signal
+    /// conductance and swamps the other by orders of magnitude — that is the term
+    /// that gives a rectifier its reverse recovery.
+    fn capacitance(&self, vd: f64, gd: f64) -> f64 {
+        let m = &self.model;
+        let depletion = if vd < FORWARD_CAP_LIMIT * m.vj {
+            m.cj0 * (1.0 - vd / m.vj).powf(-m.m)
+        } else {
+            // Continued along the tangent at the limit rather than followed into
+            // its own singularity.
+            let f = (1.0 - FORWARD_CAP_LIMIT).powf(-m.m);
+            let slope = m.m * f / (m.vj * (1.0 - FORWARD_CAP_LIMIT));
+            m.cj0 * (f + slope * (vd - FORWARD_CAP_LIMIT * m.vj))
+        };
+        depletion + m.tt * gd
     }
 
     /// Current and conductance at a given junction voltage.
@@ -201,6 +277,11 @@ impl Element for Diode {
     fn is_nonlinear(&self) -> bool {
         true
     }
+    fn is_reactive(&self) -> bool {
+        // Both, which the element interface allows and nothing else here uses: a
+        // junction is a nonlinear resistor and a nonlinear capacitor at once.
+        true
+    }
 
     fn stamp(&mut self, sys: &mut LinearSystem, ctx: &StampCtx) -> StampReport {
         if self.blown_at.is_some() {
@@ -230,10 +311,31 @@ impl Element for Diode {
         let (id, gd) = self.evaluate(vd);
         let gd = gd + ctx.gmin;
         self.gd_op = gd;
-        let ieq = id - gd * vd;
+
+        // The stored charge, as a conductance and a history current. Only in the
+        // time domain: an operating point is where nothing is changing, so a
+        // capacitance has nothing to say about it.
+        let cd = self.capacitance(vd, gd);
+        self.cd_op = cd;
+        let (gc, ic_eq) = if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
+            match ctx.integration {
+                Integration::BackwardEuler => {
+                    let g = cd / ctx.dt;
+                    (g, g * self.v_prev)
+                }
+                Integration::Trapezoidal => {
+                    let g = 2.0 * cd / ctx.dt;
+                    (g, g * self.v_prev + self.ic_prev)
+                }
+            }
+        } else {
+            (0.0, 0.0)
+        };
+
+        let ieq = id - gd * vd - ic_eq;
 
         let (p, m) = (node_index(self.p), node_index(self.m));
-        sys.add_conductance(p, m, gd);
+        sys.add_conductance(p, m, gd + gc);
         sys.add_current(p, m, ieq);
 
         if limited { StampReport::LIMITED } else { StampReport::CLEAN }
@@ -241,12 +343,12 @@ impl Element for Diode {
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
         // A forward-biased junction is a small resistance, a reverse-biased one is
-        // effectively open. Both fall out of the conductance the operating point
-        // already computed.
+        // effectively open, and either way it stores charge. All three fall out of
+        // what the operating point already computed.
         sys.add_admittance(
             node_index(self.p),
             node_index(self.m),
-            C64::real(self.gd_op.max(ctx.gmin)),
+            C64::new(self.gd_op.max(ctx.gmin), ctx.omega * self.cd_op),
         );
     }
 
@@ -280,6 +382,23 @@ impl Element for Diode {
         }
 
         self.i_accepted = current;
+
+        // Roll the capacitive branch forward, the way any reactive element does.
+        let vd = ctx.voltage(self.p) - ctx.voltage(self.m);
+        if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
+            let (_, gd) = self.evaluate(vd);
+            let cd = self.capacitance(vd, gd + 1e-12);
+            let geq = match ctx.integration {
+                Integration::BackwardEuler => cd / ctx.dt,
+                Integration::Trapezoidal => 2.0 * cd / ctx.dt,
+            };
+            let ieq = match ctx.integration {
+                Integration::BackwardEuler => geq * self.v_prev,
+                Integration::Trapezoidal => geq * self.v_prev + self.ic_prev,
+            };
+            self.ic_prev = geq * vd - ieq;
+        }
+        self.v_prev = vd;
     }
 
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
@@ -296,6 +415,9 @@ impl Element for Diode {
     fn reset(&mut self) {
         self.v_prev_iter = 0.0;
         self.gd_op = 0.0;
+        self.cd_op = 0.0;
+        self.v_prev = 0.0;
+        self.ic_prev = 0.0;
         self.dose = 0.0;
         self.i_accepted = 0.0;
         self.peak = 0.0;
@@ -308,7 +430,14 @@ impl Element for Diode {
         }
         let vp = node_index(self.p).map_or(0.0, |i| x[i]);
         let vm = node_index(self.m).map_or(0.0, |i| x[i]);
-        Some(self.evaluate(vp - vm).0)
+        // Both branches. The charge leaving a junction that has just been reversed
+        // is most of what flows through it for that moment, and reporting only the
+        // conduction term hid reverse recovery from every probe and every trace
+        // while the solver was modelling it perfectly well.
+        //
+        // `i_prev` is this timepoint's, not the last one's: elements are accepted
+        // before the point is recorded.
+        Some(self.evaluate(vp - vm).0 + self.ic_prev)
     }
 }
 

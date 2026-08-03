@@ -21,7 +21,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 |---|---|---|
 | BJT | No junction capacitances (`CJE`, `CJC`) | AC response has no transistor rolloff; bandwidth looks infinite |
 | MOSFET | Shichman-Hodges (level 1) only, bulk tied to source, no gate capacitances | No body effect, no subthreshold conduction, no short-channel behaviour |
-| Diode | No series resistance or junction capacitance | Forward drop at high current is optimistic; switching is instantaneous |
+| Diode | No series resistance (`RS`) | Forward drop at high current is optimistic |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Op-amp | Single-pole-free: infinite bandwidth, no slew limit, no input offset | An op-amp circuit will look better than the real one |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
@@ -48,9 +48,10 @@ because each step is what makes the next one worth having:
 
 1. **Parasitics in the devices already here.** Early voltage, junction and gate
    capacitances, diode series resistance. Cheapest credibility per line of code,
-   and it is what the rows above are mostly complaining about. *(Early effect and
-   channel-length modulation done; the capacitances are next, and they are what
-   gives an AC sweep its rolloff.)*
+   and it is what the rows above are mostly complaining about. *(Early effect,
+   channel-length modulation and the diode's junction charge are in; the BJT and
+   MOSFET capacitances are what is left, and they are what gives an AC sweep of an
+   amplifier its rolloff.)*
 2. **`.model` import.** A SPICE model card is one line of the parameters step 1
    adds, so a real 1N4148 or 2N3904 becomes a paste from the manufacturer rather
    than a part someone has to hand-write here.
@@ -75,11 +76,10 @@ because each step is what makes the next one worth having:
       circuit larger than a page is bearable.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
       pivoting). The `LinearSystem` interface was kept narrow for this.
-- [ ] **Junction and gate capacitances** on every nonlinear device — `CJE`/`CJC`
-      on the BJT, `CGS`/`CGD` on the MOSFET, `CJ0` on the diode. Without them every
-      AC answer above a few hundred kHz is wrong and switching is instantaneous.
-      Needs charge-based integration on a device that is already nonlinear, which
-      is the part that makes it a job rather than a parameter.
+- [ ] **Junction and gate capacitances** on the BJT (`CJE`/`CJC`) and the MOSFET
+      (`CGS`/`CGD`). The diode has its depletion and diffusion charge already, and
+      the same shape of change carries over — a device that is nonlinear *and*
+      reactive, stamping its own companion model.
 - [ ] **Diode series resistance** (`RS`). Solved against the junction rather than
       given an internal node, so the element count stays put.
 - [ ] **Op-amp with a finite gain-bandwidth product.** The current ideal model

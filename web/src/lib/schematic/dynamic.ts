@@ -116,12 +116,14 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 			const to = pins.get(path.to);
 			if (!from || !to) continue;
 
-			// Current flows from the `to` pin toward the `from` pin when positive,
-			// matching the engine's convention of current *into* the first terminal.
+			// `from` is the terminal the engine reports current *into*, so a positive
+			// reading means it runs `from` → `to` inside the part. Drawn the other
+			// way round, the dots crossing a resistor went against the dots on the
+			// wires at both of its ends — the same conductor, animated two ways.
 			drawFlow(
 				painter,
-				to as Vec2,
 				from as Vec2,
+				to as Vec2,
 				current,
 				context.currentScale,
 				view.animation.phase.get(`i:${instance.id}`) ?? 0,

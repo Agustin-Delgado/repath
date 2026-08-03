@@ -915,3 +915,58 @@ fn collector_current_climbs_with_vce_by_the_early_voltage() {
     let ro = 8.0 / climb;
     assert!((40_000.0..65_000.0).contains(&ro), "output resistance came to {ro:.0} ohms");
 }
+
+#[test]
+fn a_conducting_diode_does_not_switch_off_the_instant_it_is_reversed() {
+    // Reverse recovery. A junction that has been passing current is full of
+    // carriers, and they have to be swept out before it blocks — so for a moment
+    // after the drive reverses the diode conducts *backwards*, hard. Without any
+    // stored charge it simply stops, which is why a rectifier used to look
+    // perfect at any frequency at all.
+    let mut c = Circuit::new();
+    let vin = c.node("vin");
+    let out = c.node("out");
+    c.add(Box::new(VoltageSource::new(
+        "V1",
+        vin,
+        Circuit::GROUND,
+        Waveform::Pulse {
+            v1: 5.0,
+            v2: -5.0,
+            delay: 1e-6,
+            rise: 1e-9,
+            fall: 1e-9,
+            width: 1e-6,
+            period: 1e9,
+        },
+    )));
+    c.add(Box::new(Resistor::new("R1", vin, out, 100.0)));
+    // A transit time an order up from the default, so the effect is unmistakable
+    // rather than a numerical whisker.
+    let model = DiodeModel { tt: 50e-9, ..DiodeModel::default() };
+    c.add(Box::new(Diode::new("D1", out, Circuit::GROUND, model)));
+
+    let mut cfg = TransientConfig::new(3e-6);
+    cfg.max_step = 2e-9;
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+
+    let d1 = result.element_index("D1").unwrap();
+    let current = result.current_signal(d1);
+    let forward = *current.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
+    let backward = *current.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
+
+    assert!(forward > 0.03, "never conducted forwards: peak {forward:.4} A");
+    // The reverse spike is the stored charge leaving. It is large — the resistor
+    // is all that limits it — and brief.
+    assert!(backward < -0.01, "no reverse recovery at all: {backward:.6} A");
+
+    // And it is over quickly. Late in the reverse window the charge is gone and
+    // the diode is blocking properly — recovery is a moment, not a state.
+    let late = result
+        .time
+        .iter()
+        .position(|&t| t >= 1.9e-6)
+        .expect("the run should reach the end of the reverse window");
+    let recovered = current[late];
+    assert!(recovered.abs() < 1e-6, "still passing {recovered:.3e} A once recovered");
+}
