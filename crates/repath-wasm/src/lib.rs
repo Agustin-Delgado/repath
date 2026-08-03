@@ -23,7 +23,18 @@ struct RunMeta {
     element_names: Vec<String>,
     net_names: Vec<String>,
     digital: Vec<Vec<DigitalTransition>>,
+    failures: Vec<PartFailure>,
     stats: RunStats,
+}
+
+/// A part that did not survive the run. Reported, not raised: the run continued
+/// with it open, which is what the circuit itself does.
+#[derive(Serialize)]
+struct PartFailure {
+    name: String,
+    time: f64,
+    peak: f64,
+    rated: f64,
 }
 
 #[derive(Serialize)]
@@ -116,6 +127,16 @@ impl Simulation {
                         .iter()
                         .map(|(t, s)| DigitalTransition { time: *t, state: logic_name(*s) })
                         .collect()
+                })
+                .collect(),
+            failures: result
+                .failures
+                .iter()
+                .map(|f| PartFailure {
+                    name: f.name.clone(),
+                    time: f.time,
+                    peak: f.peak,
+                    rated: f.rated,
                 })
                 .collect(),
             stats: RunStats {

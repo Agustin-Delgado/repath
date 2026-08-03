@@ -22,6 +22,16 @@ export interface RunStats {
 	digital_events: number;
 }
 
+/** A part the engine destroyed partway through the run. */
+export interface PartFailure {
+	name: string;
+	/** Simulated time it failed at. */
+	time: number;
+	/** Largest current it reached before then. */
+	peak: number;
+	rated: number;
+}
+
 interface RunMeta {
 	unknown_names: string[];
 	node_count: number;
@@ -29,6 +39,7 @@ interface RunMeta {
 	element_names: string[];
 	net_names: string[];
 	digital: DigitalTransition[][];
+	failures: PartFailure[];
 	stats: RunStats;
 }
 
@@ -52,6 +63,13 @@ export interface TransientRun {
 	currents: Float64Array[];
 	netNames: string[];
 	digital: DigitalTransition[][];
+	/**
+	 * Parts destroyed during the run, soonest first.
+	 *
+	 * Not an error: the run continued with each one open, which is what the
+	 * circuit does. The waveforms after a failure are the circuit without it.
+	 */
+	failures: PartFailure[];
 	stats: RunStats;
 	/** Wall-clock milliseconds spent inside the engine. */
 	elapsedMs: number;
@@ -122,6 +140,7 @@ export async function runTransient(
 			currents,
 			netNames: meta.net_names,
 			digital: meta.digital,
+			failures: meta.failures ?? [],
 			stats: meta.stats,
 			elapsedMs
 		};

@@ -223,7 +223,9 @@ fn zener_clamps_at_its_breakdown_voltage() {
     let op = Simulator::default().operating_point(&mut c).unwrap();
     let i = op.unknown_names.iter().position(|n| n == "v(out)").unwrap();
     let v = op.solution[i];
-    assert!((4.8..=5.8).contains(&v), "zener settled at {v:.3} V");
+    // Tight, because `bv` is now the voltage at a milliamp rather than the foot
+    // of the curve: a part declared as 5.1 V has to regulate near 5.1 V.
+    assert!((5.0..=5.4).contains(&v), "zener settled at {v:.3} V");
 }
 
 #[test]
@@ -725,4 +727,146 @@ fn a_shorted_voltage_source_is_reported_rather_than_panicking() {
 
     let err = Simulator::default().operating_point(&mut c).unwrap_err();
     assert!(matches!(err, SimError::Singular { .. } | SimError::NoConvergence { .. }), "got {err}");
+}
+
+// ---------------------------------------------------------------------------
+// Parts that fail
+// ---------------------------------------------------------------------------
+
+/// A supply, a series resistor and an LED, wired in a loop.
+///
+/// The resistor is what sets the current, so it is the one knob these tests
+/// turn: a large one keeps the part inside its rating, a small one destroys it.
+fn led_circuit(series: f64, rated: f64) -> Circuit {
+    let mut c = Circuit::new();
+    let rail = c.node("rail");
+    let anode = c.node("anode");
+    c.add(Box::new(VoltageSource::dc("V1", rail, Circuit::GROUND, 5.0)));
+    c.add(Box::new(Resistor::new("R1", rail, anode, series)));
+    c.add(Box::new(Diode::new("D1", anode, Circuit::GROUND, DiodeModel::led(1.9, rated))));
+    c
+}
+
+#[test]
+fn an_led_run_inside_its_rating_survives() {
+    // 330 ohms from 5 V through a 1.9 V part is about 9 mA, comfortably under
+    // the 20 mA it is specified for. Nothing may happen to it, however long the
+    // run: a part that fails while being used correctly is worse than useless.
+    let mut c = led_circuit(330.0, 0.02);
+    let result = Simulator::default().transient(&mut c, TransientConfig::new(0.5)).unwrap();
+
+    assert!(result.failures.is_empty(), "failed with {:?}", result.failures);
+    let current = result.current_signal(result.element_index("D1").unwrap());
+    let last = *current.last().unwrap();
+    assert!((last - 0.0094).abs() < 5e-4, "settled at {last:.5} A");
+}
+
+#[test]
+fn an_led_driven_far_past_its_rating_burns_out() {
+    // 33 ohms instead of 330 — the decimal point in the wrong place, and the
+    // most common way anyone destroys one of these.
+    let mut c = led_circuit(33.0, 0.02);
+    let result = Simulator::default().transient(&mut c, TransientConfig::new(2e-3)).unwrap();
+
+    assert_eq!(result.failures.len(), 1);
+    let failure = &result.failures[0];
+    assert_eq!(failure.name, "D1");
+    assert!(failure.peak > 0.07, "peaked at {:.4} A", failure.peak);
+
+    // At about four times rated, the dose rule puts the failure near a third of
+    // a millisecond in.
+    assert!((failure.time - 3.2e-4).abs() < 5e-5, "failed at {:.2} us", failure.time * 1e6);
+}
+
+#[test]
+fn a_burnt_out_led_stops_conducting_for_the_rest_of_the_run() {
+    // The whole point of modelling the failure inside the transient loop rather
+    // than reading it off the answer afterwards: what happens next is the
+    // circuit with the part gone, not the circuit as if it had survived.
+    let mut c = led_circuit(33.0, 0.02);
+    let result = Simulator::default().transient(&mut c, TransientConfig::new(2e-3)).unwrap();
+    let failed_at = result.failures[0].time;
+
+    let current = result.element_index("D1").unwrap();
+    let anode = index_of(&result, "v(anode)");
+
+    let before = value_at(&result, anode, failed_at * 0.5);
+    assert!((before - 2.2).abs() < 0.4, "anode sat at {before:.3} V while lit");
+
+    for (i, &t) in result.time.iter().enumerate() {
+        if t <= failed_at {
+            continue;
+        }
+        let i_d = result.currents[i][current];
+        assert!(i_d.abs() < 1e-6, "still carrying {i_d:.3e} A at {t:.3e} s");
+    }
+
+    // With nothing drawing current there is no drop across the series resistor,
+    // so the anode is pulled all the way to the rail.
+    let after = value_at(&result, anode, 1.5e-3);
+    assert!((after - 5.0).abs() < 1e-3, "anode sat at {after:.4} V after the failure");
+}
+
+#[test]
+fn a_brief_pulse_over_the_rating_does_not_destroy_anything() {
+    // Ten times rated for a few microseconds is how a multiplexed display runs.
+    // An instantaneous threshold would have condemned this part.
+    let mut c = Circuit::new();
+    let rail = c.node("rail");
+    let anode = c.node("anode");
+    c.add(Box::new(VoltageSource::new(
+        "V1",
+        rail,
+        Circuit::GROUND,
+        Waveform::Pulse {
+            v1: 0.0,
+            v2: 8.0,
+            delay: 1e-4,
+            rise: 1e-7,
+            fall: 1e-7,
+            width: 5e-6,
+            period: 1.0,
+        },
+    )));
+    c.add(Box::new(Resistor::new("R1", rail, anode, 30.0)));
+    c.add(Box::new(Diode::new("D1", anode, Circuit::GROUND, DiodeModel::led(1.9, 0.02))));
+
+    let result = Simulator::default().transient(&mut c, TransientConfig::new(1e-3)).unwrap();
+    let peak = result
+        .current_signal(result.element_index("D1").unwrap())
+        .into_iter()
+        .fold(0.0f64, f64::max);
+
+    assert!(peak > 0.1, "the pulse only reached {peak:.4} A, so this proves nothing");
+    assert!(result.failures.is_empty(), "destroyed by a pulse: {:?}", result.failures);
+}
+
+#[test]
+fn a_diode_with_no_rating_is_indestructible() {
+    // An ordinary rectifier carries no rating, and must not acquire one by
+    // accident: silently opening a diode mid-run would be a spectacular way to
+    // produce a wrong answer.
+    let mut c = led_circuit(1.0, 0.02);
+    if let Some(d) = c.elements_mut()[2].as_any_mut().downcast_mut::<Diode>() {
+        d.model.rated = None;
+    }
+
+    let result = Simulator::default().transient(&mut c, TransientConfig::new(2e-3)).unwrap();
+    assert!(result.failures.is_empty());
+}
+
+#[test]
+fn re_running_gives_the_part_its_life_back() {
+    // State from a previous run must not leak into the next one, or a circuit
+    // that was fixed would go on failing until the page was reloaded.
+    let mut c = led_circuit(33.0, 0.02);
+    let mut sim = Simulator::default();
+    let first = sim.transient(&mut c, TransientConfig::new(2e-3)).unwrap();
+    assert_eq!(first.failures.len(), 1);
+
+    if let Some(d) = c.elements_mut()[1].as_any_mut().downcast_mut::<Resistor>() {
+        d.r = 330.0;
+    }
+    let second = sim.transient(&mut c, TransientConfig::new(2e-3)).unwrap();
+    assert!(second.failures.is_empty(), "still failing: {:?}", second.failures);
 }

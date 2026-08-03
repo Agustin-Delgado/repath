@@ -47,9 +47,9 @@ pub mod prelude {
     };
     pub use crate::element::{Element, Integration, Mode, NodeId};
     pub use crate::elements::{
-        Bjt, BjtModel, Capacitor, Channel, CurrentSource, Diode, DiodeModel, Inductor, Mosfet,
-        MosfetModel, OpAmp, Polarity, Resistor, Switch, SwitchModel, Vccs, Vcvs, VoltageSource,
-        Waveform,
+        BURN_TIME, Bjt, BjtModel, Capacitor, Channel, CurrentSource, Diode, DiodeModel, Failure,
+        Inductor, Mosfet, MosfetModel, OpAmp, Polarity, Resistor, Switch, SwitchModel, Vccs, Vcvs,
+        VoltageSource, Waveform,
     };
     pub use crate::netlist::{Netlist, NetlistError};
     pub use crate::solver::{

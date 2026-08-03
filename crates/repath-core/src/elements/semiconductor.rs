@@ -10,7 +10,8 @@
 
 use crate::complex::{C64, ComplexSystem};
 use crate::element::{
-    AcCtx, Element, NodeId, StampCtx, StampReport, critical_voltage, limit_junction, node_index,
+    AcCtx, AcceptCtx, Element, Mode, NodeId, StampCtx, StampReport, critical_voltage,
+    limit_junction, node_index,
 };
 use crate::linalg::LinearSystem;
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,13 @@ pub fn thermal_voltage(temp_k: f64) -> f64 {
 
 /// Room temperature, 27 °C, the SPICE default.
 pub const TNOM: f64 = 300.15;
+
+/// Current at which a diode's breakdown voltage is defined, amps.
+///
+/// SPICE's `IBV`, and one milliamp is its default. `bv` is the reverse voltage at
+/// *this* current, which is how a zener is specified — not the point where the
+/// curve first lifts off the axis.
+const BREAKDOWN_KNEE: f64 = 1e-3;
 
 /// `exp` with the argument clamped, so a stray iterate cannot produce infinity
 /// even if limiting is bypassed.
@@ -49,24 +57,63 @@ pub struct DiodeModel {
     pub bv: Option<f64>,
     /// Temperature in kelvin.
     pub temp: f64,
+    /// Continuous forward current the part is rated for, amps.
+    ///
+    /// `None` makes it indestructible, which is the right default: a rating is a
+    /// datasheet number the caller has to supply, and inventing one would put
+    /// parts out of action in circuits that never asked for the behaviour.
+    #[serde(default)]
+    pub rated: Option<f64>,
 }
 
 impl Default for DiodeModel {
     fn default() -> Self {
         // Roughly a 1N4148.
-        Self { is: 2.52e-9, n: 1.752, bv: None, temp: TNOM }
+        Self { is: 2.52e-9, n: 1.752, bv: None, temp: TNOM, rated: None }
     }
 }
 
+/// How long a steady current of exactly twice the rating takes to destroy a part.
+///
+/// Everything else follows from it. The dose needed is `rated × BURN_TIME`, so a
+/// current of `k` times the rating gets there in `BURN_TIME / (k − 1)`: ten times
+/// rated kills in about a tenth of a millisecond, a hundred times in ten
+/// microseconds, and anything at or below the rating never does.
+///
+/// The number is chosen so that both of the cases that matter come out right — a
+/// brief pulse well over the rating survives, which is how a multiplexed display
+/// works, while the classic mistake of leaving out the series resistor fails fast
+/// enough to watch happen.
+pub const BURN_TIME: f64 = 1e-3;
+
+/// A part that did not survive the run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Failure {
+    pub name: String,
+    /// Simulated time at which it failed.
+    pub time: f64,
+    /// Largest forward current it reached before then.
+    pub peak: f64,
+    /// What it was rated for.
+    pub rated: f64,
+}
+
 impl DiodeModel {
-    /// A red LED: higher forward drop, no useful breakdown region.
-    pub fn led_red() -> Self {
-        Self { is: 9.3e-20, n: 3.73, bv: None, temp: TNOM }
+    /// An LED with the given forward voltage at `rated` amps.
+    ///
+    /// Inverting `vf = n·Vt·ln(i/is)` for the saturation current is what lets a
+    /// caller specify the part the way a datasheet does. An emission coefficient
+    /// of 2 puts the slope at about 120 mV per decade of current, which is where
+    /// a real indicator LED sits.
+    pub fn led(vf: f64, rated: f64) -> Self {
+        let n = 2.0;
+        let is = rated * (-vf / (n * thermal_voltage(TNOM))).exp();
+        Self { is, n, bv: None, temp: TNOM, rated: Some(rated) }
     }
 
     /// A zener with the given breakdown voltage.
     pub fn zener(bv: f64) -> Self {
-        Self { is: 2.52e-9, n: 1.752, bv: Some(bv.abs()), temp: TNOM }
+        Self { is: 2.52e-9, n: 1.752, bv: Some(bv.abs()), temp: TNOM, rated: None }
     }
 }
 
@@ -79,11 +126,40 @@ pub struct Diode {
     v_prev_iter: f64,
     /// Small-signal conductance at the operating point, kept for AC analysis.
     gd_op: f64,
+    /// Accumulated overcurrent in amp-seconds. Only tracked with a rating.
+    dose: f64,
+    /// Forward current at the last accepted timepoint, for the trapezoid.
+    i_accepted: f64,
+    /// Largest forward current reached before failing.
+    peak: f64,
+    /// When the part failed, if it did. Once set, it stamps as an open circuit.
+    blown_at: Option<f64>,
 }
 
 impl Diode {
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, model: DiodeModel) -> Self {
-        Self { name: name.into(), p, m, model, v_prev_iter: 0.0, gd_op: 0.0 }
+        Self {
+            name: name.into(),
+            p,
+            m,
+            model,
+            v_prev_iter: 0.0,
+            gd_op: 0.0,
+            dose: 0.0,
+            i_accepted: 0.0,
+            peak: 0.0,
+            blown_at: None,
+        }
+    }
+
+    /// How this part failed, or `None` if it came through the run intact.
+    pub fn failure(&self) -> Option<Failure> {
+        Some(Failure {
+            name: self.name.clone(),
+            time: self.blown_at?,
+            peak: self.peak,
+            rated: self.model.rated.unwrap_or(0.0),
+        })
     }
 
     /// Current and conductance at a given junction voltage.
@@ -99,10 +175,17 @@ impl Diode {
         if let Some(bv) = self.model.bv
             && vd < -bv
         {
-            // Breakdown is modelled as a second exponential mirrored about -bv.
+            // Breakdown is a second exponential mirrored about -bv, anchored so
+            // that the current through it is exactly `BREAKDOWN_KNEE` at -bv.
+            //
+            // Anchoring it on the saturation current instead — which is what this
+            // did first — makes `bv` the foot of the curve rather than a working
+            // voltage, and the two are far apart: a part declared as 5.1 V then
+            // regulated at 5.8 V once it was carrying a normal 13 mA. A datasheet
+            // quotes the voltage at a test current, so that is what `bv` means.
             let e = safe_exp(-(bv + vd) / vt);
-            id -= self.model.is * e;
-            gd += self.model.is * e / vt;
+            id -= BREAKDOWN_KNEE * e;
+            gd += BREAKDOWN_KNEE * e / vt;
         }
         (id, gd)
     }
@@ -120,6 +203,17 @@ impl Element for Diode {
     }
 
     fn stamp(&mut self, sys: &mut LinearSystem, ctx: &StampCtx) -> StampReport {
+        if self.blown_at.is_some() {
+            // The junction is gone: what is left conducts nothing. Not literally
+            // nothing, though — gmin holds the nodes it was bridging into the
+            // matrix, exactly as it does for a reverse-biased junction, so a part
+            // failing cannot leave a node floating and the solve singular.
+            self.gd_op = ctx.gmin;
+            self.v_prev_iter = 0.0;
+            sys.add_conductance(node_index(self.p), node_index(self.m), ctx.gmin);
+            return StampReport::CLEAN;
+        }
+
         let vt = thermal_voltage(self.model.temp) * self.model.n;
         let vcrit = critical_voltage(self.model.is, vt);
 
@@ -156,12 +250,62 @@ impl Element for Diode {
         );
     }
 
+    /// Accumulate the overcurrent this timepoint is worth, and fail if it is enough.
+    ///
+    /// A dose rather than a threshold, because whether an overcurrent destroys a
+    /// part depends on how long it lasts as much as on how large it is. Integrated
+    /// with the trapezoid between accepted timepoints: the timestep is adaptive, so
+    /// weighting one sample across the whole step that follows it would let a spike
+    /// the circuit spent almost no time at destroy something that was never in
+    /// danger.
+    ///
+    /// Only accepted timepoints get here, so a step the solver tried and threw away
+    /// contributes nothing.
+    fn accept(&mut self, ctx: &AcceptCtx) {
+        let current = self.current(ctx.x).unwrap_or(0.0);
+
+        if let Some(rated) = self.model.rated
+            && self.blown_at.is_none()
+            && ctx.mode == Mode::Transient
+            && ctx.dt > 0.0
+            && rated > 0.0
+        {
+            self.peak = self.peak.max(current);
+            let before = (self.i_accepted - rated).max(0.0);
+            let after = (current - rated).max(0.0);
+            self.dose += (before + after) / 2.0 * ctx.dt;
+            if self.dose >= rated * BURN_TIME {
+                self.blown_at = Some(ctx.time);
+            }
+        }
+
+        self.i_accepted = current;
+    }
+
+    fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        // The step out of a failure crosses a discontinuity: whatever the part was
+        // carrying goes to nothing between one timepoint and the next. Take that
+        // one step short so the solver lands on the edge instead of integrating
+        // across it and smearing the jump over a wide interval.
+        match self.blown_at {
+            Some(at) if ctx.time <= at => BURN_TIME * 1e-3,
+            _ => f64::INFINITY,
+        }
+    }
+
     fn reset(&mut self) {
         self.v_prev_iter = 0.0;
         self.gd_op = 0.0;
+        self.dose = 0.0;
+        self.i_accepted = 0.0;
+        self.peak = 0.0;
+        self.blown_at = None;
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {
+        if self.blown_at.is_some() {
+            return Some(0.0);
+        }
         let vp = node_index(self.p).map_or(0.0, |i| x[i]);
         let vm = node_index(self.m).map_or(0.0, |i| x[i]);
         Some(self.evaluate(vp - vm).0)

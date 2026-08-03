@@ -26,6 +26,7 @@ use crate::circuit::Circuit;
 use crate::complex::ComplexSystem;
 use crate::digital::{DriverId, Logic, NetId};
 use crate::element::{AcCtx, AcceptCtx, Integration, Mode, StampCtx};
+use crate::elements::{Diode, Failure};
 use crate::linalg::{LinearSystem, SolveError};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -154,6 +155,13 @@ pub struct TransientResult {
     pub net_names: Vec<String>,
     /// Per net, the instants at which it changed value.
     pub digital: Vec<Vec<(f64, Logic)>>,
+    /// Parts destroyed during the run, soonest first.
+    ///
+    /// A failure is not an error: the run carries on with the part open, which is
+    /// what the circuit actually does. This is here so the caller can say which
+    /// part went and when, rather than leaving someone to work out why the
+    /// waveforms change shape partway through.
+    pub failures: Vec<Failure>,
     pub stats: Stats,
 }
 
@@ -684,6 +692,13 @@ impl Simulator {
             // the next rejection.
             dt = (attempt * 2.0).min(cfg.max_step);
         }
+
+        result.failures = circuit
+            .elements()
+            .iter()
+            .filter_map(|e| e.as_any().downcast_ref::<Diode>()?.failure())
+            .collect();
+        result.failures.sort_by(|a, b| a.time.total_cmp(&b.time));
 
         result.stats = stats;
         Ok(result)
