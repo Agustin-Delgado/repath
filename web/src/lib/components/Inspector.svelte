@@ -78,6 +78,47 @@
 		return true;
 	}
 
+	/**
+	 * How long the field waits after the last keystroke before applying.
+	 *
+	 * Long enough that `4700` goes in as one value rather than as four, short
+	 * enough that typing a number and looking up at the circuit shows it already
+	 * done. Leaving nothing to apply until Enter meant a value could sit on the
+	 * screen looking set while the circuit was still running the old one.
+	 */
+	const SETTLE_MS = 350;
+	const settling: Record<string, ReturnType<typeof setTimeout>> = {};
+
+	/**
+	 * A keystroke.
+	 *
+	 * The typed text is kept as-is — the field is not reformatted underneath
+	 * someone mid-number — and the value goes in once the typing stops. Anything
+	 * that does not parse yet is simply not applied: `-` and `4.` are on the way
+	 * to a number, not mistakes, and complaining about them while they are still
+	 * being typed would be nagging. Pressing Enter or leaving the field still
+	 * takes the full path, refusals and reformatting included.
+	 */
+	function typing(key: string, raw: string) {
+		editing[key] = raw;
+		clearTimeout(settling[key]);
+
+		// Captured now: a timer that fires after the selection has moved on must
+		// still apply to the part the value was typed for.
+		const id = instance?.id;
+		const prefix = instance ? split(key, instance.params[key]).prefix : '';
+		if (!id) return;
+
+		settling[key] = setTimeout(() => {
+			const typed = parseValue(raw);
+			if (typed === null) return;
+			const hasOwnPrefix = /[fpnuµμmkKMGT]|meg/i.test(raw.trim());
+			const refusal = app.setParam(id, key, hasOwnPrefix ? typed : joinValue(typed, prefix));
+			if (refusal) problems[key] = refusal;
+			else delete problems[key];
+		}, SETTLE_MS);
+	}
+
 	function commit(key: string, raw: string, field: HTMLInputElement) {
 		if (!instance) return;
 
@@ -227,8 +268,11 @@
 									inputmode="decimal"
 									title="Arrow keys step the value — Shift for ten at a time, Alt for a tenth"
 									value={displayed(param.key, instance.params[param.key])}
-									oninput={(e) => (editing[param.key] = e.currentTarget.value)}
-									onblur={(e) => commit(param.key, e.currentTarget.value, e.currentTarget)}
+									oninput={(e) => typing(param.key, e.currentTarget.value)}
+									onblur={(e) => {
+										clearTimeout(settling[param.key]);
+										commit(param.key, e.currentTarget.value, e.currentTarget);
+									}}
 									onkeydown={(e) => {
 										if (e.key === 'Enter') e.currentTarget.blur();
 										else nudge(e, param.key, e.currentTarget);
