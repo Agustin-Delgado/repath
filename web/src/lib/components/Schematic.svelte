@@ -19,10 +19,13 @@
 	} from '$lib/schematic/draw';
 	import { drawDynamic, tick, type DynamicView } from '$lib/schematic/dynamic';
 	import { prepareFlow, sampleFlow, sampleIndexAt } from '$lib/schematic/flow';
+	import { burnoutsById } from '$lib/schematic/led';
 	import { GRID } from '$lib/schematic/model';
+	import { routeWire } from '$lib/schematic/route';
+	import { parseTrace } from '$lib/trace';
 	import { junctionDots } from '$lib/schematic/nets';
 	import { buildSceneItems, buildSnapTargets } from '$lib/schematic/scene';
-	import { createPlaceTool, createSelectTool } from '$lib/schematic/tools';
+	import { createPlaceTool, createSelectTool, createWireTool } from '$lib/schematic/tools';
 	import { app } from '$lib/state.svelte';
 
 	let host = $state<HTMLDivElement | null>(null);
@@ -34,6 +37,7 @@
 	let editor = $state.raw<CanvasEditor | null>(null);
 	let theme: Theme | null = null;
 	const selectTool = createSelectTool();
+	const wireTool = createWireTool();
 	// Built once per kind and kept. A tool holds in-flight gesture state, so
 	// rebuilding one mid-interaction quietly discards it.
 	const placeTools = new Map<string, ReturnType<typeof createPlaceTool>>();
@@ -48,13 +52,25 @@
 	// compares every wire against every other, which is not something to do at 60 Hz.
 	const junctions = $derived(junctionDots(app.schematic));
 	const selectionSet = $derived(new Set(app.selection));
+	/**
+	 * Which nets carry a trace colour, and only while something is running.
+	 *
+	 * The tint is what ties a wire on the page to its trace on the scope, so it is
+	 * as much a part of showing a simulation as the voltage colours are — and it
+	 * lives on the static layer, which is why stopping used to leave it behind
+	 * looking like the run was still going.
+	 */
 	const probeColours = $derived(
-		new Map(app.activeProbes.map((p) => [p.netIndex, p.colour] as const))
+		app.live ? new Map(app.activeProbes.map((p) => [p.netIndex, p.colour] as const)) : new Map()
 	);
 
 	// The live overlay. Planned once per run, evaluated once per frame.
 	const animation = createAnimationState();
 	let dynamicView: DynamicView | null = null;
+
+	// Keyed on the list rather than rebuilt per frame: the map is only interesting
+	// on the frames where an LED is actually failing, which is very few of them.
+	const burnoutMap = $derived(burnoutsById(app.burnouts));
 
 	const flowContext = $derived.by(() => {
 		const run = app.result;
@@ -106,7 +122,25 @@
 			// A handle for driving the canvas from the console or a browser test.
 			// There is no DOM to query on a canvas, so without this the editor is
 			// a black box to anything outside it.
-			(window as unknown as Record<string, unknown>).__repath = { editor: created, app };
+			(window as unknown as Record<string, unknown>).__repath = {
+				editor: created,
+				app,
+				/**
+				 * Re-perform a trace someone handed over.
+				 *
+				 * Routed through the select tool's own router, so a replay reproduces
+				 * this editor rather than a slightly different one.
+				 */
+				replay: (text: string) =>
+					app.replay(parseTrace(text), (from, to, settling, prefer) =>
+						routeWire(app.schematic, from, to, {
+							grid: GRID,
+							ignoreWires: settling,
+							prefer,
+							effort: 4000
+						})
+					)
+			};
 		}
 
 		return () => {
@@ -132,7 +166,9 @@
 		const active = editor;
 		const tool = app.tool;
 		if (!active) return;
-		active.setTool(tool.mode === 'place' ? placeTool(tool.kind) : selectTool);
+		active.setTool(
+			tool.mode === 'place' ? placeTool(tool.kind) : tool.mode === 'wire' ? wireTool : selectTool
+		);
 	});
 
 	// Appearance-only changes: repaint the schematic, leave the index alone.
@@ -180,7 +216,11 @@
 			// The live overlay belongs to the transient result. Leaving it running
 			// during a frequency sweep would show the state of a run the user is no
 			// longer looking at, which is worse than showing nothing.
-			if (app.analysis === 'transient' && (app.showVoltage || app.showCurrent)) {
+			// Built whenever there is a transient result to draw from, rather than
+			// only when a layer is switched on. What each layer paints is the layer's
+			// business; a burnt part is drawn regardless of all three, and gating the
+			// whole view on them meant switching them off hid that too.
+			if (app.analysis === 'transient' && app.live) {
 				const index = sampleIndexAt(context.run.time, app.playbackTime);
 				dynamicView = {
 					schematic: app.schematic,
@@ -189,7 +229,15 @@
 					animation,
 					netOfPoint: app.compiled.connectivity.netOfPoint,
 					showVoltage: app.showVoltage,
-					showCurrent: app.showCurrent
+					showCurrent: app.showCurrent,
+					showLight: app.showLight,
+					showValues: app.showValues,
+					running: app.playing,
+					time: app.playbackTime,
+					stopTime: app.stopTime,
+					burnouts: burnoutMap,
+					selection: selectionSet,
+					selectionColour: theme!.selection
 				};
 				tick(dynamicView, dt);
 				active.invalidate('dynamic');

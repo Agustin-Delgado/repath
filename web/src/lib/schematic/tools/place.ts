@@ -49,6 +49,12 @@ export function createPlaceTool(kind: string): Tool {
 			const where = snapPoint(pointer.world, ctx.gridSize);
 			app.place(kind, where.x, where.y, rotation);
 			at = where;
+			// Back to the cursor, because one part is what was asked for. Staying
+			// armed meant dismissing the tool after every single component, which is
+			// a keystroke paid on the common case to save one on the rare one — and
+			// the part that was just dropped is now selected and ready to be wired.
+			// Shift keeps it loaded, for laying out a row of the same thing.
+			if (!pointer.shift) app.tool = { mode: 'select' };
 			ctx.invalidate();
 		},
 

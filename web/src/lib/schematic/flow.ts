@@ -39,6 +39,7 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number]>> = {
 	vsource: [['plus', -1], ['minus', 1]],
 	isource: [['plus', -1], ['minus', 1]],
 	diode: [['anode', -1], ['cathode', 1]],
+	led: [['anode', -1], ['cathode', 1]],
 	nmos: [['drain', -1], ['source', 1]],
 	pmos: [['drain', -1], ['source', 1]],
 	npn: [['collector', -1], ['emitter', 1]],

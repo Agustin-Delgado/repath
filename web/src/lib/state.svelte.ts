@@ -8,10 +8,14 @@
 
 import { runFrequencySweep, runTransient, type FrequencyRun, type TransientRun } from './engine';
 import { EXAMPLES, exampleById } from './examples';
+import { sampleIndexAt } from './schematic/flow';
+import { Trace, wireRef, type Step } from './trace';
+import { findBurnouts, type Burnout } from './schematic/led';
 import {
 	GRID,
 	defaultParams,
 	definitionOf,
+	migrateInstance,
 	nextName,
 	normaliseWire,
 	pinPosition,
@@ -26,9 +30,15 @@ import {
 	type Schematic,
 	type Wire
 } from './schematic/model';
-import { crossesBody, elbow } from './schematic/route';
+import { elbow } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
-import { buildConnectivity, mergeWireChains, splitAtJunctions, trimOverlaps } from './schematic/nets';
+import {
+	buildConnectivity,
+	mergeWireChains,
+	openForPins,
+	splitAtJunctions,
+	trimOverlaps
+} from './schematic/nets';
 
 /**
  * Wiring used to be a mode of its own. It is not any more: dragging off a pin or
@@ -36,7 +46,7 @@ import { buildConnectivity, mergeWireChains, splitAtJunctions, trimOverlaps } fr
  * anyway, and a wire has to land on something at both ends regardless — so a
  * mode whose whole job was drawing freely had nothing left to do.
  */
-export type Tool = { mode: 'select' } | { mode: 'place'; kind: string };
+export type Tool = { mode: 'select' } | { mode: 'place'; kind: string } | { mode: 'wire' };
 
 export interface ProbeInfo {
 	/** Stable handle: a grid point the net passes through. */
@@ -72,27 +82,13 @@ const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`
  * where they used to be. Treating those as obstacles makes a route dodge a wire
  * that is about to move — a detour around a state that never appears on screen.
  */
-export type RouteBetween = (from: Point, to: Point, settling: ReadonlySet<string>) => Point[];
-
-/**
- * Move one end of a wire and leave the rest of it alone.
- *
- * The end travels, and a single corner is inserted so the run it belonged to
- * keeps the direction it was drawn in. Re-routing instead would be free to
- * redraw the whole wire, which is how lowering a ground used to bring the rail
- * it feeds down with it — a part of the picture nobody asked to move.
- */
-function stretchEnd(points: readonly Point[], end: number, dx: number, dy: number): Point[] {
-	const moved = { x: points[end].x + dx, y: points[end].y + dy };
-	const neighbour = points[end === 0 ? 1 : points.length - 2];
-	// Preserve the axis of the segment that reached this end, so the wire still
-	// arrives at its neighbour the way it did before.
-	const horizontal = points[end].y === neighbour.y;
-	const corner = horizontal ? { x: moved.x, y: neighbour.y } : { x: neighbour.x, y: moved.y };
-
-	const rest = end === 0 ? points.slice(1) : points.slice(0, -1);
-	return simplifyPath(end === 0 ? [moved, corner, ...rest] : [...rest, corner, moved]);
-}
+export type RouteBetween = (
+	from: Point,
+	to: Point,
+	settling: ReadonlySet<string>,
+	/** The shape this wire already had, which the route is charged for leaving. */
+	prefer?: readonly Point[]
+) => Point[];
 
 /** Everything a drag needs to recompute itself from scratch on each frame. */
 interface MoveOrigin {
@@ -145,6 +141,25 @@ class AppState {
 	/** Net under the cursor, highlighted across every wire that carries it. */
 	hoverNet = $state<number | null>(null);
 
+	/**
+	 * What has been done to this editor, in replayable form.
+	 *
+	 * Always on. The cost is a line of text per operation, and the alternative is
+	 * what this project has been doing until now: reconstructing someone's path
+	 * from a screenshot and a description, which has been wrong more often than it
+	 * has been right.
+	 */
+	trace = new Trace();
+
+	/** How a trace names the current selection: parts by name, wires by their ends. */
+	private selectionRef(): { parts: string[]; wires: string[] } {
+		const chosen = new Set(this.selection);
+		return {
+			parts: this.schematic.instances.filter((i) => chosen.has(i.id)).map((i) => i.name),
+			wires: this.schematic.wires.filter((w) => chosen.has(w.id)).map((w) => wireRef(w.points))
+		};
+	}
+
 	running = $state(false);
 	result = $state<TransientRun | null>(null);
 	error = $state<string | null>(null);
@@ -173,6 +188,7 @@ class AppState {
 	analysis = $state<'transient' | 'frequency'>('transient');
 	/** Playback belongs to the transient result; stop it when leaving that mode. */
 	setAnalysis(mode: 'transient' | 'frequency'): void {
+		this.trace.record({ op: 'analysis', mode });
 		if (mode === 'frequency') this.playing = false;
 		this.analysis = mode;
 	}
@@ -196,10 +212,67 @@ class AppState {
 	playbackSpeed = $state(1);
 	showVoltage = $state(true);
 	showCurrent = $state(true);
+	showLight = $state(true);
+	/**
+	 * Numbers on the drawing: what each net sits at, and what each part carries.
+	 *
+	 * Off by default. Colour and motion say *roughly* at a glance, which is what
+	 * you want while watching something move; a number says exactly, which is what
+	 * you want when you have stopped to check one. Showing both at once on every
+	 * net buries the circuit under its own readout.
+	 */
+	showValues = $state(false);
+
+	/**
+	 * Which LEDs did not survive the run, and when each one went.
+	 *
+	 * The engine decides this during the run, not here — a failed part is open for
+	 * the rest of it, so the waveforms already account for it. All this does is
+	 * match the names back to the instances on the canvas.
+	 */
+	burnouts = $derived.by((): Burnout[] => {
+		const run = this.result;
+		if (!run || this.analysis !== 'transient') return [];
+		return findBurnouts(this.schematic, run);
+	});
+
+	/**
+	 * Current through a component at the instant playback is showing.
+	 *
+	 * What a probe on the schematic would read. Null when nothing has been run, or
+	 * when the part is not in the result — a component added since the last run has
+	 * no answer yet, and inventing a zero for it would read as "no current here"
+	 * rather than "nobody asked".
+	 */
+	currentThrough(name: string): number | null {
+		const run = this.result;
+		if (!run || this.analysis !== 'transient') return null;
+		const element = run.elementNames.indexOf(name);
+		const series = element < 0 ? undefined : run.currents[element];
+		if (!series) return null;
+		return series[sampleIndexAt(run.time, this.playbackTime)] ?? null;
+	}
 
 	/** Simulated seconds per real second at the current speed setting. */
 	get playbackRate(): number {
 		return (this.stopTime / 4) * this.playbackSpeed;
+	}
+
+	/**
+	 * Stop simulating and put the drawing back the way it was.
+	 *
+	 * Not the same as pausing playback, which freezes the overlay at an instant so
+	 * it can be read. This clears the overlay off the schematic entirely — no
+	 * voltage colours, no current, no lit LEDs — because the button that does it
+	 * is the one that started the whole thing, and the opposite of running should
+	 * be not running rather than running very slowly.
+	 *
+	 * The results themselves are kept: the scope still holds the traces, which are
+	 * the record of the run and not something anyone asked to throw away.
+	 */
+	stop(): void {
+		this.playing = false;
+		this.live = false;
 	}
 
 	togglePlay(): void {
@@ -221,6 +294,15 @@ class AppState {
 	/** Snapshot taken at the start of a drag; null when nothing is being dragged. */
 	private moveOrigin: MoveOrigin | null = null;
 	private dragStarted = false;
+	/**
+	 * The gesture in flight, for the trace.
+	 *
+	 * A drag is recomputed from its starting snapshot on every frame, so only the
+	 * offset it ends on decides the result. That is what gets written down, once,
+	 * when the gesture is released — rather than a line per frame saying the same
+	 * thing sixty times.
+	 */
+	private gesture: Step | null = null;
 
 	compiled = $derived(compileSchematic(this.schematic));
 
@@ -291,6 +373,7 @@ class AppState {
 	}
 
 	undo(): void {
+		this.trace.record({ op: 'undo' });
 		const previous = this.past.pop();
 		if (!previous) return;
 		this.historyBytes -= previous.document.length;
@@ -302,6 +385,7 @@ class AppState {
 	}
 
 	redo(): void {
+		this.trace.record({ op: 'redo' });
 		const next = this.future.pop();
 		if (!next) return;
 		this.past.push(this.snapshot());
@@ -323,9 +407,25 @@ class AppState {
 			rotation,
 			params: defaultParams(kind)
 		};
+		this.trace.record({ op: 'place', kind, x, y, rotation });
 		this.schematic.instances.push(instance);
+		this.makeRoomFor(instance);
 		this.selection = [instance.id];
 		return instance;
+	}
+
+	/**
+	 * Break any wire the part is now standing on, so it goes in series.
+	 *
+	 * Dropping a component onto a wire is how one gets put in a circuit, and it is
+	 * what deleting a part and letting the gap heal leaves you set up to do. Left
+	 * alone the wire runs straight past the new part and shorts it out, which is
+	 * invisible on the canvas — a symbol on a line with a pin touching at either
+	 * end is exactly what a series connection looks like.
+	 */
+	private makeRoomFor(instance: Instance): void {
+		const pins = definitionOf(instance.kind).pins.map((pin) => pinPosition(instance, pin));
+		this.schematic.wires = openForPins(this.schematic, pins, freshId);
 	}
 
 	addWire(x1: number, y1: number, x2: number, y2: number): void {
@@ -346,6 +446,7 @@ class AppState {
 	addWirePath(points: ReadonlyArray<Point>): void {
 		const path = simplifyPath(points);
 		if (path.length < 2) return;
+		this.trace.record({ op: 'wire', points: path.map((q) => ({ x: q.x, y: q.y })) });
 		this.checkpoint();
 		this.schematic.wires.push({ id: freshId(), points: path });
 		this.tidyWires();
@@ -411,6 +512,7 @@ class AppState {
 	 */
 	deleteSelection(route?: RouteBetween): void {
 		if (this.selection.length === 0) return;
+		this.trace.record({ op: 'delete', ...this.selectionRef() });
 		this.checkpoint();
 		const doomed = new Set(this.selection);
 
@@ -469,6 +571,7 @@ class AppState {
 		const turning = this.schematic.wires.filter((w) => chosen.has(w.id));
 		if (rotating.length === 0 && turning.length === 0) return;
 
+		this.trace.record({ op: 'rotate', ...this.selectionRef() });
 		this.checkpoint();
 
 		// Snapped, so an odd-sized group still lands on the lattice.
@@ -630,6 +733,8 @@ class AppState {
 		if (!origin) return;
 		if (dx === 0 && dy === 0 && !this.dragStarted) return;
 
+		this.gesture = { op: 'move', ...this.selectionRef(), dx, dy };
+
 		if (!this.dragStarted) {
 			// One history entry per gesture, taken on the first actual movement.
 			this.checkpoint();
@@ -678,34 +783,32 @@ class AppState {
 					continue;
 				}
 
-				// One end riding along. Two ways to answer, and they disagree.
-				//
-				// Stretching that end leaves the rest of the wire where it was drawn,
-				// which is what lowering a ground should do — lower the ground, not
-				// carry the rail it feeds down with it. Re-routing is free to redraw
-				// the whole run, which is right when the old shape has stopped making
-				// sense: a wire that used to run along the row above both its ends
-				// should not still climb up there to do it.
-				//
-				// So: keep the drawing unless keeping it costs more than one extra
-				// bend. That is the line between a wire the move stretched and a wire
-				// the move made obsolete.
-				const end = moved.has(0) ? 0 : from.length - 1;
-				const stretched = stretchEnd(from, end, dx, dy);
+				/*
+				 * One end riding along.
+				 *
+				 * There used to be two answers here — stretch the end and keep the old
+				 * drawing, or re-route and redraw it — with a growing list of yes/no
+				 * tests to pick between them: does it cross a body, is it more than one
+				 * bend worse, does it double back on itself. Every reported case was one
+				 * where neither candidate was what anyone wanted, and each fix added
+				 * another test to the list.
+				 *
+				 * The question those tests were groping at is not *keep or redraw* but
+				 * *how much of what was drawn is still worth keeping*, which is a matter
+				 * of degree and belongs in the router's cost function. So: one route,
+				 * handed the shape the wire already had. Departing from it costs, and
+				 * everything the old rules were reaching for falls out of that — the
+				 * rail under a lowered ground stays because moving all of it costs more
+				 * than a stub, the feed under a part dragged sideways slides because
+				 * moving a little of it costs less than a corner, and a stale detour is
+				 * dropped because keeping it no longer pays for its own length.
+				 */
+				const last = from.length - 1;
 				const ends = {
 					start: moved.has(0) ? { x: from[0].x + dx, y: from[0].y + dy } : from[0],
-					end: moved.has(from.length - 1)
-						? { x: from[from.length - 1].x + dx, y: from[from.length - 1].y + dy }
-						: from[from.length - 1]
+					end: moved.has(last) ? { x: from[last].x + dx, y: from[last].y + dy } : from[last]
 				};
-				const routed = simplifyPath(route(ends.start, ends.end, settling));
-
-				const throughSomething = crossesBody(this.schematic, stretched, {
-					grid: GRID,
-					ignoreInstances: new Set(this.selection)
-				});
-				const tooCrooked = stretched.length > routed.length + 1;
-				wire.points = throughSomething || tooCrooked ? routed : stretched;
+				wire.points = simplifyPath(route(ends.start, ends.end, settling, from));
 				continue;
 			}
 
@@ -738,6 +841,8 @@ class AppState {
 
 		const wire = this.schematic.wires.find((w) => w.id === wireId);
 		if (!wire) return;
+
+		this.gesture = { op: 'segment', wire: wireRef(from), index, dx, dy };
 
 		const held = origin.anchors.get(wireId);
 		if (!held || held.size === 0) {
@@ -796,13 +901,24 @@ class AppState {
 
 		this.moveOrigin = null;
 		this.dragStarted = false;
+		this.gesture = null;
 	}
 
 	/** Release the snapshot. The geometry is already final. */
 	endMove(): void {
 		const changed = this.dragStarted;
+		if (changed && this.gesture) this.trace.record(this.gesture);
+		this.gesture = null;
 		this.moveOrigin = null;
 		this.dragStarted = false;
+		// Deliberately *not* opening wires for what was dragged, though dropping a
+		// part onto one means the same thing as placing it there. Measured over a
+		// thousand random drags it tripled the number that came apart: a part
+		// shuffled a few units often ends with a pin grazing some unrelated wire,
+		// and cutting that wire rewires a circuit nobody asked to rewire. Placing
+		// is unambiguous — you chose that spot for a part that was not there before
+		// — and a drag is not. The short-circuit warning covers what is left.
+		//
 		// Merging only ever removes a joint, never moves a point, so nothing on
 		// screen shifts when this runs.
 		if (changed) this.tidyWires();
@@ -844,6 +960,7 @@ class AppState {
 		if (refusal) return refusal;
 
 		if (instance.params[key] === value) return null;
+		this.trace.record({ op: 'param', part: instance.name, key, value });
 		this.checkpoint();
 		instance.params[key] = value;
 		return null;
@@ -858,6 +975,7 @@ class AppState {
 		if (this.schematic.instances.some((i) => i.id !== id && i.name === trimmed)) {
 			return `${trimmed} is already taken.`;
 		}
+		this.trace.record({ op: 'rename', part: instance.name, to: trimmed });
 		if (instance.name === trimmed) return null;
 		this.checkpoint();
 		instance.name = trimmed;
@@ -865,6 +983,7 @@ class AppState {
 	}
 
 	clear(): void {
+		this.trace.record({ op: 'clear' });
 		this.checkpoint();
 		this.schematic = { instances: [], wires: [] };
 		this.selection = [];
@@ -1012,6 +1131,7 @@ class AppState {
 
 	loadExample(id: string): void {
 		const example = exampleById(id);
+		this.trace.record({ op: 'example', id: example.id });
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = example.build();
@@ -1071,12 +1191,13 @@ class AppState {
 		if (!parsed.schematic?.instances) throw new Error('That file is not a repath schematic.');
 		// Re-key everything so a pasted circuit cannot collide with what is open.
 		const remap = new Map<string, string>();
-		for (const instance of parsed.schematic.instances) {
+		const instances = parsed.schematic.instances.map((instance) => {
 			const id = freshId();
 			remap.set(instance.id, id);
-			instance.id = id;
-			definitionOf(instance.kind); // throws early on an unknown component
-		}
+			const migrated = migrateInstance({ ...instance, id });
+			definitionOf(migrated.kind); // throws early on an unknown component
+			return migrated;
+		});
 		// Files written before wires became polylines still load: the two-point
 		// form is upgraded rather than rejected.
 		const wires = (parsed.schematic.wires ?? [])
@@ -1085,7 +1206,7 @@ class AppState {
 
 		this.past.length = 0;
 		this.future.length = 0;
-		this.schematic = { instances: parsed.schematic.instances, wires };
+		this.schematic = { instances, wires };
 		this.tidyWires();
 		this.stopTime = parsed.stopTime ?? 1e-3;
 		this.probes = parsed.probes ?? [];
@@ -1095,6 +1216,111 @@ class AppState {
 		this.notice = null;
 		this.live = false;
 		this.playing = false;
+	}
+
+	/** Change the length of a run, and write it down. */
+	setStopTime(seconds: number): void {
+		if (!(seconds > 0) || seconds === this.stopTime) return;
+		this.trace.record({ op: 'stop', seconds });
+		this.stopTime = seconds;
+	}
+
+	/**
+	 * Re-perform a recorded trace, from wherever the editor is now.
+	 *
+	 * `route` is passed in rather than reached for, so a replay routes exactly the
+	 * way the select tool does — a replay that used a different router would be
+	 * reproducing a different editor.
+	 *
+	 * Stops at the first step it cannot carry out and says which. That failure is
+	 * information, not an inconvenience: a step referring to a part or a wire that
+	 * is not there means the replay had already diverged from the recording before
+	 * whatever anyone was trying to look at.
+	 */
+	replay(steps: readonly Step[], route: RouteBetween): { done: number; failed?: string } {
+		const partId = (name: string) => this.schematic.instances.find((i) => i.name === name)?.id;
+		const wireId = (ref: string) =>
+			this.schematic.wires.find((w) => wireRef(w.points) === ref)?.id;
+
+		for (const [index, step] of steps.entries()) {
+			const stop = (why: string) => ({ done: index, failed: `step ${index + 1} (${step.op}): ${why}` });
+			switch (step.op) {
+				case 'example':
+					this.loadExample(step.id);
+					break;
+				case 'clear':
+					this.clear();
+					break;
+				case 'place':
+					this.place(step.kind, step.x, step.y, step.rotation);
+					break;
+				case 'wire':
+					this.addWirePath(step.points);
+					break;
+				case 'undo':
+					this.undo();
+					break;
+				case 'redo':
+					this.redo();
+					break;
+				case 'run':
+					// Left to the caller: a replay is about the drawing, and awaiting the
+					// engine here would make every step of it asynchronous.
+					break;
+				case 'analysis':
+					this.setAnalysis(step.mode === 'frequency' ? 'frequency' : 'transient');
+					break;
+				case 'stop':
+					this.setStopTime(step.seconds);
+					break;
+				case 'rename': {
+					const id = partId(step.part);
+					if (!id) return stop(`no component named ${step.part}`);
+					this.rename(id, step.to);
+					break;
+				}
+				case 'param': {
+					const id = partId(step.part);
+					if (!id) return stop(`no component named ${step.part}`);
+					this.setParam(id, step.key, step.value);
+					break;
+				}
+				case 'segment': {
+					const id = wireId(step.wire);
+					if (!id) return stop(`no wire running ${step.wire}`);
+					this.selection = [id];
+					this.beginMove();
+					this.applySegmentMove(id, step.index, step.dx, step.dy);
+					this.endMove();
+					break;
+				}
+				case 'delete':
+				case 'rotate':
+				case 'move': {
+					const ids: string[] = [];
+					for (const name of step.parts) {
+						const id = partId(name);
+						if (!id) return stop(`no component named ${name}`);
+						ids.push(id);
+					}
+					for (const ref of step.wires) {
+						const id = wireId(ref);
+						if (!id) return stop(`no wire running ${ref}`);
+						ids.push(id);
+					}
+					this.selection = ids;
+					if (step.op === 'delete') this.deleteSelection(route);
+					else if (step.op === 'rotate') this.rotateSelection(route);
+					else {
+						this.beginMove();
+						this.applyMove(step.dx, step.dy, route);
+						this.endMove();
+					}
+					break;
+				}
+			}
+		}
+		return { done: steps.length };
 	}
 
 	// -- simulation -------------------------------------------------------
@@ -1120,6 +1346,9 @@ class AppState {
 	 * unwatchable while you are turning a knob.
 	 */
 	async run(options: { keepPlayback?: boolean } = {}): Promise<void> {
+		// Only a deliberate press. A live re-run after an edit follows from the edit
+		// that is already written down, and logging it would double every line.
+		if (!options.keepPlayback) this.trace.record({ op: 'run' });
 		const compiled = this.compiled;
 		if (!compiled.netlist) {
 			this.error = compiled.errors.join(' ');

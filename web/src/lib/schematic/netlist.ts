@@ -9,6 +9,7 @@
  * converter symbol to remember to place.
  */
 
+import { ledDiodeModel, ledRating } from './led';
 import { definitionOf, type Instance, type Schematic } from './model';
 import { buildConnectivity, pinKey, type Connectivity, type Net } from './nets';
 
@@ -114,6 +115,25 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 				warnings.push(`${instance.name}.${pin.name} is not connected to anything.`);
 			}
 		}
+
+		// A part with every pin on one net is wired out of its own circuit: the
+		// current goes round it instead of through it, so it does nothing at all.
+		//
+		// Worth saying out loud, because it is close to invisible on the canvas. It
+		// is what a wire drawn straight past a component looks like — the symbol
+		// sits on the line with a pin touching it at each end, exactly like a part
+		// that is properly in series. The simulation is then correct and the
+		// drawing is a lie, which is the worst combination to leave someone with.
+		if (def.pins.length >= 2) {
+			const nets = new Set(
+				def.pins.map((pin) => connectivity.netOfPin.get(pinKey(instance.id, pin.name)))
+			);
+			if (nets.size === 1 && !nets.has(undefined)) {
+				warnings.push(
+					`${instance.name} is shorted out: every pin is on the same net, so nothing flows through it. A wire probably runs straight past it.`
+				);
+			}
+		}
 	}
 
 	const analogOf = (instance: Instance, pin: string): string => {
@@ -190,6 +210,18 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 					anode: analogOf(instance, 'anode'),
 					cathode: analogOf(instance, 'cathode'),
 					model: diodeModel(instance)
+				});
+				break;
+			// Electrically an LED is a diode with a high forward voltage and a current
+			// it will not survive being held above. The engine takes both, so the
+			// failure happens inside the run rather than being noticed after it.
+			case 'led':
+				components.push({
+					type: 'diode',
+					name,
+					anode: analogOf(instance, 'anode'),
+					cathode: analogOf(instance, 'cathode'),
+					model: ledDiodeModel(instance.params.colour, ledRating(instance))
 				});
 				break;
 			case 'nmos':

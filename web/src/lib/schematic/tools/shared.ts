@@ -86,10 +86,6 @@ export function connectsAt(at: Vec2): boolean {
 	return false;
 }
 
-/** What to say when a wire is turned away for going nowhere. */
-export const DANGLING_NOTICE =
-	'A wire needs something at both ends — a pin, or another wire. That one would not have carried anything.';
-
 /**
  * Show what an endpoint would attach to.
  *

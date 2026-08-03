@@ -155,6 +155,35 @@ export class Painter {
 		}
 	}
 
+	/**
+	 * A soft radial glow, fading to nothing at `radius` world units.
+	 *
+	 * Added to what is already there rather than painted over it, so two lights
+	 * close together brighten each other the way real ones do — and so the wire
+	 * underneath shows through the halo instead of being wiped out by it.
+	 *
+	 * Alpha is carried in the gradient stops rather than in `globalAlpha`, which
+	 * would flatten the falloff into a uniformly translucent disc.
+	 */
+	glow(centre: Vec2, radius: number, rgb: readonly [number, number, number], alpha: number): void {
+		if (!(radius > 0) || !(alpha > 0)) return;
+		const { ctx } = this;
+		const [r, g, b] = rgb;
+		const gradient = ctx.createRadialGradient(centre.x, centre.y, 0, centre.x, centre.y, radius);
+		gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
+		gradient.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, ${alpha * 0.34})`);
+		gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+
+		const previous = ctx.globalCompositeOperation;
+		ctx.globalCompositeOperation = 'lighter';
+		ctx.globalAlpha = 1;
+		ctx.fillStyle = gradient;
+		ctx.beginPath();
+		ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
+		ctx.fill();
+		ctx.globalCompositeOperation = previous;
+	}
+
 	/** A dot of a fixed screen size, whatever the zoom. */
 	dot(centre: Vec2, screenRadius: number, fill: FillStyle, stroke?: StrokeStyle): void {
 		this.circle(centre, screenRadius * this.unit, fill, stroke);

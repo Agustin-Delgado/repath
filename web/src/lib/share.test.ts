@@ -94,6 +94,50 @@ describe('circuit links', () => {
 		expect(fragment.length).toBeLessThan(JSON.stringify(big).length / 2);
 	});
 
+	it('brings an older link up to date on the way in', async () => {
+		// A link is the one artefact here that outlives the catalog it was written
+		// against — someone posts one in a forum thread and it is opened a year
+		// later. LEDs used to be a model choice on the diode, so a link from then
+		// still says so, and decoding has to produce the part that was meant rather
+		// than a plain rectifier with the wrong forward voltage.
+		const old = circuit();
+		old.schematic.instances = [
+			{
+				id: 'd1',
+				kind: 'diode',
+				name: 'D1',
+				x: 200,
+				y: 200,
+				rotation: 0,
+				params: { model: 'led' }
+			}
+		];
+
+		const back = await decodeCircuit(await encodeCircuit(old));
+		expect(back.schematic.instances[0].kind).toBe('led');
+		expect(back.schematic.instances[0].params.colour).toBe('red');
+		expect(back.schematic.instances[0].name).toBe('D1');
+	});
+
+	it('leaves an ordinary diode alone', async () => {
+		const old = circuit();
+		old.schematic.instances = [
+			{
+				id: 'd1',
+				kind: 'diode',
+				name: 'D1',
+				x: 200,
+				y: 200,
+				rotation: 0,
+				params: { model: 'zener', breakdown: 5.1 }
+			}
+		];
+
+		const back = await decodeCircuit(await encodeCircuit(old));
+		expect(back.schematic.instances[0].kind).toBe('diode');
+		expect(back.schematic.instances[0].params.breakdown).toBe(5.1);
+	});
+
 	it('rejects anything that is not a repath link', async () => {
 		await expect(decodeCircuit('https://example.com')).rejects.toThrow();
 		await expect(decodeCircuit('cq' + btoa('nonsense'))).rejects.toThrow();

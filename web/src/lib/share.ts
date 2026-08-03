@@ -10,7 +10,7 @@
  * the host, which keeps the promise that circuits stay on your machine.
  */
 
-import type { Schematic } from './schematic/model';
+import { migrateInstance, type Schematic } from './schematic/model';
 
 export interface SharedCircuit {
 	schematic: Schematic;
@@ -84,15 +84,19 @@ function expand(raw: unknown): SharedCircuit {
 	return {
 		stopTime: data.t ?? 1e-3,
 		schematic: {
-			instances: (data.i ?? []).map(([kind, name, x, y, rotation, params]) => ({
-				id: id(),
-				kind,
-				name,
-				x,
-				y,
-				rotation: rotation as 0 | 90 | 180 | 270,
-				params: params ?? {}
-			})),
+			instances: (data.i ?? []).map(([kind, name, x, y, rotation, params]) =>
+				// A link outlives the catalog it was written against, so what comes out
+				// of one is brought up to date before anything else touches it.
+				migrateInstance({
+					id: id(),
+					kind,
+					name,
+					x,
+					y,
+					rotation: rotation as 0 | 90 | 180 | 270,
+					params: params ?? {}
+				})
+			),
 			wires: (data.w ?? [])
 				.map((flat) => {
 					const points: Array<{ x: number; y: number }> = [];

@@ -4,6 +4,7 @@ import {
 	junctionDots,
 	liesWithin,
 	mergeWireChains,
+	openForPins,
 	pinKey,
 	splitAtJunctions,
 	trimOverlaps
@@ -478,5 +479,88 @@ describe('simplifyPath and loops', () => {
 			{ x: 100, y: 100 }
 		];
 		expect(simplifyPath(path)).toEqual(path);
+	});
+});
+
+describe('openForPins', () => {
+	const wire = (id: string, ...points: Array<[number, number]>): Wire => ({
+		id,
+		points: points.map(([x, y]) => ({ x, y }))
+	});
+	const at = (x: number, y: number) => ({ x, y });
+
+	let made = 0;
+	const nextId = () => `m${++made}`;
+
+	const schematicOf = (...wires: Wire[]) => ({ instances: [], wires });
+
+	it('opens a gap where a part bridges a wire', () => {
+		// The reported case: a wire running the length of the right-hand side, with
+		// a part dropped onto it. Both pins land on the one wire.
+		const out = openForPins(
+			schematicOf(wire('w', [400, 170], [400, 330])),
+			[at(400, 230), at(400, 290)],
+			nextId
+		);
+
+		expect(out).toHaveLength(2);
+		expect(out[0].points).toEqual([at(400, 170), at(400, 230)]);
+		expect(out[1].points).toEqual([at(400, 290), at(400, 330)]);
+	});
+
+	it('leaves a wire that only reaches one pin alone', () => {
+		// One pin on a wire is a tap, which is what branching off one means. Cutting
+		// there would break the very connection the user just made.
+		const original = wire('w', [400, 170], [400, 330]);
+		const out = openForPins(schematicOf(original), [at(400, 230), at(460, 230)], nextId);
+
+		expect(out).toHaveLength(1);
+		expect(out[0].points).toEqual(original.points);
+	});
+
+	it('follows a wire round its corners', () => {
+		const out = openForPins(
+			schematicOf(wire('w', [100, 100], [300, 100], [300, 400])),
+			[at(300, 200), at(300, 260)],
+			nextId
+		);
+
+		expect(out).toHaveLength(2);
+		expect(out[0].points).toEqual([at(100, 100), at(300, 100), at(300, 200)]);
+		expect(out[1].points).toEqual([at(300, 260), at(300, 400)]);
+	});
+
+	it('keeps only the far side when a pin sits on the wire end', () => {
+		// The upper pin is already where the wire starts, so there is nothing above
+		// it to keep — but the piece below the lower pin still has to survive.
+		const out = openForPins(
+			schematicOf(wire('w', [400, 170], [400, 330])),
+			[at(400, 170), at(400, 230)],
+			nextId
+		);
+
+		expect(out).toHaveLength(1);
+		expect(out[0].points).toEqual([at(400, 230), at(400, 330)]);
+	});
+
+	it('leaves wires the part is nowhere near', () => {
+		const out = openForPins(
+			schematicOf(wire('a', [0, 0], [100, 0]), wire('b', [400, 170], [400, 330])),
+			[at(400, 230), at(400, 290)],
+			nextId
+		);
+
+		expect(out.filter((w) => w.id === 'a')).toHaveLength(1);
+		expect(out).toHaveLength(3);
+	});
+
+	it('keeps one of the pieces on the original id, so history stays readable', () => {
+		const out = openForPins(
+			schematicOf(wire('w', [400, 170], [400, 330])),
+			[at(400, 230), at(400, 290)],
+			nextId
+		);
+		expect(out.map((w) => w.id)).toContain('w');
+		expect(new Set(out.map((w) => w.id)).size).toBe(out.length);
 	});
 });

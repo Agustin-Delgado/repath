@@ -17,9 +17,43 @@
 				? { mode: 'select' }
 				: { mode: 'place', kind };
 	}
+
+	function wire() {
+		app.tool = app.tool.mode === 'wire' ? { mode: 'select' } : { mode: 'wire' };
+	}
 </script>
 
 <div class="palette">
+	<section>
+		<h3>Connect</h3>
+		<div class="grid">
+			<!--
+				Dragging off a pin already draws a wire, so this is here for the one
+				thing that cannot start: a branch off the middle of an existing wire.
+			-->
+			<button
+				class="part"
+				class:active={app.tool.mode === 'wire'}
+				onclick={wire}
+				title="Draw a wire between two pins, or off an existing wire"
+			>
+				<svg viewBox="-40 -40 80 80" aria-hidden="true">
+					<path
+						d="M-28 14 H0 V-14 H28"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="3"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+					/>
+					<circle cx="-28" cy="14" r="5" fill="currentColor" />
+					<circle cx="28" cy="-14" r="5" fill="currentColor" />
+				</svg>
+				<span>Wire</span>
+			</button>
+		</div>
+	</section>
+
 	{#each GROUPS as group (group.id)}
 		<section>
 			<h3>{group.label}</h3>

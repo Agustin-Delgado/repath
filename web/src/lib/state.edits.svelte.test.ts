@@ -9,7 +9,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { app } from './state.svelte';
-import { routeWire } from './schematic/route';
+import { crossesBody, routeWire } from './schematic/route';
 import { pinKey } from './schematic/nets';
 import type { Point } from './schematic/model';
 
@@ -20,13 +20,17 @@ import type { Point } from './schematic/model';
  * different search budget from the one a real drag uses — a gap that would hide
  * any bug living in the fallback.
  */
-const routeFor = (moving: Set<string>) => (from: Point, to: Point, settling: ReadonlySet<string>) =>
-	routeWire(app.schematic, from, to, {
-		grid: 10,
-		ignoreInstances: moving,
-		ignoreWires: settling,
-		effort: 4000
-	});
+const routeFor =
+	(moving: Set<string>) =>
+	(from: Point, to: Point, settling: ReadonlySet<string>, prefer?: readonly Point[]) => {
+		void moving;
+		return routeWire(app.schematic, from, to, {
+			grid: 10,
+			ignoreWires: settling,
+			prefer,
+			effort: 4000
+		});
+	};
 
 const find = (name: string) => app.schematic.instances.find((i) => i.name === name)!;
 const netOf = (name: string, pin: string) =>
@@ -754,6 +758,59 @@ describe('what moves when one thing moves', () => {
 		expect(shapes()).toContain('300,260 300,290 100,290');
 		expect(netOf('GND1', 'g')).toBe(netOf('C1', 'b'));
 		expect(netOf('GND1', 'g')).toBe(netOf('V1', 'minus'));
+		expect(orthogonal()).toBe(true);
+	});
+
+	it('arrives at a pin along the way it faces, not across it', () => {
+		// Reported from a shared link. Both L shapes between the two pins are the same
+		// length with the same one corner, so nothing about length or corner count can
+		// separate them — but one comes down into an upward-facing terminal and the
+		// other clips into its side. The router has always known the difference; the
+		// drag used to answer without asking it.
+		lowPass();
+		drag('R1', 10, -30);
+
+		expect(shapes()).toContain('240,140 300,140 300,200');
+		expect(netOf('R1', 'b')).toBe(netOf('C1', 'a'));
+		expect(orthogonal()).toBe(true);
+	});
+
+	it('never leaves a wire running through the part it is chasing', () => {
+		// Reported from a shared link: the wire feeding the capacitor's top pin came
+		// in along the row below it and turned up *inside* the symbol, crossing the
+		// plates to reach the terminal. Routing had been told to treat the parts on
+		// the move as though they were not there, so nothing objected.
+		lowPass();
+		drag('C1', 0, -20);
+
+		for (const wire of app.schematic.wires) {
+			expect(crossesBody(app.schematic, wire.points, { grid: 10 })).toBe(false);
+		}
+		expect(netOf('C1', 'a')).toBe(netOf('R1', 'b'));
+	});
+
+	it('slides the feed sideways when a part is dragged across the way its pins face', () => {
+		// Reported: dragging a part to the right left a step in the wire right where
+		// it plugs in — down to the old height, across, then into the pin. The drop
+		// that feeds a part should travel with it, and the run above simply gets
+		// longer, because nothing that was drawn has to leave the line it is on.
+		lowPass();
+		drag('C1', 60, 0);
+
+		const after = shapes();
+		expect(after).toContain('230,170 360,170 360,200');
+		expect(after).toContain('360,260 360,290 100,290');
+		expect(orthogonal()).toBe(true);
+	});
+
+	it('does not slide when the part is dragged along the way its pins face', () => {
+		// The other half of the same rule, and the reason the ground case above still
+		// holds: moving along the lead only changes how far the wire has to reach.
+		lowPass();
+		drag('C1', 0, 40);
+
+		// The run from the resistor is still on the row it was drawn on.
+		expect(shapes().some((shape) => shape.startsWith('230,170 300,170'))).toBe(true);
 		expect(orthogonal()).toBe(true);
 	});
 

@@ -12,6 +12,7 @@
 
 import { rectExpand, type Painter, type Rect, type Vec2 } from '$lib/canvas';
 import { formatWithUnit } from '$lib/units';
+import { ledInk, ledRating } from './led';
 import {
 	definitionOf,
 	rotatePoint,
@@ -48,7 +49,14 @@ const FALLBACK: Theme = {
 	pin: '#6d7a8f',
 	pinDigital: '#d09b4a',
 	accent: '#4ea8ff',
-	selection: '#ffb454',
+	/**
+	 * Yellow, and nothing else on the canvas is.
+	 *
+	 * It was orange before, which was the second trace colour *exactly* — so a
+	 * selected wire and a probed one were the same shade. Yellow is clear of the
+	 * traces, of the diverging voltage scale, of danger, and of the LED inks.
+	 */
+	selection: '#ffd400',
 	labelStrong: '#cdd5e2',
 	labelDim: '#7c8496',
 	danger: '#ff6b7a'
@@ -75,7 +83,34 @@ export function setCurrentTheme(theme: Theme): void {
  * resistor and a transistor sit the same distance from their names however
  * differently sized their symbols are.
  */
-const LABEL_GAP = 5;
+export const LABEL_GAP = 5;
+
+/**
+ * Which way a part's leads leave it, once rotated.
+ *
+ * Labels go on the side with no lead on it, and this is how that side is found.
+ * Deciding it from the rotation instead — which is what this did first — works
+ * for the parts whose pins happen to lie along their long axis and fails for the
+ * ones that do not: an upright voltage source has its terminals top and bottom,
+ * so a label placed underneath lands squarely on the wire leaving it.
+ */
+export function leadAxis(def: ComponentDef, rotation: Rotation): 'x' | 'y' {
+	let spreadX = 0;
+	let spreadY = 0;
+	const turned = def.pins.map((pin) => rotatePoint(pin.x, pin.y, rotation));
+	for (const a of turned) {
+		for (const b of turned) {
+			spreadX = Math.max(spreadX, Math.abs(a.x - b.x));
+			spreadY = Math.max(spreadY, Math.abs(a.y - b.y));
+		}
+	}
+	// A single-pin part spreads nowhere; treat its lead as the way the pin points.
+	if (spreadX === 0 && spreadY === 0) {
+		const only = turned[0] ?? { x: 0, y: 0 };
+		return Math.abs(only.x) >= Math.abs(only.y) ? 'x' : 'y';
+	}
+	return spreadX >= spreadY ? 'x' : 'y';
+}
 
 /**
  * How far a symbol reaches from its origin, on each axis, once rotated.
@@ -238,13 +273,13 @@ export function wireVisible(wire: Wire, region: Rect): boolean {
 }
 
 function wireColour(wire: Wire, view: SchematicView): { colour: string; width: number } {
-	if (view.selection.has(wire.id)) return { colour: view.theme.selection, width: 3 };
+	if (view.selection.has(wire.id)) return { colour: view.theme.selection, width: 2.4 };
 	const start = wireStart(wire);
 	const net = view.netOfPoint.get(keyOf(start.x, start.y));
-	if (net !== undefined && net === view.hoverNet) return { colour: view.theme.accent, width: 3 };
+	if (net !== undefined && net === view.hoverNet) return { colour: view.theme.accent, width: 2.4 };
 	const probe = net === undefined ? undefined : view.probeColours.get(net);
-	if (probe) return { colour: probe, width: 2.5 };
-	return { colour: view.theme.wire, width: 2 };
+	if (probe) return { colour: probe, width: 2 };
+	return { colour: view.theme.wire, width: 1.5 };
 }
 
 function valueLabel(instance: Instance): string | null {
@@ -262,6 +297,11 @@ function valueLabel(instance: Instance): string | null {
 				: `${formatWithUnit(Number(p.value), 'V')} ${formatWithUnit(Number(p.frequency), 'Hz')}`;
 		case 'isource':
 			return formatWithUnit(Number(p.value), 'A');
+		case 'led':
+			// The rating rather than the colour: the colour is already on the symbol,
+			// and what is worth reading off a schematic is the number you have to size
+			// the series resistor against.
+			return formatWithUnit(ledRating(instance), 'A');
 		case 'clock':
 			return formatWithUnit(Number(p.frequency), 'Hz');
 		default:
@@ -292,7 +332,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			(net !== undefined && net === view.hoverNet && theme.accent) ||
 			(net !== undefined && view.probeColours.get(net)) ||
 			theme.wire;
-		painter.dot(dot, 3.5, { color: colour });
+		painter.dot(dot, 3, { color: colour });
 	}
 
 	const showPins = scale > 0.45;
@@ -310,11 +350,15 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 		}
 
 		const selected = view.selection.has(instance.id);
-		const colour = selected ? theme.selection : theme.symbol;
+		const colour = selected
+			? theme.selection
+			: instance.kind === 'led'
+				? ledInk(instance.params.colour)
+				: theme.symbol;
 		const paths = symbolPaths(instance.kind, instance.params);
 
 		painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
-			painter.strokePath(paths.stroke, { color: colour, width: 2 });
+			painter.strokePath(paths.stroke, { color: colour, width: 1.5 });
 			if (paths.hasFill) painter.fillPath(paths.fill, { color: colour });
 		});
 
@@ -343,7 +387,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 					at,
 					3,
 					{ color: hovered ? theme.accent : theme.background },
-					{ color: hovered ? theme.accent : pin.domain === 'digital' ? theme.pinDigital : theme.pin, width: 1.5 }
+					{ color: hovered ? theme.accent : pin.domain === 'digital' ? theme.pinDigital : theme.pin, width: 1.2 }
 				);
 			}
 		}
@@ -354,17 +398,16 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			// which left a resistor's name floating twenty units above a body that
 			// stops at nine — the label reads as belonging to nothing in particular.
 			const reach = drawnReach(def, instance.rotation);
-			// Upright, the labels sit above and below; turned, they stack to the
-			// right, because a part on its side is tall and thin and there is no
-			// room over it.
-			const upright = instance.rotation === 0 || instance.rotation === 180;
-			const clear = (upright ? reach.y : reach.x) + LABEL_GAP;
-			const tx = upright ? instance.x : instance.x + clear;
-			const align = upright ? 'center' : 'left';
+			// Above and below when the leads go sideways; stacked to the right when
+			// they go up and down. Either way the labels land where no wire does.
+			const sideways = leadAxis(def, instance.rotation) === 'x';
+			const clear = (sideways ? reach.y : reach.x) + LABEL_GAP;
+			const tx = sideways ? instance.x : instance.x + clear;
+			const align = sideways ? 'center' : 'left';
 
 			painter.text(
 				instance.name,
-				{ x: tx, y: upright ? instance.y - clear : instance.y - 6 },
+				{ x: tx, y: sideways ? instance.y - clear : instance.y - 6 },
 				{ size: labelSize, color: theme.labelStrong, align, baseline: 'bottom', minSize: 6 }
 			);
 
@@ -372,7 +415,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			if (value) {
 				painter.text(
 					value,
-					{ x: tx, y: upright ? instance.y + clear : instance.y + 8 },
+					{ x: tx, y: sideways ? instance.y + clear : instance.y + 8 },
 					{ size: labelSize, color: theme.labelDim, align, baseline: 'top', minSize: 6 }
 				);
 			}

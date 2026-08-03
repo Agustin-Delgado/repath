@@ -29,12 +29,28 @@ import { currentTheme } from '../draw';
 import { wireSegments, type Point } from '../model';
 import { elbow, routeWire } from '../route';
 import type { SchematicItem } from '../scene';
-import { connectsAt, DANGLING_NOTICE, drawSnapHint, netAt } from './shared';
+import { connectsAt, drawSnapHint, netAt } from './shared';
 
 type Mode = 'idle' | 'move' | 'marquee' | 'wire';
 
 /** How close to a pin the cursor has to be for a drag to mean "start a wire". */
 const PIN_REACH = 1.1;
+
+/**
+ * The same, for a part that is already selected.
+ *
+ * Tighter rather than nothing at all. A selected part is also the thing you are
+ * about to move, and a small symbol has most of its body inside the ordinary
+ * reach — a ground is twenty units tall with its pin on the top edge — so at the
+ * full reach it could never be dragged. Refusing the pin outright fixed that at
+ * the price of making a selected component impossible to wire from, which is the
+ * worse trade: the part you have just placed is the one still selected, and
+ * connecting it is the very next thing anyone does.
+ *
+ * At this reach the terminal itself starts a wire and the rest of the symbol
+ * moves it, which is what the two look like.
+ */
+const SELECTED_PIN_REACH = 0.5;
 
 /**
  * Explored-cell cap for a route computed mid-drag.
@@ -58,15 +74,6 @@ export function createSelectTool(): Tool {
 	let pressedWasSelected = false;
 	/** Which leg of a wire the press landed on, when the press was on a wire. */
 	let pressedSegment: { wireId: string; index: number } | null = null;
-	/**
-	 * A press on a wire that has not been selected yet, waiting to find out which
-	 * gesture it is.
-	 *
-	 * Moving turns it into a new wire tapped off that one; releasing without moving
-	 * selects it, which is the other thing a click on a wire has always meant. The
-	 * decision cannot be made on the press, so it is deferred by one event.
-	 */
-	let tapping: { id: string; from: Point } | null = null;
 	/** Pin pairs the current offset would join, for the overlay to show. */
 	let pendingJoin: Vec2 | null = null;
 
@@ -104,11 +111,10 @@ export function createSelectTool(): Tool {
 	function pinUnder(pointer: EditorPointer, ctx: ToolContext): SnapTarget | null {
 		const found = ctx.snap.nearestPoint(pointer.world, ctx.tolerance * PIN_REACH);
 		if (!found || found.kind !== 'pin') return null;
-		// A pin belonging to something already selected is a handle for moving it,
-		// not for starting a wire. Without this a small symbol — a ground is twenty
-		// units tall with its pin on the top edge — has most of its body inside pin
-		// reach and can never be dragged at all.
-		if (found.ownerId && app.selection.includes(found.ownerId)) return null;
+		if (found.ownerId && app.selection.includes(found.ownerId)) {
+			const near = ctx.snap.nearestPoint(pointer.world, ctx.tolerance * SELECTED_PIN_REACH);
+			if (!near || near.kind !== 'pin' || near.label !== found.label) return null;
+		}
 		return found;
 	}
 
@@ -171,21 +177,27 @@ export function createSelectTool(): Tool {
 
 	/** Routing used both while dragging and on release — there is only one. */
 	function routeDragged(ctx: ToolContext) {
-		const moving = new Set(app.selection);
 		// A hard backstop on the frame, for the case the per-route cap does not
 		// cover: dragging a part with a dozen wires on a crowded page. Past it the
 		// remaining wires take the plain elbow, which is instant. Releasing does not
 		// re-route — `endMove` keeps the geometry the last frame produced — so this
 		// cannot make the committed shape differ from the previewed one.
 		const deadline = performance.now() + FRAME_ROUTING_MS;
-		return (from: Point, to: Point, settling: ReadonlySet<string>) => {
+		return (from: Point, to: Point, settling: ReadonlySet<string>, prefer?: readonly Point[]) => {
 			if (performance.now() > deadline) return elbow(from, to);
 			return routeWire(app.schematic, from, to, {
 				grid: ctx.gridSize,
-				// The parts on the move are not obstacles for the wire chasing them,
-				// or the route would have to detour around the very pin it is
-				// heading for.
-				ignoreInstances: moving,
+				// What the wire looked like before this drag. Leaving it costs, which
+				// is how a shape someone arranged on purpose survives a move without a
+				// separate rule saying when to keep it.
+				prefer,
+				// The parts on the move stay obstacles, contrary to what one might
+				// expect. Exempting them was meant to stop a route detouring around
+				// the pin it is heading for — but obstacle boxes are inset by half a
+				// cell precisely so a pin is always reachable without paying the body
+				// cost, so there was nothing to protect against. What the exemption
+				// did instead was let a wire chasing a part's pin drive straight
+				// through the middle of that part to reach it.
 				ignoreWires: settling,
 				// Deliberately below the default. A drag routes every frame, and a
 				// bound that depends only on the geometry keeps each frame's result
@@ -211,7 +223,6 @@ export function createSelectTool(): Tool {
 			pressedId = null;
 			pressedSegment = null;
 			pendingJoin = null;
-			tapping = null;
 			hoveredPin = null;
 			wireFrom = null;
 			if (app.hoverNet !== null) {
@@ -236,18 +247,11 @@ export function createSelectTool(): Tool {
 
 			const item = ctx.scene.top(pointer.world, ctx.tolerance);
 
-			// Pressing an unselected wire is ambiguous: it could be a click to select
-			// it, or the start of a branch off it. Hold both open until the pointer
-			// says which. This is the same rule the pins follow — something already
-			// selected is a handle for editing, anything else is a place to wire from.
-			if (item && item.kind === 'wire' && !app.selection.includes(item.id)) {
-				const on = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
-				tapping = { id: item.id, from: { x: on.x, y: on.y } };
-				pressedId = item.id;
-				moved = false;
-				ctx.invalidate('overlay');
-				return;
-			}
+			// Pressing a wire used to be ambiguous — a click to select it, or the
+			// start of a branch off it — resolved by watching what the pointer did
+			// next. It reads as a wire that runs away when you try to move it, which
+			// is the opposite of what dragging anything else does. Branching now has
+			// a tool of its own; here, a wire is a wire.
 
 			if (item) {
 				pressedId = item.id;
@@ -283,21 +287,6 @@ export function createSelectTool(): Tool {
 		},
 
 		pointerMove(pointer, ctx) {
-			// The deferred decision: the pointer has moved, so that press on a wire
-			// was the start of a branch rather than a click to select it.
-			if (tapping) {
-				const now = snapPoint(pointer.world, ctx.gridSize);
-				if (now.x !== tapping.from.x || now.y !== tapping.from.y) {
-					mode = 'wire';
-					wireFrom = tapping.from;
-					handRouted = pointer.shift;
-					wireTo = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
-					tapping = null;
-					ctx.invalidate('overlay');
-				}
-				return;
-			}
-
 			if (mode === 'wire') {
 				handRouted = pointer.shift;
 				wireTo = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
@@ -345,26 +334,14 @@ export function createSelectTool(): Tool {
 		},
 
 		pointerUp(pointer, ctx) {
-			// Pressed and released on a wire without moving: that was a click, so
-			// select it, which is what it did before branching was possible.
-			if (tapping) {
-				app.selection = pointer.shift ? [...new Set([...app.selection, tapping.id])] : [tapping.id];
-				tapping = null;
-				pressedId = null;
-				mode = 'idle';
-				ctx.invalidate('schematic', 'overlay');
-				return;
-			}
-
 			if (mode === 'wire' && wireFrom) {
 				const to = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
 				if (to.x !== wireFrom.x || to.y !== wireFrom.y) {
 					// Dragged from a pin, so the far end is the one that can be adrift.
+					// Refused in silence: the preview has been red the whole way, which
+					// says it better than a banner that then has to be dismissed.
 					if (connectsAt({ x: to.x, y: to.y })) {
-						app.notice = null;
 						app.addWirePath(wirePath({ x: to.x, y: to.y }, ctx));
-					} else {
-						app.notice = DANGLING_NOTICE;
 					}
 				}
 				wireFrom = null;

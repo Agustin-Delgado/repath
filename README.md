@@ -190,9 +190,15 @@ and re-routes them, instead of leaving them behind holding nothing; and dragging
 off a pin draws a connection without switching tools, which is the gesture people
 reach for after dropping a part.
 
-There is no wire mode, for the same reason. Dragging off a pin or off an existing
-wire draws one, both ends have to land on something anyway, so a mode whose whole
-job was drawing freely had nothing left to do.
+Pressing a wire, though, means the wire. That used to be ambiguous — a click to
+select it, or the start of a branch off it — and the tool guessed by watching
+whether the pointer moved next, so a wire someone meant to drag ran away and
+became a new wire instead. Dragging a thing should move the thing, so branching
+has a tool of its own in the palette. It is the only thing that tool is for: a
+run off the middle of an existing wire is the one connection a pin cannot start.
+
+Either way a wire needs something at both ends. One that would be left in mid-air
+is turned away as it is drawn, not after.
 
 **The router** is A* over the grid, with costs rather than walls almost
 everywhere. Only component bodies are real obstacles; crossing a wire, running
@@ -230,13 +236,37 @@ eyeballed — ΔE 22 under protanopia, 32 under tritanopia, 32 with normal visio
 all clearing 3:1 against the canvas — and colour is never the only channel, since
 the same values are on the scope and in the readout.
 
+Everything in this layer is a function of the playback instant and nothing else,
+with one exception: the current dots carry a phase that accumulates in real time,
+because motion cannot be read off a single frozen moment. That is the one thing
+that has to be told when the transport stops, and it is — dots still crawling
+under a paused clock would report a flow the readouts beside them call frozen.
+
+LEDs light from the same currents. Brightness follows a power law rather than the
+current itself, since a fifth of the current still reads as about half the light,
+and an overdriven one blazes past full before it goes.
+
+Whether it goes is decided in the engine, inside the transient loop, by an
+integrated dose rather than a threshold: a brief pulse at ten times rated is
+ordinary multiplexed operation, while twice rated held for a millisecond is fatal.
+Only accepted timepoints count toward the dose, so a step the solver tried and
+threw away contributes nothing, and the trapezoid between timepoints keeps a spike
+the circuit spent no time at from destroying a part that was never in danger.
+
+Deciding it there rather than reading it off the finished waveforms is what makes
+the answer usable: a part that fails at 321 µs is open from 321 µs, and everything
+after that is the circuit without it. In the LED driver example the node above the
+burnt part steps from its forward drop straight to the rail, because nothing is
+drawing through the series resistor any more — which is exactly what the bench
+would show you.
+
 ## What is in the box
 
 | | |
 |---|---|
 | **Passive** | resistor, capacitor, inductor, ground |
 | **Sources** | voltage and current, with DC / sine / pulse waveforms |
-| **Semiconductors** | diode (silicon, LED, zener), NMOS, PMOS, NPN, PNP |
+| **Semiconductors** | diode (silicon, zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP |
 | **Analog** | op-amp with finite gain and rail saturation, voltage-controlled switch, VCVS, VCCS |
 | **Logic** | AND, NAND, OR, NOR, XOR, NOT, D flip-flop, tri-state buffer, clock |
 | **Analyses** | DC operating point, DC sweep, mixed-signal transient, AC frequency sweep |
@@ -246,8 +276,11 @@ the same values are on the scope and in the readout.
 | | |
 |---|---|
 | Place a part | pick it in the palette, then click the canvas — `R` turns the ghost before you drop it |
-| Connect two things | drag from one pin to another — there is no wire mode to switch to |
-| Branch off a wire | drag from any point on it; that is how a junction is made |
+| Connect two things | drag from one pin to another — no tool to switch to first |
+| Branch off a wire | pick **Wire** in the palette and drag from any point on one |
+| Move a wire | drag it; a leg with corners reshapes, a straight one slides |
+| Place several of a part | hold `Shift` — otherwise the cursor comes back after one |
+| Report something odd | **Steps** copies everything you did, as text, so it can be replayed exactly |
 | Hand-route a wire | hold `Shift` while drawing to bypass the router |
 | Reshape a wire | select it, then drag the leg you want to move |
 | Select | click, `Shift`-click to add, or drag a box around things |

@@ -35,7 +35,7 @@
 <style>
 	path {
 		stroke: var(--symbol-stroke, #d8dee9);
-		stroke-width: 2;
+		stroke-width: 1;
 		stroke-linecap: round;
 		stroke-linejoin: round;
 		fill: none;

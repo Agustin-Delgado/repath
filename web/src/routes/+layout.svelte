@@ -34,7 +34,7 @@
 
 		--accent: #4ea8ff;
 		--accent-text: #08111c;
-		--selection: #ffb454;
+		--selection: #ffd400;
 		--danger: #ff6b7a;
 
 		--scope-axis: #39414f;

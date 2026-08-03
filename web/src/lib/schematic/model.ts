@@ -7,6 +7,8 @@
  * gate and it just works, with no explicit converter to place.
  */
 
+import { LED_COLOURS, RATED } from './led';
+
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
 
@@ -393,7 +395,6 @@ export const CATALOG: ComponentDef[] = [
 				default: 'silicon',
 				choices: [
 					{ value: 'silicon', label: 'Silicon (1N4148)' },
-					{ value: 'led', label: 'LED (red)' },
 					{ value: 'zener', label: 'Zener' }
 				]
 			},
@@ -407,6 +408,35 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				nonZero: true,
 				visibleWhen: { key: 'model', values: ['zener'] }
+			}
+		]
+	},
+	{
+		kind: 'led',
+		// Taller than a plain diode: the emission arrows are part of the symbol, and
+		// a box that stopped at the body would let a label sit on top of them.
+		box: { x: -30, y: -24, w: 60, h: 33 },
+		label: 'LED',
+		group: 'semiconductor',
+		prefix: 'D',
+		pins: [analog('anode', -30, 0), analog('cathode', 30, 0)],
+		params: [
+			{
+				key: 'colour',
+				label: 'Colour',
+				unit: '',
+				default: LED_COLOURS[0].value,
+				choices: LED_COLOURS.map(({ value, label }) => ({ value, label })),
+				description: 'Sets the forward voltage as well as the light: blue needs 3 V where red needs 1.9 V.'
+			},
+			{
+				key: 'imax',
+				label: 'Rated current',
+				unit: 'A',
+				default: RATED,
+				min: 0,
+				nonZero: true,
+				description: 'Held above this the LED burns out. Brief pulses well over it survive.'
 			}
 		]
 	},
@@ -563,6 +593,21 @@ export function definitionOf(kind: string): ComponentDef {
 	return def;
 }
 
+/**
+ * Bring an instance up to date with the current catalog.
+ *
+ * An LED used to be one of the diode's model choices, from before it could light
+ * up. Someone's saved file or shared link still says so, and dropping the choice
+ * without this would leave them holding a plain silicon diode that no longer
+ * glows and no longer has the forward voltage their circuit was designed around.
+ */
+export function migrateInstance(instance: Instance): Instance {
+	if (instance.kind === 'diode' && instance.params.model === 'led') {
+		return { ...instance, kind: 'led', params: defaultParams('led') };
+	}
+	return instance;
+}
+
 export function defaultParams(kind: string): Record<string, number | string> {
 	const params: Record<string, number | string> = {};
 	for (const p of definitionOf(kind).params) params[p.key] = p.default;
@@ -573,6 +618,21 @@ export function defaultParams(kind: string): Record<string, number | string> {
 export function isParamVisible(param: ParamDef, params: Record<string, number | string>): boolean {
 	if (!param.visibleWhen) return true;
 	return param.visibleWhen.values.includes(String(params[param.visibleWhen.key]));
+}
+
+/**
+ * Which axis a pin faces once its part has been turned.
+ *
+ * A lead leaves the body along whichever axis the pin sits furthest out on, so
+ * this is the direction a wire is expected to arrive from — and the direction
+ * along which moving the part changes how far that wire has to reach, rather
+ * than where it runs.
+ */
+export function pinAxis(instance: Instance, pin: PinDef): 'x' | 'y' {
+	const facing =
+		Math.abs(pin.x) >= Math.abs(pin.y) ? { x: 1, y: 0 } : { x: 0, y: 1 };
+	const turned = rotatePoint(facing.x, facing.y, instance.rotation);
+	return Math.abs(turned.x) >= Math.abs(turned.y) ? 'x' : 'y';
 }
 
 /** Next free reference designator for a kind, e.g. `R3`. */

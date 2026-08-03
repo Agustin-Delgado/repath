@@ -84,6 +84,20 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
+	led: {
+		shapes: [
+			path('M-30 0 H-8'),
+			path('M-8 -9 L-8 9 L8 0 Z', true),
+			path('M8 -9 V9'),
+			path('M8 0 H30'),
+			// Two arrows leaving the junction: the mark that says this one emits.
+			// Drawn clear of the body so the glow has somewhere to sit.
+			path('M-2 -12 L6 -20 M1 -20 H6 V-15'),
+			path('M5 -12 L13 -20 M8 -20 H13 V-15')
+		],
+		labels: []
+	},
+
 	nmos: {
 		shapes: [
 			path('M-30 0 H-16 M-16 -14 V14'),
@@ -216,10 +230,6 @@ function diode(variant: string): SymbolGeometry {
 	// A zener's cathode bar is bent, which is the whole visual distinction.
 	shapes.push(variant === 'zener' ? path('M8 -9 H3 M8 -9 V9 M8 9 H13') : path('M8 -9 V9'));
 	shapes.push(path('M8 0 H30'));
-	if (variant === 'led') {
-		shapes.push(path('M2 -14 L10 -22 M6 -22 H10 V-18'));
-		shapes.push(path('M8 -11 L16 -19 M12 -19 H16 V-15'));
-	}
 	return { shapes, labels: [] };
 }
 

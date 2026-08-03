@@ -455,3 +455,105 @@ function firstJunctionWithin(
 	}
 	return null;
 }
+
+// ---------------------------------------------------------------------------
+// Making room for a part
+// ---------------------------------------------------------------------------
+
+/** Running distance to each corner of a polyline. Axis-aligned, so Manhattan. */
+function lengthsOf(points: readonly Point[]): number[] {
+	const out = [0];
+	for (let i = 1; i < points.length; i++) {
+		const step = Math.abs(points[i].x - points[i - 1].x) + Math.abs(points[i].y - points[i - 1].y);
+		out.push(out[i - 1] + step);
+	}
+	return out;
+}
+
+/** How far along a wire a point sits, or null if it is not on it at all. */
+function positionAlong(points: readonly Point[], p: Point): number | null {
+	const lengths = lengthsOf(points);
+	for (let i = 1; i < points.length; i++) {
+		const a = points[i - 1];
+		if (p.x === a.x && p.y === a.y) return lengths[i - 1];
+		if (liesWithin(p.x, p.y, a, points[i])) {
+			return lengths[i - 1] + Math.abs(p.x - a.x) + Math.abs(p.y - a.y);
+		}
+	}
+	const last = points[points.length - 1];
+	if (p.x === last.x && p.y === last.y) return lengths[lengths.length - 1];
+	return null;
+}
+
+function pointAt(points: readonly Point[], distance: number): Point {
+	const lengths = lengthsOf(points);
+	for (let i = 1; i < points.length; i++) {
+		if (distance > lengths[i]) continue;
+		const a = points[i - 1];
+		const b = points[i];
+		const span = lengths[i] - lengths[i - 1];
+		const t = span === 0 ? 0 : (distance - lengths[i - 1]) / span;
+		return { x: Math.round(a.x + (b.x - a.x) * t), y: Math.round(a.y + (b.y - a.y) * t) };
+	}
+	return { ...points[points.length - 1] };
+}
+
+/** The stretch of a wire between two distances along it. */
+function sliceAlong(points: readonly Point[], from: number, to: number): Point[] {
+	if (to <= from) return [];
+	const lengths = lengthsOf(points);
+	const out: Point[] = [pointAt(points, from)];
+	for (let i = 0; i < points.length; i++) {
+		if (lengths[i] > from && lengths[i] < to) out.push({ ...points[i] });
+	}
+	out.push(pointAt(points, to));
+	return out.filter((p, i) => i === 0 || p.x !== out[i - 1].x || p.y !== out[i - 1].y);
+}
+
+/**
+ * Open a gap in any wire that a part now bridges, so it sits in series.
+ *
+ * Dropping a component onto a wire is how anyone puts one in a circuit, and it
+ * is exactly what you get after deleting a part and letting the gap close behind
+ * it. What it must never leave behind is the part standing on an unbroken wire:
+ * that shorts it out, and the drawing gives nothing away, because a symbol on a
+ * line with a pin touching at each end is what a series connection looks like.
+ * The simulation is then right about a circuit nobody meant to draw.
+ *
+ * So a wire reaching two or more of the part's pins loses the run between the
+ * outermost of them, and the pieces either side stay. What joins them now is the
+ * part. A wire touching only one pin is left alone: that is a tap, and it is
+ * what someone branching off a wire means.
+ */
+export function openForPins(
+	schematic: Schematic,
+	pins: readonly Point[],
+	nextId: () => string
+): Wire[] {
+	const out: Wire[] = [];
+
+	for (const wire of schematic.wires) {
+		const hits = pins
+			.map((p) => positionAlong(wire.points, p))
+			.filter((d): d is number => d !== null)
+			.sort((a, b) => a - b);
+
+		const total = lengthsOf(wire.points).at(-1) ?? 0;
+		if (hits.length < 2 || hits[hits.length - 1] <= hits[0]) {
+			out.push(wire);
+			continue;
+		}
+
+		let reusedId = false;
+		for (const piece of [
+			sliceAlong(wire.points, 0, hits[0]),
+			sliceAlong(wire.points, hits[hits.length - 1], total)
+		]) {
+			if (piece.length < 2) continue;
+			out.push({ id: reusedId ? nextId() : wire.id, points: piece });
+			reusedId = true;
+		}
+	}
+
+	return out;
+}

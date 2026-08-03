@@ -15,6 +15,7 @@
 	let acStartField = $state(formatValue(app.acStart, 3));
 	let acStopField = $state(formatValue(app.acStop, 3));
 	let fileInput = $state<HTMLInputElement | null>(null);
+	let traceState = $state<'idle' | 'copied' | 'failed'>('idle');
 	let shareState = $state<'idle' | 'copied' | 'failed'>('idle');
 
 	$effect(() => {
@@ -93,8 +94,32 @@
 
 	function commitStopTime(value: string) {
 		const parsed = parseValue(value);
-		if (parsed !== null && parsed > 0) app.stopTime = parsed;
+		if (parsed !== null && parsed > 0) app.setStopTime(parsed);
 		stopField = formatValue(app.stopTime, 3);
+	}
+
+	/**
+	 * Hand over what has been done here, as text.
+	 *
+	 * A share link carries the circuit; this carries the *route* to it, which for
+	 * anything involving a drag is the part that is hard to describe and easy to
+	 * get wrong when it is described. Paste it into a bug report and the exact
+	 * sequence can be replayed rather than guessed at.
+	 */
+	async function copyTrace() {
+		const text = app.trace.toText();
+		if (!text) {
+			app.notice = 'Nothing has been done yet, so there is nothing to hand over.';
+			return;
+		}
+		try {
+			await navigator.clipboard.writeText(text);
+			traceState = 'copied';
+		} catch {
+			traceState = 'failed';
+			app.notice = text;
+		}
+		setTimeout(() => (traceState = 'idle'), 2500);
 	}
 
 	function commitAc(which: 'start' | 'stop', value: string) {
@@ -146,8 +171,31 @@
 		</div>
 
 		<div class="controls">
-			<button class="run" onclick={() => app.run()} disabled={app.running}>
-				{app.running ? 'Running…' : 'Run'}
+			<!--
+				One button for the whole thing. Running is a state you are in or out
+				of, and having to hunt for a different control to leave it is what made
+				a paused overlay sit there looking like a live one.
+			-->
+			<button
+				class="run"
+				class:stopping={app.live && !app.running}
+				onclick={() => (app.live && !app.running ? app.stop() : app.run())}
+				disabled={app.running}
+				title={app.live
+					? 'Stop simulating and put the drawing back'
+					: 'Simulate and show it on the schematic'}
+			>
+				<svg viewBox="0 0 12 12" aria-hidden="true">
+					{#if app.running}
+						<circle cx="6" cy="6" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"
+							stroke-dasharray="6 20" stroke-linecap="round" />
+					{:else if app.live}
+						<path d="M3 2.5h2.2v7H3zM6.8 2.5H9v7H6.8z" />
+					{:else}
+						<path d="M3.5 2l6 4-6 4z" />
+					{/if}
+				</svg>
+				{app.running ? 'Running…' : app.live ? 'Stop' : 'Run'}
 			</button>
 
 			<select
@@ -219,6 +267,16 @@
 
 			<button onclick={share} title="Copy a link that contains this circuit">
 				{shareState === 'copied' ? 'Copied' : shareState === 'failed' ? 'In the URL bar' : 'Share'}
+			</button>
+			<button
+				onclick={copyTrace}
+				title="Copy every step taken here, as text, so it can be replayed"
+			>
+				{traceState === 'copied'
+					? `Copied ${app.trace.steps.length}`
+					: traceState === 'failed'
+						? 'See the notice'
+						: 'Steps'}
 			</button>
 			<button onclick={save} title="Download this circuit">Save</button>
 			<button onclick={() => fileInput?.click()} title="Open a saved circuit">Open</button>
@@ -341,7 +399,24 @@
 		border-color: var(--accent) !important;
 		color: var(--accent-text) !important;
 		font-weight: 600;
-		min-width: 4.5rem;
+		min-width: 5.6rem;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.35rem;
+	}
+
+	.run svg {
+		width: 11px;
+		height: 11px;
+		fill: currentColor;
+	}
+
+	/* Running reads as the live state; leaving it should not look like the same
+	   invitation, so the button steps back to an outline while it is on. */
+	.run.stopping {
+		background: transparent !important;
+		color: var(--accent) !important;
 	}
 
 	.run:disabled {

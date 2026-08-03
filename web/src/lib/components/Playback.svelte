@@ -75,6 +75,22 @@
 			<span class="dots" aria-hidden="true">•••</span>
 			Current
 		</button>
+		<button
+			class:active={app.showValues}
+			onclick={() => (app.showValues = !app.showValues)}
+			title="Print the voltage on each net and the current through each part"
+		>
+			<span class="figures" aria-hidden="true">5V</span>
+			Values
+		</button>
+		<button
+			class:active={app.showLight}
+			onclick={() => (app.showLight = !app.showLight)}
+			title="Light the LEDs from the current through them"
+		>
+			<span class="bulb" aria-hidden="true">●</span>
+			Light
+		</button>
 	</div>
 </div>
 
@@ -191,5 +207,16 @@
 	.dots {
 		color: #ffe9a8;
 		letter-spacing: -1px;
+	}
+
+	.figures {
+		font-family: var(--font-mono);
+		font-size: 0.62rem;
+		color: #7fe3a0;
+	}
+
+	.bulb {
+		color: #ff4e3e;
+		text-shadow: 0 0 5px #ff4e3e;
 	}
 </style>

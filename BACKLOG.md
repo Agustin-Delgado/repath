@@ -27,6 +27,9 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Op-amp | Single-pole-free: infinite bandwidth, no slew limit, no input offset | An op-amp circuit will look better than the real one |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
 | Digital | No setup/hold checking, no X-propagation through timing | A metastable design simulates as if it were fine |
+| Editor | A wire is consumed when a drag lands its two pins on the same point | Separating them again leaves both bare; the wire is not restored |
+| LED | Reverse breakdown not modelled | A real LED dies a few volts backwards; here it simply blocks |
+| LED | Failure is thermal-free: one dose rule, no junction temperature | A part in still air and one on a heatsink fail at the same instant |
 | Animation | BJT base current approximated as zero when distributing wire current | Base-net current dots are missing rather than wrong |
 | Animation | Wires closing a loop show no current | Genuinely undefined for ideal wires in parallel; shown as nothing rather than guessed |
 | Canvas | Layer-level invalidation, no dirty rectangles | A full-screen repaint per interaction on the affected layer |
@@ -101,7 +104,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 - [ ] Crystal / resonator.
 - [ ] Voltage-controlled oscillator, comparator with hysteresis.
 - [ ] Counters, shift registers, decoders, multiplexers, RAM/ROM.
-- [ ] 7-segment display, LED with visible brightness, bar graph.
+- [ ] 7-segment display and bar graph, built on the LED that already lights.
 - [ ] Current-controlled sources (`F` and `H`) to complete the set.
 - [ ] Ideal transmission line.
 
@@ -190,3 +193,11 @@ Kept short — it is here to show the direction, not to be a changelog.
   so instead of quietly showing the default circuit.
 - A wire that would end in mid-air is turned away, shown as such while it is
   being drawn rather than only after.
+- Every operation recorded as replayable text, so a report can be reproduced
+  rather than reconstructed from a screenshot and a description.
+- Drag routing decided by one cost function with the old path as an input,
+  replacing five interacting rules about when to keep a shape and when to redraw.
+- LEDs in five colours that light from the current through them and blow up when
+  driven past their rating — modelled inside the transient loop, so a part that
+  fails is open for the rest of the run and the waveforms after it are the circuit
+  without it. The current animation stops when playback does.

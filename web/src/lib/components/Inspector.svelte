@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { app } from '$lib/state.svelte';
+	import { ledRating } from '$lib/schematic/led';
+	import { pinKey } from '$lib/schematic/nets';
 	import { definitionOf, isParamVisible } from '$lib/schematic/model';
 	import {
+		formatWithUnit,
 		joinValue,
 		parseValue,
 		PREFIX_OPTIONS,
@@ -12,6 +15,28 @@
 
 	const instance = $derived(app.selectedInstances.length === 1 ? app.selectedInstances[0] : null);
 	const def = $derived(instance ? definitionOf(instance.kind) : null);
+
+	/** Whether every pin of the selected part lands on the same net. */
+	const shorted = $derived.by(() => {
+		if (!instance || !def || def.pins.length < 2) return false;
+		const nets = new Set(
+			def.pins.map((pin) => app.compiled.connectivity.netOfPin.get(pinKey(instance.id, pin.name)))
+		);
+		return nets.size === 1 && !nets.has(undefined);
+	});
+
+	/** What the selected LED is carrying right now, or null if that is not a question. */
+	const lit = $derived.by(() => {
+		if (instance?.kind !== 'led') return null;
+		const current = app.currentThrough(instance.name);
+		if (current === null) return null;
+		const rated = ledRating(instance);
+		return {
+			current: Math.max(current, 0),
+			rated,
+			percent: Math.round((Math.max(current, 0) / rated) * 1000) / 10
+		};
+	});
 
 	/** Text currently in each field, so a half-typed value is not clobbered. */
 	let editing = $state<Record<string, string>>({});
@@ -234,6 +259,28 @@
 			{/each}
 		</div>
 
+		<!--
+			Why an LED is not lighting is the question this readout exists to answer.
+			Brightness is not linear in current, so a part carrying a fiftieth of its
+			rating is very nearly dark, and there is no way to tell that from the
+			drawing alone — the difference between "barely on" and "off" is a few
+			pixels of glow. Saying the number, and what it is a fraction of, turns
+			guessing into arithmetic.
+		-->
+		{#if lit}
+			<p class="reading">
+				Carrying <strong>{formatWithUnit(lit.current, 'A')}</strong>, {lit.percent}% of its
+				{formatWithUnit(lit.rated, 'A')} rating.
+				{#if shorted}
+					Nothing can flow through it: a wire runs straight past it, joining both of its pins. Move
+					the wire so it ends on each pin instead of crossing them.
+				{:else if lit.percent < 5}
+					Too little to light: check how much voltage is left over the series resistor once the LED
+					has taken its forward drop.
+				{/if}
+			</p>
+		{/if}
+
 		<div class="actions">
 			<button onclick={() => app.rotateSelection()} title="Turn a quarter turn; wires follow"
 				>Rotate <kbd>R</kbd></button
@@ -242,9 +289,32 @@
 		</div>
 	{/if}
 
+	{#if app.burnouts.length > 0}
+		<section class="issues burnt">
+			<h3>Burnt out</h3>
+			<ul>
+				{#each app.burnouts as burnout (burnout.instanceId)}
+					<li>
+						<strong>{burnout.name}</strong> reached
+						{formatWithUnit(burnout.peak, 'A')} against a
+						{formatWithUnit(burnout.rated, 'A')} rating, and went at
+						{formatWithUnit(burnout.time, 's')}.
+					</li>
+				{/each}
+			</ul>
+			<p class="caveat">
+				{app.burnouts.length === 1 ? 'It is' : 'They are'} open from then on, and the rest of the
+				run is the circuit without {app.burnouts.length === 1 ? 'it' : 'them'}. Add a series
+				resistor to keep {app.burnouts.length === 1 ? 'it' : 'them'} alive.
+			</p>
+		</section>
+	{/if}
+
 	{#if app.compiled.warnings.length > 0}
 		<section class="issues">
-			<h3>Loose ends</h3>
+			<!-- Not "loose ends" any more: a part shorted by a wire drawn past it is
+			     the opposite problem, and belongs in the same list. -->
+			<h3>Check the wiring</h3>
 			<ul>
 				{#each app.compiled.warnings.slice(0, 6) as warning, i (i)}
 					<li>{warning}</li>
@@ -451,6 +521,40 @@
 		list-style: none;
 		margin-left: -1rem;
 		opacity: 0.7;
+	}
+
+	.burnt h3 {
+		color: var(--danger);
+	}
+
+	.burnt strong {
+		color: var(--label-strong);
+		font-weight: 600;
+	}
+
+	.reading {
+		margin: 0;
+		padding: 0.4rem 0.55rem;
+		border: 1px solid var(--border);
+		border-radius: 5px;
+		background: var(--control-bg);
+		font-size: 0.7rem;
+		line-height: 1.5;
+		color: var(--label-dim);
+	}
+
+	.reading strong {
+		font-family: var(--font-mono);
+		color: var(--label-strong);
+		font-weight: 600;
+	}
+
+	.caveat {
+		margin: 0.35rem 0 0;
+		font-size: 0.68rem;
+		line-height: 1.45;
+		color: var(--label-dim);
+		opacity: 0.85;
 	}
 
 	kbd {
