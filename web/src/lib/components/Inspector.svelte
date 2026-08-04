@@ -312,6 +312,21 @@
 									<option value={choice.value}>{choice.label}</option>
 								{/each}
 							</select>
+						{:else if typeof param.default === 'string'}
+							<!--
+								Free text, not a quantity. Everything below is built for a number
+								and a unit — arrow keys that step it, an engineering prefix, a
+								parse that refuses what is not one — and running a name through
+								that machinery is how a probe called "drive" came back as "P1".
+							-->
+							<input
+								class="text"
+								value={String(instance.params[param.key] ?? '')}
+								oninput={(e) => app.setParam(instance.id, param.key, e.currentTarget.value)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter') e.currentTarget.blur();
+								}}
+							/>
 						{:else}
 							<span class="value-field" class:rejected={problems[param.key]}>
 								<input
@@ -558,6 +573,17 @@
 		font-size: 0.66rem;
 		line-height: 1.4;
 		color: var(--danger);
+	}
+
+	.fields input.text {
+		width: 100%;
+		box-sizing: border-box;
+		font-size: 0.72rem;
+		padding: 0.2rem 0.35rem;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		background: var(--control-bg);
+		color: var(--label-strong);
 	}
 
 	.value-field input {

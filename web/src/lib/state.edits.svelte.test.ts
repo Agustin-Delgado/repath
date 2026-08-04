@@ -1043,3 +1043,54 @@ describe('a diode is one device, not a menu of two', () => {
 		expect(app.schematic.instances[0].params).toEqual(before);
 	});
 });
+
+describe('a probe put where you want to measure', () => {
+	function rc() {
+		app.place('vsource', 100, 200, 0); // plus 100,170
+		app.place('resistor', 220, 170, 0); // a 190,170  b 250,170
+		app.place('ground', 100, 300, 0);
+		app.addWirePath([
+			{ x: 100, y: 170 },
+			{ x: 190, y: 170 }
+		]);
+		app.addWirePath([
+			{ x: 100, y: 230 },
+			{ x: 100, y: 290 }
+		]);
+	}
+
+	it('measures as soon as it is placed', () => {
+		// Putting one there is the request. Having to place it and then also ask
+		// for it would be two steps for one intention.
+		rc();
+		app.place('probe', 150, 170, 0);
+		expect(app.activeProbes.map((p) => p.label)).toContain('P1');
+	});
+
+	it('goes by the name you give it', () => {
+		rc();
+		app.place('probe', 150, 170, 0);
+		const id = app.schematic.instances.find((i) => i.kind === 'probe')!.id;
+		app.setParam(id, 'label', 'drive');
+		expect(app.activeProbes.map((p) => p.label)).toContain('drive');
+	});
+
+	it('carries no current and changes nothing', () => {
+		// It is a name attached to a point. The engine must never hear about it, or
+		// the act of measuring would alter what is measured.
+		rc();
+		const before = JSON.stringify(app.compiled.netlist);
+		app.place('probe', 150, 170, 0);
+		expect(JSON.stringify(app.compiled.netlist)).toBe(before);
+	});
+
+	it('takes the place of a guess about what to plot', () => {
+		// With probes on the drawing, the scope shows those and not a handful of
+		// nets picked for you.
+		rc();
+		app.place('probe', 150, 170, 0);
+		app.run;
+		expect(app.activeProbes.length).toBe(1);
+		expect(app.activeProbes[0].label).toBe('P1');
+	});
+});

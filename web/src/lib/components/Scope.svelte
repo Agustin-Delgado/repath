@@ -382,9 +382,9 @@
 			{#each app.compiled.connectivity.nets as net (net.index)}
 				{@const names = app.compiled.names.get(net.index)}
 				{@const signal = names?.analog ?? names?.digital}
-				{@const label = signal ? netLabel(net, signal) : ''}
+				{@const probe = app.activeProbes.find((p) => p.netIndex === net.index)}
+				{@const label = probe?.label ?? (signal ? netLabel(net, signal) : '')}
 				{#if signal && !net.isGround}
-					{@const probe = app.activeProbes.find((p) => p.netIndex === net.index)}
 					<!--
 						Pointing at a name lights that net up on the schematic. A label can
 						only say so much in the width of a sidebar; this says the rest by

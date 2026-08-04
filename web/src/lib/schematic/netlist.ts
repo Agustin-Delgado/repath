@@ -245,6 +245,10 @@ export function compileSchematic(
 		const name = instance.name;
 		switch (instance.kind) {
 			case 'ground':
+			// A probe is a name attached to a point. It carries no current and
+			// changes nothing, so the engine never hears about it — but its pin
+			// still joins a net, which is how it knows what it is measuring.
+			case 'probe':
 				break;
 			case 'resistor':
 				components.push({

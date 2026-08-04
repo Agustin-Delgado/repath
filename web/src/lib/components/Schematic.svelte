@@ -72,6 +72,20 @@
 	// on the frames where an LED is actually failing, which is very few of them.
 	const burnoutMap = $derived(burnoutsById(app.burnouts));
 
+	/**
+	 * What each placed probe will be called on the scope, and in what colour.
+	 *
+	 * Read by the drawing so a probe wears its own name: two traces are told apart
+	 * by looking at the schematic rather than by matching a legend to it.
+	 */
+	const probeLabels = $derived(
+		new Map(
+			app.activeProbes
+				.filter((p) => p.key.startsWith('pin:'))
+				.map((p) => [p.key.split(':')[1], { label: p.label, colour: p.colour }] as const)
+		)
+	);
+
 	const flowContext = $derived.by(() => {
 		const run = app.result;
 		if (!run) return null;
@@ -87,6 +101,7 @@
 			hoverNet: app.hoverNet,
 			netOfPoint: app.compiled.connectivity.netOfPoint,
 			probeColours,
+			probes: probeLabels,
 			junctions
 		};
 	}

@@ -427,10 +427,23 @@ class AppState {
 
 	compiled = $derived(compileSchematic(this.schematic, this.temperature + 273.15, this.sample));
 
+	/** Probes placed on the drawing, in the order they were put there. */
+	probeInstances = $derived(this.schematic.instances.filter((i) => i.kind === 'probe'));
+
 	activeProbes = $derived.by((): ProbeInfo[] => {
 		const compiled = this.compiled;
 		const out: ProbeInfo[] = [];
-		for (const key of this.probes) {
+		// A probe on the drawing measures whether or not anyone asked it to: that
+		// is what putting one there means. Its own name wins over anything derived
+		// from the net, because someone chose it.
+		const placed = this.probeInstances.map((i) => `pin:${i.id}:p`);
+		const named = new Map<string, string>(
+			this.probeInstances.map((i) => [
+				`pin:${i.id}:p`,
+				String(i.params.label || '').trim() || i.name
+			])
+		);
+		for (const key of [...placed, ...this.probes.filter((k) => !named.has(k))]) {
 			const netIndex = this.netForProbe(key);
 			if (netIndex === undefined) continue;
 			const names = compiled.names.get(netIndex);
@@ -442,8 +455,9 @@ class AppState {
 				netIndex,
 				analog: names?.analog,
 				digital: names?.digital,
-				// What it joins, not what the compiler called it.
-				label: net ? netLabel(net, signal) : signal,
+				// What someone called it, or failing that what it joins — anything but
+				// the name the compiler happened to give it.
+				label: named.get(key) ?? (net ? netLabel(net, signal) : signal),
 				colour: TRACE_COLOURS[out.length % TRACE_COLOURS.length]
 			});
 		}

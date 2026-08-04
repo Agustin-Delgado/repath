@@ -24,6 +24,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
 | Temperature | One number for the whole circuit; no self-heating and no per-part rise | A resistor dissipating a watt is at the same temperature as the air around it |
+| Probe | Voltage only; no current probe and no differential pair | Measuring a current means reading it off the component, not putting a probe in the branch |
 | Monte Carlo | Uniform draws, no correlation between parts, no worst-case corner search | Two halves of a matched pair drift independently here, and a random sweep can miss a corner a deliberate search would find |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
 | Digital | No setup/hold checking, no X-propagation through timing | A metastable design simulates as if it were fine |
@@ -239,6 +240,9 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- A probe you place where you want to measure, with a name you choose and its
+  own colour on the drawing — so telling two traces apart is a matter of looking
+  at the schematic rather than holding a legend in your head.
 - Signals on the scope are named after what they join — `V1.+ · R1.a` rather than
   `n1` — and pointing at one lights that net up on the drawing.
 - A tolerance sweep: many samples at once, shaded on the scope as the band the

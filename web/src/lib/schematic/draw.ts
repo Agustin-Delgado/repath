@@ -255,6 +255,8 @@ export interface SchematicView {
 	netOfPoint: ReadonlyMap<string, number>;
 	/** Net index -> trace colour, for probed nets. */
 	probeColours: ReadonlyMap<number, string>;
+	/** Probe instance id -> the name and colour it appears under on the scope. */
+	probes?: ReadonlyMap<string, { label: string; colour: string }>;
 	junctions: readonly Vec2[];
 }
 
@@ -390,6 +392,25 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 					{ color: hovered ? theme.accent : pin.domain === 'digital' ? theme.pinDigital : theme.pin, width: 1.2 }
 				);
 			}
+		}
+
+		// A probe wears the name it will appear under, in the colour it will appear
+		// in — so telling two traces apart is a matter of looking at the drawing
+		// rather than of holding a legend in your head.
+		if (showLabels && instance.kind === 'probe') {
+			const probe = view.probes?.get(instance.id);
+			painter.text(
+				probe?.label ?? instance.name,
+				{ x: instance.x, y: instance.y - 28 },
+				{
+					size: labelSize,
+					color: probe?.colour ?? theme.labelStrong,
+					align: 'center',
+					baseline: 'bottom',
+					minSize: 6
+				}
+			);
+			continue;
 		}
 
 		if (showLabels && instance.kind !== 'ground') {

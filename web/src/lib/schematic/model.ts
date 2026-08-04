@@ -498,6 +498,32 @@ export const CATALOG: ComponentDef[] = [
 		]
 	},
 	{
+		/**
+		 * A place to measure, put where you want to measure it.
+		 *
+		 * Reading a trace called `n1` means counting nets by hand; reading one
+		 * called `out` means nothing at all, because you named it. A probe carries
+		 * no current and changes nothing — it is a name attached to a point, which
+		 * is what a test point on a bench is.
+		 */
+		kind: 'probe',
+		box: { x: -8, y: -26, w: 16, h: 34 },
+		label: 'Probe',
+		group: 'analog',
+		prefix: 'P',
+		pins: [analog('p', 0, 0)],
+		params: [
+			{
+				key: 'label',
+				label: 'Name',
+				unit: '',
+				default: '',
+				description:
+					'What to call this signal on the scope. Left empty it uses the designator above.'
+			}
+		]
+	},
+	{
 		kind: 'ground',
 		box: { x: -12, y: -10, w: 24, h: 20 },
 		label: 'Ground',

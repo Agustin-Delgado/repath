@@ -82,6 +82,13 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
+	probe: {
+		// A stalk up from the point being measured, with a ring on top: the shape
+		// of every test point anyone has ever clipped a lead to.
+		shapes: [path('M0 0 V-16'), { kind: 'circle', cx: 0, cy: -21, r: 5 }],
+		labels: []
+	},
+
 	ground: {
 		shapes: [path('M0 -10 V0 M-11 0 H11 M-7 4 H7 M-3 8 H3')],
 		labels: []
