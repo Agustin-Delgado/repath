@@ -12,6 +12,7 @@ use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
 use crate::digital::{Clock, DFlipFlop, Gate, GateKind, TriStateBuffer};
 use crate::element::NodeId;
+use crate::elements::semiconductor::TNOM;
 use crate::elements::{
     Bjt, BjtModel, Capacitor, CurrentSource, Diode, DiodeModel, Inductor, Mosfet, MosfetModel,
     OpAmp, OpAmpModel, Resistor, Switch, SwitchModel, Vccs, Vcvs, VoltageSource, Waveform,
@@ -323,6 +324,19 @@ pub struct Netlist {
     /// Logic thresholds used by any bridge that does not override them.
     #[serde(default)]
     pub logic_family: LogicFamily,
+    /// What the whole circuit is sitting at, in kelvin.
+    ///
+    /// One number rather than one per part, because that is the question people
+    /// ask: does this still work in a cold car, or in a hot enclosure. Applied to
+    /// every device that has an opinion about it, over whatever its own model
+    /// said — a part that carried its own temperature would silently ignore the
+    /// oven the rest of the circuit is in.
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+}
+
+fn default_temperature() -> f64 {
+    TNOM
 }
 
 /// Names that always mean ground, whatever case the user typed.
@@ -374,7 +388,9 @@ impl Netlist {
         match comp {
             Component::Resistor { name, a, b, resistance } => {
                 let (a, b) = (self.node(c, a), self.node(c, b));
-                c.add(Box::new(Resistor::new(name, a, b, *resistance)));
+                let mut r = Resistor::new(name, a, b, *resistance);
+                r.temp = self.temperature;
+                c.add(Box::new(r));
             }
             Component::Capacitor { name, a, b, capacitance, initial_voltage } => {
                 let (a, b) = (self.node(c, a), self.node(c, b));
@@ -408,7 +424,12 @@ impl Netlist {
             }
             Component::Diode { name, anode, cathode, model } => {
                 let (a, k) = (self.node(c, anode), self.node(c, cathode));
-                c.add(Box::new(Diode::new(name, a, k, *model)));
+                c.add(Box::new(Diode::new(
+                    name,
+                    a,
+                    k,
+                    DiodeModel { temp: self.temperature, ..*model },
+                )));
             }
             Component::Mosfet { name, drain, gate, source, model } => {
                 let (d, g, s) = (self.node(c, drain), self.node(c, gate), self.node(c, source));
@@ -417,7 +438,13 @@ impl Netlist {
             Component::Bjt { name, collector, base, emitter, model } => {
                 let (col, b, e) =
                     (self.node(c, collector), self.node(c, base), self.node(c, emitter));
-                c.add(Box::new(Bjt::new(name, col, b, e, *model)));
+                c.add(Box::new(Bjt::new(
+                    name,
+                    col,
+                    b,
+                    e,
+                    BjtModel { temp: self.temperature, ..*model },
+                )));
             }
             Component::OpAmp {
                 name,

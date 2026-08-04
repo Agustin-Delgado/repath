@@ -4,6 +4,8 @@
 //! stamp, which the unit tests cannot.
 
 use repath_core::digital::Logic;
+use repath_core::elements::semiconductor::TNOM;
+use repath_core::netlist::{Component, Netlist};
 use repath_core::prelude::*;
 
 /// Value of an unknown at a given time, linearly interpolated between the two
@@ -1523,4 +1525,100 @@ fn a_zener_in_hard_breakdown_stays_a_real_number() {
     // A quarter of an amp through a 5.1 V part pushes it up a few hundred
     // millivolts, and the bulk resistance is what decides how far.
     assert!((5.0..6.5).contains(&v), "regulated at {v:.4} V");
+}
+
+#[test]
+fn a_diode_drops_two_millivolts_less_for_every_degree_warmer() {
+    // The number everybody knows, and the reason a bandgap reference has to work
+    // for a living. It falls out of the saturation current, not out of a fudge:
+    // hot, more carriers get over the gap, so less voltage passes the same
+    // current. At a fixed current the drop should slide by about -2 mV/K.
+    let drop_at = |kelvin: f64| {
+        let netlist = Netlist {
+            temperature: kelvin,
+            components: vec![
+                Component::CurrentSource {
+                    name: "I1".into(),
+                    plus: "gnd".into(),
+                    minus: "a".into(),
+                    waveform: Waveform::Dc { value: 1e-3 },
+                    ac_magnitude: 0.0,
+                    ac_phase: 0.0,
+                },
+                Component::Diode {
+                    name: "D1".into(),
+                    anode: "a".into(),
+                    cathode: "gnd".into(),
+                    model: DiodeModel::default(),
+                },
+            ],
+            ..Default::default()
+        };
+        let mut c = netlist.compile().unwrap();
+        let op = Simulator::default().operating_point(&mut c).unwrap();
+        op.solution[op.unknown_names.iter().position(|n| n == "v(a)").unwrap()]
+    };
+
+    let cold = drop_at(273.15);
+    let hot = drop_at(373.15);
+    let slope = (hot - cold) / 100.0;
+    assert!(
+        (slope + 2.0e-3).abs() < 0.4e-3,
+        "the drop moved by {:.3} mV/K, expected about -2",
+        slope * 1000.0
+    );
+
+    // And reverse leakage runs the other way, roughly doubling every ten degrees.
+    // Same expression, read at the other end of the curve.
+    let leak_at = |kelvin: f64| {
+        let netlist = Netlist {
+            temperature: kelvin,
+            components: vec![
+                Component::VoltageSource {
+                    name: "V1".into(),
+                    plus: "a".into(),
+                    minus: "gnd".into(),
+                    waveform: Waveform::Dc { value: -5.0 },
+                    ac_magnitude: 0.0,
+                    ac_phase: 0.0,
+                },
+                Component::Diode {
+                    name: "D1".into(),
+                    anode: "a".into(),
+                    cathode: "gnd".into(),
+                    model: DiodeModel::default(),
+                },
+            ],
+            ..Default::default()
+        };
+        let mut c = netlist.compile().unwrap();
+        let op = Simulator::default().operating_point(&mut c).unwrap();
+        -op.solution[op.unknown_names.iter().position(|n| n == "i(V1)").unwrap()]
+    };
+    let ratio = leak_at(TNOM + 10.0).abs() / leak_at(TNOM).abs();
+    assert!((1.7..3.0).contains(&ratio), "ten degrees multiplied the leakage by {ratio:.2}");
+}
+
+#[test]
+fn a_resistor_drifts_by_its_temperature_coefficient() {
+    // A part with none is one made of a material that does not exist. Two hundred
+    // parts per million per degree is ordinary metal film; over eighty degrees
+    // that is a sixty-fourth of the value, which is more than the tolerance band
+    // most people design against.
+    let mut c = Circuit::new();
+    let a = c.node("a");
+    let mid = c.node("mid");
+    c.add(Box::new(VoltageSource::dc("V1", a, Circuit::GROUND, 10.0)));
+    // One drifting, one not: a divider made of a matched pair would not move at
+    // all, which is exactly why precision dividers are built that way.
+    let mut top = Resistor::new("R1", a, mid, 1000.0).with_tempco(200e-6, 0.0);
+    top.temp = TNOM + 80.0;
+    c.add(Box::new(top));
+    c.add(Box::new(Resistor::new("R2", mid, Circuit::GROUND, 1000.0)));
+
+    let op = Simulator::default().operating_point(&mut c).unwrap();
+    let v = op.solution[op.unknown_names.iter().position(|n| n == "v(mid)").unwrap()];
+    // R1 is up by 1.6%, so the divider leans away from it.
+    let expected = 10.0 * 1000.0 / (1000.0 * 1.016 + 1000.0);
+    assert!((v - expected).abs() < 5e-3, "divider sat at {v:.4} V, expected {expected:.4}");
 }

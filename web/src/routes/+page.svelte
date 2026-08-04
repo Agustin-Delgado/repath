@@ -92,6 +92,14 @@
 		setTimeout(() => (shareState = 'idle'), 2500);
 	}
 
+	let tempField = $state(String(app.temperature));
+
+	function commitTemperature(value: string) {
+		const parsed = Number(value);
+		if (Number.isFinite(parsed)) app.setTemperature(parsed);
+		tempField = String(app.temperature);
+	}
+
 	function commitStopTime(value: string) {
 		const parsed = parseValue(value);
 		if (parsed !== null && parsed > 0) app.setStopTime(parsed);
@@ -244,6 +252,25 @@
 					<span class="unit">s</span>
 				</label>
 			{/if}
+
+			<!--
+				One temperature for the drawing, because that is the question people
+				ask of a circuit: does it still work in a cold car, or inside a hot
+				enclosure. Every junction drop, every gain and every resistor moves
+				with it.
+			-->
+			<label class="stop">
+				<span>at</span>
+				<input
+					bind:value={tempField}
+					onblur={(e) => commitTemperature(e.currentTarget.value)}
+					onkeydown={(e) => {
+						if (e.key === 'Enter') e.currentTarget.blur();
+					}}
+					aria-label="Circuit temperature"
+				/>
+				<span class="unit">°C</span>
+			</label>
 
 			<span class="divider"></span>
 

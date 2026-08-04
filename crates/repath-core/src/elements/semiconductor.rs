@@ -28,6 +28,44 @@ pub fn thermal_voltage(temp_k: f64) -> f64 {
 /// Room temperature, 27 °C, the SPICE default.
 pub const TNOM: f64 = 300.15;
 
+/// Silicon's bandgap at room temperature, eV. SPICE's `EG`.
+pub const BANDGAP: f64 = 1.11;
+
+/// Temperature exponent for the saturation current. SPICE's `XTI`.
+///
+/// Three for a junction whose leakage is diffusion-limited, which is every
+/// silicon diode and transistor here.
+const XTI: f64 = 3.0;
+
+fn default_tnom() -> f64 {
+    TNOM
+}
+
+/// Temperature exponent of a bipolar gain. SPICE's `XTB`.
+fn default_xtb() -> f64 {
+    1.5
+}
+
+/// How a junction's saturation current moves with temperature.
+///
+/// The dominant term is the exponential, and it is why a diode's forward drop
+/// falls about two millivolts per degree while its reverse leakage doubles every
+/// ten. Both come out of the same expression: more carriers get over the gap when
+/// it is hot, so it takes less voltage to pass a given current and more current
+/// leaks through when no voltage is applied at all.
+///
+/// `n` is 1 for a transistor's transport current and the emission coefficient for
+/// a diode, which is the only difference between the two forms.
+fn saturation_current(is_nom: f64, n: f64, temp: f64, tnom: f64) -> f64 {
+    let (t, tn) = (temp.max(1.0), tnom.max(1.0));
+    if (t - tn).abs() < 1e-9 {
+        return is_nom;
+    }
+    let ratio = t / tn;
+    let vt = thermal_voltage(t);
+    is_nom * ratio.powf(XTI / n) * safe_exp((ratio - 1.0) * BANDGAP / (n * vt))
+}
+
 fn default_vj() -> f64 {
     1.0
 }
@@ -218,8 +256,11 @@ pub struct DiodeModel {
     /// Reverse breakdown voltage as a positive number. `None` disables breakdown,
     /// which is what you want for a rectifier and not for a zener.
     pub bv: Option<f64>,
-    /// Temperature in kelvin.
+    /// Temperature this device is running at, in kelvin.
     pub temp: f64,
+    /// Temperature the parameters above were measured at.
+    #[serde(default = "default_tnom")]
+    pub tnom: f64,
     /// Zero-bias junction capacitance, farads.
     ///
     /// Charge stored in the depletion region. It is what stops a diode turning
@@ -267,6 +308,7 @@ impl Default for DiodeModel {
             tt: 5e-9,
             rs: 0.568,
             temp: TNOM,
+            tnom: TNOM,
             rated: None,
         }
     }
@@ -452,15 +494,22 @@ impl Diode {
         (id + gc * vd - ic_eq, gd + gc)
     }
 
+    /// Saturation current at the temperature this part is actually running at.
+    fn saturation(&self) -> f64 {
+        let m = &self.model;
+        saturation_current(m.is, m.n, m.temp, m.tnom)
+    }
+
     /// Current and conductance at a given junction voltage.
     fn evaluate(&self, vd: f64) -> (f64, f64) {
         let vt = thermal_voltage(self.model.temp) * self.model.n;
+        let is = self.saturation();
         // One expression covers both directions: in reverse the exponential
         // decays to zero, leaving the leakage current `-is` and a conductance
         // that tends to zero, which is exactly the physics. gmin, added by the
         // caller, is what keeps the node from floating.
         let e = safe_exp(vd / vt);
-        let (mut id, mut gd) = (self.model.is * (e - 1.0), self.model.is * e / vt);
+        let (mut id, mut gd) = (is * (e - 1.0), is * e / vt);
 
         if let Some(bv) = self.model.bv
             && vd < -bv
@@ -510,7 +559,7 @@ impl Element for Diode {
         }
 
         let vt = thermal_voltage(self.model.temp) * self.model.n;
-        let vcrit = critical_voltage(self.model.is, vt);
+        let vcrit = critical_voltage(self.saturation(), vt);
         let rs = self.model.rs.max(0.0);
 
         let terminal = ctx.voltage(self.p) - ctx.voltage(self.m);
@@ -1074,7 +1123,19 @@ pub struct BjtModel {
     pub tf: f64,
     #[serde(default = "default_tr")]
     pub tr: f64,
+    /// Temperature this device is running at, in kelvin.
     pub temp: f64,
+    /// Temperature the parameters above were measured at.
+    #[serde(default = "default_tnom")]
+    pub tnom: f64,
+    /// Temperature exponent of the forward gain. SPICE's `XTB`.
+    ///
+    /// Beta climbs with temperature — about half again over a hundred degrees —
+    /// which is one half of why a bipolar stage biased by a single base resistor
+    /// drifts. The other half is the base-emitter drop falling, and both push the
+    /// collector current the same way.
+    #[serde(default = "default_xtb")]
+    pub xtb: f64,
 }
 
 impl Default for BjtModel {
@@ -1103,6 +1164,8 @@ impl Default for BjtModel {
             tf: default_tf(),
             tr: default_tr(),
             temp: TNOM,
+            tnom: TNOM,
+            xtb: default_xtb(),
         }
     }
 }
@@ -1178,11 +1241,26 @@ impl Bjt {
         (v(self.b) - v(self.e), v(self.b) - v(self.c))
     }
 
+    /// Saturation current and forward gain at the temperature this part is
+    /// running at, rather than the one its numbers were measured at.
+    ///
+    /// Both move, and both move the same way: hot, the transport current is
+    /// larger for a given base-emitter voltage *and* more of it reaches the
+    /// collector. Which is why a stage biased by one base resistor walks its
+    /// operating point across the room's temperature and a proper bias network
+    /// does not.
+    fn at_temperature(&self) -> (f64, f64) {
+        let m = &self.model;
+        let ratio = (m.temp.max(1.0) / m.tnom.max(1.0)).max(1e-9);
+        (saturation_current(m.is, 1.0, m.temp, m.tnom), m.bf * ratio.powf(m.xtb))
+    }
+
     /// Junction conductances at a pair of junction voltages.
     fn junction_conductances(&self, vbe: f64, vbc: f64) -> (f64, f64) {
         let m = &self.model;
         let vt = thermal_voltage(m.temp);
-        (m.is * safe_exp(vbe / vt) / vt, m.is * safe_exp(vbc / vt) / vt)
+        let is = self.at_temperature().0;
+        (is * safe_exp(vbe / vt) / vt, is * safe_exp(vbc / vt) / vt)
     }
 }
 
@@ -1204,7 +1282,7 @@ impl Element for Bjt {
         let m = &self.model;
         let sign = m.polarity.sign();
         let vt = thermal_voltage(m.temp);
-        let vcrit = critical_voltage(m.is, vt);
+        let vcrit = critical_voltage(self.at_temperature().0, vt);
 
         let vb = ctx.voltage(self.b) * sign;
         let vc = ctx.voltage(self.c) * sign;
@@ -1221,14 +1299,15 @@ impl Element for Bjt {
         self.vbc_prev = vbc;
 
         // Forward and reverse transport currents and their conductances.
+        let (is, bf) = self.at_temperature();
         let ef = safe_exp(vbe / vt);
         let er = safe_exp(vbc / vt);
-        let i_f = m.is * (ef - 1.0);
-        let i_r = m.is * (er - 1.0);
+        let i_f = is * (ef - 1.0);
+        let i_r = is * (er - 1.0);
         // The junction conductances: how much more current crosses each junction
         // for a millivolt more across it. Everything else is built from these.
-        let gif_j = m.is * ef / vt;
-        let gir_j = m.is * er / vt;
+        let gif_j = is * ef / vt;
+        let gir_j = is * er / vt;
 
         // Base-width modulation. Gummel-Poon's base charge factor with high-level
         // injection left out, which is the term that matters here: the transport
@@ -1260,9 +1339,9 @@ impl Element for Bjt {
         // stage gain, so a stage whose input resistance should be a kilohm measured
         // under two hundred ohms: the DC current gain stayed at 200 while the
         // small-signal one came out at 34.
-        let ibe = i_f / m.bf;
+        let ibe = i_f / bf;
         let ibc = i_r / m.br;
-        let gbe = gif_j / m.bf + ctx.gmin;
+        let gbe = gif_j / bf + ctx.gmin;
         let gbc = gir_j / m.br + ctx.gmin;
 
         self.op_gif = gif;
@@ -1368,8 +1447,9 @@ impl Element for Bjt {
         let vt = thermal_voltage(m.temp);
         let v = |n: NodeId| node_index(n).map_or(0.0, |i| x[i]) * sign;
         let (vbe, vbc) = (v(self.b) - v(self.e), v(self.b) - v(self.c));
-        let i_f = m.is * (safe_exp(vbe / vt) - 1.0);
-        let i_r = m.is * (safe_exp(vbc / vt) - 1.0);
+        let is = self.at_temperature().0;
+        let i_f = is * (safe_exp(vbe / vt) - 1.0);
+        let i_r = is * (safe_exp(vbc / vt) - 1.0);
         Some(((i_f - i_r) - i_r / m.br) * sign)
     }
 }

@@ -9,6 +9,7 @@ use crate::complex::{C64, ComplexSystem};
 use crate::element::{
     AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, StampCtx, StampReport, node_index,
 };
+use crate::elements::semiconductor::TNOM;
 use crate::linalg::LinearSystem;
 use crate::lte::Trace;
 
@@ -20,16 +21,45 @@ pub struct Resistor {
     /// Resistance in ohms. Clamped away from zero at stamp time — a literal 0 Ω
     /// is a short, and users draw those constantly.
     pub r: f64,
+    /// First and second order temperature coefficients, per kelvin.
+    ///
+    /// A carbon film part drifts a few hundred parts per million per degree and a
+    /// wirewound one drifts more; the reason a precision divider is built from a
+    /// matched pair is that theirs cancel. Zero is a resistor made of nothing that
+    /// exists.
+    pub tc1: f64,
+    pub tc2: f64,
+    /// What the part is at, and what its value was measured at, in kelvin.
+    pub temp: f64,
+    pub tnom: f64,
 }
 
 impl Resistor {
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, r: f64) -> Self {
-        Self { name: name.into(), p, m, r }
+        Self { name: name.into(), p, m, r, tc1: 0.0, tc2: 0.0, temp: TNOM, tnom: TNOM }
+    }
+
+    pub fn with_tempco(mut self, tc1: f64, tc2: f64) -> Self {
+        self.tc1 = tc1;
+        self.tc2 = tc2;
+        self
+    }
+
+    /// Resistance at the temperature the part is actually at.
+    fn resistance(&self) -> f64 {
+        let d = self.temp - self.tnom;
+        if d == 0.0 || (self.tc1 == 0.0 && self.tc2 == 0.0) {
+            return self.r;
+        }
+        // Clamped positive: a coefficient large enough to take a resistance
+        // through zero is a description of something that stopped being a
+        // resistor, and a negative one would be a source.
+        (self.r * (1.0 + self.tc1 * d + self.tc2 * d * d)).max(self.r.abs() * 1e-3)
     }
 
     #[inline]
     fn conductance(&self) -> f64 {
-        1.0 / self.r.abs().max(1e-9)
+        1.0 / self.resistance().abs().max(1e-9)
     }
 }
 

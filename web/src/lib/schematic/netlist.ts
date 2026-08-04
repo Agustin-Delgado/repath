@@ -123,7 +123,7 @@ function diodeModel(instance: Instance): Record<string, unknown> {
 	return { is: 2.52e-9, n: 1.752, bv: null, ...base };
 }
 
-export function compileSchematic(schematic: Schematic): CompileResult {
+export function compileSchematic(schematic: Schematic, temperature = 300.15): CompileResult {
 	const connectivity = buildConnectivity(schematic);
 	const errors: string[] = [];
 	const warnings: string[] = [];
@@ -458,7 +458,7 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 	}
 
 	return {
-		netlist: errors.length ? null : { components, devices, bridges },
+		netlist: errors.length ? null : { components, devices, bridges, temperature },
 		names,
 		errors,
 		warnings,

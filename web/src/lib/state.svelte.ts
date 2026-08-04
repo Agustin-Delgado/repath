@@ -165,6 +165,14 @@ class AppState {
 	selection = $state<string[]>([]);
 	probes = $state<string[]>([]);
 	stopTime = $state(EXAMPLES[0].stopTime);
+	/**
+	 * What the whole circuit is sitting at, in degrees Celsius.
+	 *
+	 * One number for the drawing rather than one per part, because that is the
+	 * question people ask of it: does this still work in a cold car, or inside a
+	 * hot enclosure. Twenty-seven is the temperature every datasheet quotes at.
+	 */
+	temperature = $state(27);
 	exampleId = $state(EXAMPLES[0].id);
 
 	constructor() {
@@ -344,7 +352,7 @@ class AppState {
 	 */
 	private gesture: Step | null = null;
 
-	compiled = $derived(compileSchematic(this.schematic));
+	compiled = $derived(compileSchematic(this.schematic, this.temperature + 273.15));
 
 	activeProbes = $derived.by((): ProbeInfo[] => {
 		const compiled = this.compiled;
@@ -1256,7 +1264,7 @@ class AppState {
 
 	/** Pick a few interesting nets so a freshly loaded circuit plots something. */
 	autoProbe(): void {
-		const compiled = compileSchematic(this.schematic);
+		const compiled = compileSchematic(this.schematic, this.temperature + 273.15);
 		const chosen: string[] = [];
 		for (const net of compiled.connectivity.nets) {
 			if (chosen.length >= 4) break;
@@ -1367,6 +1375,16 @@ class AppState {
 	}
 
 	/** Change the length of a run, and write it down. */
+	/** Set the circuit temperature, in degrees Celsius. */
+	setTemperature(celsius: number): void {
+		if (!Number.isFinite(celsius) || celsius === this.temperature) return;
+		// Bounded well outside anything electronics is asked to survive, but bounded:
+		// absolute zero makes the thermal voltage zero and every junction infinite.
+		const clamped = Math.min(Math.max(celsius, -273), 1000);
+		this.trace.record({ op: 'temperature', celsius: clamped });
+		this.temperature = clamped;
+	}
+
 	setStopTime(seconds: number): void {
 		if (!(seconds > 0) || seconds === this.stopTime) return;
 		this.trace.record({ op: 'stop', seconds });
@@ -1437,6 +1455,9 @@ class AppState {
 				case 'stop':
 					this.setStopTime(step.seconds);
 					break;
+				case 'temperature':
+					this.setTemperature(step.celsius);
+					break;
 				case 'rename': {
 					const id = partId(step.part);
 					if (!id) return stop(`no component named ${step.part}`);
@@ -1499,7 +1520,13 @@ class AppState {
 	get netlistSignature(): string {
 		const compiled = this.compiled;
 		if (!compiled.netlist) return `error:${compiled.errors.join('|')}`;
-		return JSON.stringify([compiled.netlist, this.stopTime, this.analysis, this.acStart, this.acStop]);
+		return JSON.stringify([
+			compiled.netlist,
+			this.stopTime,
+			this.analysis,
+			this.acStart,
+			this.acStop
+		]);
 	}
 
 	/**

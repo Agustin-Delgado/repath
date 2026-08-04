@@ -23,6 +23,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | MOSFET | Gate capacitances are constant, not the bias-dependent Meyer model | Right for a datasheet's Ciss/Crss/Coss; a gate charge curve will not have its plateau in quite the right place |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
+| Temperature | One number for the whole circuit; no self-heating and no per-part rise | A resistor dissipating a watt is at the same temperature as the air around it |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
 | Digital | No setup/hold checking, no X-propagation through timing | A metastable design simulates as if it were fine |
 | LED | Reverse breakdown not modelled | A real LED dies a few volts backwards; here it simply blocks |
@@ -234,6 +235,10 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- One temperature for the whole circuit, and every junction drop, bipolar gain
+  and resistance moves with it. A diode loses two millivolts per degree, leakage
+  doubles every ten, and the common-emitter example walks its bias across the
+  room — which is the reason nobody biases one that way.
 - Diodes have a bulk resistance, so the forward curve bends away from the
   exponential where a real one does instead of climbing forever, and breakdown is
   damped like conduction rather than running off the end of `exp`.
