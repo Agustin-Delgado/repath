@@ -126,3 +126,80 @@ describe('shorted components', () => {
 		expect(compileSchematic(schematic).warnings.some((w) => w.includes('not connected'))).toBe(true);
 	});
 });
+
+describe('a pasted SPICE model', () => {
+	const Q2N3904 = `.MODEL 2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
++ ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 RC=1 CJC=3.638p MJC=.3085
++ VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75 TR=239.5n TF=301.2p RB=10)`;
+
+	/** An NPN wired up enough to compile, with whatever card is handed in. */
+	function transistor(spice: string, fields: Record<string, number> = {}) {
+		const q = at('npn', 'Q1', 200, 200);
+		Object.assign(q.params, fields);
+		q.params.spice = spice;
+		const schematic = drawing(
+			[at('vsource', 'V1', 100, 200), at('ground', 'GND1', 100, 320), q],
+			[
+				[100, 170, 170, 170],
+				[170, 170, 170, 200],
+				[100, 230, 100, 320],
+				[100, 300, 210, 300],
+				[210, 230, 210, 300],
+				[210, 170, 210, 170]
+			]
+		);
+		const result = compileSchematic(schematic);
+		const netlist = result.netlist as { components: Array<Record<string, unknown>> } | null;
+		const bjt = netlist?.components.find((c) => c.name === 'Q1');
+		return { model: bjt?.model as Record<string, number> | undefined, warnings: result.warnings };
+	}
+
+	it('is what the part is simulated as', () => {
+		// The whole point of step two: a part becomes a paste from the manufacturer
+		// rather than a row of numbers someone transcribed by hand.
+		const { model } = transistor(Q2N3904);
+		expect(model?.bf).toBeCloseTo(416.4, 6);
+		expect(model?.vaf).toBeCloseTo(74.03, 6);
+		expect(model?.is).toBeCloseTo(6.734e-15, 25);
+		// Including the ones no field on the part exposes.
+		expect(model?.br).toBeCloseTo(0.7371, 8);
+		expect(model?.mje).toBeCloseTo(0.2593, 8);
+		expect(model?.tr).toBeCloseTo(239.5e-9, 20);
+	});
+
+	it('outranks the fields it overlaps with', () => {
+		// A card is an explicit statement that *this* is the part. A field quietly
+		// winning would leave someone looking at a 2N3904 behaving like the generic
+		// transistor it was meant to replace.
+		const { model } = transistor(Q2N3904, { bf: 12 });
+		expect(model?.bf).toBeCloseTo(416.4, 6);
+	});
+
+	it('names what it could not use', () => {
+		// A 2N3904 without its high-level injection keeps its gain at currents where
+		// the real part has lost most of it. Dropping that in silence is the
+		// difference between a simplification and a lie.
+		const { warnings } = transistor(Q2N3904);
+		const note = warnings.find((w) => w.includes('2N3904'));
+		expect(note).toBeTruthy();
+		expect(note).toContain('IKF');
+		expect(note).toContain('RB');
+		// Parameters this engine matches anyway are not worth crowding it with.
+		expect(note).not.toContain('FC');
+	});
+
+	it('leaves the part alone when there is no card', () => {
+		const { model, warnings } = transistor('');
+		expect(model?.bf).toBe(200);
+		expect(warnings.some((w) => w.includes('does not model'))).toBe(false);
+	});
+
+	it('ignores a card meant for something else', () => {
+		// Pasting a diode onto a transistor should not half-apply: `IS` means
+		// different things in the two models, and taking the parameters that happen
+		// to share a name would build a part that is neither.
+		const { model } = transistor('.model 1N4148 D(IS=2.52n N=1.752 BV=100)');
+		expect(model?.is).toBe(6.73e-15);
+		expect(model?.bf).toBe(200);
+	});
+});

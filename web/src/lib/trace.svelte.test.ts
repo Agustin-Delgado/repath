@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { app } from './state.svelte';
-import { parseTrace, wireRef } from './trace';
+import { parseTrace, Trace, wireRef } from './trace';
 import { routeWire } from './schematic/route';
 import type { Point } from './schematic/model';
 
@@ -155,5 +155,34 @@ describe('naming wires', () => {
 
 		const move = app.trace.steps.find((s) => s.op === 'move');
 		expect(move).toEqual({ op: 'move', parts: [], wires: [ref], dx: 0, dy: 20 });
+	});
+});
+
+describe('a value with more than one line in it', () => {
+	const CARD = '.MODEL 2N3904 NPN(IS=6.734f BF=416.4\n+ VAF=74.03 CJC=3.638p)';
+
+	it('survives being written and read back', () => {
+		// The format is one step per line, which held while every value was a
+		// number. A pasted model card is not: written out as it stands, each of its
+		// continuation lines becomes a step of its own, and replay stops at the
+		// point where someone chose a part.
+		const trace = new Trace();
+		trace.record({ op: 'param', part: 'Q1', key: 'spice', value: CARD });
+		const text = trace.toText();
+
+		expect(text.split('\n').length).toBe(1);
+		const [step] = parseTrace(text);
+		expect(step).toEqual({ op: 'param', part: 'Q1', key: 'spice', value: CARD });
+	});
+
+	it('still reads a plain number as a number', () => {
+		const trace = new Trace();
+		trace.record({ op: 'param', part: 'R1', key: 'resistance', value: 330 });
+		expect(parseTrace(trace.toText())[0]).toEqual({
+			op: 'param',
+			part: 'R1',
+			key: 'resistance',
+			value: 330
+		});
 	});
 });

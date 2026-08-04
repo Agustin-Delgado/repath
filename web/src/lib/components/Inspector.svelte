@@ -3,6 +3,7 @@
 	import { ledRating } from '$lib/schematic/led';
 	import { pinKey } from '$lib/schematic/nets';
 	import { definitionOf, isParamVisible } from '$lib/schematic/model';
+	import { bjtFromCard, cardFor, diodeFromCard, mosfetFromCard, parseModelCards } from '$lib/spice';
 	import {
 		formatWithUnit,
 		joinValue,
@@ -36,6 +37,42 @@
 			rated,
 			percent: Math.round((Math.max(current, 0) / rated) * 1000) / 10
 		};
+	});
+
+	/**
+	 * What the pasted card came to, or `undefined` for a part that does not take
+	 * one. `null` means there is a box to paste into and nothing in it yet.
+	 */
+	const card = $derived.by(() => {
+		if (!instance || !def?.params.some((p) => p.key === 'spice')) return undefined;
+		const text = String(instance.params.spice ?? '');
+		const found = cardFor(text, instance.kind);
+		if (!found) return null;
+		const fold =
+			instance.kind === 'npn' || instance.kind === 'pnp'
+				? bjtFromCard
+				: instance.kind === 'nmos' || instance.kind === 'pmos'
+					? mosfetFromCard
+					: diodeFromCard;
+		return { name: found.name, ignored: fold(found).ignored };
+	});
+
+	/**
+	 * Why a paste did nothing.
+	 *
+	 * Silence here reads as "it worked": the fields above do not change when a
+	 * card is applied — they are what it overrides — so with nothing said, text
+	 * sitting in the box and a part still behaving like the generic one look
+	 * exactly the same.
+	 */
+	const cardProblem = $derived.by(() => {
+		if (!instance || card !== null) return null;
+		const text = String(instance.params.spice ?? '');
+		if (!text.trim()) return null;
+		const cards = parseModelCards(text);
+		if (cards.length === 0) return 'No .model card found in that text.';
+		const types = [...new Set(cards.map((c) => c.type))].join(', ');
+		return `That card is a ${types}, which does not fit a ${def?.label ?? 'part'}.`;
 	});
 
 	/** Text currently in each field, so a half-typed value is not clobbered. */
@@ -117,6 +154,20 @@
 			if (refusal) problems[key] = refusal;
 			else delete problems[key];
 		}, SETTLE_MS);
+	}
+
+	/**
+	 * The card box, on the same timer as every other field.
+	 *
+	 * A paste arrives as one event and would be fine either way, but a card that
+	 * is typed or corrected by hand would otherwise be one undo step and one trace
+	 * line per keystroke — which buries whatever came before it.
+	 */
+	function typingCard(raw: string) {
+		clearTimeout(settling.spice);
+		const id = instance?.id;
+		if (!id) return;
+		settling.spice = setTimeout(() => app.setParam(id, 'spice', raw), SETTLE_MS);
 	}
 
 	function commit(key: string, raw: string, field: HTMLInputElement) {
@@ -249,7 +300,7 @@
 
 		<div class="fields">
 			{#each def.params as param (param.key)}
-				{#if isParamVisible(param, instance.params)}
+				{#if !param.hidden && isParamVisible(param, instance.params)}
 					<label>
 						<span class="field-label">{param.label}</span>
 						{#if param.choices}
@@ -323,6 +374,47 @@
 					has taken its forward drop.
 				{/if}
 			</p>
+		{/if}
+
+		<!--
+			A part is a paste from the manufacturer rather than a row of numbers
+			transcribed by hand. What the card could not be used for is named rather
+			than dropped quietly: a 2N3904 without its high-level injection keeps its
+			gain at currents where the real part has lost most of it, and the gap
+			between a simplification and a lie is whether it is stated.
+		-->
+		{#if card !== undefined}
+			<section class="spice">
+				<h3>SPICE model</h3>
+				{#if card}
+					<p class="loaded">
+						Using <strong>{card.name}</strong>. Its values override the fields above.
+					</p>
+					{#if card.ignored.length > 0}
+						<p class="dropped">
+							Not modelled here: {card.ignored.join(', ')}.
+						</p>
+					{/if}
+				{/if}
+				<textarea
+					rows="3"
+					spellcheck="false"
+					placeholder=".model 2N3904 NPN(IS=6.734f BF=416.4 VAF=74.03 …)"
+					value={String(instance.params.spice ?? '')}
+					oninput={(e) => typingCard(e.currentTarget.value)}
+					onblur={(e) => {
+						// Read from the field, not from what the last keystroke left behind:
+						// focusing this box and leaving it without typing has to be a
+						// no-op, and taking the pending value would blank the card instead.
+						clearTimeout(settling.spice);
+						if (instance) app.setParam(instance.id, 'spice', e.currentTarget.value);
+					}}
+					aria-label="SPICE model card"
+				></textarea>
+				{#if cardProblem}
+					<p class="problem" role="alert">{cardProblem}</p>
+				{/if}
+			</section>
 		{/if}
 
 		<div class="actions">
@@ -591,6 +683,55 @@
 		font-family: var(--font-mono);
 		color: var(--label-strong);
 		font-weight: 600;
+	}
+
+	.spice {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+
+	.spice h3 {
+		margin: 0;
+		font-size: 0.66rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--label-dim);
+		font-weight: 600;
+	}
+
+	.spice textarea {
+		width: 100%;
+		box-sizing: border-box;
+		resize: vertical;
+		font-family: var(--font-mono);
+		font-size: 0.66rem;
+		line-height: 1.5;
+		padding: 0.35rem 0.45rem;
+		border: 1px solid var(--border);
+		border-radius: 5px;
+		background: var(--control-bg);
+		color: var(--label-strong);
+	}
+
+	.spice .loaded,
+	.spice .dropped {
+		margin: 0;
+		font-size: 0.68rem;
+		line-height: 1.45;
+		color: var(--label-dim);
+	}
+
+	.spice .loaded strong {
+		font-family: var(--font-mono);
+		color: var(--label-strong);
+		font-weight: 600;
+	}
+
+	/* Said quietly. It is a limit worth knowing, not a fault to fix. */
+	.spice .dropped {
+		opacity: 0.8;
+		word-break: break-word;
 	}
 
 	.caveat {

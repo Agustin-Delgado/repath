@@ -54,7 +54,9 @@ because each step is what makes the next one worth having:
    first made it possible to drag a drain past its own rail.)*
 2. **`.model` import.** A SPICE model card is one line of the parameters step 1
    adds, so a real 1N4148 or 2N3904 becomes a paste from the manufacturer rather
-   than a part someone has to hand-write here.
+   than a part someone has to hand-write here. *(Done for the diode, BJT and
+   MOSFET. What a card carries and this engine does not is named on the part
+   rather than dropped in silence.)*
 3. **Subcircuits**, then `.subckt` import. This is what turns "has an op-amp"
    into "has the op-amp you are going to buy", with its bandwidth and its slew
    rate, and it is the only way a library grows past what fits in one file.
@@ -69,9 +71,9 @@ because each step is what makes the next one worth having:
 
 ### Engine
 
-- [ ] **SPICE model import** — parse `.model` and `.subckt` from a manufacturer's
-      datasheet. This is the single biggest gap between a toy and a tool: without
-      it, every part is a generic approximation.
+- [ ] **`.subckt` import** — the other half of reading a manufacturer's file.
+      `.model` is in; a subcircuit needs somewhere to put the parts it expands to,
+      which is why it waits on the item below.
 - [ ] **Subcircuits** — draw a block once, reuse it, nest it. Needed before any
       circuit larger than a page is bearable.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
@@ -229,6 +231,10 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- A part can be a `.model` card pasted from the manufacturer instead of a row of
+  numbers transcribed by hand, kept as the text it arrived as so it survives a
+  save and a share link. What the card carries and this engine does not model is
+  named on the part.
 - Devices that store charge: junction capacitances and transit times on the BJT,
   terminal capacitances and a body diode on the MOSFET. An amplifier now runs out
   of gain at the top, a transistor takes time to switch, and a drain cannot be

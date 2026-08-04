@@ -1196,3 +1196,79 @@ fn a_mosfet_drain_cannot_be_dragged_below_its_source() {
     let i = result.current_signal(m1)[result.time.len() - 1];
     assert!(i < -3e-3, "the body diode was passing {i:.4} A, expected about -4 mA");
 }
+
+// ---------------------------------------------------------------------------
+// The contract with the editor
+// ---------------------------------------------------------------------------
+
+/// Model JSON exactly as the editor emits it for a part with a `.model` card
+/// pasted onto it — copied from what the compiler actually produced, not from
+/// what it was expected to produce.
+const CARD_2N3904: &str = r#"{"polarity":"npn","is":6.734e-15,"bf":416.4,"br":0.7371,
+"vaf":74.03,"cjc":3.638e-12,"tf":3.012e-10,"temp":300.15,"cje":4.493e-12,"vje":0.75,
+"mje":0.2593,"vjc":0.75,"mjc":0.3085,"tr":2.395e-7}"#;
+
+const CARD_1N4148: &str =
+    r#"{"is":2.52e-9,"n":1.752,"bv":100,"temp":300.15,"cj0":4e-12,"m":0.4,"tt":2e-8}"#;
+
+#[test]
+fn a_model_card_from_the_editor_arrives_intact() {
+    // Pasting a manufacturer's card is only worth anything if the numbers survive
+    // the trip. Two sides have to agree on every name for that — the editor maps
+    // SPICE spellings onto these fields, and a mismatch would be silent: serde
+    // fills a missing field with its default, so the part would simulate as a
+    // perfectly ordinary transistor and nothing anywhere would say otherwise.
+    let q: BjtModel = serde_json::from_str(CARD_2N3904).expect("the editor's JSON should parse");
+    assert!((q.bf - 416.4).abs() < 1e-9, "bf came through as {}", q.bf);
+    assert_eq!(q.vaf, Some(74.03));
+    assert!((q.br - 0.7371).abs() < 1e-9);
+    assert!((q.cje - 4.493e-12).abs() < 1e-24);
+    assert!((q.mje - 0.2593).abs() < 1e-9);
+    assert!((q.tr - 239.5e-9).abs() < 1e-18);
+    // Not in the card, so the default stands rather than being zeroed.
+    assert!(q.tf > 0.0);
+
+    let d: DiodeModel = serde_json::from_str(CARD_1N4148).expect("the editor's JSON should parse");
+    assert!((d.is - 2.52e-9).abs() < 1e-18);
+    assert!((d.n - 1.752).abs() < 1e-9);
+    assert_eq!(d.bv, Some(100.0));
+    assert!((d.cj0 - 4e-12).abs() < 1e-24);
+    assert!((d.tt - 20e-9).abs() < 1e-18);
+}
+
+#[test]
+fn a_pasted_part_behaves_like_the_part_it_names() {
+    // And the numbers have to reach the solve, not just the struct. A 2N3904 has
+    // twice the gain of the generic transistor this editor ships, so the same
+    // stage biased the same way has to pass about twice the collector current.
+    let collector_current = |model: BjtModel| {
+        let mut c = Circuit::new();
+        let vcc = c.node("vcc");
+        let base = c.node("base");
+        let col = c.node("col");
+        c.add(Box::new(VoltageSource::dc("V1", vcc, Circuit::GROUND, 12.0)));
+        // Fed from a current source, so the base drive is the same in both runs
+        // and the collector current is the gain and nothing else.
+        c.add(Box::new(CurrentSource::new(
+            "IB",
+            Circuit::GROUND,
+            base,
+            Waveform::Dc { value: 10e-6 },
+        )));
+        c.add(Box::new(Resistor::new("RC", vcc, col, 100.0)));
+        c.add(Box::new(Bjt::new("Q1", col, base, Circuit::GROUND, model)));
+
+        let op = Simulator::default().operating_point(&mut c).unwrap();
+        let v = op.solution[op.unknown_names.iter().position(|n| n == "v(col)").unwrap()];
+        (12.0 - v) / 100.0
+    };
+
+    let generic = collector_current(BjtModel::npn());
+    let real = collector_current(serde_json::from_str(CARD_2N3904).unwrap());
+    let ratio = real / generic;
+    assert!(
+        (1.9..2.3).contains(&ratio),
+        "a beta of 416 against 200 should roughly double the current; got {generic:.4} then \
+         {real:.4}, a ratio of {ratio:.2}"
+    );
+}

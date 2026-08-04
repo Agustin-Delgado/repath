@@ -114,6 +114,23 @@ export class Trace {
 
 const list = (names: readonly string[]) => (names.length ? names.join(',') : '-');
 
+/**
+ * A value onto one line.
+ *
+ * The format is one step per line, which held while every value was a number.
+ * A pasted `.model` card is not: it arrives with continuation lines, and written
+ * out as it stands each of those becomes a line the reader takes for a step of
+ * its own — so the trace stops replaying at the point where someone chose a
+ * part, which is rarely the uninteresting half of what they did.
+ */
+const flatten = (value: number | string): string =>
+	typeof value === 'number'
+		? String(value)
+		: value.replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n');
+
+const unflatten = (text: string): string =>
+	text.replace(/\\(.)/g, (_, character) => (character === 'n' ? '\n' : character));
+
 function format(step: Step): string {
 	switch (step.op) {
 		case 'example':
@@ -133,7 +150,7 @@ function format(step: Step): string {
 		case 'rotate':
 			return `rotate ${list(step.parts)} ${list(step.wires)}`;
 		case 'param':
-			return `param ${step.part} ${step.key} ${step.value}`;
+			return `param ${step.part} ${step.key} ${flatten(step.value)}`;
 		case 'rename':
 			return `rename ${step.part} ${step.to}`;
 		case 'undo':
@@ -212,7 +229,13 @@ function read(op: string, rest: string[]): Step {
 			return { op, parts: names(rest[0]), wires: names(rest[1]) };
 		case 'param': {
 			const value = rest.slice(2).join(' ');
-			return { op, part: rest[0], key: rest[1], value: Number.isFinite(Number(value)) && value !== '' ? Number(value) : value };
+			return {
+				op,
+				part: rest[0],
+				key: rest[1],
+				value:
+					Number.isFinite(Number(value)) && value !== '' ? Number(value) : unflatten(value)
+			};
 		}
 		case 'rename':
 			return { op, part: rest[0], to: rest[1] };

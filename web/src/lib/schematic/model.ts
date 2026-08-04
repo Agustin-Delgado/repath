@@ -48,6 +48,14 @@ export interface ParamDef {
 	/** Refuse exactly zero, for quantities a zero would make degenerate. */
 	nonZero?: boolean;
 	/**
+	 * Kept out of the ordinary list of fields, because a text box is not a value.
+	 *
+	 * The inspector lays parameters out as a number and a unit. A pasted model
+	 * card is neither, and it gets a block of its own rather than being squeezed
+	 * into a row that was built for `470 Ω`.
+	 */
+	hidden?: boolean;
+	/**
 	 * Show the number as it is, with no engineering prefix beside it.
 	 *
 	 * For quantities that live near one and mean nothing scaled: a duty cycle of
@@ -237,6 +245,20 @@ const analog = (name: string, x: number, y: number): PinDef => ({
 	domain: 'analog',
 	direction: 'inout'
 });
+
+/**
+ * A `.model` card pasted onto a part, verbatim.
+ *
+ * Held as the text it arrived as rather than unpacked into a row of fields. A
+ * card has twenty-odd parameters and this engine models eight of them, so
+ * unpacking would mean either twenty fields nobody wants to look at or silently
+ * throwing away the twelve that did not fit. Keeping the text means the part
+ * says which one it is, the card survives a save and a share link intact, and
+ * what could not be used is reported rather than lost.
+ */
+const SPICE_CARD = [
+	{ key: 'spice', label: 'SPICE model', unit: '', default: '', hidden: true }
+] as const;
 
 /// What a transistor has to be charged with before it does anything, shared by
 /// both polarities of each device. These are the parameters that give a stage a
@@ -453,7 +475,8 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				nonZero: true,
 				visibleWhen: { key: 'model', values: ['zener'] }
-			}
+			},
+			...SPICE_CARD
 		]
 	},
 	{
@@ -482,7 +505,11 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				nonZero: true,
 				description: 'Held above this the LED burns out. Brief pulses well over it survive.'
-			}
+			},
+			// The colour and the rating survive a pasted card: one is about light and
+			// the other about what destroys the part, and neither is something a
+			// `.model` line has an opinion on.
+			...SPICE_CARD
 		]
 	},
 	{
@@ -504,7 +531,8 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				description: 'The drain current keeps climbing in saturation. Zero makes the device a perfect current source, which nothing is.'
 			},
-			...GATE_CHARGE
+			...GATE_CHARGE,
+			...SPICE_CARD
 		]
 	},
 	{
@@ -526,7 +554,8 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				description: 'The drain current keeps climbing in saturation. Zero makes the device a perfect current source, which nothing is.'
 			},
-			...GATE_CHARGE
+			...GATE_CHARGE,
+			...SPICE_CARD
 		]
 	},
 	{
@@ -548,7 +577,8 @@ export const CATALOG: ComponentDef[] = [
 				description:
 					'Base-width modulation. Sets the output resistance to about VAF/Ic — zero here would make a stage into a high impedance amplify without limit.'
 			},
-			...BASE_CHARGE
+			...BASE_CHARGE,
+			...SPICE_CARD
 		]
 	},
 	{
@@ -570,7 +600,8 @@ export const CATALOG: ComponentDef[] = [
 					'Base-width modulation. Sets the output resistance to about VAF/Ic — zero here would make a stage into a high impedance amplify without limit.'
 			},
 			{ key: 'is', label: 'Saturation current', unit: 'A', default: 6.73e-15 },
-			...BASE_CHARGE
+			...BASE_CHARGE,
+			...SPICE_CARD
 		]
 	},
 	{

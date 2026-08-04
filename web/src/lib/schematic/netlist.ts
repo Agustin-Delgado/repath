@@ -12,6 +12,7 @@
 import { ledDiodeModel, ledRating } from './led';
 import { definitionOf, type Instance, type Schematic } from './model';
 import { buildConnectivity, pinKey, type Connectivity, type Net } from './nets';
+import { bjtFromCard, cardFor, diodeFromCard, mosfetFromCard, type ModelCard } from '../spice';
 
 export interface NetNames {
 	analog?: string;
@@ -70,7 +71,38 @@ function waveform(instance: Instance): unknown {
 	return { type: 'dc', value: amplitude };
 }
 
-function diodeModel(instance: Instance): unknown {
+/**
+ * Fold a pasted `.model` card over what the part's own fields say.
+ *
+ * The card wins where the two overlap. Pasting one is an explicit statement that
+ * *this* is the part, and a field that quietly outranked it would leave someone
+ * looking at a 2N3904 that behaves like the generic transistor it replaced.
+ *
+ * What the card could not be used for goes back to the caller by name. A card
+ * carries twenty-odd parameters and this engine models eight of them, and the
+ * difference is not a rounding error — a 2N3904 without its `IKF` keeps its gain
+ * at currents where the real one has lost most of it. Reporting it is the
+ * difference between a simplification and a lie.
+ */
+function withCard(
+	instance: Instance,
+	base: Record<string, unknown>,
+	fold: (card: ModelCard) => { model: Record<string, number>; ignored: string[] },
+	report: (message: string) => void
+): unknown {
+	const card = cardFor(str(instance, 'spice', ''), instance.kind);
+	if (!card) return base;
+
+	const { model, ignored } = fold(card);
+	if (ignored.length > 0) {
+		report(
+			`${instance.name}: ${card.name} sets ${ignored.join(', ')}, which this simulator does not model.`
+		);
+	}
+	return { ...base, ...model };
+}
+
+function diodeModel(instance: Instance): Record<string, unknown> {
 	const kind = str(instance, 'model', 'silicon');
 	if (kind === 'led') return { is: 9.3e-20, n: 3.73, bv: null, temp: 300.15 };
 	if (kind === 'zener') {
@@ -215,7 +247,9 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 					name,
 					anode: analogOf(instance, 'anode'),
 					cathode: analogOf(instance, 'cathode'),
-					model: diodeModel(instance)
+					model: withCard(instance, diodeModel(instance), diodeFromCard, (m) =>
+						warnings.push(m)
+					)
 				});
 				break;
 			// Electrically an LED is a diode with a high forward voltage and a current
@@ -227,7 +261,12 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 					name,
 					anode: analogOf(instance, 'anode'),
 					cathode: analogOf(instance, 'cathode'),
-					model: ledDiodeModel(instance.params.colour, ledRating(instance))
+					model: withCard(
+						instance,
+						ledDiodeModel(instance.params.colour, ledRating(instance)) as Record<string, unknown>,
+						diodeFromCard,
+						(m) => warnings.push(m)
+					)
 				});
 				break;
 			case 'nmos':
@@ -238,18 +277,23 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 					drain: analogOf(instance, 'drain'),
 					gate: analogOf(instance, 'gate'),
 					source: analogOf(instance, 'source'),
-					model: {
-						channel: instance.kind === 'nmos' ? 'n' : 'p',
-						vto: num(instance, 'vto', 2),
-						kp: num(instance, 'kp', 2e-5),
-						lambda: num(instance, 'lambda', 0.02),
-						// Only the ratio matters at this model level.
-						w: num(instance, 'ratio', 10),
-						l: 1,
-						cgs: num(instance, 'cgs', 20e-12),
-						cgd: num(instance, 'cgd', 5e-12),
-						cds: 5e-12
-					}
+					model: withCard(
+						instance,
+						{
+							channel: instance.kind === 'nmos' ? 'n' : 'p',
+							vto: num(instance, 'vto', 2),
+							kp: num(instance, 'kp', 2e-5),
+							lambda: num(instance, 'lambda', 0.02),
+							// Only the ratio matters at this model level.
+							w: num(instance, 'ratio', 10),
+							l: 1,
+							cgs: num(instance, 'cgs', 20e-12),
+							cgd: num(instance, 'cgd', 5e-12),
+							cds: 20e-12
+						},
+						mosfetFromCard,
+						(m) => warnings.push(m)
+					)
 				});
 				break;
 			case 'npn':
@@ -260,16 +304,21 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 					collector: analogOf(instance, 'collector'),
 					base: analogOf(instance, 'base'),
 					emitter: analogOf(instance, 'emitter'),
-					model: {
-						polarity: instance.kind === 'npn' ? 'npn' : 'pnp',
-						is: num(instance, 'is', 6.73e-15),
-						bf: num(instance, 'bf', 200),
-						br: 4,
-						vaf: num(instance, 'vaf', 100),
-						cjc: num(instance, 'cjc', 3.6e-12),
-						tf: num(instance, 'tf', 301e-12),
-						temp: 300.15
-					}
+					model: withCard(
+						instance,
+						{
+							polarity: instance.kind === 'npn' ? 'npn' : 'pnp',
+							is: num(instance, 'is', 6.73e-15),
+							bf: num(instance, 'bf', 200),
+							br: 4,
+							vaf: num(instance, 'vaf', 100),
+							cjc: num(instance, 'cjc', 3.6e-12),
+							tf: num(instance, 'tf', 301e-12),
+							temp: 300.15
+						},
+						bjtFromCard,
+						(m) => warnings.push(m)
+					)
 				});
 				break;
 			case 'opamp':
