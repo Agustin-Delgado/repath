@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { app } from '../state.svelte';
 import {
 	buildConnectivity,
 	junctionDots,
 	liesWithin,
 	mergeWireChains,
+	netLabel,
 	openForPins,
 	pinKey,
 	splitAtJunctions,
@@ -562,5 +564,66 @@ describe('openForPins', () => {
 		);
 		expect(out.map((w) => w.id)).toContain('w');
 		expect(new Set(out.map((w) => w.id)).size).toBe(out.length);
+	});
+});
+
+describe('what to call a net', () => {
+	/** The RC low-pass, which is the drawing the scope opens on. */
+	function rc() {
+		app.clear();
+		app.schematic.subcircuits = [];
+		app.place('vsource', 100, 200, 0); // plus 100,170  minus 100,230
+		app.place('resistor', 220, 170, 0); // a 190,170  b 250,170
+		app.place('capacitor', 350, 170, 0); // a 320,170  b 380,170
+		app.place('ground', 100, 300, 0);
+		app.addWirePath([
+			{ x: 100, y: 170 },
+			{ x: 190, y: 170 }
+		]);
+		app.addWirePath([
+			{ x: 250, y: 170 },
+			{ x: 320, y: 170 }
+		]);
+		return buildConnectivity(app.schematic);
+	}
+
+	it('names a net after what it joins', () => {
+		// `n1` and `n2` are names the compiler invented, in the order it happened to
+		// walk the drawing. Shown two traces called that, there is nothing to do but
+		// count nets by hand.
+		const nets = rc().nets;
+		const labels = nets.map((n) => netLabel(n, `n${n.index}`));
+		expect(labels).toContain('V1.+ · R1.a');
+		expect(labels.some((l) => l.includes('R1.b') && l.includes('C1.a'))).toBe(true);
+	});
+
+	it('puts what drives a net before what merely sits on it', () => {
+		// A source's output says more about a net than a resistor's leg does, so it
+		// goes first — the name should read as where the signal comes from.
+		const nets = rc().nets;
+		const driven = nets.map((n) => netLabel(n, '?')).find((l) => l.includes('V1'));
+		expect(driven?.startsWith('V1')).toBe(true);
+	});
+
+	it('calls ground ground', () => {
+		const net = rc().nets.find((n) => n.isGround)!;
+		expect(netLabel(net, 'n9')).toBe('GND');
+	});
+
+	it('does not grow with the net', () => {
+		// A name longer than the trace it labels is not a name.
+		app.clear();
+		app.schematic.subcircuits = [];
+		for (let i = 0; i < 6; i++) app.place('resistor', 100 + i * 80, 200, 0);
+		app.addWirePath([
+			{ x: 70, y: 200 },
+			{ x: 530, y: 200 }
+		]);
+		const biggest = buildConnectivity(app.schematic).nets.reduce((a, b) =>
+			a.pins.length >= b.pins.length ? a : b
+		);
+		const label = netLabel(biggest, 'n1');
+		expect(label.length).toBeLessThan(24);
+		expect(label).toMatch(/\+\d+$/);
 	});
 });

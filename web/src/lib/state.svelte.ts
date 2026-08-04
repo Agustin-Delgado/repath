@@ -40,6 +40,7 @@ import { compileSchematic } from './schematic/netlist';
 import {
 	buildConnectivity,
 	mergeWireChains,
+	netLabel,
 	openForPins,
 	splitAtJunctions,
 	trimOverlaps
@@ -433,14 +434,16 @@ class AppState {
 			const netIndex = this.netForProbe(key);
 			if (netIndex === undefined) continue;
 			const names = compiled.names.get(netIndex);
-			const label = names?.analog ?? names?.digital;
-			if (!label) continue;
+			const signal = names?.analog ?? names?.digital;
+			if (!signal) continue;
+			const net = compiled.connectivity.nets[netIndex];
 			out.push({
 				key,
 				netIndex,
 				analog: names?.analog,
 				digital: names?.digital,
-				label,
+				// What it joins, not what the compiler called it.
+				label: net ? netLabel(net, signal) : signal,
 				colour: TRACE_COLOURS[out.length % TRACE_COLOURS.length]
 			});
 		}

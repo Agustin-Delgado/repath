@@ -557,3 +557,65 @@ export function openForPins(
 
 	return out;
 }
+
+/**
+ * What to call a net on a scope trace or in a list.
+ *
+ * `n1` and `n2` are names the compiler invented, in the order it happened to
+ * walk the drawing. They are stable and unique, which is all the engine needs
+ * and none of what a person needs: shown two traces called `n1` and `n2`, there
+ * is nothing to do but count nets by hand.
+ *
+ * So a net is named after what it joins. Its pins, most telling first — a
+ * source's output says more than a resistor's leg — and at most two of them,
+ * because a name longer than the trace it labels is not a name.
+ */
+export function netLabel(net: Net, fallback: string): string {
+	if (net.isGround) return 'GND';
+	if (net.pins.length === 0) return fallback;
+
+	// A pin that drives says more about a net than one that merely sits on it.
+	const rank = (ref: PinRef) => {
+		const kind = ref.instance.kind;
+		if (kind === 'vsource' || kind === 'isource') return 0;
+		if (kind === 'clock') return 1;
+		if (ref.pin.direction === 'out') return 1;
+		return 2;
+	};
+	const named = [...net.pins]
+		.sort((a, b) => rank(a) - rank(b) || a.instance.name.localeCompare(b.instance.name))
+		.map((ref) => `${ref.instance.name}.${short(ref.pin.name)}`);
+
+	// A middle dot, so the separator between two names is not the same character
+	// as the one inside them: `V1.+-R1.a` reads as one thing, `V1.+ · R1.a` as two.
+	const shown = named.slice(0, 2).join(' · ');
+	return named.length > 2 ? `${shown}+${named.length - 2}` : shown;
+}
+
+/** Pin names as they read on a label rather than in the catalog. */
+function short(pin: string): string {
+	switch (pin) {
+		case 'plus':
+			return '+';
+		case 'minus':
+			return '-';
+		case 'anode':
+			return 'a';
+		case 'cathode':
+			return 'k';
+		case 'collector':
+			return 'c';
+		case 'emitter':
+			return 'e';
+		case 'base':
+			return 'b';
+		case 'drain':
+			return 'd';
+		case 'source':
+			return 's';
+		case 'gate':
+			return 'g';
+		default:
+			return pin;
+	}
+}

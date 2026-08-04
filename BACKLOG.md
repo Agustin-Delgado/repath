@@ -150,8 +150,11 @@ because each step is what makes the next one worth having:
 - [ ] **Buses** for digital, with `d[7:0]` notation.
 - [ ] **Align and distribute** on a multi-selection.
 - [ ] **Component search** in the palette; it will not stay small.
-- [ ] **Measurement cursors** on the scope with delta readouts, and a "measure"
-      panel: rise time, overshoot, RMS, frequency, duty.
+- [ ] **A scope with controls**, the way a bench one has: cursors with delta
+      readouts, per-channel volts/div and offset so traces can be separated
+      instead of overlapping, a trigger, and a measure panel — rise time,
+      overshoot, RMS, frequency, duty. Signals now say where they are; what they
+      cannot yet do is be measured.
 - [ ] **Current and differential probes**, not just node voltages.
 - [ ] **Export** — PNG/SVG of the schematic, CSV of the traces, SPICE netlist out.
 - [ ] **Print / PDF** of a schematic that looks like a schematic.
@@ -236,6 +239,8 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- Signals on the scope are named after what they join — `V1.+ · R1.a` rather than
+  `n1` — and pointing at one lights that net up on the drawing.
 - A tolerance sweep: many samples at once, shaded on the scope as the band the
   answer moves in, so the question stops being "does it work with these parts"
   and starts being "does it work with the parts I will be sent".

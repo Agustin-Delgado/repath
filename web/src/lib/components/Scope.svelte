@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { netLabel } from '$lib/schematic/nets';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
 	import type { DigitalTransition } from '$lib/engine';
@@ -380,10 +381,19 @@
 		<ul>
 			{#each app.compiled.connectivity.nets as net (net.index)}
 				{@const names = app.compiled.names.get(net.index)}
-				{@const label = names?.analog ?? names?.digital}
-				{#if label && !net.isGround}
+				{@const signal = names?.analog ?? names?.digital}
+				{@const label = signal ? netLabel(net, signal) : ''}
+				{#if signal && !net.isGround}
 					{@const probe = app.activeProbes.find((p) => p.netIndex === net.index)}
-					<li>
+					<!--
+						Pointing at a name lights that net up on the schematic. A label can
+						only say so much in the width of a sidebar; this says the rest by
+						pointing at the drawing, which is where the answer actually is.
+					-->
+					<li
+						onpointerenter={() => (app.hoverNet = net.index)}
+						onpointerleave={() => (app.hoverNet = null)}
+					>
 						<label>
 							<input
 								type="checkbox"
