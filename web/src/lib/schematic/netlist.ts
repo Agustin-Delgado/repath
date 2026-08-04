@@ -110,17 +110,26 @@ function withCard(
 	return { ...base, ...model };
 }
 
+/**
+ * A diode built from its own fields rather than from which of two names it went
+ * by.
+ *
+ * There is one diode equation, and a 1N4148, a Schottky and a germanium part are
+ * the same device with different numbers in it. The preset on the part fills
+ * those numbers in; from there they are the part, so anything on the market can
+ * be described without waiting for it to be added to a list.
+ */
 function diodeModel(instance: Instance): Record<string, unknown> {
 	const kind = str(instance, 'model', 'silicon');
-	// The bulk resistance travels with every one of them. It does nothing at a
-	// milliamp and it is most of the forward drop at an amp, and a part without
-	// one has an exponential that never stops climbing.
-	const base = { rs: num(instance, 'rs', 0.568), temp: 300.15 };
-	if (kind === 'led') return { is: 9.3e-20, n: 3.73, bv: null, ...base };
-	if (kind === 'zener') {
-		return { is: 2.52e-9, n: 1.752, bv: Math.abs(num(instance, 'breakdown', 5.1)), ...base };
-	}
-	return { is: 2.52e-9, n: 1.752, bv: null, ...base };
+	return {
+		is: num(instance, 'is', 2.52e-9),
+		n: num(instance, 'n', 1.752),
+		rs: num(instance, 'rs', 0.568),
+		cj0: num(instance, 'cj0', 4e-12),
+		tt: num(instance, 'tt', 5e-9),
+		bv: kind === 'zener' ? Math.abs(num(instance, 'breakdown', 5.1)) : null,
+		temp: 300.15
+	};
 }
 
 

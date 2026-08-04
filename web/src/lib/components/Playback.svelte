@@ -11,7 +11,10 @@
 
 	const SPEEDS = [0.25, 1, 4];
 
-	const disabled = $derived(!app.result);
+	// A result that is no longer being kept up to date is a record, not something
+	// to play: Stop clears `live`, and without this the transport happily ran a
+	// playhead across a schematic with no overlay on it at all.
+	const disabled = $derived(!app.result || !app.live);
 	const progress = $derived(app.stopTime > 0 ? app.playbackTime / app.stopTime : 0);
 </script>
 

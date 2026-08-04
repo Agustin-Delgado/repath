@@ -302,6 +302,30 @@ const tolerance = (percent: number) => ({
 		'Only does anything with sampling switched on, where each part is drawn once from inside its band and stays there for the run.'
 });
 
+/**
+ * What each diode preset fills the fields in with.
+ *
+ * Presets rather than kinds: a diode is one device with one set of equations,
+ * and what separates a Schottky from a rectifier is these six numbers. Picking
+ * one is a starting point — every field stays editable afterwards, and a part
+ * that is none of these is a paste of its `.model` card.
+ */
+export const DIODE_PRESETS: Record<string, Record<string, number>> = {
+	// 1N4148. The one everybody has in a drawer.
+	silicon: { is: 2.52e-9, n: 1.752, rs: 0.568, cj0: 4e-12, tt: 5e-9 },
+	// 1N4007. A volt of drop at an amp, and slow: microseconds of stored charge,
+	// which is why it rectifies mains and nothing faster.
+	rectifier: { is: 14.11e-9, n: 1.984, rs: 0.0334, cj0: 25.9e-12, tt: 4.32e-6 },
+	// 1N5819. A metal-semiconductor junction has no minority carriers to sweep
+	// out, so it has no reverse recovery at all — that, and the low drop, is the
+	// whole reason to reach for one.
+	schottky: { is: 31.7e-6, n: 1.37, rs: 0.0512, cj0: 160e-12, tt: 0 },
+	// OA90. A quarter of a volt forward, and leaky enough that the leakage is a
+	// design consideration rather than a footnote.
+	germanium: { is: 5e-6, n: 1.4, rs: 1.0, cj0: 1e-12, tt: 1e-9 },
+	zener: { is: 2.52e-9, n: 1.752, rs: 0.568, cj0: 4e-12, tt: 5e-9 }
+};
+
 const SPICE_CARD = [
 	{ key: 'spice', label: 'SPICE model', unit: '', default: '', hidden: true }
 ] as const;
@@ -512,13 +536,49 @@ export const CATALOG: ComponentDef[] = [
 		params: [
 			{
 				key: 'model',
-				label: 'Type',
+				label: 'Preset',
 				unit: '',
 				default: 'silicon',
+				// A starting point, not a species. Choosing one fills the fields below
+				// in; every one of them is then yours to change, which is what makes
+				// this a diode rather than a menu of two of them.
 				choices: [
-					{ value: 'silicon', label: 'Silicon (1N4148)' },
+					{ value: 'silicon', label: 'Small signal (1N4148)' },
+					{ value: 'rectifier', label: 'Rectifier (1N4007)' },
+					{ value: 'schottky', label: 'Schottky (1N5819)' },
+					{ value: 'germanium', label: 'Germanium (OA90)' },
 					{ value: 'zener', label: 'Zener' }
 				]
+			},
+			{
+				key: 'is',
+				label: 'Saturation current',
+				unit: 'A',
+				default: 2.52e-9,
+				min: 0,
+				nonZero: true,
+				description:
+					'Where the forward curve sits. Larger means a smaller drop at the same current, which is most of what separates a Schottky from a silicon part.'
+			},
+			{
+				key: 'n',
+				label: 'Emission coefficient',
+				unit: '',
+				default: 1.752,
+				min: 0.1,
+				max: 4,
+				plain: true,
+				step: 0.05,
+				description: 'How steep the curve is: about 60·n millivolts per decade of current.'
+			},
+			{
+				key: 'rs',
+				label: 'Series resistance',
+				unit: 'Ω',
+				default: 0.568,
+				min: 0,
+				description:
+					'The bulk silicon and the leads. Nothing at a milliamp, and most of the forward drop at an amp.'
 			},
 			{
 				key: 'breakdown',
@@ -530,6 +590,23 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				nonZero: true,
 				visibleWhen: { key: 'model', values: ['zener'] }
+			},
+			{
+				key: 'cj0',
+				label: 'Junction capacitance',
+				unit: 'F',
+				default: 4e-12,
+				min: 0,
+				description: 'Charge in the depletion region, which is what a diode blocks with at high frequency rather than instantly.'
+			},
+			{
+				key: 'tt',
+				label: 'Transit time',
+				unit: 's',
+				default: 5e-9,
+				min: 0,
+				description:
+					'The carriers in transit while it conducts. They have to be swept out before it blocks, so this is the reverse recovery — and it is why a Schottky, which has none, rectifies where a silicon part has given up.'
 			},
 			...SPICE_CARD
 		]

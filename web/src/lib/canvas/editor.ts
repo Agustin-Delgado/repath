@@ -224,6 +224,7 @@ export class CanvasEditor {
 			alt: event.altKey,
 			meta: event.metaKey,
 			pointerId: event.pointerId,
+			detail: event.detail,
 			dragging: gesture?.dragging ?? false,
 			native: event
 		};

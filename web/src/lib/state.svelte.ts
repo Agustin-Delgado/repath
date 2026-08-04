@@ -16,6 +16,7 @@ import {
 	GRID,
 	defaultParams,
 	definitionOf,
+	DIODE_PRESETS,
 	migrateInstance,
 	nextName,
 	normaliseWire,
@@ -198,6 +199,14 @@ class AppState {
 	tool = $state<Tool>({ mode: 'select' });
 	selection = $state<string[]>([]);
 	probes = $state<string[]>([]);
+	/**
+	 * The part whose name is being edited on the canvas, if any.
+	 *
+	 * Held here rather than in the component because the canvas tool is what
+	 * starts it and the overlay is what finishes it, and those are two different
+	 * files that both already know about this object.
+	 */
+	renaming = $state<string | null>(null);
 	stopTime = $state(EXAMPLES[0].stopTime);
 	/**
 	 * What the whole circuit is sitting at, in degrees Celsius.
@@ -385,7 +394,9 @@ class AppState {
 	}
 
 	togglePlay(): void {
-		if (!this.result) return;
+		// Nothing to play once the run has been stopped: the overlay is gone, so
+		// the only thing that would move is a cursor over a static drawing.
+		if (!this.result || !this.live) return;
 		// Restarting from the end rather than sitting there doing nothing.
 		if (!this.playing && this.playbackTime >= this.stopTime) this.playbackTime = 0;
 		this.playing = !this.playing;
@@ -1122,6 +1133,13 @@ class AppState {
 		this.trace.record({ op: 'param', part: instance.name, key, value });
 		this.checkpoint();
 		instance.params[key] = value;
+		// Choosing a preset fills the fields in rather than replacing what they
+		// mean. They stay editable afterwards: the preset is where a part starts,
+		// not what it is allowed to be.
+		if (instance.kind === 'diode' && key === 'model') {
+			const preset = DIODE_PRESETS[String(value)];
+			if (preset) for (const [k, v] of Object.entries(preset)) instance.params[k] = v;
+		}
 		return null;
 	}
 

@@ -33,6 +33,8 @@ export interface EditorPointer {
 	alt: boolean;
 	meta: boolean;
 	pointerId: number;
+	/** Click count: 2 on the second press of a double-click. */
+	detail: number;
 	/** True once the pointer has moved beyond the drag threshold. */
 	dragging: boolean;
 	native: PointerEvent;

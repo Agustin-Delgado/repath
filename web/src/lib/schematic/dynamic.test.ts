@@ -58,15 +58,17 @@ function view(overrides: Partial<DynamicView> = {}): DynamicView {
 }
 
 describe('tick', () => {
-	it('moves the current dots along while the transport runs', () => {
+	it('moves the current dots along as playback moves', () => {
 		const running = view();
 		tick(running, 1 / 60);
 		expect(running.animation.phase.get(WIRE)).toBeGreaterThan(0);
 	});
 
-	it('leaves them exactly where they are while it is paused', () => {
-		const paused = view({ running: false });
-		for (let i = 0; i < 120; i++) tick(paused, 1 / 60);
+	it('leaves them exactly where they are when playback has not moved', () => {
+		// Which is what being paused amounts to: the transport is not consulted at
+		// all, because a paused transport is simply one that is not advancing.
+		const paused = view();
+		for (let i = 0; i < 120; i++) tick(paused, 0);
 		expect(paused.animation.phase.get(WIRE)).toBeUndefined();
 	});
 
@@ -78,8 +80,21 @@ describe('tick', () => {
 		const held = state.animation.phase.get(WIRE);
 
 		const paused = view({ running: false, animation: state.animation });
-		tick(paused, 1 / 60);
+		tick(paused, 0);
 		expect(paused.animation.phase.get(WIRE)).toBe(held);
+	});
+
+	it('runs them backwards when the timeline is dragged back', () => {
+		// The reported case: pausing froze the dots, but scrubbing backwards left
+		// them frozen too — at most their brightness changed. Dragging the timeline
+		// is a rewind, and the flow has to rewind with it.
+		const forward = view();
+		for (let i = 0; i < 8; i++) tick(forward, 1 / 60);
+		const ahead = forward.animation.phase.get(WIRE)!;
+		expect(ahead).toBeGreaterThan(0);
+
+		tick(forward, -4 / 60);
+		expect(forward.animation.phase.get(WIRE)).toBeLessThan(ahead);
 	});
 
 	it('stays still with the current layer switched off', () => {

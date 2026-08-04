@@ -44,8 +44,8 @@ const orthogonal = () =>
 beforeEach(() => {
 	app.clear();
 	app.selection = [];
-	// `clear` deliberately keeps imported parts � they are a library rather than
-	// part of the circuit � so a fresh start has to drop them on purpose.
+	// `clear` deliberately keeps imported parts — they are a library rather than
+	// part of the circuit — so a fresh start has to drop them on purpose.
 	app.schematic.subcircuits = [];
 });
 
@@ -975,7 +975,7 @@ describe('importing a subcircuit', () => {
 
 	it('refuses a definition that names a terminal twice', () => {
 		// Both pins would answer with whichever net was wired last, so the circuit
-		// would be quietly wrong rather than refused � the worst outcome available.
+		// would be quietly wrong rather than refused — the worst outcome available.
 		const { added, error } = app.importSubcircuits('.SUBCKT TWICE 1 1 2\nR1 1 2 1k\n.ENDS');
 		expect(added).toEqual([]);
 		expect(error).toContain('twice');
@@ -1003,5 +1003,43 @@ describe('importing a subcircuit', () => {
 
 		expect(app.schematic.subcircuits).toEqual([]);
 		expect(app.schematic.instances.map((i) => i.kind)).toEqual(['resistor']);
+	});
+});
+
+describe('a diode is one device, not a menu of two', () => {
+	it('fills its fields in when a preset is chosen', () => {
+		// A preset is where a part starts. Before this the choice *was* the part:
+		// two names, hard-coded, and anything else on the market was unreachable.
+		app.place('diode', 200, 200, 0);
+		const id = app.schematic.instances[0].id;
+		app.setParam(id, 'model', 'schottky');
+
+		const params = app.schematic.instances[0].params;
+		expect(params.model).toBe('schottky');
+		// A metal-semiconductor junction has no stored charge to sweep out, which
+		// is most of the reason to reach for one.
+		expect(params.tt).toBe(0);
+		expect(Number(params.is)).toBeGreaterThan(1e-6);
+	});
+
+	it('keeps a value edited after the preset', () => {
+		app.place('diode', 200, 200, 0);
+		const id = app.schematic.instances[0].id;
+		app.setParam(id, 'model', 'rectifier');
+		app.setParam(id, 'rs', 0.2);
+		expect(app.schematic.instances[0].params.rs).toBe(0.2);
+		// And re-picking the same preset is not a change, so it does not silently
+		// undo the edit either.
+		app.setParam(id, 'model', 'rectifier');
+		expect(app.schematic.instances[0].params.rs).toBe(0.2);
+	});
+
+	it('takes one undo to put a preset back', () => {
+		app.place('diode', 200, 200, 0);
+		const id = app.schematic.instances[0].id;
+		const before = { ...app.schematic.instances[0].params };
+		app.setParam(id, 'model', 'germanium');
+		app.undo();
+		expect(app.schematic.instances[0].params).toEqual(before);
 	});
 });

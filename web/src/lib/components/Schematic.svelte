@@ -201,17 +201,33 @@
 
 		let frame = 0;
 		let last = performance.now();
+		// Where playback was on the previous frame, so a drag of the scrubber shows
+		// up here as a distance rather than as a jump nobody can see.
+		let lastPlayback = app.playbackTime;
 
 		const step = (now: number) => {
 			// Clamped so a backgrounded tab does not resume with one enormous jump.
 			const dt = Math.min((now - last) / 1000, 0.1);
 			last = now;
 
+			// How far playback moved this frame, which is what the current dots run
+			// on. Zero while paused and untouched, negative when the scrubber is
+			// dragged backwards, large when it is dragged fast.
+			let moved = 0;
 			if (app.playing) {
 				const next = app.playbackTime + dt * app.playbackRate;
-				if (next >= app.stopTime) app.playbackTime = 0;
-				else app.playbackTime = next;
+				if (next >= app.stopTime) {
+					// Looping back to the start is not a rewind anybody performed, so it
+					// does not spin the dots backwards through the whole run.
+					app.playbackTime = 0;
+				} else {
+					app.playbackTime = next;
+					moved = dt * app.playbackRate;
+				}
+			} else {
+				moved = app.playbackTime - lastPlayback;
 			}
+			lastPlayback = app.playbackTime;
 
 			// The live overlay belongs to the transient result. Leaving it running
 			// during a frequency sweep would show the state of a run the user is no
@@ -239,7 +255,9 @@
 					selection: selectionSet,
 					selectionColour: theme!.selection
 				};
-				tick(dynamicView, dt);
+				// In seconds of wall clock, so a given current draws the dots along at
+				// the same speed however fast the run is being played.
+				tick(dynamicView, moved / Math.max(app.playbackRate, 1e-9));
 				active.invalidate('dynamic');
 				if (import.meta.env.DEV) {
 					const handle = (window as unknown as Record<string, Record<string, unknown>>).__repath;
@@ -334,13 +352,89 @@
 				break;
 		}
 	}
+
+	/** Where the rename field goes, in canvas pixels, and what it starts with. */
+	const renameAt = $derived.by(() => {
+		const id = app.renaming;
+		const view = editor?.viewport;
+		if (!id || !view) return null;
+		const instance = app.schematic.instances.find((i) => i.id === id);
+		if (!instance) return null;
+		const at = view.toScreen({ x: instance.x, y: instance.y });
+		return { x: at.x, y: at.y, name: instance.name };
+	});
+
+	let renameField = $state.raw<HTMLInputElement | null>(null);
+
+	$effect(() => {
+		// Focused and selected the moment it appears, so the second click lands you
+		// typing rather than clicking again to put the caret somewhere.
+		if (renameAt && renameField) renameField.select();
+	});
+
+	function commitRename(value: string) {
+		const id = app.renaming;
+		app.renaming = null;
+		if (id) app.rename(id, value);
+	}
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
 
-<div class="host" bind:this={host} role="application" aria-label="Schematic editor"></div>
+<div class="stage">
+	<div class="host" bind:this={host} role="application" aria-label="Schematic editor"></div>
+
+	<!--
+		Renaming happens where the name is. An input floated over the canvas rather
+		than drawn into it, so it is a real text field — selection, caret, undo, an
+		IME — none of which is worth reimplementing on a 2D context.
+	-->
+	{#if renameAt}
+		<input
+			class="rename"
+			style:left="{renameAt.x}px"
+			style:top="{renameAt.y}px"
+			bind:this={renameField}
+			value={renameAt.name}
+			onblur={(e) => commitRename(e.currentTarget.value)}
+			onkeydown={(e) => {
+				if (e.key === 'Enter') e.currentTarget.blur();
+				else if (e.key === 'Escape') {
+					// Put the old name back before blurring, so Escape cancels rather
+					// than committing whatever was half-typed.
+					e.currentTarget.value = renameAt?.name ?? '';
+					e.currentTarget.blur();
+				}
+				e.stopPropagation();
+			}}
+			aria-label="Component name"
+		/>
+	{/if}
+</div>
 
 <style>
+	.stage {
+		position: relative;
+		width: 100%;
+		height: 100%;
+		min-height: 0;
+	}
+
+	.rename {
+		position: absolute;
+		transform: translate(-50%, -50%);
+		width: 6.5rem;
+		text-align: center;
+		font-size: 0.78rem;
+		font-family: var(--font-mono);
+		padding: 0.15rem 0.3rem;
+		border: 1px solid var(--accent);
+		border-radius: 4px;
+		background: var(--control-bg);
+		color: var(--label-strong);
+		z-index: 3;
+	}
+
 	.host {
 		position: relative;
 		width: 100%;

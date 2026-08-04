@@ -262,7 +262,7 @@ M1 3 1 2 0 MX
 		expect(sub.elements.map((e) => e.kind)).toEqual(['bjt', 'bjt', 'diode', 'mosfet']);
 		// A `Q` line may name its substrate, and it goes before the model rather
 		// than after, so the model has to be taken from the right and the extra node
-		// dropped — this engine ties the base region to the emitter.
+		// dropped â€” this engine ties the base region to the emitter.
 		expect(sub.elements[1].nodes).toEqual(['3', '1', '2']);
 		expect('model' in sub.elements[1] && sub.elements[1].model).toBe('QN');
 		expect(sub.models.get('QN')?.params.get('BF')).toBe(250);

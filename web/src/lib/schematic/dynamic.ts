@@ -5,11 +5,11 @@
  * repaints only this and never re-rasterizes the components underneath.
  *
  * Everything here is a function of the playback instant and nothing else, with
- * one exception: the current dots carry a phase that accumulates in real time,
- * because motion is the one thing that cannot be read off a single frozen
- * moment. That exception is why `tick` exists, and why it stops when playback
- * does — dots still crawling under a paused transport would be reporting a flow
- * that the rest of the display says is standing still.
+ * one exception: the current dots carry a phase, because motion is the one thing
+ * that cannot be read off a single frozen moment. That exception is why `tick`
+ * exists, and the phase advances with *playback* rather than with the wall
+ * clock — so it holds still under a paused transport, and rewinds and races when
+ * the timeline is dragged.
  */
 
 import { rectExpand, type Painter, type Rect, type Vec2 } from '$lib/canvas';
@@ -21,6 +21,7 @@ import { formatWithUnit } from '$lib/units';
 import {
 	definitionOf,
 	pointKey,
+	rotatePoint,
 	wireSegments,
 	wireStart,
 	type Instance,
@@ -38,7 +39,7 @@ export interface DynamicView {
 	showCurrent: boolean;
 	showLight: boolean;
 	showValues: boolean;
-	/** Whether the transport is running. Paused, nothing may advance on its own. */
+	/** Whether the transport is running. Read by the drawing, not by `tick`. */
 	running: boolean;
 	/** Where playback is, in simulated seconds. */
 	time: number;
@@ -51,9 +52,20 @@ export interface DynamicView {
 	selectionColour: string;
 }
 
-/** Advance the animation. Call once per frame, before drawing. */
+/**
+ * Advance the animation. Call once per frame, before drawing.
+ *
+ * `dt` is how far *playback* moved, not how long the frame took — so it is
+ * negative when the timeline is dragged backwards and large when it is dragged
+ * quickly. That is what makes the dots rewind and race with the scrubber
+ * instead of sitting still while only their brightness changes.
+ *
+ * Which also means there is nothing to gate on the transport: paused and
+ * untouched, playback has not moved, `dt` is zero, and the dots hold where they
+ * are of their own accord.
+ */
 export function tick(view: DynamicView, dt: number): void {
-	if (!view.showCurrent || !view.running) return;
+	if (!view.showCurrent || dt === 0) return;
 	advance(view.animation, view.frame, view.context.currentScale, dt);
 }
 
@@ -189,19 +201,47 @@ function drawReadings(
 	const size = Math.min(11 * painter.viewport.scale, 14);
 	if (size < 7) return;
 
-	const anchor = new Map<number, Vec2>();
+	// Where each part is, so a reading is not written across one.
+	//
+	// The label sits just above its anchor, and the topmost point of a net is
+	// very often a pin — which put the reading inside the symbol it belongs to,
+	// overlapping the drawing and, on a source, sitting in the middle of the
+	// circle. A point out on the wiring says the same thing and can be read.
+	const bodies = view.schematic.instances.map((instance) => {
+		const box = definitionOf(instance.kind).box;
+		const half = rotatePoint(box.w / 2, box.h / 2, instance.rotation);
+		return {
+			x: instance.x - Math.abs(half.x),
+			y: instance.y - Math.abs(half.y),
+			w: Math.abs(half.x) * 2,
+			h: Math.abs(half.y) * 2
+		};
+	});
+	const clearOfParts = (p: Vec2) =>
+		!bodies.some(
+			(b) => p.x >= b.x - 6 && p.x <= b.x + b.w + 6 && p.y >= b.y - 14 && p.y <= b.y + b.h + 6
+		);
+
+	const anchor = new Map<number, { at: Vec2; clear: boolean }>();
 	for (const wire of view.schematic.wires) {
 		for (const point of wire.points) {
 			const net = view.netOfPoint.get(pointKey(point.x, point.y));
 			if (net === undefined) continue;
+			const clear = clearOfParts(point);
 			const best = anchor.get(net);
-			if (!best || point.y < best.y || (point.y === best.y && point.x < best.x)) {
-				anchor.set(net, { x: point.x, y: point.y });
-			}
+			// Clear of every symbol first, and only then highest and leftmost. A net
+			// whose every point is under something keeps the old placement rather
+			// than losing its reading altogether.
+			const better =
+				!best ||
+				(clear && !best.clear) ||
+				(clear === best.clear &&
+					(point.y < best.at.y || (point.y === best.at.y && point.x < best.at.x)));
+			if (better) anchor.set(net, { at: { x: point.x, y: point.y }, clear });
 		}
 	}
 
-	for (const [net, at] of anchor) {
+	for (const [net, { at }] of anchor) {
 		const volts = view.frame.netVoltage.get(net);
 		if (volts === undefined || !inside(at.x, at.y)) continue;
 		painter.text(formatWithUnit(volts, 'V', FIGURES), { x: at.x, y: at.y - 7 }, {
