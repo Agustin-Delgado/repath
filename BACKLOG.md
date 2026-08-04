@@ -151,10 +151,9 @@ because each step is what makes the next one worth having:
 - [ ] **Buses** for digital, with `d[7:0]` notation.
 - [ ] **Align and distribute** on a multi-selection.
 - [ ] **Component search** in the palette; it will not stay small.
-- [ ] **The rest of a bench scope**: a trigger, and a measure panel — rise time,
-      overshoot, RMS, frequency, duty — so the numbers everyone reads off by hand
-      are read off for them. Separate scales per trace and two cursors with deltas
-      are in.
+- [ ] **A trigger**, so a repeating waveform holds still instead of being read
+      from wherever the run happened to start. The rest of a bench scope — split
+      scales, two cursors with deltas, and a measure panel — is in.
 - [ ] **Current and differential probes**, not just node voltages.
 - [ ] **Export** — PNG/SVG of the schematic, CSV of the traces, SPICE netlist out.
 - [ ] **Print / PDF** of a schematic that looks like a schematic.
@@ -239,6 +238,8 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- A measure panel: peak-to-peak, mean, true RMS, frequency, duty, rise time and
+  overshoot, read off the trace rather than off two cursors and some arithmetic.
 - Each trace can have a scale of its own, so 400 mV of ripple is not flattened by
   the 5 V square wave beside it, and a second cursor gives Δt and ΔV rather than
   two readings to subtract by hand.

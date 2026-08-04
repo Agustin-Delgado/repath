@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { measure } from '$lib/measure';
 	import { netLabel } from '$lib/schematic/nets';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
@@ -94,6 +95,23 @@
 		const pad = (hi - lo) * 0.1;
 		return { lo: lo - pad, hi: hi + pad };
 	}
+
+	/**
+	 * The numbers a bench scope has a button for.
+	 *
+	 * Off by default: they are what you want once you have stopped to check
+	 * something, and a wall of figures over a moving trace is what you want at no
+	 * other time.
+	 */
+	let measuring = $state(false);
+
+	const measurements = $derived.by(() => {
+		const run = app.result;
+		if (!run || !measuring) return [];
+		return traces
+			.map((t) => ({ label: t.label, colour: t.colour, m: measure(run.time, t.samples) }))
+			.filter((row) => row.m !== null);
+	});
 
 	/** One range per trace, for when they are drawn separated. */
 	const lanes = $derived(traces.map((t) => spanOf([t.samples, t.low, t.high])));
@@ -494,6 +512,14 @@
 	<aside class="signals">
 		<h3>
 			Signals
+			<button
+				class="scale"
+				class:on={measuring}
+				onclick={() => (measuring = !measuring)}
+				title="Read off frequency, duty, RMS, rise time and overshoot"
+			>
+				measure
+			</button>
 			{#if traces.length > 1}
 				<button
 					class="scale"
@@ -549,7 +575,47 @@
 				{app.acResult.frequencies.length} points ·
 				{app.acResult.elapsedMs.toFixed(0)} ms
 			</footer>
-		{:else if app.analysis === 'transient' && app.result}
+		{/if}
+
+		{#if measurements.length > 0}
+			<!--
+				Each of these is something you could get from two cursors and some
+				arithmetic. Doing it by hand is slow, and being slow is the reason
+				nobody checks.
+			-->
+			<div class="measures">
+				{#each measurements as row (row.label)}
+					{@const m = row.m!}
+					<div class="measure">
+						<span class="who" style:color={row.colour}>{row.label}</span>
+						<dl>
+							<dt>pk-pk</dt>
+							<dd>{formatValue(m.peakToPeak, 3)}V</dd>
+							<dt>mean</dt>
+							<dd>{formatValue(m.mean, 3)}V</dd>
+							<dt>rms</dt>
+							<dd>{formatValue(m.rms, 3)}V</dd>
+							{#if m.frequency !== null}
+								<dt>freq</dt>
+								<dd>{formatValue(m.frequency, 3)}Hz</dd>
+								<dt>duty</dt>
+								<dd>{Math.round((m.duty ?? 0) * 100)}%</dd>
+							{/if}
+							{#if m.riseTime !== null}
+								<dt>rise</dt>
+								<dd>{formatValue(m.riseTime, 3)}s</dd>
+							{/if}
+							{#if m.overshoot !== null && m.overshoot > 0.005}
+								<dt>over</dt>
+								<dd>{Math.round(m.overshoot * 100)}%</dd>
+							{/if}
+						</dl>
+					</div>
+				{/each}
+			</div>
+		{/if}
+
+		{#if app.analysis === 'transient' && app.result}
 			<footer>
 				{app.result.stats.accepted_steps} steps ·
 				{app.result.stats.newton_iterations} iterations ·
@@ -560,6 +626,39 @@
 </div>
 
 <style>
+	.measures {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		padding: 0.4rem 0.15rem 0;
+		border-top: 1px solid var(--border);
+		margin-top: 0.4rem;
+	}
+
+	.measure .who {
+		font-size: 0.66rem;
+		font-family: var(--font-mono);
+	}
+
+	.measure dl {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 0.05rem 0.4rem;
+		margin: 0.15rem 0 0;
+		font-size: 0.64rem;
+	}
+
+	.measure dt {
+		color: var(--label-dim);
+	}
+
+	.measure dd {
+		margin: 0;
+		text-align: right;
+		font-family: var(--font-mono);
+		color: var(--label-strong);
+	}
+
 	.readout .delta {
 		margin-left: 0.35rem;
 		opacity: 0.8;
