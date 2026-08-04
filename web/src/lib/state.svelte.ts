@@ -813,10 +813,16 @@ class AppState {
 		// Torn down and rebuilt from the snapshot on every frame like everything
 		// else here, so dragging back until they touch again removes it, and what
 		// the preview shows is what lands.
+		//
+		// Guarded, because almost no drag has a bond: rebuilding the wire array on
+		// every frame of every drag to remove nothing is work the canvas then has to
+		// notice.
 		const separated = dx !== 0 || dy !== 0;
-		this.schematic.wires = this.schematic.wires.filter(
-			(w) => !origin.bonds.some((b) => b.wireId === w.id)
-		);
+		if (origin.bonds.length > 0) {
+			this.schematic.wires = this.schematic.wires.filter(
+				(w) => !origin.bonds.some((b) => b.wireId === w.id)
+			);
+		}
 		if (separated) {
 			for (const bond of origin.bonds) {
 				const moved = { x: bond.at.x + dx, y: bond.at.y + dy };
@@ -1095,6 +1101,13 @@ class AppState {
 		const added: SubcircuitDef[] = [];
 		for (const sub of found) {
 			if (sub.ports.length === 0) continue;
+			// Two terminals with one name would collide the moment anything asked
+			// which net a pin is on: both would answer with whichever was wired last,
+			// and the circuit would be quietly wrong rather than refused.
+			const seen = new Set(sub.ports);
+			if (seen.size !== sub.ports.length) {
+				return { added: [], error: `${sub.name} names the same terminal twice.` };
+			}
 			// Re-importing under the same name replaces the definition rather than
 			// adding a second part with an identical label, so a corrected file can
 			// be pasted over the one it corrects and the parts already placed pick
@@ -1386,7 +1399,23 @@ class AppState {
 				case 'clear':
 					this.clear();
 					break;
+				case 'import': {
+					// Without this the one step that *creates* a part was skipped, and
+					// every `place` after it threw `unknown component kind` — out of
+					// `replay` entirely, not as a refusal it could report. A trace whose
+					// author imported something is exactly the trace worth replaying.
+					const { error } = this.importSubcircuits(step.source);
+					if (error) return stop(error);
+					break;
+				}
 				case 'place':
+					// Asked for by name, so it can name something this editor does not
+					// have — an older trace, or one whose import failed above.
+					try {
+						definitionOf(step.kind);
+					} catch {
+						return stop(`no component called ${step.kind}`);
+					}
 					this.place(step.kind, step.x, step.y, step.rotation);
 					break;
 				case 'wire':

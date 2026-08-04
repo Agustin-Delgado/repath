@@ -44,8 +44,8 @@ const orthogonal = () =>
 beforeEach(() => {
 	app.clear();
 	app.selection = [];
-	// `clear` deliberately keeps imported parts — they are a library rather than
-	// part of the circuit — so a fresh start has to drop them on purpose.
+	// `clear` deliberately keeps imported parts ï¿½ they are a library rather than
+	// part of the circuit ï¿½ so a fresh start has to drop them on purpose.
 	app.schematic.subcircuits = [];
 });
 
@@ -971,6 +971,15 @@ describe('importing a subcircuit', () => {
 		expect(app.schematic.subcircuits?.length).toBe(1);
 		expect(app.schematic.instances.length).toBe(1);
 		expect(app.schematic.subcircuits?.[0].source).toContain('1MEG');
+	});
+
+	it('refuses a definition that names a terminal twice', () => {
+		// Both pins would answer with whichever net was wired last, so the circuit
+		// would be quietly wrong rather than refused ï¿½ the worst outcome available.
+		const { added, error } = app.importSubcircuits('.SUBCKT TWICE 1 1 2\nR1 1 2 1k\n.ENDS');
+		expect(added).toEqual([]);
+		expect(error).toContain('twice');
+		expect(app.schematic.subcircuits ?? []).toEqual([]);
 	});
 
 	it('keeps imported parts when the drawing is cleared', () => {

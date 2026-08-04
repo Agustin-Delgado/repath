@@ -195,10 +195,16 @@ export const EXAMPLES: Example[] = [
 					{
 						kind: 'resistor',
 						name: 'RB',
+						// Sized so the collector rests near half the supply. At 470 k it
+						// sat at 1.4 V, which leaves 1.4 V of room below and 10 V above:
+						// the stage described here as amplifying a 10 mV signal wants
+						// ±2 V, so it was clipping flat against ground on every negative
+						// half cycle. An amplifier example that visibly distorts teaches
+						// the wrong thing twice over.
 						x: 340,
 						y: 150,
 						rotation: 90,
-						params: { resistance: 470000 }
+						params: { resistance: 820000 }
 					},
 					{
 						kind: 'resistor',

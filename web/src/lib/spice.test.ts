@@ -347,3 +347,16 @@ describe('placing a subcircuit', () => {
 		expect(skipped.some((s) => s.includes('MISSING'))).toBe(true);
 	});
 });
+
+describe('source values inside a definition', () => {
+	it('takes every spelling of a DC value', () => {
+		const lines = ['V1 1 2 12', 'V1 1 2 DC 12', 'V1 1 2 DC=12', 'V1 1 2 dc = 12'];
+		for (const line of lines) {
+			const [sub] = parseSubcircuits(`.SUBCKT X 1 2\n${line}\n.ENDS`);
+			const element = sub.elements[0];
+			expect(element, `"${line}" was not read`).toBeTruthy();
+			expect('value' in element && element.value, line).toBe(12);
+			expect(element.nodes).toEqual(['1', '2']);
+		}
+	});
+});

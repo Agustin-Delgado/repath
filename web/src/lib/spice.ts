@@ -318,8 +318,13 @@ function readElement(line: string): SubElement | null {
 	if (!spec) return null;
 
 	const name = tokens[0];
-	const plain = tokens.slice(1).filter((t) => !t.includes('='));
-	// A source may spell its value `DC 12`, `DC=12` or just `12`.
+	// A source may spell its value `DC 12`, `DC=12` or just `12`, so an assignment
+	// whose left-hand side is one of those keywords is the value rather than one of
+	// the trailing `AREA=1`-style parameters that get dropped below.
+	const plain = tokens
+		.slice(1)
+		.map((t) => t.replace(/^(dc|ac)\s*=\s*/i, ''))
+		.filter((t) => !t.includes('='));
 	const tail = plain[plain.length - 1];
 	const nodes = plain.slice(0, -1).filter((t) => !/^(dc|ac)$/i.test(t));
 	if (nodes.length < spec.nodes) return null;
@@ -341,7 +346,26 @@ function readElement(line: string): SubElement | null {
  * definition, because that is where they are: a vendor's file declares its
  * transistors once at the top and the subcircuits below refer to them by name.
  */
+/**
+ * Last file parsed, and what it came to.
+ *
+ * A drawing is recompiled whenever it changes, which during a drag is every
+ * frame, and every placed instance re-reads the file it came from. Eight copies
+ * of a vendor macromodel cost about a millisecond and a half of each frame that
+ * way; one entry is enough to take almost all of it back, because within a
+ * single compile the instances of a definition all hand over the same string.
+ */
+let lastSource = '';
+let lastParse: Subcircuit[] = [];
+
 export function parseSubcircuits(text: string): Subcircuit[] {
+	if (text === lastSource) return lastParse;
+	lastSource = text;
+	lastParse = parseSubcircuitsUncached(text);
+	return lastParse;
+}
+
+function parseSubcircuitsUncached(text: string): Subcircuit[] {
 	const models = new Map<string, ModelCard>();
 	for (const card of parseModelCards(text)) models.set(card.name.toUpperCase(), card);
 

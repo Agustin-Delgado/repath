@@ -186,3 +186,30 @@ describe('a value with more than one line in it', () => {
 		});
 	});
 });
+
+describe('replaying a session that imported a part', () => {
+	it('creates the part before the step that places it', () => {
+		// Found by replaying a trace in a process that had never imported the
+		// definition — which is the only situation that matters, since it is what
+		// happens when someone opens a stranger's trace. `import` was not a case in
+		// the replay switch, so it was skipped in silence, and the `place` after it
+		// threw `unknown component kind` out of `replay` altogether.
+		const text = [
+			'clear',
+			String.raw`import .SUBCKT TRACEONLY a b\nR1 a b 4k7\n.ENDS`,
+			'place x:traceonly 300 200 0'
+		].join('\n');
+
+		expect(app.replay(parseTrace(text), route)).toEqual({ done: 3 });
+		expect(app.schematic.instances.map((i) => i.kind)).toEqual(['x:traceonly']);
+		expect(app.schematic.subcircuits?.[0].name).toBe('TRACEONLY');
+	});
+
+	it('stops with a reason when it names a part this editor does not have', () => {
+		// A refusal, not an exception. Replay is a debugging tool: it has to be able
+		// to say where it got to.
+		const outcome = app.replay(parseTrace('clear\nplace x:missing 0 0 0'), route);
+		expect(outcome.failed).toBeTruthy();
+		expect(outcome.failed).toContain('x:missing');
+	});
+});
