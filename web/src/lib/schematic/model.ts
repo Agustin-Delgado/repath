@@ -238,6 +238,51 @@ const analog = (name: string, x: number, y: number): PinDef => ({
 	direction: 'inout'
 });
 
+/// What a transistor has to be charged with before it does anything, shared by
+/// both polarities of each device. These are the parameters that give a stage a
+/// top end; with them at zero it amplifies and switches without limit.
+const BASE_CHARGE = [
+	{
+		key: 'cjc',
+		label: 'Collector capacitance',
+		unit: 'F',
+		default: 3.6e-12,
+		min: 0,
+		description:
+			'Across the base-collector junction. An inverting stage multiplies it by its own gain — Miller — so a few picofarads here is what usually sets the top of the band.'
+	},
+	{
+		key: 'tf',
+		label: 'Transit time',
+		unit: 's',
+		default: 301e-12,
+		min: 0,
+		description:
+			'How long a carrier takes to cross the base, which is what sets the transition frequency: fT is roughly 1/(2π·tf), so 300 ps is a device good to a few hundred megahertz.'
+	}
+] as const;
+
+const GATE_CHARGE = [
+	{
+		key: 'cgd',
+		label: 'Gate-drain capacitance',
+		unit: 'F',
+		default: 5e-12,
+		min: 0,
+		description:
+			'A datasheet calls it Crss. It bridges the gate to the drain, so turning the device on means dragging it across the whole output swing — the plateau in a gate-drive waveform.'
+	},
+	{
+		key: 'cgs',
+		label: 'Gate-source capacitance',
+		unit: 'F',
+		default: 20e-12,
+		min: 0,
+		description:
+			'With the gate-drain capacitance this makes up the datasheet Ciss — the charge a driver has to deliver before the device starts conducting at all.'
+	}
+] as const;
+
 const digitalIn = (name: string, x: number, y: number): PinDef => ({
 	name,
 	x,
@@ -458,7 +503,8 @@ export const CATALOG: ComponentDef[] = [
 				default: 0.02,
 				min: 0,
 				description: 'The drain current keeps climbing in saturation. Zero makes the device a perfect current source, which nothing is.'
-			}
+			},
+			...GATE_CHARGE
 		]
 	},
 	{
@@ -479,7 +525,8 @@ export const CATALOG: ComponentDef[] = [
 				default: 0.02,
 				min: 0,
 				description: 'The drain current keeps climbing in saturation. Zero makes the device a perfect current source, which nothing is.'
-			}
+			},
+			...GATE_CHARGE
 		]
 	},
 	{
@@ -500,7 +547,8 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				description:
 					'Base-width modulation. Sets the output resistance to about VAF/Ic — zero here would make a stage into a high impedance amplify without limit.'
-			}
+			},
+			...BASE_CHARGE
 		]
 	},
 	{
@@ -521,7 +569,8 @@ export const CATALOG: ComponentDef[] = [
 				description:
 					'Base-width modulation. Sets the output resistance to about VAF/Ic — zero here would make a stage into a high impedance amplify without limit.'
 			},
-			{ key: 'is', label: 'Saturation current', unit: 'A', default: 6.73e-15 }
+			{ key: 'is', label: 'Saturation current', unit: 'A', default: 6.73e-15 },
+			...BASE_CHARGE
 		]
 	},
 	{

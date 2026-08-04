@@ -245,7 +245,10 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 						lambda: num(instance, 'lambda', 0.02),
 						// Only the ratio matters at this model level.
 						w: num(instance, 'ratio', 10),
-						l: 1
+						l: 1,
+						cgs: num(instance, 'cgs', 20e-12),
+						cgd: num(instance, 'cgd', 5e-12),
+						cds: 5e-12
 					}
 				});
 				break;
@@ -263,6 +266,8 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 						bf: num(instance, 'bf', 200),
 						br: 4,
 						vaf: num(instance, 'vaf', 100),
+						cjc: num(instance, 'cjc', 3.6e-12),
+						tf: num(instance, 'tf', 301e-12),
 						temp: 300.15
 					}
 				});

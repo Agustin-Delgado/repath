@@ -36,6 +36,54 @@ fn default_grading() -> f64 {
     0.5
 }
 
+/// Built-in potential of a silicon transistor junction. SPICE's `VJE`/`VJC`.
+fn default_vje() -> f64 {
+    0.75
+}
+
+/// A transistor's junctions are diffused rather than abrupt, so a third rather
+/// than a half.
+fn default_bjt_grading() -> f64 {
+    1.0 / 3.0
+}
+
+// A model description that leaves a capacitance out gets the 2N3904's, not zero.
+// SPICE would default these to nothing, but nothing is not a simpler transistor —
+// it is one that switches instantly and amplifies to infinite frequency, and a
+// caller who omitted the field did not mean to ask for that.
+fn default_cje() -> f64 {
+    4.5e-12
+}
+
+fn default_cjc() -> f64 {
+    3.6e-12
+}
+
+fn default_tf() -> f64 {
+    301e-12
+}
+
+fn default_tr() -> f64 {
+    239e-9
+}
+
+// The same argument for a MOSFET's gate. Read as a datasheet would quote them,
+// these are Ciss 55 pF, Crss 5 pF and Coss 25 pF — the range a small discrete
+// part lives in, and, more to the point, in the proportions one does. The ratio
+// between `cgd` and the rest is what decides how much of a gate edge feeds
+// straight through to the drain before the channel has turned on at all.
+fn default_cgs() -> f64 {
+    50e-12
+}
+
+fn default_cgd() -> f64 {
+    5e-12
+}
+
+fn default_cds() -> f64 {
+    20e-12
+}
+
 /// Where the depletion capacitance stops being evaluated and starts being
 /// extrapolated, as a fraction of the junction potential.
 ///
@@ -56,6 +104,84 @@ const BREAKDOWN_KNEE: f64 = 1e-3;
 #[inline]
 fn safe_exp(x: f64) -> f64 {
     x.min(80.0).exp()
+}
+
+/// Depletion capacitance of a junction at a given bias.
+///
+/// The charge sitting either side of a junction, as the depletion region widens
+/// under reverse bias and narrows under forward bias. Every junction in this file
+/// has one, and they differ only in their three parameters.
+fn depletion_capacitance(cj0: f64, vj: f64, grading: f64, v: f64) -> f64 {
+    if cj0 <= 0.0 {
+        return 0.0;
+    }
+    let vj = vj.max(1e-3);
+    if v < FORWARD_CAP_LIMIT * vj {
+        cj0 * (1.0 - v / vj).powf(-grading)
+    } else {
+        // Continued along the tangent at the limit rather than followed into its
+        // own singularity.
+        let f = (1.0 - FORWARD_CAP_LIMIT).powf(-grading);
+        let slope = grading * f / (vj * (1.0 - FORWARD_CAP_LIMIT));
+        cj0 * (f + slope * (v - FORWARD_CAP_LIMIT * vj))
+    }
+}
+
+/// One charge-storing branch of a nonlinear device.
+///
+/// A transistor is several capacitors at once, each across a different pair of
+/// terminals and each with a capacitance that depends on the bias. The
+/// integration rule is the same for all of them, and the same as a plain
+/// capacitor's, so it lives here once: hand it this step's capacitance and get
+/// back a conductance and a history current to stamp.
+#[derive(Debug, Clone, Copy, Default)]
+struct ChargeBranch {
+    /// Voltage and capacitive current at the last accepted timepoint.
+    v_prev: f64,
+    i_prev: f64,
+    /// Capacitance at the operating point, kept for AC analysis.
+    c_op: f64,
+}
+
+impl ChargeBranch {
+    fn terms(&self, c: f64, integration: Integration, dt: f64) -> (f64, f64) {
+        match integration {
+            Integration::BackwardEuler => {
+                let g = c / dt;
+                (g, g * self.v_prev)
+            }
+            Integration::Trapezoidal => {
+                let g = 2.0 * c / dt;
+                (g, g * self.v_prev + self.i_prev)
+            }
+        }
+    }
+
+    /// Companion conductance and history current for this step.
+    ///
+    /// Zero outside the time domain: an operating point is where nothing is
+    /// changing, and a capacitance has nothing to say about it.
+    fn companion(&mut self, c: f64, ctx: &StampCtx) -> (f64, f64) {
+        self.c_op = c;
+        if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
+            self.terms(c, ctx.integration, ctx.dt)
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
+    /// Roll the branch forward past a converged timepoint.
+    fn accept(&mut self, v: f64, c: f64, ctx: &AcceptCtx) {
+        if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
+            let (g, ieq) = self.terms(c, ctx.integration, ctx.dt);
+            self.i_prev = g * v - ieq;
+        }
+        self.v_prev = v;
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,11 +299,8 @@ pub struct Diode {
     v_prev_iter: f64,
     /// Small-signal conductance at the operating point, kept for AC analysis.
     gd_op: f64,
-    /// Junction capacitance at the operating point, likewise.
-    cd_op: f64,
-    /// Voltage and capacitive current at the last accepted timepoint.
-    v_prev: f64,
-    ic_prev: f64,
+    /// The junction's stored charge.
+    charge: ChargeBranch,
     /// Accumulated overcurrent in amp-seconds. Only tracked with a rating.
     dose: f64,
     /// Forward current at the last accepted timepoint, for the trapezoid.
@@ -197,9 +320,7 @@ impl Diode {
             model,
             v_prev_iter: 0.0,
             gd_op: 0.0,
-            cd_op: 0.0,
-            v_prev: 0.0,
-            ic_prev: 0.0,
+            charge: ChargeBranch::default(),
             dose: 0.0,
             i_accepted: 0.0,
             peak: 0.0,
@@ -226,16 +347,7 @@ impl Diode {
     /// that gives a rectifier its reverse recovery.
     fn capacitance(&self, vd: f64, gd: f64) -> f64 {
         let m = &self.model;
-        let depletion = if vd < FORWARD_CAP_LIMIT * m.vj {
-            m.cj0 * (1.0 - vd / m.vj).powf(-m.m)
-        } else {
-            // Continued along the tangent at the limit rather than followed into
-            // its own singularity.
-            let f = (1.0 - FORWARD_CAP_LIMIT).powf(-m.m);
-            let slope = m.m * f / (m.vj * (1.0 - FORWARD_CAP_LIMIT));
-            m.cj0 * (f + slope * (vd - FORWARD_CAP_LIMIT * m.vj))
-        };
-        depletion + m.tt * gd
+        depletion_capacitance(m.cj0, m.vj, m.m, vd) + m.tt * gd
     }
 
     /// Current and conductance at a given junction voltage.
@@ -312,26 +424,7 @@ impl Element for Diode {
         let gd = gd + ctx.gmin;
         self.gd_op = gd;
 
-        // The stored charge, as a conductance and a history current. Only in the
-        // time domain: an operating point is where nothing is changing, so a
-        // capacitance has nothing to say about it.
-        let cd = self.capacitance(vd, gd);
-        self.cd_op = cd;
-        let (gc, ic_eq) = if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
-            match ctx.integration {
-                Integration::BackwardEuler => {
-                    let g = cd / ctx.dt;
-                    (g, g * self.v_prev)
-                }
-                Integration::Trapezoidal => {
-                    let g = 2.0 * cd / ctx.dt;
-                    (g, g * self.v_prev + self.ic_prev)
-                }
-            }
-        } else {
-            (0.0, 0.0)
-        };
-
+        let (gc, ic_eq) = self.charge.companion(self.capacitance(vd, gd), ctx);
         let ieq = id - gd * vd - ic_eq;
 
         let (p, m) = (node_index(self.p), node_index(self.m));
@@ -348,7 +441,7 @@ impl Element for Diode {
         sys.add_admittance(
             node_index(self.p),
             node_index(self.m),
-            C64::new(self.gd_op.max(ctx.gmin), ctx.omega * self.cd_op),
+            C64::new(self.gd_op.max(ctx.gmin), ctx.omega * self.charge.c_op),
         );
     }
 
@@ -385,20 +478,8 @@ impl Element for Diode {
 
         // Roll the capacitive branch forward, the way any reactive element does.
         let vd = ctx.voltage(self.p) - ctx.voltage(self.m);
-        if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
-            let (_, gd) = self.evaluate(vd);
-            let cd = self.capacitance(vd, gd + 1e-12);
-            let geq = match ctx.integration {
-                Integration::BackwardEuler => cd / ctx.dt,
-                Integration::Trapezoidal => 2.0 * cd / ctx.dt,
-            };
-            let ieq = match ctx.integration {
-                Integration::BackwardEuler => geq * self.v_prev,
-                Integration::Trapezoidal => geq * self.v_prev + self.ic_prev,
-            };
-            self.ic_prev = geq * vd - ieq;
-        }
-        self.v_prev = vd;
+        let (_, gd) = self.evaluate(vd);
+        self.charge.accept(vd, self.capacitance(vd, gd + 1e-12), ctx);
     }
 
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
@@ -415,9 +496,7 @@ impl Element for Diode {
     fn reset(&mut self) {
         self.v_prev_iter = 0.0;
         self.gd_op = 0.0;
-        self.cd_op = 0.0;
-        self.v_prev = 0.0;
-        self.ic_prev = 0.0;
+        self.charge.reset();
         self.dose = 0.0;
         self.i_accepted = 0.0;
         self.peak = 0.0;
@@ -437,7 +516,7 @@ impl Element for Diode {
         //
         // `i_prev` is this timepoint's, not the last one's: elements are accepted
         // before the point is recorded.
-        Some(self.evaluate(vp - vm).0 + self.ic_prev)
+        Some(self.evaluate(vp - vm).0 + self.charge.i_prev)
     }
 }
 
@@ -476,11 +555,41 @@ pub struct MosfetModel {
     /// Channel width and length in metres; only their ratio matters at level 1.
     pub w: f64,
     pub l: f64,
+    /// Gate-source, gate-drain and drain-source capacitance, farads.
+    ///
+    /// Held constant rather than followed through the channel's own charge, which
+    /// is how a datasheet gives them and how a switching calculation uses them:
+    /// `Ciss = cgs + cgd`, `Crss = cgd`, `Coss = cgd + cds`.
+    ///
+    /// `cgd` is the one that does the damage. It bridges the gate to the drain, so
+    /// turning the device on means dragging it across the whole output swing —
+    /// that is the plateau in a gate-drive waveform, and the dominant pole of a
+    /// linear stage. Left at zero, a gate driver looks infinitely strong.
+    #[serde(default = "default_cgs")]
+    pub cgs: f64,
+    #[serde(default = "default_cgd")]
+    pub cgd: f64,
+    #[serde(default = "default_cds")]
+    pub cds: f64,
 }
 
 impl Default for MosfetModel {
     fn default() -> Self {
-        Self { channel: Channel::N, vto: 2.0, kp: 2e-5, lambda: 0.0, w: 100e-6, l: 10e-6 }
+        // Capacitances in the range a small discrete MOSFET quotes — tens of
+        // picofarads in, a few across. The point of having any is that the device
+        // takes charge to turn on; a gate that switches in no time is not a simpler
+        // MOSFET, it is one no driver has to work for.
+        Self {
+            channel: Channel::N,
+            vto: 2.0,
+            kp: 2e-5,
+            lambda: 0.0,
+            w: 100e-6,
+            l: 10e-6,
+            cgs: default_cgs(),
+            cgd: default_cgd(),
+            cds: default_cds(),
+        }
     }
 }
 
@@ -515,6 +624,21 @@ pub struct Mosfet {
     op_gds: f64,
     op_drain: NodeId,
     op_source: NodeId,
+    /// The three terminal capacitances. Unlike the channel, these stay on the
+    /// terminals as drawn: the oxide does not move when the bias reverses.
+    q_gs: ChargeBranch,
+    q_gd: ChargeBranch,
+    q_ds: ChargeBranch,
+    /// The body diode, from the bulk to the drain.
+    ///
+    /// Not an optional extra: tying the bulk to the source, which is how a
+    /// three-terminal MOSFET is drawn, puts a junction across drain and source
+    /// whether anyone wants it or not. It is what stops the drain being dragged a
+    /// volt below the source, and until the terminal capacitances existed nothing
+    /// here could drag it there — so it had nothing to do and its absence did not
+    /// show. Now it does: the charge injected through `cgd` on a fast edge has to
+    /// land somewhere, and without the diode it lands outside the rails.
+    body: Diode,
 }
 
 /// Drain current and its derivatives, all in n-channel normalized form.
@@ -532,8 +656,22 @@ impl Mosfet {
         s: NodeId,
         model: MosfetModel,
     ) -> Self {
+        let name = name.into();
+        // The bulk sits on the source, so the junction points from source to drain
+        // in an n-channel device and the other way in a p-channel one — either way,
+        // reverse biased for as long as the drain stays on the correct side of the
+        // source, and conducting the moment it does not.
+        //
+        // No charge of its own: `cds` is that charge, and a datasheet's `Coss` is
+        // exactly this junction's capacitance plus `Crss`.
+        let junction = DiodeModel { cj0: 0.0, tt: 0.0, is: 1e-14, n: 1.0, ..DiodeModel::default() };
+        let (anode, cathode) = match model.channel {
+            Channel::N => (s, d),
+            Channel::P => (d, s),
+        };
         Self {
-            name: name.into(),
+            body: Diode::new(format!("{name}#body"), anode, cathode, junction),
+            name,
             d,
             g,
             s,
@@ -542,7 +680,18 @@ impl Mosfet {
             op_gds: 0.0,
             op_drain: d,
             op_source: s,
+            q_gs: ChargeBranch::default(),
+            q_gd: ChargeBranch::default(),
+            q_ds: ChargeBranch::default(),
         }
+    }
+
+    /// The terminal pairs the capacitances sit across, in the real frame. No
+    /// polarity normalization: a constant capacitance does not care which way
+    /// round it is, so the channel type never enters.
+    fn terminal_pairs(&self) -> [(NodeId, NodeId, f64); 3] {
+        let m = &self.model;
+        [(self.g, self.s, m.cgs), (self.g, self.d, m.cgd), (self.d, self.s, m.cds)]
     }
 
     /// Evaluate with `vgs`/`vds` already normalized to the n-channel convention
@@ -585,6 +734,9 @@ impl Element for Mosfet {
         &self.name
     }
     fn is_nonlinear(&self) -> bool {
+        true
+    }
+    fn is_reactive(&self) -> bool {
         true
     }
 
@@ -632,7 +784,41 @@ impl Element for Mosfet {
 
         // Keep the drain and source tied to something even in cutoff.
         sys.add_conductance(d, s, ctx.gmin);
-        StampReport::CLEAN
+
+        // The terminal capacitances. In cutoff these are the only thing joining the
+        // gate to anything at all, which is exactly right: it is how charge reaches
+        // a gate that is not conducting yet.
+        let pairs = self.terminal_pairs();
+        for (branch, &(p, n, c)) in
+            [&mut self.q_gs, &mut self.q_gd, &mut self.q_ds].into_iter().zip(pairs.iter())
+        {
+            let (geq, ieq) = branch.companion(c, ctx);
+            sys.add_conductance(node_index(p), node_index(n), geq);
+            sys.add_current(node_index(p), node_index(n), -ieq);
+        }
+
+        // And the body diode, which limits how far the charge above can push the
+        // drain. It carries its own limiting, so its report has to come back out.
+        self.body.stamp(sys, ctx)
+    }
+
+    fn accept(&mut self, ctx: &AcceptCtx) {
+        let pairs = self.terminal_pairs();
+        for (branch, &(p, n, c)) in
+            [&mut self.q_gs, &mut self.q_gd, &mut self.q_ds].into_iter().zip(pairs.iter())
+        {
+            branch.accept(ctx.voltage(p) - ctx.voltage(n), c, ctx);
+        }
+        self.body.accept(ctx);
+    }
+
+    fn reset(&mut self) {
+        self.op_gm = 0.0;
+        self.op_gds = 0.0;
+        self.q_gs.reset();
+        self.q_gd.reset();
+        self.q_ds.reset();
+        self.body.reset();
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
@@ -652,6 +838,14 @@ impl Element for Mosfet {
         sys.add(s, d, -gds);
         sys.add(s, s, gds);
         sys.add_admittance(d, s, C64::real(ctx.gmin));
+
+        // The terminal capacitances, on the terminals as drawn. `cgd` is what makes
+        // this worth having: bridging input to output, it is the Miller capacitance
+        // and it sets the corner frequency of the stage.
+        for (p, n, c) in self.terminal_pairs() {
+            sys.add_admittance(node_index(p), node_index(n), C64::imaginary(ctx.omega * c));
+        }
+        self.body.ac_stamp(sys, ctx);
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {
@@ -661,7 +855,17 @@ impl Element for Mosfet {
         let swapped = vd < vs;
         let (vhi, vlo) = if swapped { (vs, vd) } else { (vd, vs) };
         let ids = self.evaluate(vg - vlo, vhi - vlo).ids;
-        Some(ids * sign * if swapped { -1.0 } else { 1.0 })
+        let channel = ids * sign * if swapped { -1.0 } else { 1.0 };
+
+        // Plus whatever the body diode is passing, which is the whole of it when
+        // the device is off and the drain has been dragged the wrong way. Reporting
+        // only the channel would show a part carrying nothing while it clamps.
+        //
+        // The diode reports current into its own anode. In an n-channel device that
+        // is the source, so it arrives at the drain and counts negative; in a
+        // p-channel one the anode is the drain and it counts positive.
+        let body = self.body.current(x).unwrap_or(0.0) * -sign;
+        Some(channel + body)
     }
 }
 
@@ -707,6 +911,31 @@ pub struct BjtModel {
     /// impedance is bounded by nothing at all.
     #[serde(default)]
     pub vaf: Option<f64>,
+    /// Zero-bias base-emitter depletion capacitance, farads, with its junction
+    /// potential and grading coefficient.
+    #[serde(default = "default_cje")]
+    pub cje: f64,
+    #[serde(default = "default_vje")]
+    pub vje: f64,
+    #[serde(default = "default_bjt_grading")]
+    pub mje: f64,
+    /// The same three for the base-collector junction. This is the one that
+    /// matters most: it sits between the input and the output of an inverting
+    /// stage, so the source driving it has to swing it by both at once.
+    #[serde(default = "default_cjc")]
+    pub cjc: f64,
+    #[serde(default = "default_vje")]
+    pub vjc: f64,
+    #[serde(default = "default_bjt_grading")]
+    pub mjc: f64,
+    /// Forward and reverse transit times, seconds — the carriers in transit while
+    /// a junction conducts. `tf` is what sets the transition frequency: `fT` is
+    /// roughly `1 / (2π · tf)` once the current is high enough for the diffusion
+    /// charge to swamp the depletion charge.
+    #[serde(default = "default_tf")]
+    pub tf: f64,
+    #[serde(default = "default_tr")]
+    pub tr: f64,
     pub temp: f64,
 }
 
@@ -716,12 +945,25 @@ impl Default for BjtModel {
         // Roughly a 2N3904. A hundred volts is where a small-signal NPN's Early
         // voltage lives, and having one by default is the point: a device with
         // none is not a simpler transistor, it is an impossible one.
+        //
+        // The capacitances are the 2N3904's too, and they are why an amplifier
+        // built here has a bandwidth at all: `tf` of 300 ps puts fT near 500 MHz,
+        // and 3.6 pF of `cjc` across an inverting stage is what Miller multiplies
+        // into the thing that actually sets the corner.
         Self {
             polarity: Polarity::Npn,
             is: 6.73e-15,
             bf: 200.0,
             br: 4.0,
             vaf: Some(100.0),
+            cje: default_cje(),
+            vje: default_vje(),
+            mje: default_bjt_grading(),
+            cjc: default_cjc(),
+            vjc: default_vje(),
+            mjc: default_bjt_grading(),
+            tf: default_tf(),
+            tr: default_tr(),
             temp: TNOM,
         }
     }
@@ -752,6 +994,9 @@ pub struct Bjt {
     op_gir: f64,
     op_gbe: f64,
     op_gbc: f64,
+    /// The charge stored across each junction.
+    q_be: ChargeBranch,
+    q_bc: ChargeBranch,
 }
 
 impl Bjt {
@@ -768,7 +1013,38 @@ impl Bjt {
             op_gir: 0.0,
             op_gbe: 0.0,
             op_gbc: 0.0,
+            q_be: ChargeBranch::default(),
+            q_bc: ChargeBranch::default(),
         }
+    }
+
+    /// Charge stored across each junction, as a pair of capacitances.
+    ///
+    /// The same two terms as a diode's, once per junction: the depletion region,
+    /// plus the carriers in transit while the junction conducts. `gif`/`gir` are
+    /// the junction conductances — the diffusion charge follows the current
+    /// actually crossing the junction, not the part of it that reaches the far
+    /// terminal.
+    fn capacitances(&self, vbe: f64, vbc: f64, gif: f64, gir: f64) -> (f64, f64) {
+        let m = &self.model;
+        (
+            depletion_capacitance(m.cje, m.vje, m.mje, vbe) + m.tf * gif,
+            depletion_capacitance(m.cjc, m.vjc, m.mjc, vbc) + m.tr * gir,
+        )
+    }
+
+    /// The junction voltages in the polarity-normalized frame, for `accept`.
+    fn junction_voltages(&self, ctx: &AcceptCtx) -> (f64, f64) {
+        let sign = self.model.polarity.sign();
+        let v = |n: NodeId| ctx.voltage(n) * sign;
+        (v(self.b) - v(self.e), v(self.b) - v(self.c))
+    }
+
+    /// Junction conductances at a pair of junction voltages.
+    fn junction_conductances(&self, vbe: f64, vbc: f64) -> (f64, f64) {
+        let m = &self.model;
+        let vt = thermal_voltage(m.temp);
+        (m.is * safe_exp(vbe / vt) / vt, m.is * safe_exp(vbc / vt) / vt)
     }
 }
 
@@ -780,6 +1056,9 @@ impl Element for Bjt {
         &self.name
     }
     fn is_nonlinear(&self) -> bool {
+        true
+    }
+    fn is_reactive(&self) -> bool {
         true
     }
 
@@ -808,8 +1087,10 @@ impl Element for Bjt {
         let er = safe_exp(vbc / vt);
         let i_f = m.is * (ef - 1.0);
         let i_r = m.is * (er - 1.0);
-        let gif = m.is * ef / vt;
-        let gir = m.is * er / vt;
+        // The junction conductances: how much more current crosses each junction
+        // for a millivolt more across it. Everything else is built from these.
+        let gif_j = m.is * ef / vt;
+        let gir_j = m.is * er / vt;
 
         // Base-width modulation. Gummel-Poon's base charge factor with high-level
         // injection left out, which is the term that matters here: the transport
@@ -822,16 +1103,29 @@ impl Element for Bjt {
             Some(vaf) if vaf > 0.0 => ((1.0 - vbc / vaf).max(0.01), -1.0 / vaf),
             _ => (1.0, 0.0),
         };
-        let ict = i_f - i_r;
-        // d(ict * early)/d(vbe) and −d(ict * early)/d(vbc).
-        let gif = gif * early;
-        let gir = gir * early - ict * d_early;
+        // The stored charge follows the current actually crossing each junction.
+        let (cbe, cbc) = self.capacitances(vbe, vbc, gif_j, gir_j);
 
-        // Base recombination currents.
+        let ict = i_f - i_r;
+        // The transport current is the part that reaches the far terminal, so it
+        // carries the Early factor: d(ict * early)/d(vbe) and −d(ict * early)/d(vbc).
+        let gif = gif_j * early;
+        let gir = gir_j * early - ict * d_early;
+
+        // Base recombination, which does not. It is the fraction of each junction's
+        // own current that recombines in the base, so it is built from the junction
+        // conductances rather than from the transport ones.
+        //
+        // Taking it from the transport conductances instead — which is what this
+        // did first — divides the Early term by `br` and leaves the base looking at
+        // the collector through about eighty kilohms. Miller multiplies that by the
+        // stage gain, so a stage whose input resistance should be a kilohm measured
+        // under two hundred ohms: the DC current gain stayed at 200 while the
+        // small-signal one came out at 34.
         let ibe = i_f / m.bf;
         let ibc = i_r / m.br;
-        let gbe = gif / m.bf + ctx.gmin;
-        let gbc = gir / m.br + ctx.gmin;
+        let gbe = gif_j / m.bf + ctx.gmin;
+        let gbc = gir_j / m.br + ctx.gmin;
 
         self.op_gif = gif;
         self.op_gir = gir;
@@ -868,10 +1162,21 @@ impl Element for Bjt {
         sys.add_rhs(bn, -ibeq);
         sys.add_rhs(en, iceq + ibeq);
 
+        // The two charge branches, across the junctions they belong to. A
+        // capacitance is the same either way round, so only the history term picks
+        // up the polarity sign: the branch keeps its state in the normalized frame,
+        // where a forward-biased junction is always positive.
+        let (gc_be, ic_be) = self.q_be.companion(cbe, ctx);
+        let (gc_bc, ic_bc) = self.q_bc.companion(cbc, ctx);
+        sys.add_conductance(bn, en, gc_be);
+        sys.add_current(bn, en, -ic_be * sign);
+        sys.add_conductance(bn, cn, gc_bc);
+        sys.add_current(bn, cn, -ic_bc * sign);
+
         if lim_e || lim_c { StampReport::LIMITED } else { StampReport::CLEAN }
     }
 
-    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+    fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
         let (cn, bn, en) = (node_index(self.c), node_index(self.b), node_index(self.e));
         // The same rows as the DC stamp, without the constant terms: a small
         // signal has no operating point of its own to correct for.
@@ -892,6 +1197,20 @@ impl Element for Bjt {
         sys.add(en, bn, -(gif - gir + gbe));
         sys.add(en, en, gif + gbe);
         sys.add(en, cn, -gir);
+
+        // The junction capacitances, at the value the operating point left them.
+        // These are the whole reason an amplifier here has a top end: without them
+        // every stage keeps its gain up to infinite frequency.
+        sys.add_admittance(bn, en, C64::imaginary(ctx.omega * self.q_be.c_op));
+        sys.add_admittance(bn, cn, C64::imaginary(ctx.omega * self.q_bc.c_op));
+    }
+
+    fn accept(&mut self, ctx: &AcceptCtx) {
+        let (vbe, vbc) = self.junction_voltages(ctx);
+        let (gif, gir) = self.junction_conductances(vbe, vbc);
+        let (cbe, cbc) = self.capacitances(vbe, vbc, gif, gir);
+        self.q_be.accept(vbe, cbe, ctx);
+        self.q_bc.accept(vbc, cbc, ctx);
     }
 
     fn reset(&mut self) {
@@ -901,6 +1220,8 @@ impl Element for Bjt {
         self.op_gir = 0.0;
         self.op_gbe = 0.0;
         self.op_gbc = 0.0;
+        self.q_be.reset();
+        self.q_bc.reset();
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {

@@ -19,8 +19,8 @@ Each one should either move into Must/Should below, or be documented in the UI.
 
 | Area | Limitation | Impact |
 |---|---|---|
-| BJT | No junction capacitances (`CJE`, `CJC`) | AC response has no transistor rolloff; bandwidth looks infinite |
-| MOSFET | Shichman-Hodges (level 1) only, bulk tied to source, no gate capacitances | No body effect, no subthreshold conduction, no short-channel behaviour |
+| MOSFET | Shichman-Hodges (level 1) only, bulk tied to source | No body effect, no subthreshold conduction, no short-channel behaviour |
+| MOSFET | Gate capacitances are constant, not the bias-dependent Meyer model | Right for a datasheet's Ciss/Crss/Coss; a gate charge curve will not have its plateau in quite the right place |
 | Diode | No series resistance (`RS`) | Forward drop at high current is optimistic |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Op-amp | Single-pole-free: infinite bandwidth, no slew limit, no input offset | An op-amp circuit will look better than the real one |
@@ -48,10 +48,11 @@ because each step is what makes the next one worth having:
 
 1. **Parasitics in the devices already here.** Early voltage, junction and gate
    capacitances, diode series resistance. Cheapest credibility per line of code,
-   and it is what the rows above are mostly complaining about. *(Early effect,
-   channel-length modulation and the diode's junction charge are in; the BJT and
-   MOSFET capacitances are what is left, and they are what gives an AC sweep of an
-   amplifier its rolloff.)*
+   and it is what the rows above are mostly complaining about. *(Done, bar the
+   diode's series resistance: Early effect, channel-length modulation, and charge
+   storage in all three devices, so an amplifier has a top end and a switch takes
+   time. The MOSFET's body diode came with it — the gate capacitances are what
+   first made it possible to drag a drain past its own rail.)*
 2. **`.model` import.** A SPICE model card is one line of the parameters step 1
    adds, so a real 1N4148 or 2N3904 becomes a paste from the manufacturer rather
    than a part someone has to hand-write here.
@@ -76,12 +77,12 @@ because each step is what makes the next one worth having:
       circuit larger than a page is bearable.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
       pivoting). The `LinearSystem` interface was kept narrow for this.
-- [ ] **Junction and gate capacitances** on the BJT (`CJE`/`CJC`) and the MOSFET
-      (`CGS`/`CGD`). The diode has its depletion and diffusion charge already, and
-      the same shape of change carries over — a device that is nonlinear *and*
-      reactive, stamping its own companion model.
 - [ ] **Diode series resistance** (`RS`). Solved against the junction rather than
       given an internal node, so the element count stays put.
+- [ ] **Meyer gate capacitance** on the MOSFET — the channel charge split that
+      makes `CGS` and `CGD` follow the operating region instead of sitting still.
+      What a gate charge curve needs; the constant values are already enough for
+      Miller and for a switching time.
 - [ ] **Op-amp with a finite gain-bandwidth product.** The current ideal model
       makes unstable circuits look stable, which is actively misleading.
 - [ ] **Convergence diagnostics** — when a solve fails, say *which node* and *which
@@ -226,6 +227,10 @@ Kept short — it is here to show the direction, not to be a changelog.
   rather than reconstructed from a screenshot and a description.
 - Drag routing decided by one cost function with the old path as an input,
   replacing five interacting rules about when to keep a shape and when to redraw.
+- Devices that store charge: junction capacitances and transit times on the BJT,
+  terminal capacitances and a body diode on the MOSFET. An amplifier now runs out
+  of gain at the top, a transistor takes time to switch, and a drain cannot be
+  dragged past its own rail.
 - LEDs in five colours that light from the current through them and blow up when
   driven past their rating — modelled inside the transient loop, so a part that
   fails is open for the rest of the run and the waveforms after it are the circuit

@@ -970,3 +970,229 @@ fn a_conducting_diode_does_not_switch_off_the_instant_it_is_reversed() {
     let recovered = current[late];
     assert!(recovered.abs() < 1e-6, "still passing {recovered:.3e} A once recovered");
 }
+
+#[test]
+fn a_transistor_stage_runs_out_of_gain_at_the_top() {
+    // Every amplifier has a top end, and a model without junction capacitances
+    // does not: the gain it reports at ten megahertz is the gain it reports at ten
+    // kilohertz, which is the one answer that is certainly wrong.
+    //
+    // The dominant term is not the capacitance itself but what the stage does to
+    // it. `cjc` bridges the base to the collector, so the source charging it has
+    // to swing it by the input *and* the inverted output — Miller — and a few
+    // picofarads across a gain of four hundred is a nanofarad at the input.
+    let build = |model: BjtModel| {
+        let mut c = Circuit::new();
+        let vcc = c.node("vcc");
+        let base = c.node("base");
+        let col = c.node("col");
+        let input = c.node("in");
+        let driven = c.node("driven");
+        c.add(Box::new(VoltageSource::dc("V1", vcc, Circuit::GROUND, 12.0)));
+        c.add(Box::new(Resistor::new("RB", vcc, base, 470_000.0)));
+        c.add(Box::new(Resistor::new("RC", vcc, col, 2_200.0)));
+        c.add(Box::new(Bjt::new("Q1", col, base, Circuit::GROUND, model)));
+        c.add(Box::new(
+            VoltageSource::new("V2", driven, Circuit::GROUND, Waveform::Dc { value: 0.0 })
+                .with_ac(1.0, 0.0),
+        ));
+        // A source that is not ideal. With a stiff drive there is nothing for the
+        // input capacitance to work against and the corner runs off the top of any
+        // sweep — which is true of the real circuit too.
+        c.add(Box::new(Resistor::new("RS", driven, input, 10_000.0)));
+        c.add(Box::new(Capacitor::new("CIN", input, base, 10e-6)));
+        c
+    };
+
+    let sweep = |model: BjtModel| {
+        let mut c = build(model);
+        let result = Simulator::default().ac_sweep(&mut c, AcConfig::new(1_000.0, 100e6)).unwrap();
+        let (mid, _) = at_frequency(&result, "v(col)", 10_000.0);
+        let (top, _) = at_frequency(&result, "v(col)", 10e6);
+        (mid, top)
+    };
+
+    let (mid, top) = sweep(BjtModel::npn());
+    assert!(mid > 20.0, "no midband gain to lose: {mid:.1}");
+    assert!(top < mid / 20.0, "gain at 10 MHz was {top:.1} against {mid:.1} at 10 kHz");
+
+    // And it is the capacitances doing it. Strip them and the same stage keeps its
+    // gain to the top of the sweep, which is how this looked before they existed.
+    let ideal = BjtModel { cje: 0.0, cjc: 0.0, tf: 0.0, tr: 0.0, ..BjtModel::npn() };
+    let (flat_mid, flat_top) = sweep(ideal);
+    assert!(
+        flat_top > flat_mid / 1.1,
+        "with no charge storage the response should be flat: {flat_mid:.1} then {flat_top:.1}"
+    );
+}
+
+#[test]
+fn an_npn_and_a_pnp_take_the_same_time_to_switch() {
+    // The two polarities are one set of equations mirrored, so the stored charge
+    // has to mirror with everything else. It is the easiest thing in the file to
+    // get half-wrong: the capacitance is the same either way round, but the
+    // history current the companion model injects is not, and a missing sign there
+    // leaves the NPN perfect and the PNP driving its own charge the wrong way.
+    let switch_time = |pnp: bool| {
+        let sign = if pnp { -1.0 } else { 1.0 };
+        let mut c = Circuit::new();
+        let rail = c.node("rail");
+        let drive = c.node("drive");
+        let base = c.node("base");
+        let col = c.node("col");
+        c.add(Box::new(VoltageSource::dc("V1", rail, Circuit::GROUND, 5.0 * sign)));
+        c.add(Box::new(VoltageSource::new(
+            "VG",
+            drive,
+            Circuit::GROUND,
+            Waveform::Pulse {
+                v1: 0.0,
+                v2: 3.0 * sign,
+                delay: 1e-7,
+                rise: 1e-12,
+                fall: 1e-12,
+                width: 1e9,
+                period: 0.0,
+            },
+        )));
+        c.add(Box::new(Resistor::new("RB", drive, base, 10_000.0)));
+        c.add(Box::new(Resistor::new("RC", rail, col, 1_000.0)));
+        let model = if pnp { BjtModel::pnp() } else { BjtModel::npn() };
+        c.add(Box::new(Bjt::new("Q1", col, base, Circuit::GROUND, model)));
+
+        let mut cfg = TransientConfig::new(4e-6);
+        cfg.max_step = 2e-9;
+        let result = Simulator::default().transient(&mut c, cfg).unwrap();
+        let col_index = index_of(&result, "v(col)");
+        let signal = result.signal(col_index);
+
+        // When the collector has come three quarters of the way to ground.
+        let crossed =
+            signal.iter().position(|&v| v * sign < 1.25).expect("the transistor never turned on");
+        result.time[crossed] - 1e-7
+    };
+
+    let npn = switch_time(false);
+    let pnp = switch_time(true);
+    assert!(npn > 5e-9, "switched in {npn:.3e} s, which is no time at all");
+    assert!(
+        (npn - pnp).abs() < 0.05 * npn,
+        "npn took {npn:.4e} s and pnp took {pnp:.4e} s; they are the same circuit mirrored"
+    );
+}
+
+#[test]
+fn a_mosfet_gate_has_to_be_charged_before_the_drain_moves() {
+    // A gate is a capacitor with a channel underneath it. Nothing about the drain
+    // current says so — it is a function of the gate *voltage* — so with no gate
+    // capacitance a MOSFET switches the instant the drive does, no matter what is
+    // driving it. That is what makes a gate-drive resistor look free.
+    let drain_at = |cgs: f64, cgd: f64, t: f64| {
+        let mut c = Circuit::new();
+        let vdd = c.node("vdd");
+        let drive = c.node("drive");
+        let gate = c.node("gate");
+        let out = c.node("out");
+        c.add(Box::new(VoltageSource::dc("VDD", vdd, Circuit::GROUND, 5.0)));
+        c.add(Box::new(VoltageSource::new("VG", drive, Circuit::GROUND, step(5.0))));
+        c.add(Box::new(Resistor::new("RG", drive, gate, 100_000.0)));
+        c.add(Box::new(Resistor::new("RD", vdd, out, 2_000.0)));
+        let model = MosfetModel { cgs, cgd, cds: 5e-12, ..MosfetModel::nmos() };
+        c.add(Box::new(Mosfet::new("M1", out, gate, Circuit::GROUND, model)));
+
+        let mut cfg = TransientConfig::new(2e-5);
+        cfg.max_step = 1e-8;
+        let result = Simulator::default().transient(&mut c, cfg).unwrap();
+        value_at(&result, index_of(&result, "v(out)"), t)
+    };
+
+    // 100 k into 25 pF is a couple of microseconds, and the Miller term on `cgd`
+    // stretches the middle of the transition well past that.
+    let early = drain_at(20e-12, 5e-12, 2e-7);
+    let settled = drain_at(20e-12, 5e-12, 1.5e-5);
+    assert!(early > 4.8, "the drain had already moved to {early:.3} V at 200 ns");
+    assert!(settled < 3.6, "the drain never switched: {settled:.3} V");
+
+    // Without the gate capacitance the same drive switches it immediately.
+    let instant = drain_at(0.0, 0.0, 2e-7);
+    assert!(
+        (instant - settled).abs() < 0.05,
+        "with no gate charge it should already be at {settled:.3} V, got {instant:.3} V"
+    );
+}
+
+#[test]
+fn a_common_emitter_stage_has_the_input_resistance_its_gain_implies() {
+    // rπ = β / gm, and nothing else should be loading the base. This is worth
+    // pinning because it is invisible from a DC measurement: the base current was
+    // right, the collector current was right, the ratio between them was 200 — and
+    // the small-signal input resistance was still five times too low, because the
+    // Early term had leaked into the base-collector conductance where Miller then
+    // multiplied it by the gain. Every gain figure taken from a source with any
+    // impedance at all was wrong by that factor.
+    let mut c = Circuit::new();
+    let vcc = c.node("vcc");
+    let base = c.node("base");
+    let col = c.node("col");
+    let driven = c.node("driven");
+    let input = c.node("in");
+    c.add(Box::new(VoltageSource::dc("V1", vcc, Circuit::GROUND, 12.0)));
+    c.add(Box::new(Resistor::new("RB", vcc, base, 470_000.0)));
+    c.add(Box::new(Resistor::new("RC", vcc, col, 2_200.0)));
+    c.add(Box::new(Bjt::new("Q1", col, base, Circuit::GROUND, BjtModel::npn())));
+    c.add(Box::new(
+        VoltageSource::new("V2", driven, Circuit::GROUND, Waveform::Dc { value: 0.0 })
+            .with_ac(1.0, 0.0),
+    ));
+    let source = 1_000.0;
+    c.add(Box::new(Resistor::new("RS", driven, input, source)));
+    c.add(Box::new(Capacitor::new("CIN", input, base, 10e-6)));
+
+    let op = Simulator::default().operating_point(&mut c).unwrap();
+    let vcol = op.solution[op.unknown_names.iter().position(|n| n == "v(col)").unwrap()];
+    let ic = (12.0 - vcol) / 2_200.0;
+    // rπ = β·Vt/Ic, with Vt about 25.9 mV at the default temperature.
+    let expected = 200.0 * (repath_core::elements::thermal_voltage(300.15)) / ic;
+
+    // Well below the stage's corner, so the divider is resistive.
+    let result = Simulator::default().ac_sweep(&mut c, AcConfig::new(500.0, 2_000.0)).unwrap();
+    let (at_base, _) = at_frequency(&result, "v(base)", 1_000.0);
+    let measured = source * at_base / (1.0 - at_base);
+
+    assert!(
+        (measured - expected).abs() < 0.05 * expected,
+        "input resistance came to {measured:.0} ohms; beta over gm says {expected:.0}"
+    );
+}
+
+#[test]
+fn a_mosfet_drain_cannot_be_dragged_below_its_source() {
+    // Drawing a MOSFET with three terminals ties the bulk to the source, and that
+    // puts a junction across drain and source that nobody chose. It is why you
+    // cannot pull the drain of an n-channel device below its source: the body
+    // diode conducts and clamps it a drop down, and every freewheeling path in
+    // every half-bridge ever built is that diode.
+    //
+    // It was invisible until the terminal capacitances arrived, because nothing
+    // could push the drain there. Now a fast gate edge can, through `cgd`, and
+    // without the diode the drain of an unloaded inverter left the rails entirely.
+    let mut c = Circuit::new();
+    let pull = c.node("pull");
+    let out = c.node("out");
+    c.add(Box::new(VoltageSource::dc("V1", pull, Circuit::GROUND, -5.0)));
+    c.add(Box::new(Resistor::new("R1", out, pull, 1_000.0)));
+    // Gate at ground: the channel is firmly off, so anything here is the diode.
+    c.add(Box::new(Mosfet::new("M1", out, Circuit::GROUND, Circuit::GROUND, MosfetModel::nmos())));
+
+    let op = Simulator::default().operating_point(&mut c).unwrap();
+    let v = op.solution[op.unknown_names.iter().position(|n| n == "v(out)").unwrap()];
+    assert!((-1.0..-0.3).contains(&v), "the drain settled at {v:.3} V; it should clamp near -0.7");
+
+    // And the part has to admit it is carrying the clamp current. Reporting the
+    // channel alone would draw a device sitting at a diode drop, passing milliamps,
+    // with nothing moving through it.
+    let result = Simulator::default().transient(&mut c, TransientConfig::new(1e-5)).unwrap();
+    let m1 = result.element_index("M1").expect("a mosfet should report a current");
+    let i = result.current_signal(m1)[result.time.len() - 1];
+    assert!(i < -3e-3, "the body diode was passing {i:.4} A, expected about -4 mA");
+}
