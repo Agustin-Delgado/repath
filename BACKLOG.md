@@ -51,9 +51,9 @@ because each step is what makes the next one worth having:
 
 1. **Parasitics in the devices already here.** Early voltage, junction and gate
    capacitances, diode series resistance. Cheapest credibility per line of code,
-   and it is what the rows above are mostly complaining about. *(Done: Early effect, channel-length modulation, and charge
-   storage in all three devices, so an amplifier has a top end and a switch takes
-   time. The MOSFET's body diode came with it — the gate capacitances are what
+   and it is what the rows above are mostly complaining about. *(Done: Early
+   effect, channel-length modulation, and charge storage in all three devices, so
+   an amplifier has a top end and a switch takes time. The MOSFET's body diode came with it — the gate capacitances are what
    first made it possible to drag a drain past its own rail. Series resistance
    included, which is also what stopped a diode across a volt reporting nine
    amps.)*
@@ -71,9 +71,10 @@ because each step is what makes the next one worth having:
 4. **Sparse solver.** Dense LU is fine to a few hundred nodes and quadratic-ish
    past that. It matters once steps 2 and 3 bring circuits big enough to feel it,
    which is why it is fourth and not first.
-5. **Measurement.** Parameter sweep, noise, Fourier and THD, and a scope with
-   triggering and cursors that reports rise time and RMS rather than leaving them
-   to be eyeballed.
+5. **Measurement.** Parameter sweep, noise, Fourier and THD. *(The scope is
+   mostly there: gain and position per channel, split scales, two cursors with
+   deltas, and a panel that reads off frequency, duty, RMS, rise time and
+   overshoot. A trigger and a timebase are what it still lacks.)*
 
 ## Must
 
@@ -141,13 +142,14 @@ because each step is what makes the next one worth having:
 - [ ] Voltage-controlled oscillator, comparator with hysteresis.
 - [ ] Counters, shift registers, decoders, multiplexers, RAM/ROM.
 - [ ] 7-segment display and bar graph, built on the LED that already lights.
-- [ ] Current-controlled sources (`F` and `H`) to complete the set.
 - [ ] Ideal transmission line.
 
 ### Editor
 
-- [ ] **Text labels and net names on the schematic** — naming a net beats reading
-      `n7`, and named nets are how you avoid drawing a wire across the page.
+- [ ] **Text labels, and net names that join** — free text anywhere on the
+      drawing, and a name that makes two distant points one net so a wire does not
+      have to cross the page. A probe already names a signal for the scope; what
+      it cannot do is connect anything.
 - [ ] **Buses** for digital, with `d[7:0]` notation.
 - [ ] **Align and distribute** on a multi-selection.
 - [ ] **Component search** in the palette; it will not stay small.
@@ -168,8 +170,10 @@ because each step is what makes the next one worth having:
       the result is orthogonal, connected, and lands on both endpoints.
 - [ ] **Golden-file regression tests** for the analyses, so a numerical change is
       noticed rather than discovered.
-- [ ] **Browser test suite in CI** (Playwright), covering the interactions that are
-      currently only verified by hand.
+- [ ] **Browser checks in CI.** Playwright is a dev dependency and has found three
+      shipped bugs — a dead overlay, a double-click that could not fire, a compiler
+      case that never landed — none of which the other tests could see, because
+      none of them opens a browser. Nothing in CI runs it yet.
 - [ ] **Fuzz the netlist compiler** — no input should panic the engine.
 
 ---
