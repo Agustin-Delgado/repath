@@ -21,7 +21,6 @@ Each one should either move into Must/Should below, or be documented in the UI.
 |---|---|---|
 | MOSFET | Shichman-Hodges (level 1) only, bulk tied to source | No body effect, no subthreshold conduction, no short-channel behaviour |
 | MOSFET | Gate capacitances are constant, not the bias-dependent Meyer model | Right for a datasheet's Ciss/Crss/Coss; a gate charge curve will not have its plateau in quite the right place |
-| Diode | No series resistance (`RS`) | Forward drop at high current is optimistic |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
@@ -49,11 +48,12 @@ because each step is what makes the next one worth having:
 
 1. **Parasitics in the devices already here.** Early voltage, junction and gate
    capacitances, diode series resistance. Cheapest credibility per line of code,
-   and it is what the rows above are mostly complaining about. *(Done, bar the
-   diode's series resistance: Early effect, channel-length modulation, and charge
+   and it is what the rows above are mostly complaining about. *(Done: Early effect, channel-length modulation, and charge
    storage in all three devices, so an amplifier has a top end and a switch takes
    time. The MOSFET's body diode came with it — the gate capacitances are what
-   first made it possible to drag a drain past its own rail.)*
+   first made it possible to drag a drain past its own rail. Series resistance
+   included, which is also what stopped a diode across a volt reporting nine
+   amps.)*
 2. **`.model` import.** A SPICE model card is one line of the parameters step 1
    adds, so a real 1N4148 or 2N3904 becomes a paste from the manufacturer rather
    than a part someone has to hand-write here. *(Done for the diode, BJT and
@@ -85,8 +85,6 @@ because each step is what makes the next one worth having:
       need before they will build.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
       pivoting). The `LinearSystem` interface was kept narrow for this.
-- [ ] **Diode series resistance** (`RS`). Solved against the junction rather than
-      given an internal node, so the element count stays put.
 - [ ] **Meyer gate capacitance** on the MOSFET — the channel charge split that
       makes `CGS` and `CGD` follow the operating region instead of sitting still.
       What a gate charge curve needs; the constant values are already enough for
@@ -236,6 +234,9 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- Diodes have a bulk resistance, so the forward curve bends away from the
+  exponential where a real one does instead of climbing forever, and breakdown is
+  damped like conduction rather than running off the end of `exp`.
 - The op-amp is a macromodel rather than an ideal: gain-bandwidth product, slew
   rate, output resistance, input offset and input bias current, all falling out
   of a transconductance into a compensated gain node. Every op-amp circuit here

@@ -112,11 +112,15 @@ function withCard(
 
 function diodeModel(instance: Instance): Record<string, unknown> {
 	const kind = str(instance, 'model', 'silicon');
-	if (kind === 'led') return { is: 9.3e-20, n: 3.73, bv: null, temp: 300.15 };
+	// The bulk resistance travels with every one of them. It does nothing at a
+	// milliamp and it is most of the forward drop at an amp, and a part without
+	// one has an exponential that never stops climbing.
+	const base = { rs: num(instance, 'rs', 0.568), temp: 300.15 };
+	if (kind === 'led') return { is: 9.3e-20, n: 3.73, bv: null, ...base };
 	if (kind === 'zener') {
-		return { is: 2.52e-9, n: 1.752, bv: Math.abs(num(instance, 'breakdown', 5.1)), temp: 300.15 };
+		return { is: 2.52e-9, n: 1.752, bv: Math.abs(num(instance, 'breakdown', 5.1)), ...base };
 	}
-	return { is: 2.52e-9, n: 1.752, bv: null, temp: 300.15 };
+	return { is: 2.52e-9, n: 1.752, bv: null, ...base };
 }
 
 export function compileSchematic(schematic: Schematic): CompileResult {

@@ -1455,3 +1455,72 @@ fn an_op_amp_drives_a_load_through_its_output_resistance() {
     let heavy = reached(75.0);
     assert!((heavy - 7.5).abs() < 0.2, "into an equal load, expected about half; got {heavy:.3}");
 }
+
+#[test]
+fn a_diode_stops_being_an_exponential_at_high_current() {
+    // The bulk resistance does nothing at a milliamp and is most of the forward
+    // drop at an amp. Without it the exponential runs off on its own: a volt
+    // across a small-signal diode came out at nine amps, and past that the solve
+    // gave up entirely, because nothing in the model says the silicon between the
+    // junction and the leads has any resistance at all.
+    let current_at = |v: f64, rs: f64| {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        c.add(Box::new(VoltageSource::dc("V1", a, Circuit::GROUND, v)));
+        c.add(Box::new(Diode::new(
+            "D1",
+            a,
+            Circuit::GROUND,
+            DiodeModel { rs, ..Default::default() },
+        )));
+        let op = Simulator::default().operating_point(&mut c).ok()?;
+        Some(-op.solution[op.unknown_names.iter().position(|n| n == "i(V1)").unwrap()])
+    };
+
+    // Low down, the resistance is beneath notice: a few millivolts of a drop that
+    // is most of a volt.
+    let (small, ideal) = (current_at(0.6, 0.568).unwrap(), current_at(0.6, 0.0).unwrap());
+    assert!((small - ideal).abs() < 0.05 * ideal, "{small:.6} A against {ideal:.6} A");
+
+    // High up it is the whole story. Above the knee the drop is the junction plus
+    // `rs·i`, so the current climbs about linearly rather than by a decade every
+    // hundred millivolts.
+    let one = current_at(1.0, 0.568).unwrap();
+    let two = current_at(2.0, 0.568).unwrap();
+    assert!(one > 0.2 && one < 0.4, "a volt should give a few hundred mA, got {one:.4} A");
+    let slope = (two - one) / 1.0;
+    assert!(
+        (slope - 1.0 / 0.568).abs() < 0.25 / 0.568,
+        "past the knee it should climb at 1/rs; got {slope:.3} S against {:.3}",
+        1.0 / 0.568
+    );
+
+    // And it is what lets the solve get there at all.
+    assert!(current_at(5.0, 0.568).is_some(), "a diode across five volts should still solve");
+
+    // A part that arrives without one is the runaway above, so the default is
+    // part of the model rather than a number the caller has to know to supply.
+    assert!(DiodeModel::default().rs > 0.0, "a diode should come with a bulk resistance");
+}
+
+#[test]
+fn a_zener_in_hard_breakdown_stays_a_real_number() {
+    // Breakdown is an exponential and needs the same damping conduction gets.
+    // Without it a single overshooting iterate lands where `exp` is clamped —
+    // flat, while still reporting the slope it had on the way up — and the solve
+    // walks in and cannot walk back out.
+    let mut c = Circuit::new();
+    let rail = c.node("rail");
+    let out = c.node("out");
+    // Far past breakdown, and stiffly driven, which is the case that used to
+    // leave the part looking like a short.
+    c.add(Box::new(VoltageSource::dc("V1", rail, Circuit::GROUND, 30.0)));
+    c.add(Box::new(Resistor::new("R1", rail, out, 100.0)));
+    c.add(Box::new(Diode::new("D1", Circuit::GROUND, out, DiodeModel::zener(5.1))));
+
+    let op = Simulator::default().operating_point(&mut c).unwrap();
+    let v = op.solution[op.unknown_names.iter().position(|n| n == "v(out)").unwrap()];
+    // A quarter of an amp through a 5.1 V part pushes it up a few hundred
+    // millivolts, and the bulk resistance is what decides how far.
+    assert!((5.0..6.5).contains(&v), "regulated at {v:.4} V");
+}

@@ -46,6 +46,9 @@ export interface LedColour {
 export const RATED = 0.02;
 
 /** Where the curve is anchored. Fixed, unlike a part's rating. */
+/** Bulk resistance, as every diode here has. */
+const RS = 0.568;
+
 const REFERENCE = RATED;
 
 export const LED_COLOURS: readonly LedColour[] = [
@@ -79,13 +82,13 @@ export function ledColour(value: unknown): LedColour {
 export function ledDiodeModel(
 	value: unknown,
 	rated: number
-): { is: number; n: number; bv: null; temp: number; rated: number } {
+): { is: number; n: number; bv: null; rs: number; temp: number; rated: number } {
 	const { vf } = ledColour(value);
 	// The curve is anchored at the fixed reference current, never at `rated`.
 	// The rating says how much abuse the part takes, and raising it to keep a
 	// circuit alive must not quietly move the forward voltage and change how much
 	// current that circuit draws in the first place.
-	return { is: REFERENCE * Math.exp(-vf / (N * VT)), n: N, bv: null, temp: TEMP, rated };
+	return { is: REFERENCE * Math.exp(-vf / (N * VT)), n: N, bv: null, rs: RS, temp: TEMP, rated };
 }
 
 /** What this LED is rated for, in amps. */

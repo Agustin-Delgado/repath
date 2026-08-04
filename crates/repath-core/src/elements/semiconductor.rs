@@ -101,9 +101,30 @@ const BREAKDOWN_KNEE: f64 = 1e-3;
 
 /// `exp` with the argument clamped, so a stray iterate cannot produce infinity
 /// even if limiting is bypassed.
+///
+/// A backstop, not a model. Past the clamp the value stops rising while its
+/// derivative carries on claiming it is — so anything that lands there solves a
+/// tangent that says it has already arrived. Every exponential here is kept out
+/// of that region by limiting instead.
 #[inline]
 fn safe_exp(x: f64) -> f64 {
     x.min(80.0).exp()
+}
+
+/// Damp a step into reverse breakdown, the way `limit_junction` damps one into
+/// forward conduction.
+///
+/// Breakdown is an exponential like any other and needs the same treatment,
+/// mirrored about `-bv`. Without it a single overshooting iterate runs off the
+/// end of `safe_exp`, where the curve is flat and its slope is not: a zener asked
+/// for six volts reported four hundred kiloamps and a solve that walked in there
+/// could not walk back out.
+fn limit_breakdown(v_new: f64, v_old: f64, vt: f64, bv: f64) -> (f64, bool) {
+    // How far past the knee, counted positive going into breakdown, which turns
+    // this into exactly the forward problem.
+    let vcrit = critical_voltage(BREAKDOWN_KNEE, vt);
+    let (limited, hit) = limit_junction(-(v_new + bv), -(v_old + bv), vt, vcrit);
+    (if hit { -(limited + bv) } else { v_new }, hit)
 }
 
 /// Depletion capacitance of a junction at a given bias.
@@ -215,6 +236,15 @@ pub struct DiodeModel {
     /// Transit time, seconds — the diffusion charge carried while conducting.
     #[serde(default)]
     pub tt: f64,
+    /// Bulk series resistance, ohms.
+    ///
+    /// Everything between the junction and the leads: the undepleted silicon
+    /// either side of it, the bond wires, the package. It does nothing worth
+    /// noticing at a milliamp and it is most of the forward drop at an amp, which
+    /// is why a rectifier's datasheet curve bends away from the exponential and a
+    /// model without it stays a straight line on a log plot forever.
+    #[serde(default)]
+    pub rs: f64,
     /// Continuous forward current the part is rated for, amps.
     ///
     /// `None` makes it indestructible, which is the right default: a rating is a
@@ -235,6 +265,7 @@ impl Default for DiodeModel {
             vj: default_vj(),
             m: default_grading(),
             tt: 5e-9,
+            rs: 0.568,
             temp: TNOM,
             rated: None,
         }
@@ -350,6 +381,77 @@ impl Diode {
         depletion_capacitance(m.cj0, m.vj, m.m, vd) + m.tt * gd
     }
 
+    /// Damp a step in whichever direction it is heading.
+    ///
+    /// A junction has an exponential at each end — conduction one way, breakdown
+    /// the other — and a step towards either one has to be held back.
+    fn limited(&self, v_new: f64, v_old: f64, vt: f64, vcrit: f64) -> (f64, bool) {
+        let (v, forward) = limit_junction(v_new, v_old, vt, vcrit);
+        match self.model.bv {
+            Some(bv) if bv > 0.0 => {
+                let (v, reverse) = limit_breakdown(v, v_old, vt, bv);
+                (v, forward || reverse)
+            }
+            _ => (v, forward),
+        }
+    }
+
+    /// Where the junction sits, given what is across the whole part.
+    ///
+    /// The bulk resistance drops whatever the junction is passing, so the two
+    /// have to be solved together: `vj + rs·i(vj) = v`. Solved here, to
+    /// convergence, rather than by giving the part an internal node — one more
+    /// unknown per diode is a real cost in a circuit with a bridge rectifier in
+    /// it, and this is a scalar equation in one variable that a handful of
+    /// exponentials settles.
+    ///
+    /// To convergence and not one step per outer iteration, which is what this
+    /// did first. A single step leaves the junction lagging whatever the terminals
+    /// are doing, so the device the outer Newton is linearising is not the device
+    /// it then solves — a zener came out at seven millivolts instead of five
+    /// volts, and a transient ground its timestep down to nothing trying to
+    /// follow. Solved properly the part is an exact function of its terminal
+    /// voltage again, which is all the outer loop ever needed it to be.
+    fn solve_junction(&self, terminal: f64, ctx: &StampCtx, vt: f64, vcrit: f64) -> f64 {
+        let rs = self.model.rs.max(0.0);
+        if rs <= 0.0 {
+            return terminal;
+        }
+        let mut vj = self.v_prev_iter;
+        for _ in 0..40 {
+            let (i, y) = self.junction(vj, ctx);
+            let residual = vj + rs * i - terminal;
+            if residual.abs() <= 1e-12 * (1.0 + terminal.abs()) {
+                break;
+            }
+            // The same limiting the outer loop uses, for the same reason: a raw
+            // step into either exponential overshoots past where `exp` is still
+            // being evaluated rather than clamped.
+            let next = self.limited(vj - residual / (1.0 + rs * y), vj, vt, vcrit).0;
+            if (next - vj).abs() <= 1e-15 {
+                vj = next;
+                break;
+            }
+            vj = next;
+        }
+        vj
+    }
+
+    /// The junction as one branch — conduction and stored charge together — at a
+    /// given junction voltage. Used to work out where the junction sits behind
+    /// the series resistance, before anything is stamped.
+    fn junction(&self, vd: f64, ctx: &StampCtx) -> (f64, f64) {
+        let (id, gd) = self.evaluate(vd);
+        let gd = gd + ctx.gmin;
+        let c = self.capacitance(vd, gd);
+        let (gc, ic_eq) = if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
+            self.charge.terms(c, ctx.integration, ctx.dt)
+        } else {
+            (0.0, 0.0)
+        };
+        (id + gc * vd - ic_eq, gd + gc)
+    }
+
     /// Current and conductance at a given junction voltage.
     fn evaluate(&self, vd: f64) -> (f64, f64) {
         let vt = thermal_voltage(self.model.temp) * self.model.n;
@@ -409,14 +511,26 @@ impl Element for Diode {
 
         let vt = thermal_voltage(self.model.temp) * self.model.n;
         let vcrit = critical_voltage(self.model.is, vt);
+        let rs = self.model.rs.max(0.0);
 
-        let raw = ctx.voltage(self.p) - ctx.voltage(self.m);
+        let terminal = ctx.voltage(self.p) - ctx.voltage(self.m);
+        // What the junction itself is at, which is the terminal voltage less
+        // whatever the bulk resistance is dropping. Solved rather than read,
+        // because the drop depends on the current and the current on the
+        // junction — but solved *here*, one step per outer iteration, rather than
+        // by giving the part an internal node. The outer loop is already
+        // iterating; this rides along with it and converges when it does.
+        //
+        // With no series resistance the step lands exactly on the terminal
+        // voltage, so a part without one behaves as it always did.
+        let target = self.solve_junction(terminal, ctx, vt, vcrit);
+
         let (vd, limited) = if ctx.iteration == 0 {
             // Start every timepoint from the last converged junction voltage rather
             // than from whatever the linear predictor produced.
             (self.v_prev_iter, false)
         } else {
-            limit_junction(raw, self.v_prev_iter, vt, vcrit)
+            self.limited(target, self.v_prev_iter, vt, vcrit)
         };
         self.v_prev_iter = vd;
 
@@ -425,11 +539,19 @@ impl Element for Diode {
         self.gd_op = gd;
 
         let (gc, ic_eq) = self.charge.companion(self.capacitance(vd, gd), ctx);
-        let ieq = id - gd * vd - ic_eq;
+
+        // The junction and its charge as one branch, then the bulk resistance in
+        // series with it. Linearised at the terminals: a conductance the series
+        // resistance has softened, and a source that puts the pair back where the
+        // junction actually is.
+        let i0 = id + gc * vd - ic_eq;
+        let y = gd + gc;
+        let g_eff = y / (1.0 + rs * y);
+        let v0 = vd + rs * i0;
 
         let (p, m) = (node_index(self.p), node_index(self.m));
-        sys.add_conductance(p, m, gd + gc);
-        sys.add_current(p, m, ieq);
+        sys.add_conductance(p, m, g_eff);
+        sys.add_current(p, m, i0 - g_eff * v0);
 
         if limited { StampReport::LIMITED } else { StampReport::CLEAN }
     }
@@ -477,7 +599,13 @@ impl Element for Diode {
         self.i_accepted = current;
 
         // Roll the capacitive branch forward, the way any reactive element does.
-        let vd = ctx.voltage(self.p) - ctx.voltage(self.m);
+        //
+        // At the junction's voltage, which is where the charge is — not at the
+        // terminals', which is where it is only if there is no bulk resistance
+        // between them. Storing the wrong one leaves the companion model carrying
+        // history from a place the charge never was, and a rectifier's recovery
+        // ground its timestep down to nothing trying to reconcile the two.
+        let vd = self.v_prev_iter;
         let (_, gd) = self.evaluate(vd);
         self.charge.accept(vd, self.capacitance(vd, gd + 1e-12), ctx);
     }
@@ -507,8 +635,18 @@ impl Element for Diode {
         if self.blown_at.is_some() {
             return Some(0.0);
         }
-        let vp = node_index(self.p).map_or(0.0, |i| x[i]);
-        let vm = node_index(self.m).map_or(0.0, |i| x[i]);
+        // The junction's own voltage, not the terminals'. With a bulk resistance
+        // the two differ by whatever it is dropping, and putting the terminal
+        // voltage into an exponential turns five millivolts of difference into
+        // eleven percent of the answer — an LED reported as carrying 10.5 mA while
+        // the circuit around it was solved, correctly, for 9.5.
+        let vd = if self.model.rs > 0.0 {
+            self.v_prev_iter
+        } else {
+            let vp = node_index(self.p).map_or(0.0, |i| x[i]);
+            let vm = node_index(self.m).map_or(0.0, |i| x[i]);
+            vp - vm
+        };
         // Both branches. The charge leaving a junction that has just been reversed
         // is most of what flows through it for that moment, and reporting only the
         // conduction term hid reverse recovery from every probe and every trace
@@ -516,7 +654,7 @@ impl Element for Diode {
         //
         // `i_prev` is this timepoint's, not the last one's: elements are accepted
         // before the point is recorded.
-        Some(self.evaluate(vp - vm).0 + self.charge.i_prev)
+        Some(self.evaluate(vd).0 + self.charge.i_prev)
     }
 }
 
