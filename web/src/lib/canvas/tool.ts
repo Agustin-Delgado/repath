@@ -33,7 +33,13 @@ export interface EditorPointer {
 	alt: boolean;
 	meta: boolean;
 	pointerId: number;
-	/** Click count: 2 on the second press of a double-click. */
+	/**
+	 * Click count: 2 on the second press of a double-click.
+	 *
+	 * Counted here rather than taken from the event. `PointerEvent.detail` is 0 in
+	 * Chromium — only `mousedown` and `dblclick` carry a click count — so a tool
+	 * that trusted it would never see a second click at all.
+	 */
 	detail: number;
 	/** True once the pointer has moved beyond the drag threshold. */
 	dragging: boolean;

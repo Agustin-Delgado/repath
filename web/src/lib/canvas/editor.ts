@@ -58,6 +58,10 @@ export class CanvasEditor {
 	pointerWorld: Vec2 | null = null;
 
 	private activeTool: Tool | null = null;
+	/** Presses counted at roughly the same spot, so a tool can see a double-click. */
+	private clickCount = 1;
+	private lastPress: { time: number; x: number; y: number; count: number } | null = null;
+
 	private gesture: {
 		pointerId: number;
 		origin: Vec2;
@@ -224,7 +228,7 @@ export class CanvasEditor {
 			alt: event.altKey,
 			meta: event.metaKey,
 			pointerId: event.pointerId,
-			detail: event.detail,
+			detail: this.clickCount,
 			dragging: gesture?.dragging ?? false,
 			native: event
 		};
@@ -233,6 +237,17 @@ export class CanvasEditor {
 	private onPointerDown = (event: PointerEvent) => {
 		const screen = this.localPoint(event);
 		const world = this.viewport.toWorld(screen);
+
+		// A double-click, counted from the presses rather than read off the event:
+		// a `pointerdown` reports a click count of zero, and only the mouse events
+		// that shadow it carry one. Same window and slop a browser uses, so it
+		// agrees with what the rest of the page would call a double-click.
+		const previous = this.lastPress;
+		const quick = previous && event.timeStamp - previous.time < 400;
+		const still =
+			previous && Math.abs(screen.x - previous.x) < 6 && Math.abs(screen.y - previous.y) < 6;
+		this.clickCount = quick && still ? previous.count + 1 : 1;
+		this.lastPress = { time: event.timeStamp, x: screen.x, y: screen.y, count: this.clickCount };
 
 		// Middle button or Alt always pans, whatever the tool is doing.
 		const panning = event.button === 1 || (event.button === 0 && event.altKey);

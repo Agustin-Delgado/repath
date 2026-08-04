@@ -203,7 +203,15 @@
 		let last = performance.now();
 		// Where playback was on the previous frame, so a drag of the scrubber shows
 		// up here as a distance rather than as a jump nobody can see.
-		let lastPlayback = app.playbackTime;
+		//
+		// Left unset rather than seeded from `app.playbackTime`, and that is not a
+		// style choice. A read here is a read in the effect *body*, which subscribes
+		// this effect to a value that changes every single frame — so the effect
+		// tore itself down and rebuilt sixty times a second, and its cleanup nulled
+		// `dynamicView` between the frame setting it and the layer drawing it. The
+		// whole live overlay went dark. Reads belong inside `step`, where they are
+		// not tracked.
+		let lastPlayback: number | null = null;
 
 		const step = (now: number) => {
 			// Clamped so a backgrounded tab does not resume with one enormous jump.
@@ -224,7 +232,7 @@
 					app.playbackTime = next;
 					moved = dt * app.playbackRate;
 				}
-			} else {
+			} else if (lastPlayback !== null) {
 				moved = app.playbackTime - lastPlayback;
 			}
 			lastPlayback = app.playbackTime;
@@ -365,14 +373,34 @@
 	});
 
 	let renameField = $state.raw<HTMLInputElement | null>(null);
+	/**
+	 * Whether the field has had its turn at the keyboard yet.
+	 *
+	 * The gesture that opens it is not finished when it appears: the `mousedown`
+	 * that follows the `pointerdown` lands on the canvas, which takes nothing
+	 * focusable with it, so the browser blanks the focus — and a blur handler that
+	 * closed on sight shut the field before anyone could type into it. Focus goes
+	 * in on the next frame instead, once the press is over, and a blur before that
+	 * is the gesture rather than the user leaving.
+	 */
+	let renameReady = false;
 
 	$effect(() => {
-		// Focused and selected the moment it appears, so the second click lands you
-		// typing rather than clicking again to put the caret somewhere.
-		if (renameAt && renameField) renameField.select();
+		if (!renameAt || !renameField) {
+			renameReady = false;
+			return;
+		}
+		const field = renameField;
+		const id = requestAnimationFrame(() => {
+			field.select();
+			renameReady = true;
+		});
+		return () => cancelAnimationFrame(id);
 	});
 
 	function commitRename(value: string) {
+		if (!renameReady) return;
+		renameReady = false;
 		const id = app.renaming;
 		app.renaming = null;
 		if (id) app.rename(id, value);
