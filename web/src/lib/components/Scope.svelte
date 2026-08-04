@@ -9,6 +9,14 @@
 	let host = $state<HTMLDivElement | null>(null);
 	let size = $state({ width: 0, height: 0 });
 	let cursor = $state<{ x: number; time: number } | null>(null);
+	/**
+	 * A second cursor, left where you put it.
+	 *
+	 * One cursor answers "what is it here". Two answer "how much did it change,
+	 * and how long did that take", which is most of what anyone walks up to a
+	 * scope to find out. Shift-click drops it; shift-click again picks it up.
+	 */
+	let marker = $state<number | null>(null);
 
 	const DIGITAL_LANE = 26;
 	const PADDING = { left: 62, right: 14, top: 14, bottom: 26 };
@@ -55,6 +63,40 @@
 		}
 		return out;
 	});
+
+	/**
+	 * One vertical scale, or one per trace.
+	 *
+	 * Shared is what a scope does when the signals are comparable. They often are
+	 * not: a 5 V square wave and the 400 mV of ripple it produces share an axis
+	 * only in the sense that the ripple becomes a flat line. Separated, each trace
+	 * gets a band of its own and is scaled to fill it — which is what the vertical
+	 * knob on a bench scope is for.
+	 */
+	let separate = $state(false);
+
+	/** Range of one trace on its own, padded so nothing touches its band edge. */
+	function spanOf(series: Array<Float64Array | undefined>) {
+		let lo = Infinity;
+		let hi = -Infinity;
+		for (const s of series) {
+			if (!s) continue;
+			for (const v of s) {
+				if (v < lo) lo = v;
+				if (v > hi) hi = v;
+			}
+		}
+		if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { lo: -1, hi: 1 };
+		if (hi - lo < 1e-12) {
+			const centre = (hi + lo) / 2 || 0;
+			return { lo: centre - 0.5, hi: centre + 0.5 };
+		}
+		const pad = (hi - lo) * 0.1;
+		return { lo: lo - pad, hi: hi + pad };
+	}
+
+	/** One range per trace, for when they are drawn separated. */
+	const lanes = $derived(traces.map((t) => spanOf([t.samples, t.low, t.high])));
 
 	/** Vertical range of the analog traces, padded so nothing touches the frame. */
 	const range = $derived.by(() => {
@@ -125,7 +167,19 @@
 		const run = app.result;
 		const stop = run && run.time.length ? run.time[run.time.length - 1] : app.stopTime;
 		const toX = (t: number) => plot.x + (t / (stop || 1)) * plot.w;
-		const toY = (v: number) => plot.y + plot.h - ((v - range.lo) / (range.hi - range.lo)) * plot.h;
+
+		// Where each trace lives and what it is scaled against. Shared, they all
+		// have the whole plot and one range; separated, a band each and their own.
+		const bandHeight = traces.length ? plot.h / traces.length : plot.h;
+		const bandOf = (index: number) =>
+			separate
+				? { top: plot.y + index * bandHeight, h: bandHeight * 0.86, span: lanes[index] }
+				: { top: plot.y, h: plot.h, span: range };
+		const mapY = (index: number, v: number) => {
+			const b = bandOf(index);
+			return b.top + b.h - ((v - b.span.lo) / (b.span.hi - b.span.lo)) * b.h;
+		};
+		const toY = (v: number) => mapY(0, v);
 
 		// Grid.
 		ctx.strokeStyle = colour('--scope-grid') || '#2a2f3a';
@@ -136,7 +190,8 @@
 		const vStep = niceStep(range.hi - range.lo, 5);
 		ctx.textAlign = 'right';
 		ctx.textBaseline = 'middle';
-		for (let v = hasAnalog ? Math.ceil(range.lo / vStep) * vStep : Infinity; v <= range.hi; v += vStep) {
+		const gridFrom = hasAnalog && !separate ? Math.ceil(range.lo / vStep) * vStep : Infinity;
+		for (let v = gridFrom; v <= range.hi; v += vStep) {
 			const y = toY(v);
 			ctx.beginPath();
 			ctx.moveTo(plot.x, y);
@@ -169,38 +224,53 @@
 		// traces that some particular circuit followed. No sample followed either
 		// of them — each edge is the worst any sample managed at that instant.
 		ctx.lineJoin = 'round';
-		for (const trace of traces) {
-			if (!trace.low || !trace.high) continue;
+		traces.forEach((trace, index) => {
+			if (!trace.low || !trace.high) return;
 			ctx.beginPath();
 			for (let i = 0; i < run.time.length; i++) {
 				const x = toX(run.time[i]);
-				const y = toY(trace.high[i]);
+				const y = mapY(index, trace.high[i]);
 				if (i === 0) ctx.moveTo(x, y);
 				else ctx.lineTo(x, y);
 			}
 			for (let i = run.time.length - 1; i >= 0; i--) {
-				ctx.lineTo(toX(run.time[i]), toY(trace.low[i]));
+				ctx.lineTo(toX(run.time[i]), mapY(index, trace.low[i]));
 			}
 			ctx.closePath();
 			ctx.globalAlpha = 0.22;
 			ctx.fillStyle = trace.colour;
 			ctx.fill();
 			ctx.globalAlpha = 1;
-		}
+		});
 
 		// Analog traces.
 		ctx.lineWidth = 1.6;
-		for (const trace of traces) {
+		traces.forEach((trace, index) => {
 			ctx.strokeStyle = trace.colour;
 			ctx.beginPath();
 			for (let i = 0; i < run.time.length; i++) {
 				const x = toX(run.time[i]);
-				const y = toY(trace.samples[i]);
+				const y = mapY(index, trace.samples[i]);
 				if (i === 0) ctx.moveTo(x, y);
 				else ctx.lineTo(x, y);
 			}
 			ctx.stroke();
-		}
+
+			// Separated, each band carries its own two numbers in its own colour.
+			// A shared axis on the left would be describing only one of them.
+			if (separate) {
+				const b = bandOf(index);
+				ctx.fillStyle = trace.colour;
+				ctx.textAlign = 'right';
+				ctx.textBaseline = 'top';
+				ctx.fillText(`${formatValue(b.span.hi, 3)}V`, plot.x - 8, b.top);
+				ctx.textBaseline = 'bottom';
+				ctx.fillText(`${formatValue(b.span.lo, 3)}V`, plot.x - 8, b.top + b.h);
+				ctx.textAlign = 'left';
+				ctx.textBaseline = 'top';
+				ctx.fillText(trace.label, plot.x + 6, b.top + 2);
+			}
+		});
 
 		// Digital lanes below the analog plot.
 		ctx.lineWidth = 1.8;
@@ -256,6 +326,19 @@
 		}
 
 		// Cursor.
+		if (marker !== null) {
+			const x = toX(marker);
+			ctx.save();
+			ctx.setLineDash([3, 3]);
+			ctx.strokeStyle = colour('--scope-cursor');
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(x, plot.y);
+			ctx.lineTo(x, plot.y + plot.h + laneHeight);
+			ctx.stroke();
+			ctx.restore();
+		}
+
 		if (cursor) {
 			ctx.strokeStyle = colour('--scope-cursor');
 			ctx.lineWidth = 1;
@@ -291,23 +374,34 @@
 		app.seek(((event.clientX - rect.left - PADDING.left) / plotW) * stop);
 	}
 
-	/** Sample index nearest the cursor time, for the readout. */
+	/** Index of the sample nearest a time. */
+	function indexAt(time: Float64Array, at: number): number {
+		let lo = 0;
+		let hi = time.length - 1;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			if (time[mid] < at) lo = mid + 1;
+			else hi = mid;
+		}
+		return lo;
+	}
+
+	/** What the cursors read, and the difference between them if there are two. */
 	const readout = $derived.by(() => {
 		const run = app.result;
 		if (!run || !cursor || run.time.length === 0) return null;
-		let lo = 0;
-		let hi = run.time.length - 1;
-		while (lo < hi) {
-			const mid = (lo + hi) >> 1;
-			if (run.time[mid] < cursor.time) lo = mid + 1;
-			else hi = mid;
-		}
+		const here = indexAt(run.time, cursor.time);
+		const there = marker === null ? null : indexAt(run.time, marker);
 		return {
-			time: run.time[lo],
+			time: run.time[here],
+			delta: there === null ? null : run.time[here] - run.time[there],
 			values: traces.map((t) => ({
 				label: t.label,
 				colour: t.colour,
-				value: t.samples[lo]
+				value: t.samples[here],
+				// The change between the two, which is the number nobody wants to do
+				// by subtracting two readings they wrote down.
+				delta: there === null ? null : t.samples[here] - t.samples[there]
 			}))
 		};
 	});
@@ -321,8 +415,9 @@
 		const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
 		const t = ((x - PADDING.left) / plotW) * stop;
 		cursor = t >= 0 && t <= stop ? { x, time: t } : null;
-		// Dragging scrubs; a plain hover only reads values off.
-		if (event.buttons & 1) seekTo(event);
+		// Dragging scrubs; a plain hover only reads values off. Shift is measuring,
+		// so it must not drag the playhead around while you do it.
+		if (event.buttons & 1 && !event.shiftKey) seekTo(event);
 	}
 
 	$effect(() => {
@@ -336,7 +431,7 @@
 
 	$effect(() => {
 		// Redraw whenever anything the plot depends on changes.
-		void [app.result, traces, digitalTraces, range, size, cursor, playheadPx];
+		void [app.result, traces, digitalTraces, range, lanes, separate, marker, size, cursor, playheadPx];
 		draw();
 	});
 </script>
@@ -351,7 +446,16 @@
 			style:width="{size.width}px"
 			style:height="{size.height}px"
 			onpointermove={onMove}
-			onpointerdown={seekTo}
+			onpointerdown={(e) => {
+				if (e.shiftKey) {
+					// Second press in the same place picks it up again.
+					marker = marker !== null && cursor && Math.abs(marker - cursor.time) < 1e-12
+						? null
+						: (cursor?.time ?? null);
+					return;
+				}
+				seekTo(e);
+			}}
 			onpointerleave={() => (cursor = null)}
 		></canvas>
 
@@ -365,19 +469,44 @@
 
 		{#if readout && readout.values.length > 0}
 			<div class="readout">
-				<span class="time">t = {formatValue(readout.time, 4)}s</span>
+				<span class="time">
+					t = {formatValue(readout.time, 4)}s
+					{#if readout.delta !== null}
+						<span class="delta">Δt = {formatValue(readout.delta, 4)}s</span>
+					{/if}
+				</span>
 				{#each readout.values as entry (entry.label)}
 					<span class="value" style:color={entry.colour}>
 						{entry.label} = {formatValue(entry.value, 4)}V
+						{#if entry.delta !== null}
+							<span class="delta">Δ {formatValue(entry.delta, 4)}V</span>
+						{/if}
 					</span>
 				{/each}
+				{#if marker === null}
+					<span class="hint">shift-click to measure from a point</span>
+				{/if}
 			</div>
 		{/if}
 	</div>
 	{/if}
 
 	<aside class="signals">
-		<h3>Signals</h3>
+		<h3>
+			Signals
+			{#if traces.length > 1}
+				<button
+					class="scale"
+					class:on={separate}
+					onclick={() => (separate = !separate)}
+					title={separate
+						? 'One axis for everything'
+						: 'Give each signal its own scale, so a small one is not flattened by a large one'}
+				>
+					{separate ? 'split' : 'shared'}
+				</button>
+			{/if}
+		</h3>
 		<ul>
 			{#each app.compiled.connectivity.nets as net (net.index)}
 				{@const names = app.compiled.names.get(net.index)}
@@ -431,6 +560,40 @@
 </div>
 
 <style>
+	.readout .delta {
+		margin-left: 0.35rem;
+		opacity: 0.8;
+	}
+
+	.readout .hint {
+		opacity: 0.5;
+		font-style: italic;
+	}
+
+	.signals h3 {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.4rem;
+	}
+
+	.signals .scale {
+		font-size: 0.6rem;
+		letter-spacing: 0;
+		text-transform: none;
+		padding: 0.1rem 0.35rem;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		background: var(--control-bg);
+		color: var(--label-dim);
+		cursor: pointer;
+	}
+
+	.signals .scale.on {
+		border-color: var(--accent);
+		color: var(--text);
+	}
+
 	.scope {
 		display: grid;
 		grid-template-columns: 1fr 190px;
