@@ -173,6 +173,16 @@ class AppState {
 	 * hot enclosure. Twenty-seven is the temperature every datasheet quotes at.
 	 */
 	temperature = $state(27);
+	/**
+	 * Which sample of the circuit is being simulated.
+	 *
+	 * Zero means every part is exactly its marking, which is the circuit nobody
+	 * has ever built. Anything else is a seed: each part is drawn once from inside
+	 * its tolerance band and stays there for the run, so what comes out is one
+	 * real circuit rather than an average of all of them. Kept as a number so the
+	 * same sample can be re-run, shared and reported.
+	 */
+	sample = $state(0);
 	exampleId = $state(EXAMPLES[0].id);
 
 	constructor() {
@@ -352,7 +362,7 @@ class AppState {
 	 */
 	private gesture: Step | null = null;
 
-	compiled = $derived(compileSchematic(this.schematic, this.temperature + 273.15));
+	compiled = $derived(compileSchematic(this.schematic, this.temperature + 273.15, this.sample));
 
 	activeProbes = $derived.by((): ProbeInfo[] => {
 		const compiled = this.compiled;
@@ -1264,7 +1274,7 @@ class AppState {
 
 	/** Pick a few interesting nets so a freshly loaded circuit plots something. */
 	autoProbe(): void {
-		const compiled = compileSchematic(this.schematic, this.temperature + 273.15);
+		const compiled = compileSchematic(this.schematic, this.temperature + 273.15, this.sample);
 		const chosen: string[] = [];
 		for (const net of compiled.connectivity.nets) {
 			if (chosen.length >= 4) break;
@@ -1375,6 +1385,20 @@ class AppState {
 	}
 
 	/** Change the length of a run, and write it down. */
+	/**
+	 * Move to another sample of the circuit, or back to nominal.
+	 *
+	 * Rerolling is the whole point: one sample says nothing, and half a dozen say
+	 * whether the corner of a filter or the trip point of a comparator is a
+	 * property of the design or of the parts that happened to be in the drawer.
+	 */
+	setSample(seed: number): void {
+		const next = Math.max(0, Math.round(seed));
+		if (next === this.sample) return;
+		this.trace.record({ op: 'sample', seed: next });
+		this.sample = next;
+	}
+
 	/** Set the circuit temperature, in degrees Celsius. */
 	setTemperature(celsius: number): void {
 		if (!Number.isFinite(celsius) || celsius === this.temperature) return;
@@ -1457,6 +1481,9 @@ class AppState {
 					break;
 				case 'temperature':
 					this.setTemperature(step.celsius);
+					break;
+				case 'sample':
+					this.setSample(step.seed);
 					break;
 				case 'rename': {
 					const id = partId(step.part);

@@ -123,7 +123,46 @@ function diodeModel(instance: Instance): Record<string, unknown> {
 	return { is: 2.52e-9, n: 1.752, bv: null, ...base };
 }
 
-export function compileSchematic(schematic: Schematic, temperature = 300.15): CompileResult {
+
+/**
+ * A part's value, drawn from inside its tolerance band.
+ *
+ * A 1% resistor is a 1% resistor: the number printed on it is the middle of a
+ * band, and a circuit that only works at the middle does not work. One run at
+ * nominal can never say so, so this picks a value for each part and holds it
+ * there for the whole run — a circuit built once out of real parts, not a
+ * circuit whose values jitter as it goes.
+ *
+ * Deterministic in the seed and the part's *name*, so the same sample can be
+ * re-run, shared in a link and quoted in a bug report. Not its id: those are
+ * regenerated every time a document is opened or a link followed, which would
+ * have made the one property this feature exists for — that a sample is a thing
+ * you can hand to somebody — quietly false. Uniform across the band rather than
+ * bell-shaped: a tolerance is a bound the manufacturer guarantees, and parts are
+ * binned besides, so a normal distribution would be a more confident claim than
+ * anyone has grounds for.
+ */
+function drawn(instance: Instance, key: string, nominal: number, seed: number): number {
+	const percent = num(instance, 'tolerance', 0);
+	if (!seed || percent <= 0) return nominal;
+
+	// A small integer hash of the seed and this part's identity. Nothing
+	// cryptographic is needed; it only has to be well-spread and repeatable.
+	let h = (seed * 2654435761) >>> 0;
+	for (const text of [instance.name, key]) {
+		for (let i = 0; i < text.length; i++) {
+			h = (Math.imul(h ^ text.charCodeAt(i), 16777619) + 1) >>> 0;
+		}
+	}
+	const unit = (h >>> 8) / 0x1000000;
+	return nominal * (1 + (percent / 100) * (unit * 2 - 1));
+}
+
+export function compileSchematic(
+	schematic: Schematic,
+	temperature = 300.15,
+	seed = 0
+): CompileResult {
 	const connectivity = buildConnectivity(schematic);
 	const errors: string[] = [];
 	const warnings: string[] = [];
@@ -204,7 +243,7 @@ export function compileSchematic(schematic: Schematic, temperature = 300.15): Co
 					name,
 					a: analogOf(instance, 'a'),
 					b: analogOf(instance, 'b'),
-					resistance: num(instance, 'resistance', 1000)
+					resistance: drawn(instance, 'resistance', num(instance, 'resistance', 1000), seed)
 				});
 				break;
 			case 'capacitor':
@@ -213,7 +252,7 @@ export function compileSchematic(schematic: Schematic, temperature = 300.15): Co
 					name,
 					a: analogOf(instance, 'a'),
 					b: analogOf(instance, 'b'),
-					capacitance: num(instance, 'capacitance', 1e-6)
+					capacitance: drawn(instance, 'capacitance', num(instance, 'capacitance', 1e-6), seed)
 				});
 				break;
 			case 'inductor':
@@ -222,7 +261,7 @@ export function compileSchematic(schematic: Schematic, temperature = 300.15): Co
 					name,
 					a: analogOf(instance, 'a'),
 					b: analogOf(instance, 'b'),
-					inductance: num(instance, 'inductance', 1e-3)
+					inductance: drawn(instance, 'inductance', num(instance, 'inductance', 1e-3), seed)
 				});
 				break;
 			case 'vsource':

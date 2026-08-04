@@ -126,7 +126,10 @@ because each step is what makes the next one worth having:
       without leaving the app.
 - [ ] **Parameter sweeps** — run the same analysis across a range of a component
       value and overlay the results.
-- [ ] **Monte Carlo** over component tolerances.
+- [ ] **Monte Carlo** over component tolerances — many samples at once, with the
+      spread of an answer rather than one draw of it. Tolerances and the seeded
+      sampling they feed are in; what is missing is running a hundred and plotting
+      the envelope.
 - [ ] **Operating point display on the schematic** — node voltages and branch
       currents annotated in place, which is how people actually debug bias.
 - [ ] **Transfer function / input and output impedance** at a port.
@@ -187,7 +190,8 @@ because each step is what makes the next one worth having:
 - [ ] **Real-time collaboration** on a schematic.
 - [ ] **Local persistence** — reopen where you left off, and keep a few recent
       circuits.
-- [ ] **Component tolerance and temperature coefficients** shown on the schematic.
+- [ ] **Tolerance and tempco shown on the schematic**, rather than only in the
+      inspector.
 - [ ] **Auto-arrange** a netlist into a readable schematic.
 - [ ] **Dark-mode-aware PNG export** — light background for printing.
 - [ ] **Engine as a published crate** on crates.io, and as an npm package, for
@@ -235,6 +239,10 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- Parts have a tolerance, and a sample button that draws every one of them from
+  inside its band and holds it there for the run. Repeatable from a seed, so a
+  sample is a thing you can re-run, share and quote — one run at nominal is the
+  circuit nobody has ever built.
 - One temperature for the whole circuit, and every junction drop, bipolar gain
   and resistance moves with it. A diode loses two millivolts per degree, leakage
   doubles every ten, and the common-emitter example walks its bias across the

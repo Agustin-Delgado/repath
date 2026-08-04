@@ -282,6 +282,26 @@ const analog = (name: string, x: number, y: number): PinDef => ({
  * says which one it is, the card survives a save and a share link intact, and
  * what could not be used is reported rather than lost.
  */
+/**
+ * How far off its marking a part is allowed to be, as a percentage.
+ *
+ * A 1% resistor is a 1% resistor: the value printed on it is the middle of a
+ * band, not a promise. A circuit that only works at the nominal value does not
+ * work, and nothing about a single simulation run at nominal will ever say so.
+ */
+const tolerance = (percent: number) => ({
+	key: 'tolerance',
+	label: 'Tolerance',
+	unit: '%',
+	default: percent,
+	min: 0,
+	max: 100,
+	plain: true,
+	step: 0.5,
+	description:
+		'Only does anything with sampling switched on, where each part is drawn once from inside its band and stays there for the run.'
+});
+
 const SPICE_CARD = [
 	{ key: 'spice', label: 'SPICE model', unit: '', default: '', hidden: true }
 ] as const;
@@ -424,7 +444,10 @@ export const CATALOG: ComponentDef[] = [
 		group: 'passive',
 		prefix: 'R',
 		pins: [analog('a', -30, 0), analog('b', 30, 0)],
-		params: [{ key: 'resistance', label: 'Resistance', unit: 'Ω', default: 1000, min: 0, nonZero: true }]
+		params: [
+			{ key: 'resistance', label: 'Resistance', unit: 'Ω', default: 1000, min: 0, nonZero: true },
+			tolerance(1)
+		]
 	},
 	{
 		kind: 'capacitor',
@@ -433,7 +456,10 @@ export const CATALOG: ComponentDef[] = [
 		group: 'passive',
 		prefix: 'C',
 		pins: [analog('a', -30, 0), analog('b', 30, 0)],
-		params: [{ key: 'capacitance', label: 'Capacitance', unit: 'F', default: 1e-6, min: 0, nonZero: true }]
+		params: [
+			{ key: 'capacitance', label: 'Capacitance', unit: 'F', default: 1e-6, min: 0, nonZero: true },
+			tolerance(10)
+		]
 	},
 	{
 		kind: 'inductor',
@@ -442,7 +468,10 @@ export const CATALOG: ComponentDef[] = [
 		group: 'passive',
 		prefix: 'L',
 		pins: [analog('a', -30, 0), analog('b', 30, 0)],
-		params: [{ key: 'inductance', label: 'Inductance', unit: 'H', default: 1e-3, min: 0, nonZero: true }]
+		params: [
+			{ key: 'inductance', label: 'Inductance', unit: 'H', default: 1e-3, min: 0, nonZero: true },
+			tolerance(10)
+		]
 	},
 	{
 		kind: 'ground',

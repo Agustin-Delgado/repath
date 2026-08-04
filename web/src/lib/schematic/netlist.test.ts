@@ -304,3 +304,62 @@ ROUT 6 3 75
 		expect(note).toContain('F1');
 	});
 });
+
+describe('component tolerance', () => {
+	/** An RC, with whatever tolerance and sample are asked for. */
+	function rc(tolerance: number, seed: number) {
+		const r = at('resistor', 'R1', 200, 200);
+		const c = at('capacitor', 'C1', 300, 200);
+		r.params.tolerance = tolerance;
+		c.params.tolerance = tolerance;
+		const schematic = drawing([at('vsource', 'V1', 100, 200), at('ground', 'GND1', 100, 320), r, c], []);
+		const netlist = compileSchematic(schematic, 300.15, seed).netlist as {
+			components: Array<Record<string, unknown>>;
+		} | null;
+		const find = (name: string) => netlist?.components.find((x) => x.name === name);
+		return { r: find('R1')?.resistance as number, c: find('C1')?.capacitance as number };
+	}
+
+	it('leaves every part on its marking until sampling is on', () => {
+		// The default has to be the drawing as drawn. A simulator whose numbers
+		// move for reasons you did not ask for is worse than one that is optimistic.
+		const { r, c } = rc(10, 0);
+		expect(r).toBe(1000);
+		expect(c).toBe(1e-6);
+	});
+
+	it('draws each part from inside its own band', () => {
+		const { r, c } = rc(10, 1);
+		expect(r).not.toBe(1000);
+		expect(r).toBeGreaterThanOrEqual(900);
+		expect(r).toBeLessThanOrEqual(1100);
+		expect(c).toBeGreaterThanOrEqual(0.9e-6);
+		expect(c).toBeLessThanOrEqual(1.1e-6);
+		// Two parts, two draws: a sample where everything moves together is not a
+		// sample, it is a scale factor.
+		expect(r / 1000).not.toBeCloseTo(c / 1e-6, 6);
+	});
+
+	it('gives the same circuit back for the same seed', () => {
+		// Which is what makes a sample something you can re-run, share in a link
+		// and quote in a bug report.
+		expect(rc(10, 7)).toEqual(rc(10, 7));
+		expect(rc(10, 8)).not.toEqual(rc(10, 7));
+	});
+
+	it('stays put when the part has no tolerance to speak of', () => {
+		const { r } = rc(0, 5);
+		expect(r).toBe(1000);
+	});
+
+	it('spreads across the band rather than hugging one end', () => {
+		// A hash that clustered would make sampling look like a fixed derating.
+		const draws = Array.from({ length: 200 }, (_, i) => rc(10, i + 1).r);
+		const lo = Math.min(...draws);
+		const hi = Math.max(...draws);
+		const mean = draws.reduce((a, b) => a + b, 0) / draws.length;
+		expect(lo).toBeLessThan(915);
+		expect(hi).toBeGreaterThan(1085);
+		expect(Math.abs(mean - 1000)).toBeLessThan(10);
+	});
+});

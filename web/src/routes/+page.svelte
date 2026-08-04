@@ -272,6 +272,26 @@
 				<span class="unit">°C</span>
 			</label>
 
+			<!--
+				One sample says nothing; half a dozen say whether the corner of a
+				filter is a property of the design or of the parts that happened to be
+				in the drawer. So the button rerolls rather than toggling.
+			-->
+			<button
+				class="sample"
+				class:on={app.sample > 0}
+				onclick={() => app.setSample(app.sample > 0 ? app.sample + 1 : 1)}
+				oncontextmenu={(e) => {
+					e.preventDefault();
+					app.setSample(0);
+				}}
+				title={app.sample > 0
+					? `Sample #${app.sample} — click for another, right-click for nominal`
+					: 'Draw every part from inside its tolerance instead of using its marking'}
+			>
+				{app.sample > 0 ? `sample #${app.sample}` : 'nominal'}
+			</button>
+
 			<span class="divider"></span>
 
 			<button onclick={() => app.undo()} title="Undo (Ctrl+Z)">Undo</button>
@@ -449,6 +469,28 @@
 	.run:disabled {
 		opacity: 0.6;
 		cursor: progress;
+	}
+
+	.sample {
+		font-size: 0.72rem;
+		color: var(--label-dim);
+		border: 1px solid var(--border);
+		border-radius: 5px;
+		background: var(--control-bg);
+		padding: 0.22rem 0.5rem;
+		cursor: pointer;
+		font-family: var(--font-mono);
+	}
+
+	.sample:hover {
+		color: var(--text);
+	}
+
+	/* Lit while the circuit being simulated is not the one that is drawn. */
+	.sample.on {
+		border-color: var(--accent);
+		color: var(--text);
+		background: color-mix(in srgb, var(--accent) 14%, transparent);
 	}
 
 	.stop {
