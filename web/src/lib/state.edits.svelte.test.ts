@@ -848,3 +848,89 @@ describe('what moves when one thing moves', () => {
 		}
 	});
 });
+
+describe('two pins that were touching', () => {
+	/** R1 at 100,200 and R2 at 160,200: R1's `b` and R2's `a` share 130,200. */
+	const touching = () => {
+		app.place('resistor', 100, 200, 0);
+		app.place('resistor', 160, 200, 0);
+		expect(netOf('R1', 'b')).toBe(netOf('R2', 'a'));
+	};
+
+	it('are joined by a wire when a drag pulls them apart', () => {
+		// Two parts placed pin to pin are connected with nothing to show for it.
+		// Dragging one away used to disconnect them silently — while the same drag
+		// on the same two parts joined by a visible wire keeps them connected,
+		// because a wire follows what it is plugged into. The picture is identical
+		// either way, so the outcome should be too.
+		touching();
+		app.selection = [find('R2').id];
+		app.beginMove();
+		app.applyMove(120, 0, routeFor(new Set(app.selection)));
+		app.endMove();
+
+		expect(app.schematic.wires.length).toBe(1);
+		expect(netOf('R1', 'b')).toBe(netOf('R2', 'a'));
+		expect(orthogonal()).toBe(true);
+	});
+
+	it('leaves nothing behind if the drag comes back', () => {
+		// Every frame is recomputed from the snapshot, so a wire drawn while they
+		// were apart has to disappear again when they meet — not accumulate one per
+		// frame of the gesture.
+		touching();
+		app.selection = [find('R2').id];
+		app.beginMove();
+		for (let i = 1; i <= 12; i++) app.applyMove(i * 10, 0, routeFor(new Set(app.selection)));
+		app.applyMove(0, 0, routeFor(new Set(app.selection)));
+		app.endMove();
+
+		expect(app.schematic.wires).toEqual([]);
+		expect(netOf('R1', 'b')).toBe(netOf('R2', 'a'));
+	});
+
+	it('does not double up a connection that already had a wire', () => {
+		// A pin resting on a wire end is a different case: that wire follows the pin
+		// on its own, and drawing a second one alongside it would leave two
+		// conductors doing one job.
+		app.place('resistor', 100, 200, 0);
+		app.place('resistor', 300, 200, 0);
+		app.addWirePath([
+			{ x: 130, y: 200 },
+			{ x: 270, y: 200 }
+		]);
+		app.selection = [find('R2').id];
+		app.beginMove();
+		app.applyMove(0, 80, routeFor(new Set(app.selection)));
+		app.endMove();
+
+		expect(app.schematic.wires.length).toBe(1);
+		expect(netOf('R1', 'b')).toBe(netOf('R2', 'a'));
+	});
+
+	it('is undone by Escape, wire and all', () => {
+		// Cancelling restores what a drag moved, but this drag *added* something.
+		// Putting the parts back while leaving the wire would draw a connection
+		// between two pins now sitting on top of each other.
+		touching();
+		app.selection = [find('R2').id];
+		app.beginMove();
+		app.applyMove(120, 0, routeFor(new Set(app.selection)));
+		app.cancelMove();
+
+		expect(app.schematic.wires).toEqual([]);
+		expect(find('R2').x).toBe(160);
+	});
+
+	it('takes one undo, like any other drag', () => {
+		touching();
+		app.selection = [find('R2').id];
+		app.beginMove();
+		app.applyMove(120, 0, routeFor(new Set(app.selection)));
+		app.endMove();
+
+		app.undo();
+		expect(app.schematic.wires).toEqual([]);
+		expect(find('R2').x).toBe(160);
+	});
+});

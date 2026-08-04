@@ -26,7 +26,6 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Op-amp | Single-pole-free: infinite bandwidth, no slew limit, no input offset | An op-amp circuit will look better than the real one |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
 | Digital | No setup/hold checking, no X-propagation through timing | A metastable design simulates as if it were fine |
-| Editor | A wire is consumed when a drag lands its two pins on the same point | Separating them again leaves both bare; the wire is not restored |
 | LED | Reverse breakdown not modelled | A real LED dies a few volts backwards; here it simply blocks |
 | LED | Failure is thermal-free: one dose rule, no junction temperature | A part in still air and one on a heatsink fail at the same instant |
 | Animation | BJT base current approximated as zero when distributing wire current | Base-net current dots are missing rather than wrong |
@@ -227,6 +226,9 @@ Kept short — it is here to show the direction, not to be a changelog.
   rather than reconstructed from a screenshot and a description.
 - Drag routing decided by one cost function with the old path as an input,
   replacing five interacting rules about when to keep a shape and when to redraw.
+- Moving a part keeps its connections whether or not they were drawn: two pins
+  resting on each other are joined by a wire as a drag pulls them apart, so the
+  same picture behaves the same way regardless of how it was built.
 - Devices that store charge: junction capacitances and transit times on the BJT,
   terminal capacitances and a body diode on the MOSFET. An amplifier now runs out
   of gain at the top, a transistor takes time to switch, and a drain cannot be

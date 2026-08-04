@@ -98,8 +98,30 @@ interface MoveOrigin {
 	followers: Map<string, Set<number>>;
 	/** Wires being dragged, with the end indices that must stay plugged in. */
 	anchors: Map<string, Set<number>>;
+	/**
+	 * Pairs of pins sitting on the same point with only one of them moving.
+	 *
+	 * Two pins that touch are joined, with no wire to show for it. Pulling them
+	 * apart would silently disconnect the parts — while the same drag on the same
+	 * two parts joined by a visible wire keeps them connected, because a wire
+	 * follows what it is plugged into. Same picture, opposite outcome, decided by
+	 * history the drawing does not record.
+	 *
+	 * So a wire is drawn as they separate. The id is claimed up front because
+	 * `applyMove` runs on every frame of the drag: a fresh one each time would
+	 * leave a trail of wires behind the cursor.
+	 */
+	bonds: Bond[];
 	/** The redo stack as it was, so cancelling the drag can hand it back. */
 	future: HistoryEntry[];
+}
+
+/** A pin-to-pin joint that a drag is about to pull apart. */
+interface Bond {
+	/** Where both pins are while they are still touching. */
+	at: Point;
+	/** Id for the wire this becomes, held steady across the frames of the drag. */
+	wireId: string;
 }
 
 /** A point on the undo stack: the drawing, and what was selected at the time. */
@@ -703,6 +725,22 @@ class AppState {
 			if (following.size > 0) followers.set(wire.id, following);
 		}
 
+		// A joint made of two touching pins, one of them about to leave. Only when
+		// no wire already ends there: if one does it will follow the moving pin by
+		// itself, and adding a second would double the connection.
+		const wireEnds = new Set<string>();
+		for (const wire of this.schematic.wires) {
+			for (const index of [0, wire.points.length - 1]) {
+				wireEnds.add(pointKey(wire.points[index].x, wire.points[index].y));
+			}
+		}
+		const bonds: Bond[] = [];
+		for (const key of movingPins) {
+			if (!stationaryPins.has(key) || wireEnds.has(key)) continue;
+			const [x, y] = key.split(',').map(Number);
+			bonds.push({ at: { x, y }, wireId: freshId() });
+		}
+
 		this.moveOrigin = {
 			instances: new Map(
 				this.schematic.instances
@@ -716,6 +754,7 @@ class AppState {
 			),
 			followers,
 			anchors,
+			bonds,
 			future: [...this.future]
 		};
 		this.dragStarted = false;
@@ -750,7 +789,25 @@ class AppState {
 
 		// Every wire this move rewrites. None of them is an obstacle for the
 		// others: their positions are all in mid-air until the pass finishes.
-		const settling = new Set(origin.wires.keys());
+		const settling = new Set([...origin.wires.keys(), ...origin.bonds.map((b) => b.wireId)]);
+
+		// Pins that were touching and are not any more: the joint becomes a wire.
+		// Torn down and rebuilt from the snapshot on every frame like everything
+		// else here, so dragging back until they touch again removes it, and what
+		// the preview shows is what lands.
+		const separated = dx !== 0 || dy !== 0;
+		this.schematic.wires = this.schematic.wires.filter(
+			(w) => !origin.bonds.some((b) => b.wireId === w.id)
+		);
+		if (separated) {
+			for (const bond of origin.bonds) {
+				const moved = { x: bond.at.x + dx, y: bond.at.y + dy };
+				this.schematic.wires.push({
+					id: bond.wireId,
+					points: simplifyPath(route(bond.at, moved, settling))
+				});
+			}
+		}
 
 		for (const wire of this.schematic.wires) {
 			const from = origin.wires.get(wire.id);
@@ -889,6 +946,15 @@ class AppState {
 		for (const wire of this.schematic.wires) {
 			const from = origin.wires.get(wire.id);
 			if (from) wire.points = from.map((p) => ({ x: p.x, y: p.y }));
+		}
+		// Putting things back is not enough on its own: a drag can *add* a wire, by
+		// separating two pins that were touching. Restoring only the ones that
+		// existed would leave that one behind, still drawn between two parts now
+		// sitting on top of each other again.
+		if (origin.bonds.length > 0) {
+			this.schematic.wires = this.schematic.wires.filter(
+				(w) => !origin.bonds.some((b) => b.wireId === w.id)
+			);
 		}
 
 		if (this.dragStarted) {
