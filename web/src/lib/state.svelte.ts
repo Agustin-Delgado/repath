@@ -208,6 +208,37 @@ class AppState {
 	 * files that both already know about this object.
 	 */
 	renaming = $state<string | null>(null);
+	/**
+	 * Where each channel's knobs are set, by probe.
+	 *
+	 * A scope that fits everything for you is convenient and is not a scope: the
+	 * whole craft of using one is turning a signal up until you can see what it is
+	 * doing and sliding it clear of the others. Kept per probe rather than per
+	 * trace index so a channel keeps its settings when another is switched off.
+	 *
+	 * `gain` multiplies, `offset` slides, in divisions of the grid.
+	 */
+	channels = $state<Record<string, { gain: number; offset: number }>>({});
+
+	/** One step of a knob, in the 1-2-5 sequence every scope has ever used. */
+	adjustGain(key: string, direction: number): void {
+		const steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100];
+		const at = this.channels[key]?.gain ?? 1;
+		const nearest = steps.reduce((a, b) => (Math.abs(b - at) < Math.abs(a - at) ? b : a));
+		const next = steps[Math.min(Math.max(steps.indexOf(nearest) + direction, 0), steps.length - 1)];
+		this.channels[key] = { gain: next, offset: this.channels[key]?.offset ?? 0 };
+	}
+
+	adjustOffset(key: string, direction: number): void {
+		const current = this.channels[key] ?? { gain: 1, offset: 0 };
+		this.channels[key] = { ...current, offset: current.offset + direction * 0.25 };
+	}
+
+	/** Put a channel back where it started. */
+	resetChannel(key: string): void {
+		delete this.channels[key];
+		this.channels = { ...this.channels };
+	}
 	stopTime = $state(EXAMPLES[0].stopTime);
 	/**
 	 * What the whole circuit is sitting at, in degrees Celsius.

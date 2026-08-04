@@ -32,6 +32,10 @@
 		/** How far this signal moved across a tolerance sweep, if one was run. */
 		low?: Float64Array;
 		high?: Float64Array;
+		/** Where this channel's knobs are set. */
+		gain: number;
+		offset: number;
+		key: string;
 	}
 
 	const traces = $derived.by((): Trace[] => {
@@ -43,12 +47,16 @@
 			const samples = run.signals.get(key);
 			if (!samples) continue;
 			const band = app.envelope;
+			const knobs = app.channels[probe.key] ?? { gain: 1, offset: 0 };
 			out.push({
 				label: probe.label,
 				colour: probe.colour,
 				samples,
 				low: band?.low.get(key),
-				high: band?.high.get(key)
+				high: band?.high.get(key),
+				gain: knobs.gain,
+				offset: knobs.offset,
+				key: probe.key
 			});
 		}
 		return out;
@@ -195,7 +203,14 @@
 				: { top: plot.y, h: plot.h, span: range };
 		const mapY = (index: number, v: number) => {
 			const b = bandOf(index);
-			return b.top + b.h - ((v - b.span.lo) / (b.span.hi - b.span.lo)) * b.h;
+			const t = traces[index];
+			// Gain about the middle of the band, so turning it up expands the trace
+			// where it is rather than launching it off the top; offset in divisions,
+			// which is what the marks on the screen are.
+			const centre = (b.span.lo + b.span.hi) / 2;
+			const scaled = centre + (v - centre) * (t?.gain ?? 1);
+			const y = b.top + b.h - ((scaled - b.span.lo) / (b.span.hi - b.span.lo)) * b.h;
+			return y - (t?.offset ?? 0) * (b.h / 5);
 		};
 		const toY = (v: number) => mapY(0, v);
 
@@ -449,7 +464,7 @@
 
 	$effect(() => {
 		// Redraw whenever anything the plot depends on changes.
-		void [app.result, traces, digitalTraces, range, lanes, separate, marker, size, cursor, playheadPx];
+		void [app.result, traces, digitalTraces, range, lanes, separate, marker, size, cursor, playheadPx, app.channels];
 		draw();
 	});
 </script>
@@ -565,6 +580,35 @@
 								<span class="badge digital">logic</span>
 							{/if}
 						</label>
+
+						<!--
+							The knobs. Automatic is the right default — nobody wants to set up
+							a scope before seeing anything — but a scope you cannot turn is a
+							picture of a scope. Gain expands about the middle of the band, so
+							turning it up shows more of what a trace is doing rather than
+							launching it off the top.
+						-->
+						{#if probe}
+							{@const knob = app.channels[probe.key] ?? { gain: 1, offset: 0 }}
+							<div class="knobs">
+								<span class="knob">
+									<button onclick={() => app.adjustGain(probe.key, -1)} title="Less gain">−</button>
+									<span class="reading">×{knob.gain}</span>
+									<button onclick={() => app.adjustGain(probe.key, 1)} title="More gain">+</button>
+								</span>
+								<span class="knob">
+									<button onclick={() => app.adjustOffset(probe.key, 1)} title="Move up">↑</button>
+									<button onclick={() => app.adjustOffset(probe.key, -1)} title="Move down">↓</button>
+								</span>
+								{#if knob.gain !== 1 || knob.offset !== 0}
+									<button
+										class="reset"
+										onclick={() => app.resetChannel(probe.key)}
+										title="Back to automatic">auto</button
+									>
+								{/if}
+							</div>
+						{/if}
 					</li>
 				{/if}
 			{/each}
@@ -626,6 +670,50 @@
 </div>
 
 <style>
+	.knobs {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		padding: 0.1rem 0 0.15rem 1.35rem;
+	}
+
+	.knob {
+		display: inline-flex;
+		align-items: center;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		overflow: hidden;
+	}
+
+	.knobs button {
+		border: 0;
+		background: var(--control-bg);
+		color: var(--label-dim);
+		font-size: 0.62rem;
+		line-height: 1;
+		padding: 0.12rem 0.28rem;
+		cursor: pointer;
+	}
+
+	.knobs button:hover {
+		color: var(--text);
+	}
+
+	.knobs .reading {
+		font-family: var(--font-mono);
+		font-size: 0.6rem;
+		color: var(--label-dim);
+		padding: 0 0.25rem;
+		min-width: 2.1rem;
+		text-align: center;
+	}
+
+	.knobs .reset {
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		font-size: 0.58rem;
+	}
+
 	.measures {
 		display: flex;
 		flex-direction: column;
