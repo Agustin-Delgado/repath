@@ -19,6 +19,9 @@
 		label: string;
 		colour: string;
 		samples: Float64Array;
+		/** How far this signal moved across a tolerance sweep, if one was run. */
+		low?: Float64Array;
+		high?: Float64Array;
 	}
 
 	const traces = $derived.by((): Trace[] => {
@@ -26,8 +29,17 @@
 		if (!run) return [];
 		const out: Trace[] = [];
 		for (const probe of analogProbes) {
-			const samples = run.signals.get(`v(${probe.analog})`);
-			if (samples) out.push({ label: probe.label, colour: probe.colour, samples });
+			const key = `v(${probe.analog})`;
+			const samples = run.signals.get(key);
+			if (!samples) continue;
+			const band = app.envelope;
+			out.push({
+				label: probe.label,
+				colour: probe.colour,
+				samples,
+				low: band?.low.get(key),
+				high: band?.high.get(key)
+			});
 		}
 		return out;
 	});
@@ -48,9 +60,15 @@
 		let lo = Infinity;
 		let hi = -Infinity;
 		for (const trace of traces) {
-			for (const v of trace.samples) {
-				if (v < lo) lo = v;
-				if (v > hi) hi = v;
+			// The band too, or a sweep whose corners leave the nominal window would
+			// be drawn flat against the frame — which reads as "it stays inside"
+			// when what happened is that the plot ran out of room.
+			for (const series of [trace.samples, trace.low, trace.high]) {
+				if (!series) continue;
+				for (const v of series) {
+					if (v < lo) lo = v;
+					if (v > hi) hi = v;
+				}
 			}
 		}
 		if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { lo: -1, hi: 1 };
@@ -144,9 +162,33 @@
 
 		if (!run) return;
 
+		// The spread first, so the nominal trace sits on top of its own band. A
+		// filled shape rather than two lines: the useful reading is how much room
+		// the answer has, and an outline invites reading the edges as two more
+		// traces that some particular circuit followed. No sample followed either
+		// of them — each edge is the worst any sample managed at that instant.
+		ctx.lineJoin = 'round';
+		for (const trace of traces) {
+			if (!trace.low || !trace.high) continue;
+			ctx.beginPath();
+			for (let i = 0; i < run.time.length; i++) {
+				const x = toX(run.time[i]);
+				const y = toY(trace.high[i]);
+				if (i === 0) ctx.moveTo(x, y);
+				else ctx.lineTo(x, y);
+			}
+			for (let i = run.time.length - 1; i >= 0; i--) {
+				ctx.lineTo(toX(run.time[i]), toY(trace.low[i]));
+			}
+			ctx.closePath();
+			ctx.globalAlpha = 0.22;
+			ctx.fillStyle = trace.colour;
+			ctx.fill();
+			ctx.globalAlpha = 1;
+		}
+
 		// Analog traces.
 		ctx.lineWidth = 1.6;
-		ctx.lineJoin = 'round';
 		for (const trace of traces) {
 			ctx.strokeStyle = trace.colour;
 			ctx.beginPath();

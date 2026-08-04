@@ -108,6 +108,40 @@ export type RouteBetween = (
 	prefer?: readonly Point[]
 ) => Point[];
 
+/**
+ * The spread of a Monte Carlo run: the lowest and highest each signal reached
+ * across every sample, on the nominal run's time axis.
+ */
+export interface Envelope {
+	time: Float64Array;
+	low: Map<string, Float64Array>;
+	high: Map<string, Float64Array>;
+}
+
+/**
+ * A signal read at an arbitrary time, interpolated between its samples.
+ *
+ * Exported for its own test rather than only through a run: this is what makes
+ * two samples comparable at all. The adaptive timestep gives every run a grid of
+ * its own, so lining two of them up index by index would be comparing different
+ * instants and calling the difference a tolerance.
+ */
+export function valueAt(time: Float64Array, samples: Float64Array, t: number): number {
+	if (time.length === 0) return 0;
+	let lo = 0;
+	let hi = time.length - 1;
+	if (t <= time[lo]) return samples[lo];
+	if (t >= time[hi]) return samples[hi];
+	while (hi - lo > 1) {
+		const mid = (lo + hi) >> 1;
+		if (time[mid] <= t) lo = mid;
+		else hi = mid;
+	}
+	const span = time[hi] - time[lo];
+	const alpha = span > 0 ? (t - time[lo]) / span : 0;
+	return samples[lo] + (samples[hi] - samples[lo]) * alpha;
+}
+
 /** Everything a drag needs to recompute itself from scratch on each frame. */
 interface MoveOrigin {
 	instances: Map<string, Point>;
@@ -183,6 +217,23 @@ class AppState {
 	 * same sample can be re-run, shared and reported.
 	 */
 	sample = $state(0);
+	/**
+	 * How many samples a Monte Carlo run draws, or zero for none.
+	 *
+	 * One sample answers "does it work with these parts". This answers the
+	 * question anyone actually has, which is "does it work with the parts I am
+	 * going to be sent" — and the two have different answers whenever a design is
+	 * leaning on a value being what the label says.
+	 */
+	sweepCount = $state(0);
+	/**
+	 * Where every sample went, against the nominal run's time axis.
+	 *
+	 * Kept as the outer edges rather than every trace: a hundred curves drawn on
+	 * top of one another is a smear, and the useful thing is the band — how far
+	 * the answer can move, not which draw moved it.
+	 */
+	envelope = $state<Envelope | null>(null);
 	exampleId = $state(EXAMPLES[0].id);
 
 	constructor() {
@@ -1399,6 +1450,15 @@ class AppState {
 		this.sample = next;
 	}
 
+	/** How many samples the next run sweeps. Zero switches the sweep off. */
+	setSweep(count: number): void {
+		const next = Math.min(Math.max(0, Math.round(count)), 200);
+		if (next === this.sweepCount) return;
+		this.trace.record({ op: 'sweep', count: next });
+		this.sweepCount = next;
+		if (next === 0) this.envelope = null;
+	}
+
 	/** Set the circuit temperature, in degrees Celsius. */
 	setTemperature(celsius: number): void {
 		if (!Number.isFinite(celsius) || celsius === this.temperature) return;
@@ -1485,6 +1545,9 @@ class AppState {
 				case 'sample':
 					this.setSample(step.seed);
 					break;
+				case 'sweep':
+					this.setSweep(step.count);
+					break;
 				case 'rename': {
 					const id = partId(step.part);
 					if (!id) return stop(`no component named ${step.part}`);
@@ -1563,6 +1626,59 @@ class AppState {
 	 * restarting the animation every time a value moves would make the overlay
 	 * unwatchable while you are turning a knob.
 	 */
+	/**
+	 * Run the circuit again, once per sample, and keep the outer edges.
+	 *
+	 * Each sample is a whole circuit built from parts drawn inside their bands, so
+	 * every one gets its own compile and its own run — the point is that the
+	 * *values* differ, and a shortcut that perturbed the answer instead of the
+	 * circuit would be a decoration.
+	 *
+	 * Everything lands on the nominal run's time axis. The adaptive timestep gives
+	 * each sample a grid of its own, and comparing two runs sample-by-sample when
+	 * their samples are at different instants compares nothing.
+	 */
+	private async sweepTolerances(): Promise<void> {
+		const nominal = this.result;
+		if (!nominal || this.sweepCount <= 0) {
+			this.envelope = null;
+			return;
+		}
+
+		const time = nominal.time;
+		const low = new Map<string, Float64Array>();
+		const high = new Map<string, Float64Array>();
+		for (const [label, samples] of nominal.signals) {
+			low.set(label, Float64Array.from(samples));
+			high.set(label, Float64Array.from(samples));
+		}
+
+		for (let seed = 1; seed <= this.sweepCount; seed++) {
+			const compiled = compileSchematic(this.schematic, this.temperature + 273.15, seed);
+			if (!compiled.netlist) continue;
+			let run;
+			try {
+				run = await runTransient(compiled.netlist, this.stopTime, this.stopTime / 400);
+			} catch {
+				// A draw that will not solve is worth knowing about, but it is not
+				// worth losing the samples that did: a corner of the tolerance box
+				// that oscillates is exactly what someone is looking for here.
+				continue;
+			}
+			for (const [label, samples] of run.signals) {
+				const lo = low.get(label);
+				const hi = high.get(label);
+				if (!lo || !hi) continue;
+				for (let i = 0; i < time.length; i++) {
+					const v = valueAt(run.time, samples, time[i]);
+					if (v < lo[i]) lo[i] = v;
+					if (v > hi[i]) hi[i] = v;
+				}
+			}
+		}
+		this.envelope = { time, low, high };
+	}
+
 	async run(options: { keepPlayback?: boolean } = {}): Promise<void> {
 		// Only a deliberate press. A live re-run after an edit follows from the edit
 		// that is already written down, and logging it would double every line.
@@ -1591,6 +1707,7 @@ class AppState {
 				const was = { time: this.playbackTime, playing: this.playing };
 				this.result = await runTransient(compiled.netlist, this.stopTime, this.stopTime / 400);
 				if (this.probes.length === 0) this.autoProbe();
+				await this.sweepTolerances();
 				if (options.keepPlayback) {
 					this.playbackTime = Math.min(was.time, this.stopTime);
 					this.playing = was.playing;

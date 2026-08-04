@@ -71,6 +71,7 @@ export type Step =
 	| { op: 'stop'; seconds: number }
 	| { op: 'temperature'; celsius: number }
 	| { op: 'sample'; seed: number }
+	| { op: 'sweep'; count: number }
 	| { op: 'analysis'; mode: string }
 	| { op: 'run' };
 
@@ -168,6 +169,8 @@ function format(step: Step): string {
 			return `temperature ${step.celsius}`;
 		case 'sample':
 			return `sample ${step.seed}`;
+		case 'sweep':
+			return `sweep ${step.count}`;
 		case 'analysis':
 			return `analysis ${step.mode}`;
 		case 'run':
@@ -259,6 +262,8 @@ function read(op: string, rest: string[]): Step {
 			return { op, celsius: number(rest[0]) };
 		case 'sample':
 			return { op, seed: number(rest[0]) };
+		case 'sweep':
+			return { op, count: number(rest[0]) };
 		case 'analysis':
 			return { op, mode: rest[0] };
 		case 'run':

@@ -24,6 +24,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
 | Temperature | One number for the whole circuit; no self-heating and no per-part rise | A resistor dissipating a watt is at the same temperature as the air around it |
+| Monte Carlo | Uniform draws, no correlation between parts, no worst-case corner search | Two halves of a matched pair drift independently here, and a random sweep can miss a corner a deliberate search would find |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
 | Digital | No setup/hold checking, no X-propagation through timing | A metastable design simulates as if it were fine |
 | LED | Reverse breakdown not modelled | A real LED dies a few volts backwards; here it simply blocks |
@@ -126,10 +127,6 @@ because each step is what makes the next one worth having:
       without leaving the app.
 - [ ] **Parameter sweeps** — run the same analysis across a range of a component
       value and overlay the results.
-- [ ] **Monte Carlo** over component tolerances — many samples at once, with the
-      spread of an answer rather than one draw of it. Tolerances and the seeded
-      sampling they feed are in; what is missing is running a hundred and plotting
-      the envelope.
 - [ ] **Operating point display on the schematic** — node voltages and branch
       currents annotated in place, which is how people actually debug bias.
 - [ ] **Transfer function / input and output impedance** at a port.
@@ -239,6 +236,9 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- A tolerance sweep: many samples at once, shaded on the scope as the band the
+  answer moves in, so the question stops being "does it work with these parts"
+  and starts being "does it work with the parts I will be sent".
 - Parts have a tolerance, and a sample button that draws every one of them from
   inside its band and holds it there for the run. Repeatable from a seed, so a
   sample is a thing you can re-run, share and quote — one run at nominal is the

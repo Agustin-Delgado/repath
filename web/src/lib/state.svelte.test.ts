@@ -8,7 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { app } from './state.svelte';
+import { app, valueAt } from './state.svelte';
 import { elbow, routeWire } from './schematic/route';
 import { pinKey } from './schematic/nets';
 import type { Point } from './schematic/model';
@@ -309,5 +309,37 @@ describe('elbow fallback', () => {
 			{ x: 100, y: 0 },
 			{ x: 100, y: 50 }
 		]);
+	});
+});
+
+describe('reading one run against another run\u2019s clock', () => {
+	const time = Float64Array.from([0, 1, 2, 4]);
+	const samples = Float64Array.from([0, 10, 20, 40]);
+
+	it('interpolates between the samples either side', () => {
+		// Every sample of a Monte Carlo sweep lands on a time axis of its own,
+		// because the timestep is adaptive and a circuit with different values
+		// takes different steps. Comparing index by index would line up different
+		// instants and call the difference a tolerance.
+		expect(valueAt(time, samples, 0.5)).toBeCloseTo(5, 9);
+		expect(valueAt(time, samples, 1.5)).toBeCloseTo(15, 9);
+		expect(valueAt(time, samples, 3)).toBeCloseTo(30, 9);
+	});
+
+	it('returns the exact sample when it lands on one', () => {
+		for (let i = 0; i < time.length; i++) {
+			expect(valueAt(time, samples, time[i])).toBe(samples[i]);
+		}
+	});
+
+	it('holds the ends rather than extrapolating past them', () => {
+		// A run that stopped early must not be read as continuing on its last
+		// slope: that would put a band around a time nothing was solved at.
+		expect(valueAt(time, samples, -5)).toBe(0);
+		expect(valueAt(time, samples, 99)).toBe(40);
+	});
+
+	it('has something to say about an empty run', () => {
+		expect(valueAt(new Float64Array(), new Float64Array(), 1)).toBe(0);
 	});
 });

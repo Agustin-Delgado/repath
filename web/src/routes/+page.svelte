@@ -292,6 +292,22 @@
 				{app.sample > 0 ? `sample #${app.sample}` : 'nominal'}
 			</button>
 
+			<!--
+				One sample answers "does it work with these parts". This answers the
+				question anyone actually has: does it work with the parts I am going
+				to be sent.
+			-->
+			<button
+				class="sample"
+				class:on={app.sweepCount > 0}
+				onclick={() => app.setSweep(app.sweepCount > 0 ? 0 : 25)}
+				title={app.sweepCount > 0
+					? `Running ${app.sweepCount} samples and shading where they all went`
+					: 'Run many samples and shade the band they cover'}
+			>
+				{app.sweepCount > 0 ? `×${app.sweepCount}` : 'sweep'}
+			</button>
+
 			<span class="divider"></span>
 
 			<button onclick={() => app.undo()} title="Undo (Ctrl+Z)">Undo</button>
