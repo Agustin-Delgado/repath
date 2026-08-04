@@ -10,7 +10,7 @@
  * the host, which keeps the promise that circuits stay on your machine.
  */
 
-import { migrateInstance, type Schematic } from './schematic/model';
+import { migrateInstance, registerSubcircuits, type Schematic } from './schematic/model';
 
 export interface SharedCircuit {
 	schematic: Schematic;
@@ -65,7 +65,10 @@ function compact(circuit: SharedCircuit): unknown {
 		i: circuit.schematic.instances.map((n) => [n.kind, n.name, n.x, n.y, n.rotation, n.params]),
 		// Corners flattened to a number list: a wire is mostly coordinates, and
 		// every character saved here is a character of URL someone has to paste.
-		w: circuit.schematic.wires.map((w) => w.points.flatMap((p) => [p.x, p.y]))
+		w: circuit.schematic.wires.map((w) => w.points.flatMap((p) => [p.x, p.y])),
+		// Imported definitions travel with the drawing. A link that carried a part
+		// but not what it is made of would open as a hole in someone's circuit.
+		x: circuit.schematic.subcircuits?.map((s) => [s.id, s.name, s.ports, s.source])
 	};
 }
 
@@ -75,15 +78,28 @@ function expand(raw: unknown): SharedCircuit {
 		t?: number;
 		i?: Array<[string, string, number, number, number, Record<string, number | string>]>;
 		w?: number[][];
+		x?: Array<[string, string, string[], string]>;
 	};
 	if (data.v !== VERSION) throw new Error('That link was made by a different version of repath.');
 
 	let counter = 0;
 	const id = () => `s${++counter}`;
 
+	// Definitions first, and registered before a single instance is read: the very
+	// next line asks the catalog what each part is, and a part whose definition
+	// arrived later would have thrown before it got there.
+	const subcircuits = (data.x ?? []).map(([sid, name, ports, source]) => ({
+		id: sid,
+		name,
+		ports,
+		source
+	}));
+	registerSubcircuits({ instances: [], wires: [], subcircuits });
+
 	return {
 		stopTime: data.t ?? 1e-3,
 		schematic: {
+			subcircuits,
 			instances: (data.i ?? []).map(([kind, name, x, y, rotation, params]) =>
 				// A link outlives the catalog it was written against, so what comes out
 				// of one is brought up to date before anything else touches it.

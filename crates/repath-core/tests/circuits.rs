@@ -1272,3 +1272,49 @@ fn a_pasted_part_behaves_like_the_part_it_names() {
          {real:.4}, a ratio of {ratio:.2}"
     );
 }
+
+/// An inverting amplifier whose op-amp is an imported `.subckt`, exactly as the
+/// editor flattens it — copied from what the compiler produced, not written out
+/// by hand. `X1.` names are the block's insides; the rest is the drawing.
+const IMPORTED_OPAMP_AMP: &str = r#"{"components":[
+{"type":"voltage_source","name":"V1","plus":"in","minus":"gnd","waveform":{"type":"dc","value":0},"ac_magnitude":1,"ac_phase":0},
+{"type":"resistor","name":"RIN","a":"in","b":"inv","resistance":1000},
+{"type":"resistor","name":"RF","a":"inv","b":"out","resistance":10000},
+{"type":"resistor","name":"X1.RIN","a":"gnd","b":"inv","resistance":2000000},
+{"type":"vcvs","name":"X1.E1","plus":"X1.4","minus":"gnd","control_plus":"gnd","control_minus":"inv","gain":100000},
+{"type":"resistor","name":"X1.R1","a":"X1.4","b":"X1.5","resistance":1000},
+{"type":"capacitor","name":"X1.C1","a":"X1.5","b":"gnd","capacitance":0.0000159},
+{"type":"vcvs","name":"X1.E2","plus":"X1.6","minus":"gnd","control_plus":"X1.5","control_minus":"gnd","gain":1},
+{"type":"resistor","name":"X1.ROUT","a":"X1.6","b":"out","resistance":75}],
+"devices":[],"bridges":[]}"#;
+
+#[test]
+fn a_subcircuit_pasted_from_a_file_amplifies() {
+    // The whole of step three in one check: a `.subckt` read from a vendor's
+    // file, flattened into element lines, its ports bound to the nets it was
+    // dropped on and its internal nodes kept to itself — and then the thing
+    // behaves like the part it claims to be.
+    //
+    // Ten kilohms over one is a gain of ten, inverted, and that number comes from
+    // the resistors around the block rather than from anything inside it. Getting
+    // it right means the ports went to the right nets: swap the two inputs and
+    // the feedback stops being negative.
+    let netlist: Netlist =
+        serde_json::from_str(IMPORTED_OPAMP_AMP).expect("the editor's netlist should parse");
+    let mut c = netlist.compile().expect("and should compile");
+
+    let result = Simulator::default().ac_sweep(&mut c, AcConfig::new(10.0, 1_000.0)).unwrap();
+    let (gain, phase) = at_frequency(&result, "v(out)", 100.0);
+    assert!((gain - 10.0).abs() < 0.2, "expected a gain of ten, got {gain:.3}");
+    assert!((phase.abs() - 180.0).abs() < 5.0, "an inverting stage; phase was {phase:.1}");
+
+    // And the pole inside the block is real, which is the point of importing a
+    // macromodel rather than using an ideal op-amp: 100 000 falling from 10 Hz is
+    // a gain-bandwidth product of a megahertz, so a closed loop asking for ten of
+    // it runs out at a hundred kilohertz and has to follow the open loop down.
+    let wide = Simulator::default().ac_sweep(&mut c, AcConfig::new(10.0, 10e6)).unwrap();
+    let (corner, _) = at_frequency(&wide, "v(out)", 100e3);
+    let (past, _) = at_frequency(&wide, "v(out)", 2e6);
+    assert!((6.0..8.5).contains(&corner), "expected the corner near 100 kHz; gain was {corner:.3}");
+    assert!(past < 1.0, "the internal pole did nothing: gain at 2 MHz was {past:.3}");
+}

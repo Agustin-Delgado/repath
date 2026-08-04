@@ -15,7 +15,10 @@ import {
 	kindForCard,
 	mosfetFromCard,
 	parseModelCards,
-	parseSpiceNumber
+	parseSpiceNumber,
+	parseSubcircuits,
+	expandSubcircuit,
+	type Expansion
 } from './spice';
 
 const Q2N3904 = `
@@ -203,5 +206,144 @@ describe('choosing a card', () => {
 	it('has nothing to say about empty text', () => {
 		expect(cardFor('', 'npn')).toBeNull();
 		expect(cardFor('   \n  ', 'npn')).toBeNull();
+	});
+});
+
+// A one-pole op-amp macromodel of the shape a vendor ships: a differential
+// input stage, a gain node with the pole on it, and a buffer out. Every element
+// in it is one this engine has.
+const OPAMP = `* A generic op-amp
+.SUBCKT OPAMP1 1 2 3
+* 1 = non-inverting, 2 = inverting, 3 = output
+RIN 1 2 2MEG
+E1 4 0 1 2 100K
+R1 4 5 1K
+C1 5 0 15.9n
+E2 6 0 5 0 1
+ROUT 6 3 75
+.ENDS OPAMP1
+`;
+
+describe('subcircuits', () => {
+	it('reads the ports and the elements', () => {
+		const [sub] = parseSubcircuits(OPAMP);
+		expect(sub.name).toBe('OPAMP1');
+		expect(sub.ports).toEqual(['1', '2', '3']);
+		expect(sub.elements.map((e) => e.kind)).toEqual([
+			'resistor',
+			'vcvs',
+			'resistor',
+			'capacitor',
+			'vcvs',
+			'resistor'
+		]);
+		expect(sub.unread).toEqual([]);
+
+		const rin = sub.elements[0];
+		expect(rin.name).toBe('RIN');
+		// 2MEG, not two millionths: the same letter that decides everything else.
+		expect('value' in rin && rin.value).toBe(2e6);
+		const e1 = sub.elements[1];
+		expect('gain' in e1 && e1.gain).toBe(1e5);
+		expect(e1.nodes).toEqual(['4', '0', '1', '2']);
+	});
+
+	it('takes the device lines that name a model', () => {
+		const [sub] = parseSubcircuits(`
+.model QN NPN(BF=250 IS=1f)
+.model DX D(IS=2n)
+.SUBCKT PAIR 1 2 3
+Q1 3 1 2 QN
+Q2 3 1 2 4 QN
+D1 2 0 DX
+M1 3 1 2 0 MX
+.ENDS
+`);
+		expect(sub.elements.map((e) => e.kind)).toEqual(['bjt', 'bjt', 'diode', 'mosfet']);
+		// A `Q` line may name its substrate, and it goes before the model rather
+		// than after, so the model has to be taken from the right and the extra node
+		// dropped — this engine ties the base region to the emitter.
+		expect(sub.elements[1].nodes).toEqual(['3', '1', '2']);
+		expect('model' in sub.elements[1] && sub.elements[1].model).toBe('QN');
+		expect(sub.models.get('QN')?.params.get('BF')).toBe(250);
+	});
+
+	it('keeps what it could not read instead of dropping it', () => {
+		const [sub] = parseSubcircuits(`
+.SUBCKT X 1 2
+R1 1 2 1k
+F1 1 2 VSENSE 10
+X1 1 2 INNER
+.ENDS
+`);
+		expect(sub.elements.length).toBe(1);
+		expect(sub.unread).toEqual(['F1 1 2 VSENSE 10', 'X1 1 2 INNER']);
+	});
+
+	it('stops the terminal list at a parameter block', () => {
+		const [sub] = parseSubcircuits('.SUBCKT AMP 1 2 3 PARAMS: GAIN=10\nR1 1 2 1k\n.ENDS');
+		expect(sub.ports).toEqual(['1', '2', '3']);
+	});
+
+	it('finds several definitions in one file', () => {
+		const subs = parseSubcircuits(OPAMP + '\n.SUBCKT SECOND 1 2\nR1 1 2 1k\n.ENDS\n');
+		expect(subs.map((s) => s.name)).toEqual(['OPAMP1', 'SECOND']);
+	});
+});
+
+describe('placing a subcircuit', () => {
+	it('binds its ports to the nets it was dropped on', () => {
+		const [sub] = parseSubcircuits(OPAMP);
+		const { components } = expandSubcircuit(sub, 'X1', ['in', 'fb', 'out']);
+		const rin = components.find((c) => (c as { name: string }).name === 'X1.RIN') as Record<
+			string,
+			unknown
+		>;
+		expect(rin.a).toBe('in');
+		expect(rin.b).toBe('fb');
+		const rout = components.find((c) => (c as { name: string }).name === 'X1.ROUT') as Record<
+			string,
+			unknown
+		>;
+		expect(rout.b).toBe('out');
+	});
+
+	it('gives each copy its own insides', () => {
+		// Two of the same part are two circuits. Without the namespace they would
+		// share every internal node, which is one amplifier wired to itself rather
+		// than two amplifiers.
+		const [sub] = parseSubcircuits(OPAMP);
+		const one = expandSubcircuit(sub, 'X1', ['a', 'b', 'c']);
+		const two = expandSubcircuit(sub, 'X2', ['d', 'e', 'f']);
+		const internals = (e: Expansion) =>
+			e.components.map((c) => (c as { a?: string }).a).filter((n) => n?.includes('.'));
+		expect(internals(one)).toContain('X1.4');
+		expect(internals(two)).toContain('X2.4');
+		expect(internals(one).some((n) => internals(two).includes(n!))).toBe(false);
+	});
+
+	it('leaves ground global', () => {
+		// `0` inside a subcircuit is *the* ground, not one of its own. Namespacing it
+		// would leave every copy floating.
+		const [sub] = parseSubcircuits(OPAMP);
+		const { components } = expandSubcircuit(sub, 'X1', ['a', 'b', 'c']);
+		const c1 = components.find((c) => (c as { name: string }).name === 'X1.C1') as Record<
+			string,
+			unknown
+		>;
+		expect(c1.b).toBe('gnd');
+	});
+
+	it('says which lines it had to skip', () => {
+		const [sub] = parseSubcircuits(
+			'.SUBCKT X 1 2\nR1 1 2 1k\nF1 1 2 VS 10\nQ1 1 2 0 MISSING\n.ENDS'
+		);
+		const { components, skipped } = expandSubcircuit(sub, 'X1', ['a', 'b']);
+		expect(components.length).toBe(1);
+		expect(skipped).toContain('F1');
+		// A device pointing at a model card that is not in the paste would otherwise
+		// fall back to a generic part of its type â€” a different circuit wearing the
+		// right name.
+		expect(skipped.some((s) => s.includes('MISSING'))).toBe(true);
 	});
 });

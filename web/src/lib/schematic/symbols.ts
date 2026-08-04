@@ -11,6 +11,8 @@
  * where the leads drawn here end.
  */
 
+import { definitionOf, SUBCIRCUIT_PREFIX } from './model';
+
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
 	| { kind: 'circle'; cx: number; cy: number; r: number; fill?: boolean }
@@ -32,6 +34,9 @@ export interface SymbolGeometry {
 
 const path = (d: string, fill = false): Shape => ({ kind: 'path', d, fill });
 
+/** Lead length on a generated block, matching what the catalog places its pins at. */
+const LEAD = 16;
+
 /** Which variant of a symbol a set of parameters selects. Used as a cache key. */
 export function symbolVariant(kind: string, params: Record<string, unknown> = {}): string {
 	switch (kind) {
@@ -40,6 +45,13 @@ export function symbolVariant(kind: string, params: Record<string, unknown> = {}
 		case 'vsource':
 			return `vsource:${String(params.waveform ?? 'dc')}`;
 		default:
+			// An imported block's shape is its port list, so the port list *is* the
+			// cache key. Re-importing a definition under the same handle then misses
+			// both this cache and the one holding the built paths, instead of needing
+			// somebody to remember to clear them.
+			if (kind.startsWith(SUBCIRCUIT_PREFIX)) {
+				return `${kind}(${definitionOf(kind).pins.map((p) => p.name).join(',')})`;
+			}
 			return kind;
 	}
 }
@@ -262,10 +274,41 @@ export function symbolGeometry(
 	let geometry: SymbolGeometry;
 	if (kind === 'diode') geometry = diode(String(params.model ?? 'silicon'));
 	else if (kind === 'vsource') geometry = voltageSource(String(params.waveform ?? 'dc'));
+	else if (kind.startsWith(SUBCIRCUIT_PREFIX)) geometry = block(kind);
 	else geometry = STATIC[kind] ?? EMPTY;
 
 	variantCache.set(variant, geometry);
 	return geometry;
+}
+
+/**
+ * An imported subcircuit: a box with its terminals named on the inside.
+ *
+ * Drawn from the part's own pin list rather than from a stored drawing, so a
+ * five-terminal op-amp and a two-terminal filter are one piece of code. The
+ * names matter more here than on any other symbol — a `.subckt` numbers its
+ * terminals `1 2 3` and nothing but their position says which is the output.
+ */
+function block(kind: string): SymbolGeometry {
+	const def = definitionOf(kind);
+	const { x, y, w, h } = def.box;
+	const bodyX = x + LEAD;
+	const bodyW = w - LEAD * 2;
+
+	const shapes: Shape[] = [{ kind: 'rect', x: bodyX, y, w: bodyW, h }];
+	const labels: SymbolLabel[] = [];
+	for (const pin of def.pins) {
+		const onLeft = pin.x < 0;
+		shapes.push(path(`M${pin.x} ${pin.y} H${onLeft ? bodyX : bodyX + bodyW}`));
+		labels.push({
+			x: (onLeft ? bodyX : bodyX + bodyW) + (onLeft ? 5 : -5),
+			y: pin.y,
+			text: pin.name,
+			anchor: onLeft ? 'start' : 'end',
+			size: 8
+		});
+	}
+	return { shapes, labels };
 }
 
 /** SVG `d` for a shape, so the palette can render one element per shape. */

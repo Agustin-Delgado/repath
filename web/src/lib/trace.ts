@@ -64,6 +64,7 @@ export type Step =
 	| { op: 'delete'; parts: string[]; wires: WireRef[] }
 	| { op: 'rotate'; parts: string[]; wires: WireRef[] }
 	| { op: 'param'; part: string; key: string; value: number | string }
+	| { op: 'import'; source: string }
 	| { op: 'rename'; part: string; to: string }
 	| { op: 'undo' }
 	| { op: 'redo' }
@@ -151,6 +152,8 @@ function format(step: Step): string {
 			return `rotate ${list(step.parts)} ${list(step.wires)}`;
 		case 'param':
 			return `param ${step.part} ${step.key} ${flatten(step.value)}`;
+		case 'import':
+			return `import ${flatten(step.source)}`;
 		case 'rename':
 			return `rename ${step.part} ${step.to}`;
 		case 'undo':
@@ -237,6 +240,8 @@ function read(op: string, rest: string[]): Step {
 					Number.isFinite(Number(value)) && value !== '' ? Number(value) : unflatten(value)
 			};
 		}
+		case 'import':
+			return { op, source: unflatten(rest.join(' ')) };
 		case 'rename':
 			return { op, part: rest[0], to: rest[1] };
 		case 'undo':

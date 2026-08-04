@@ -35,6 +35,8 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Editor | Deleting heals a gap only for a two-pin part wired on both sides | Anything with three pins leaves stubs, since no pairing is obviously right |
 | Editor | History still stores whole-document snapshots | Bounded now (100 entries or 8 MB, whichever comes first) but not a delta log |
 | Router | Widening the search box is a fixed ladder (12 then 40 cells) | An obstacle wider than 40 cells is still routed through rather than around |
+| Subcircuit | An `X` line inside a definition is reported, not expanded | A subcircuit built out of other subcircuits imports as its outer layer only |
+| Subcircuit | No current-controlled sources (`F`, `H`) for a definition to use | Some vendor macromodels cannot be built; the lines are named rather than dropped in silence |
 
 ---
 
@@ -60,6 +62,9 @@ because each step is what makes the next one worth having:
 3. **Subcircuits**, then `.subckt` import. This is what turns "has an op-amp"
    into "has the op-amp you are going to buy", with its bandwidth and its slew
    rate, and it is the only way a library grows past what fits in one file.
+   *(The import half is in: a `.subckt` pasted from a vendor's file becomes a
+   placeable part, flattened into the netlist when the drawing compiles. Drawing
+   your own block and reusing it is what is left.)*
 4. **Sparse solver.** Dense LU is fine to a few hundred nodes and quadratic-ish
    past that. It matters once steps 2 and 3 bring circuits big enough to feel it,
    which is why it is fourth and not first.
@@ -71,11 +76,13 @@ because each step is what makes the next one worth having:
 
 ### Engine
 
-- [ ] **`.subckt` import** — the other half of reading a manufacturer's file.
-      `.model` is in; a subcircuit needs somewhere to put the parts it expands to,
-      which is why it waits on the item below.
-- [ ] **Subcircuits** — draw a block once, reuse it, nest it. Needed before any
-      circuit larger than a page is bearable.
+- [ ] **Subcircuits you draw** — turn a selection into a block, reuse it, nest it.
+      Imported ones are in and share the machinery: a definition with ports, a
+      generated symbol, and flattening at compile time. What is left is a body that
+      comes from a drawing rather than from pasted text, and somewhere to edit it.
+      Needed before any circuit larger than a page is bearable.
+- [ ] **Current-controlled sources** (`F`, `H`), which some vendor macromodels
+      need before they will build.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
       pivoting). The `LinearSystem` interface was kept narrow for this.
 - [ ] **Diode series resistance** (`RS`). Solved against the junction rather than
@@ -231,6 +238,9 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- A `.subckt` pasted from a vendor's file becomes a part you can place, flattened
+  into the circuit it stands for when the drawing compiles � so an op-amp can be
+  the one you are going to buy, with a bandwidth of its own, rather than an ideal.
 - A part can be a `.model` card pasted from the manufacturer instead of a row of
   numbers transcribed by hand, kept as the text it arrived as so it survives a
   save and a share link. What the card carries and this engine does not model is

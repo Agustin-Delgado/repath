@@ -10,6 +10,7 @@ import { runFrequencySweep, runTransient, type FrequencyRun, type TransientRun }
 import { EXAMPLES, exampleById } from './examples';
 import { sampleIndexAt } from './schematic/flow';
 import { Trace, wireRef, type Step } from './trace';
+import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import {
 	GRID,
@@ -21,13 +22,16 @@ import {
 	pinPosition,
 	pointKey,
 	rotatePoint,
+	registerSubcircuits,
 	simplifyPath,
 	snap,
+	SUBCIRCUIT_PREFIX,
 	validateParam,
 	type Instance,
 	type Point,
 	type Rotation,
 	type Schematic,
+	type SubcircuitDef,
 	type Wire
 } from './schematic/model';
 import { elbow } from './schematic/route';
@@ -72,6 +76,20 @@ export const TRACE_COLOURS = [
 
 let idCounter = 0;
 const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`;
+
+/**
+ * Take on a whole document, definitions first.
+ *
+ * The catalog is global and an imported part is not, and the ordering between
+ * them is not optional: the first thing to ask what an `x:` part looks like
+ * throws if its definition has not been registered. Every path that installs a
+ * document — opened, shared, undone — goes through here, rather than each
+ * remembering on its own.
+ */
+function adopt(schematic: Schematic): Schematic {
+	registerSubcircuits(schematic);
+	return schematic;
+}
 
 /**
  * How a tool asks for a path between two points.
@@ -400,7 +418,7 @@ class AppState {
 		if (!previous) return;
 		this.historyBytes -= previous.document.length;
 		this.future.push(this.snapshot());
-		this.schematic = JSON.parse(previous.document) as Schematic;
+		this.schematic = adopt(JSON.parse(previous.document) as Schematic);
 		// Put the selection back too: undoing a nudge and finding nothing selected
 		// means re-picking the thing you were working on every single time.
 		this.selection = this.stillPresent(previous.selection);
@@ -412,7 +430,7 @@ class AppState {
 		if (!next) return;
 		this.past.push(this.snapshot());
 		this.historyBytes += this.past[this.past.length - 1].document.length;
-		this.schematic = JSON.parse(next.document) as Schematic;
+		this.schematic = adopt(JSON.parse(next.document) as Schematic);
 		this.selection = this.stillPresent(next.selection);
 	}
 
@@ -1051,10 +1069,57 @@ class AppState {
 	clear(): void {
 		this.trace.record({ op: 'clear' });
 		this.checkpoint();
-		this.schematic = { instances: [], wires: [] };
+		// Imported parts survive clearing the drawing. They are a library rather
+		// than part of the circuit, and having to paste the op-amp again because
+		// you started a new sketch with it would make importing one not worth doing.
+		this.schematic = { instances: [], wires: [], subcircuits: this.schematic.subcircuits };
 		this.selection = [];
 		this.probes = [];
 		this.result = null;
+	}
+
+	/**
+	 * Take a SPICE file and turn every `.subckt` in it into a part.
+	 *
+	 * Returns what was added, or why nothing was. The whole file is kept against
+	 * each definition it produced: a `.subckt` names its transistors and the
+	 * `.model` cards that give those names meaning live elsewhere in the same
+	 * file, so splitting them would leave a part referring to something that no
+	 * longer exists.
+	 */
+	importSubcircuits(source: string): { added: string[]; error?: string } {
+		const found = parseSubcircuits(source);
+		if (found.length === 0) return { added: [], error: 'No .subckt definition found in that text.' };
+
+		const existing = this.schematic.subcircuits ?? [];
+		const added: SubcircuitDef[] = [];
+		for (const sub of found) {
+			if (sub.ports.length === 0) continue;
+			// Re-importing under the same name replaces the definition rather than
+			// adding a second part with an identical label, so a corrected file can
+			// be pasted over the one it corrects and the parts already placed pick
+			// up the change.
+			const id = sub.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+			added.push({ id, name: sub.name, ports: sub.ports, source });
+		}
+		if (added.length === 0) return { added: [], error: 'That definition has no terminals.' };
+
+		this.checkpoint();
+		const kept = existing.filter((s) => !added.some((a) => a.id === s.id));
+		this.schematic.subcircuits = [...kept, ...added];
+		registerSubcircuits(this.schematic);
+		this.trace.record({ op: 'import', source });
+		return { added: added.map((s) => s.name) };
+	}
+
+	/** Forget an imported part, and delete anything placed from it. */
+	removeSubcircuit(id: string): void {
+		const kind = SUBCIRCUIT_PREFIX + id;
+		this.checkpoint();
+		this.schematic.instances = this.schematic.instances.filter((i) => i.kind !== kind);
+		this.schematic.subcircuits = (this.schematic.subcircuits ?? []).filter((s) => s.id !== id);
+		this.selection = this.stillPresent(this.selection);
+		this.tidyWires();
 	}
 
 	// -- clipboard --------------------------------------------------------
@@ -1225,7 +1290,7 @@ class AppState {
 	loadShared(circuit: { schematic: Schematic; stopTime: number }): void {
 		this.past.length = 0;
 		this.future.length = 0;
-		this.schematic = circuit.schematic;
+		this.schematic = adopt(circuit.schematic);
 		this.tidyWires();
 		this.stopTime = circuit.stopTime;
 		this.exampleId = '';
@@ -1255,6 +1320,10 @@ class AppState {
 			probes?: string[];
 		};
 		if (!parsed.schematic?.instances) throw new Error('That file is not a repath schematic.');
+		// Definitions before instances, because the loop below asks the catalog what
+		// every part is and an imported one would not be there yet.
+		const subcircuits = parsed.schematic.subcircuits ?? [];
+		registerSubcircuits({ instances: [], wires: [], subcircuits });
 		// Re-key everything so a pasted circuit cannot collide with what is open.
 		const remap = new Map<string, string>();
 		const instances = parsed.schematic.instances.map((instance) => {
@@ -1272,7 +1341,7 @@ class AppState {
 
 		this.past.length = 0;
 		this.future.length = 0;
-		this.schematic = { instances, wires };
+		this.schematic = { instances, wires, subcircuits };
 		this.tidyWires();
 		this.stopTime = parsed.stopTime ?? 1e-3;
 		this.probes = parsed.probes ?? [];

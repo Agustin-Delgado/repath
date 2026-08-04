@@ -12,7 +12,15 @@
 
 import { describe, expect, it } from 'vitest';
 import { compileSchematic } from './netlist';
-import { defaultParams, type Instance, type Rotation, type Schematic } from './model';
+import {
+	defaultParams,
+	definitionOf,
+	registerSubcircuits,
+	SUBCIRCUIT_PREFIX,
+	type Instance,
+	type Rotation,
+	type Schematic
+} from './model';
 
 let counter = 0;
 
@@ -201,5 +209,98 @@ describe('a pasted SPICE model', () => {
 		const { model } = transistor('.model 1N4148 D(IS=2.52n N=1.752 BV=100)');
 		expect(model?.is).toBe(6.73e-15);
 		expect(model?.bf).toBe(200);
+	});
+});
+
+describe('an imported subcircuit', () => {
+	// A one-pole op-amp macromodel of the shape a vendor ships. Ports are 1 =
+	// non-inverting, 2 = inverting, 3 = output.
+	const OPAMP = `.SUBCKT OPAMP1 1 2 3
+RIN 1 2 2MEG
+E1 4 0 1 2 100K
+R1 4 5 1K
+C1 5 0 15.9u
+E2 6 0 5 0 1
+ROUT 6 3 75
+.ENDS`;
+
+	function withOpamp(instances: (kind: string) => Instance[], runs: Array<[number, number, number, number]>) {
+		const sub = {
+			id: 'opamp1',
+			name: 'OPAMP1',
+			ports: ['1', '2', '3'],
+			source: OPAMP
+		};
+		registerSubcircuits({ instances: [], wires: [], subcircuits: [sub] });
+		const schematic = drawing(instances(SUBCIRCUIT_PREFIX + sub.id), runs);
+		schematic.subcircuits = [sub];
+		return compileSchematic(schematic);
+	}
+
+	it('becomes a part whose pins are its ports', () => {
+		registerSubcircuits({
+			instances: [],
+			wires: [],
+			subcircuits: [{ id: 'opamp1', name: 'OPAMP1', ports: ['1', '2', '3'], source: OPAMP }]
+		});
+		const def = definitionOf(SUBCIRCUIT_PREFIX + 'opamp1');
+		expect(def.pins.map((p) => p.name)).toEqual(['1', '2', '3']);
+		expect(def.label).toBe('OPAMP1');
+		// Split across the two sides of the box, and every pin on the grid so a
+		// wire can actually reach it.
+		expect(def.pins.filter((p) => p.x < 0).length).toBe(2);
+		expect(def.pins.every((p) => p.x % 10 === 0 && p.y % 10 === 0)).toBe(true);
+	});
+
+	it('is flattened into the circuit it stands for', () => {
+		const result = withOpamp(
+			(kind) => [at('vsource', 'V1', 100, 200), at('ground', 'GND1', 100, 320), { ...at(kind, 'X1', 300, 200) }],
+			[[100, 170, 260, 170], [100, 230, 100, 320], [100, 300, 260, 300]]
+		);
+		const netlist = result.netlist as { components: Array<Record<string, unknown>> } | null;
+		const names = netlist!.components.map((c) => c.name);
+		// Every element of the definition, under the name of the part that holds it.
+		expect(names).toContain('X1.RIN');
+		expect(names).toContain('X1.E1');
+		expect(names).toContain('X1.C1');
+		expect(names).toContain('X1.ROUT');
+		// And nothing called X1 on its own: the engine never sees the block.
+		expect(names).not.toContain('X1');
+	});
+
+	it('binds its ports to the nets it was wired to, and keeps its insides to itself', () => {
+		const result = withOpamp(
+			(kind) => [at('vsource', 'V1', 100, 200), at('ground', 'GND1', 100, 320), at(kind, 'X1', 300, 200)],
+			[[100, 170, 260, 170], [100, 230, 100, 320], [100, 300, 260, 300]]
+		);
+		const netlist = result.netlist as { components: Array<Record<string, unknown>> };
+		const rin = netlist.components.find((c) => c.name === 'X1.RIN')!;
+		// Whatever the source's net was called, both are real nets and not the
+		// port numbers the file used.
+		expect(rin.a).not.toBe('1');
+		expect(rin.b).not.toBe('2');
+		// An internal node is namespaced, so a second copy is a second circuit.
+		const r1 = netlist.components.find((c) => c.name === 'X1.R1')!;
+		expect(r1.a).toBe('X1.4');
+		// `0` inside a definition is the one global ground.
+		const c1 = netlist.components.find((c) => c.name === 'X1.C1')!;
+		expect(c1.b).toBe('gnd');
+	});
+
+	it('says which lines of a definition it could not build', () => {
+		const sub = {
+			id: 'odd',
+			name: 'ODD',
+			ports: ['1', '2'],
+			source: '.SUBCKT ODD 1 2\nR1 1 2 1k\nF1 1 2 VS 10\n.ENDS'
+		};
+		registerSubcircuits({ instances: [], wires: [], subcircuits: [sub] });
+		const schematic = drawing(
+			[at('ground', 'GND1', 100, 320), at(SUBCIRCUIT_PREFIX + sub.id, 'X1', 300, 200)],
+			[]
+		);
+		schematic.subcircuits = [sub];
+		const note = compileSchematic(schematic).warnings.find((w) => w.includes('ODD'));
+		expect(note).toContain('F1');
 	});
 });

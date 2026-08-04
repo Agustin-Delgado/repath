@@ -44,6 +44,9 @@ const orthogonal = () =>
 beforeEach(() => {
 	app.clear();
 	app.selection = [];
+	// `clear` deliberately keeps imported parts — they are a library rather than
+	// part of the circuit — so a fresh start has to drop them on purpose.
+	app.schematic.subcircuits = [];
 });
 
 describe('rotating a group', () => {
@@ -932,5 +935,64 @@ describe('two pins that were touching', () => {
 		app.undo();
 		expect(app.schematic.wires).toEqual([]);
 		expect(find('R2').x).toBe(160);
+	});
+});
+
+describe('importing a subcircuit', () => {
+	const OPAMP = '.SUBCKT OPAMP1 1 2 3\nRIN 1 2 2MEG\nE1 4 0 1 2 100K\nROUT 4 3 75\n.ENDS';
+
+	it('adds a part that can be placed like any other', () => {
+		const { added, error } = app.importSubcircuits(OPAMP);
+		expect(error).toBeUndefined();
+		expect(added).toEqual(['OPAMP1']);
+
+		app.place('x:opamp1', 300, 200, 0);
+		const placed = app.schematic.instances[0];
+		expect(placed.kind).toBe('x:opamp1');
+		// Named from the `X` prefix a subcircuit call has always used.
+		expect(placed.name).toBe('X1');
+	});
+
+	it('refuses text with no definition in it, and says so', () => {
+		const { added, error } = app.importSubcircuits('.model 2N3904 NPN(BF=200)');
+		expect(added).toEqual([]);
+		expect(error).toBeTruthy();
+		expect(app.schematic.subcircuits ?? []).toEqual([]);
+	});
+
+	it('replaces a definition rather than adding a second part with the same name', () => {
+		// So a corrected file can be pasted over the one it corrects, and the parts
+		// already placed pick up the change instead of being orphaned beside a
+		// second entry with an identical label.
+		app.importSubcircuits(OPAMP);
+		app.place('x:opamp1', 300, 200, 0);
+		app.importSubcircuits('.SUBCKT OPAMP1 1 2 3\nRIN 1 2 1MEG\nE1 4 0 1 2 50K\nROUT 4 3 50\n.ENDS');
+
+		expect(app.schematic.subcircuits?.length).toBe(1);
+		expect(app.schematic.instances.length).toBe(1);
+		expect(app.schematic.subcircuits?.[0].source).toContain('1MEG');
+	});
+
+	it('keeps imported parts when the drawing is cleared', () => {
+		// They are a library, not part of the circuit. Having to paste the op-amp
+		// again because you started a new sketch would make importing one not worth
+		// the trouble.
+		app.importSubcircuits(OPAMP);
+		app.place('x:opamp1', 300, 200, 0);
+		app.clear();
+		expect(app.schematic.instances).toEqual([]);
+		expect(app.schematic.subcircuits?.length).toBe(1);
+	});
+
+	it('takes anything placed from it away with it', () => {
+		// Leaving instances of a definition that no longer exists would be a
+		// drawing that cannot be compiled and cannot be repaired from the canvas.
+		app.importSubcircuits(OPAMP);
+		app.place('x:opamp1', 300, 200, 0);
+		app.place('resistor', 500, 200, 0);
+		app.removeSubcircuit('opamp1');
+
+		expect(app.schematic.subcircuits).toEqual([]);
+		expect(app.schematic.instances.map((i) => i.kind)).toEqual(['resistor']);
 	});
 });

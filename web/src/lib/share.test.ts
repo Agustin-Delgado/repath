@@ -143,3 +143,44 @@ describe('circuit links', () => {
 		await expect(decodeCircuit('cq' + btoa('nonsense'))).rejects.toThrow();
 	});
 });
+
+describe('an imported part in a link', () => {
+	const OPAMP = '.SUBCKT OPAMP1 1 2 3\nRIN 1 2 2MEG\nE1 4 0 1 2 100K\nROUT 4 3 75\n.ENDS';
+
+	it('travels with the drawing that uses it', async () => {
+		// A link carrying a part but not what it is made of would open as a hole in
+		// the middle of someone's circuit — and the whole promise of a link is that
+		// the person who clicks it sees the working circuit.
+		const shared: SharedCircuit = {
+			stopTime: 1e-3,
+			schematic: {
+				instances: [
+					{ id: 'x', kind: 'x:opamp1', name: 'X1', x: 200, y: 200, rotation: 0, params: {} }
+				],
+				wires: [],
+				subcircuits: [{ id: 'opamp1', name: 'OPAMP1', ports: ['1', '2', '3'], source: OPAMP }]
+			}
+		};
+
+		const back = await decodeCircuit(await encodeCircuit(shared));
+		expect(back.schematic.subcircuits?.[0]).toEqual(shared.schematic.subcircuits![0]);
+		expect(back.schematic.instances[0].kind).toBe('x:opamp1');
+	});
+
+	it('is a part the catalog knows about by the time the instances are read', async () => {
+		// Ordering, not content: the loop that reads instances asks the catalog what
+		// each one is, so a definition registered afterwards would already have
+		// thrown. Reading the part back is what proves it happened first.
+		const { definitionOf } = await import('./schematic/model');
+		const shared: SharedCircuit = {
+			stopTime: 1e-3,
+			schematic: {
+				instances: [],
+				wires: [],
+				subcircuits: [{ id: 'late', name: 'LATE', ports: ['a', 'b'], source: '.SUBCKT LATE a b\nR1 a b 1k\n.ENDS' }]
+			}
+		};
+		await decodeCircuit(await encodeCircuit(shared));
+		expect(definitionOf('x:late').pins.map((p) => p.name)).toEqual(['a', 'b']);
+	});
+});

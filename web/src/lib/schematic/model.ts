@@ -199,9 +199,35 @@ export function normaliseWire(raw: unknown, id: string): Wire | null {
 	return null;
 }
 
+/**
+ * A subcircuit imported from a SPICE file, as a part you can place.
+ *
+ * The whole paste is kept rather than the definition alone, for the same reason
+ * a `.model` card is: a `.subckt` refers to its transistors by name and the
+ * cards that give those names meaning are elsewhere in the same file. Storing
+ * the text keeps the two together, and keeps the vendor's file the authority
+ * rather than a transcription of it.
+ */
+export interface SubcircuitDef {
+	/** Stable handle. The part's `kind` is `x:` followed by this. */
+	id: string;
+	/** As the `.subckt` line spells it. */
+	name: string;
+	/** Terminals in port order, which is also pin order. */
+	ports: string[];
+	/** The pasted file, verbatim. */
+	source: string;
+}
+
 export interface Schematic {
 	instances: Instance[];
 	wires: Wire[];
+	/**
+	 * Definitions this drawing carries with it, so a saved file or a shared link
+	 * is self-contained. A part whose definition travelled separately would open
+	 * as a hole in the middle of someone's circuit.
+	 */
+	subcircuits?: SubcircuitDef[];
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +731,86 @@ export function definitionOf(kind: string): ComponentDef {
 	const def = BY_KIND.get(kind);
 	if (!def) throw new Error(`unknown component kind: ${kind}`);
 	return def;
+}
+
+// ---------------------------------------------------------------------------
+// Imported subcircuits as parts
+// ---------------------------------------------------------------------------
+
+/** Distance from the body's edge out to a pin. */
+const SUB_LEAD = 16;
+const SUB_HALF_WIDTH = 24;
+/** Grid-aligned, so a pin always lands somewhere a wire can reach. */
+const SUB_PITCH = 20;
+
+export const SUBCIRCUIT_PREFIX = 'x:';
+
+/** How the ports of a subcircuit are split between the two sides of its box. */
+export function subcircuitSides(ports: readonly string[]): { left: string[]; right: string[] } {
+	const half = Math.ceil(ports.length / 2);
+	return { left: ports.slice(0, half), right: ports.slice(half) };
+}
+
+/** Where a port sits, given its index down one side of a box holding `count`. */
+function portY(index: number, count: number): number {
+	return (index - (count - 1) / 2) * SUB_PITCH;
+}
+
+/** Half the height of the body, big enough for the longer of the two sides. */
+export function subcircuitReach(ports: readonly string[]): number {
+	const { left, right } = subcircuitSides(ports);
+	const rows = Math.max(left.length, right.length, 2);
+	return Math.max(22, ((rows - 1) * SUB_PITCH) / 2 + 12);
+}
+
+/**
+ * A placeable part built from an imported definition.
+ *
+ * Generated rather than written out, because the shape of the part is decided by
+ * the file: a five-terminal op-amp and a two-terminal filter are the same code
+ * with a different port list.
+ */
+export function subcircuitDefinition(sub: SubcircuitDef): ComponentDef {
+	const { left, right } = subcircuitSides(sub.ports);
+	const half = subcircuitReach(sub.ports);
+	const x = SUB_HALF_WIDTH + SUB_LEAD;
+	return {
+		kind: SUBCIRCUIT_PREFIX + sub.id,
+		label: sub.name,
+		group: 'analog',
+		prefix: 'X',
+		box: { x: -x, y: -half, w: x * 2, h: half * 2 },
+		pins: [
+			...left.map((port, i) => analog(port, -x, portY(i, left.length))),
+			...right.map((port, i) => analog(port, x, portY(i, right.length)))
+		],
+		params: []
+	};
+}
+
+/**
+ * Make the parts in a drawing available to everything that asks about a kind.
+ *
+ * The catalog is global and a subcircuit is not, which is a tension worth being
+ * explicit about: this has to run *before* anything reads the instances of a
+ * drawing, or the first thing to ask what an `x:` part looks like throws. So it
+ * is called wherever a whole document arrives — opened, loaded, followed from a
+ * link — rather than being left to whoever gets there first.
+ *
+ * Definitions are only ever added. A stale one costs a map entry; a missing one
+ * loses someone's circuit.
+ */
+export function registerSubcircuits(schematic: Schematic): void {
+	for (const sub of schematic.subcircuits ?? []) {
+		BY_KIND.set(SUBCIRCUIT_PREFIX + sub.id, subcircuitDefinition(sub));
+	}
+}
+
+/** The definition a placed subcircuit was built from, if it is one. */
+export function subcircuitOf(schematic: Schematic, kind: string): SubcircuitDef | null {
+	if (!kind.startsWith(SUBCIRCUIT_PREFIX)) return null;
+	const id = kind.slice(SUBCIRCUIT_PREFIX.length);
+	return schematic.subcircuits?.find((s) => s.id === id) ?? null;
 }
 
 /**

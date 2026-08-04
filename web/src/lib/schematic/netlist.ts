@@ -10,9 +10,17 @@
  */
 
 import { ledDiodeModel, ledRating } from './led';
-import { definitionOf, type Instance, type Schematic } from './model';
+import { definitionOf, subcircuitOf, type Instance, type Schematic } from './model';
 import { buildConnectivity, pinKey, type Connectivity, type Net } from './nets';
-import { bjtFromCard, cardFor, diodeFromCard, mosfetFromCard, type ModelCard } from '../spice';
+import {
+	bjtFromCard,
+	cardFor,
+	diodeFromCard,
+	expandSubcircuit,
+	mosfetFromCard,
+	parseSubcircuits,
+	type ModelCard
+} from '../spice';
 
 export interface NetNames {
 	analog?: string;
@@ -378,8 +386,36 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 					duty: num(instance, 'duty', 0.5)
 				});
 				break;
-			default:
-				errors.push(`${name}: '${instance.kind}' is not something the engine knows how to build.`);
+			default: {
+				// An imported subcircuit is flattened here rather than handed to the
+				// engine as a hierarchy, because the engine solves one matrix: a
+				// subcircuit is a way of writing a circuit down, not a thing a solver
+				// knows about.
+				const sub = subcircuitOf(schematic, instance.kind);
+				if (!sub) {
+					errors.push(
+						`${name}: '${instance.kind}' is not something the engine knows how to build.`
+					);
+					break;
+				}
+				const parsed = parseSubcircuits(sub.source).find((s) => s.name === sub.name);
+				if (!parsed) {
+					errors.push(`${name}: the definition of ${sub.name} is no longer readable.`);
+					break;
+				}
+				const { components: inner, skipped } = expandSubcircuit(
+					parsed,
+					name,
+					sub.ports.map((port) => analogOf(instance, port))
+				);
+				components.push(...inner);
+				if (skipped.length > 0) {
+					warnings.push(
+						`${name}: ${sub.name} uses ${skipped.join(', ')}, which this simulator cannot build.`
+					);
+				}
+				break;
+			}
 		}
 	}
 
