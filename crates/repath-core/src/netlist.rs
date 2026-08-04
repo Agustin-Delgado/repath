@@ -14,7 +14,7 @@ use crate::digital::{Clock, DFlipFlop, Gate, GateKind, TriStateBuffer};
 use crate::element::NodeId;
 use crate::elements::{
     Bjt, BjtModel, Capacitor, CurrentSource, Diode, DiodeModel, Inductor, Mosfet, MosfetModel,
-    OpAmp, Resistor, Switch, SwitchModel, Vccs, Vcvs, VoltageSource, Waveform,
+    OpAmp, OpAmpModel, Resistor, Switch, SwitchModel, Vccs, Vcvs, VoltageSource, Waveform,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +133,20 @@ pub enum Component {
         v_max: f64,
         #[serde(default = "default_vmin")]
         v_min: f64,
+        /// Gain-bandwidth product, slew rate, output resistance, input offset and
+        /// input bias current. Each defaults to a general-purpose part rather than
+        /// to nothing: an op-amp with no bandwidth limit and no slew rate is not a
+        /// simpler op-amp, it is one that makes unstable circuits look stable.
+        #[serde(default = "default_gbw")]
+        gbw: f64,
+        #[serde(default = "default_slew")]
+        slew: f64,
+        #[serde(default = "default_r_out")]
+        r_out: f64,
+        #[serde(default = "default_v_os")]
+        v_os: f64,
+        #[serde(default = "default_i_bias")]
+        i_bias: f64,
     },
     Switch {
         name: String,
@@ -169,6 +183,30 @@ fn default_vmax() -> f64 {
 }
 fn default_vmin() -> f64 {
     -15.0
+}
+
+// A general-purpose bipolar part, near enough a 741. Kept beside the rails they
+// belong with rather than derived from `OpAmpModel::default`, because serde needs
+// a function per field and a wrong one here is a silent difference between what a
+// caller wrote and what gets built.
+fn default_gbw() -> f64 {
+    1e6
+}
+
+fn default_slew() -> f64 {
+    0.5e6
+}
+
+fn default_r_out() -> f64 {
+    75.0
+}
+
+fn default_v_os() -> f64 {
+    1e-3
+}
+
+fn default_i_bias() -> f64 {
+    80e-9
 }
 
 impl Component {
@@ -381,12 +419,33 @@ impl Netlist {
                     (self.node(c, collector), self.node(c, base), self.node(c, emitter));
                 c.add(Box::new(Bjt::new(name, col, b, e, *model)));
             }
-            Component::OpAmp { name, output, input_plus, input_minus, gain, v_max, v_min } => {
+            Component::OpAmp {
+                name,
+                output,
+                input_plus,
+                input_minus,
+                gain,
+                v_max,
+                v_min,
+                gbw,
+                slew,
+                r_out,
+                v_os,
+                i_bias,
+            } => {
                 let (o, p, n) =
                     (self.node(c, output), self.node(c, input_plus), self.node(c, input_minus));
-                c.add(Box::new(
-                    OpAmp::new(name, o, p, n).with_gain(*gain).with_rails(*v_min, *v_max),
-                ));
+                let model = OpAmpModel {
+                    gain: *gain,
+                    gbw: *gbw,
+                    slew: *slew,
+                    r_out: *r_out,
+                    v_os: *v_os,
+                    i_bias: *i_bias,
+                    v_max: *v_max,
+                    v_min: *v_min,
+                };
+                c.add(Box::new(OpAmp::new(name, o, p, n).with_model(model)));
             }
             Component::Switch { name, a, b, control_plus, control_minus, model } => {
                 let (a, b) = (self.node(c, a), self.node(c, b));

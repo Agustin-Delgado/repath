@@ -639,8 +639,51 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('plus', -30, -10), analog('minus', -30, 10), analog('out', 30, 0)],
 		params: [
 			{ key: 'gain', label: 'Open-loop gain', unit: '', default: 1e5, min: 0, nonZero: true },
+			{
+				key: 'gbw',
+				label: 'Gain-bandwidth',
+				unit: 'Hz',
+				default: 1e6,
+				min: 0,
+				nonZero: true,
+				description:
+					'Gain and bandwidth are one quantity split two ways: asking this part for a gain of a hundred leaves a hundredth of this, and no amount of feedback buys it back.'
+			},
+			{
+				key: 'slew',
+				label: 'Slew rate',
+				unit: 'V/s',
+				default: 0.5e6,
+				min: 0,
+				nonZero: true,
+				description:
+					'The fastest the output can move, whatever the input does. Past it the output stops following and becomes a ramp — which is why a square wave comes out with sloped edges.'
+			},
 			{ key: 'v_max', label: 'Positive rail', unit: 'V', default: 15 },
-			{ key: 'v_min', label: 'Negative rail', unit: 'V', default: -15 }
+			{ key: 'v_min', label: 'Negative rail', unit: 'V', default: -15 },
+			{
+				key: 'r_out',
+				label: 'Output resistance',
+				unit: 'Ω',
+				default: 75,
+				min: 0,
+				description: 'Nothing drives a load for free. Feedback hides this at low frequencies and stops hiding it as the loop gain falls.'
+			},
+			{
+				key: 'v_os',
+				label: 'Input offset',
+				unit: 'V',
+				default: 1e-3,
+				description:
+					'The input pair is never quite matched, so the output does not sit at zero — it sits at this, times the gain the circuit asks for.'
+			},
+			{
+				key: 'i_bias',
+				label: 'Input bias current',
+				unit: 'A',
+				default: 80e-9,
+				description: 'Drawn through whatever each input is connected to. The reason an integrator drifts with nothing on its input.'
+			}
 		]
 	},
 	{

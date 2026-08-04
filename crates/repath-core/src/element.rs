@@ -166,6 +166,17 @@ pub trait Element: std::fmt::Debug + Send + AsAny {
         let _ = first_extra_index;
     }
 
+    /// Label for the `k`th extra unknown, when it is not a branch current.
+    ///
+    /// Almost every extra unknown is one, and the default names it accordingly.
+    /// A device modelled internally as a small circuit has nodes of its own among
+    /// them, and calling the voltage on one a current puts a label on a probe that
+    /// is simply false.
+    fn extra_unknown_name(&self, k: usize) -> Option<String> {
+        let _ = k;
+        None
+    }
+
     /// Whether this element must be re-linearized on every Newton iteration.
     fn is_nonlinear(&self) -> bool {
         false

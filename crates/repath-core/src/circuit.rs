@@ -161,10 +161,10 @@ impl Circuit {
             self.node_names[1..].iter().map(|n| format!("v({n})")).collect();
         for element in &self.elements {
             for k in 0..element.extra_unknowns() {
-                names.push(if element.extra_unknowns() == 1 {
-                    format!("i({})", element.name())
-                } else {
-                    format!("i({}.{k})", element.name())
+                names.push(match element.extra_unknown_name(k) {
+                    Some(label) => format!("{}.{label}", element.name()),
+                    None if element.extra_unknowns() == 1 => format!("i({})", element.name()),
+                    None => format!("i({}.{k})", element.name()),
                 });
             }
         }

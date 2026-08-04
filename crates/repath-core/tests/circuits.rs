@@ -295,23 +295,37 @@ fn pmos_conducts_with_a_low_gate() {
 
 #[test]
 fn inverting_opamp_has_the_designed_gain() {
-    let mut c = Circuit::new();
-    let vin = c.node("vin");
-    let inv = c.node("inv");
-    let out = c.node("out");
-    c.add(Box::new(VoltageSource::dc("V1", vin, Circuit::GROUND, 0.1)));
-    c.add(Box::new(Resistor::new("R1", vin, inv, 1_000.0)));
-    c.add(Box::new(Resistor::new("RF", inv, out, 10_000.0)));
-    c.add(Box::new(OpAmp::new("U1", out, Circuit::GROUND, inv).with_rails(-15.0, 15.0)));
+    let solve = |vin: f64| {
+        let mut c = Circuit::new();
+        let input = c.node("vin");
+        let inv = c.node("inv");
+        let out = c.node("out");
+        c.add(Box::new(VoltageSource::dc("V1", input, Circuit::GROUND, vin)));
+        c.add(Box::new(Resistor::new("R1", input, inv, 1_000.0)));
+        c.add(Box::new(Resistor::new("RF", inv, out, 10_000.0)));
+        c.add(Box::new(OpAmp::new("U1", out, Circuit::GROUND, inv).with_rails(-15.0, 15.0)));
 
-    let op = Simulator::default().operating_point(&mut c).unwrap();
-    let names = &op.unknown_names;
-    let vout = op.solution[names.iter().position(|n| n == "v(out)").unwrap()];
-    let vinv = op.solution[names.iter().position(|n| n == "v(inv)").unwrap()];
+        let op = Simulator::default().operating_point(&mut c).unwrap();
+        let names = &op.unknown_names;
+        (
+            op.solution[names.iter().position(|n| n == "v(out)").unwrap()],
+            op.solution[names.iter().position(|n| n == "v(inv)").unwrap()],
+        )
+    };
 
-    assert!((vout + 1.0).abs() < 0.01, "gain of -10 should give -1 V, got {vout:.4} V");
-    // The inverting input is a virtual ground.
-    assert!(vinv.abs() < 1e-3, "virtual ground drifted to {vinv:.6} V");
+    // Measured across two inputs rather than from one, which is how you would
+    // measure it on a bench and for the same reason: a real part has an input
+    // offset, and reading a single point cannot tell the gain from the error.
+    // Eleven times a millivolt of offset is eleven millivolts on the output here —
+    // one percent of the answer, and nothing whatever to do with the gain.
+    let (hi, vinv) = solve(0.1);
+    let (lo, _) = solve(-0.1);
+    let gain = (hi - lo) / 0.2;
+    assert!((gain + 10.0).abs() < 0.02, "expected a gain of -10, got {gain:.4}");
+
+    // The inverting input is a virtual ground — give or take the offset the loop
+    // is holding it at.
+    assert!(vinv.abs() < 5e-3, "virtual ground drifted to {vinv:.6} V");
 }
 
 #[test]
@@ -468,27 +482,58 @@ fn series_rlc_peaks_at_its_resonant_frequency() {
 }
 
 #[test]
-fn inverting_opamp_gain_is_flat_and_inverted() {
-    let mut c = Circuit::new();
-    let vin = c.node("vin");
-    let inv = c.node("inv");
-    let out = c.node("out");
-    c.add(Box::new(
-        VoltageSource::new("V1", vin, Circuit::GROUND, Waveform::Dc { value: 0.0 })
-            .with_ac(1.0, 0.0),
-    ));
-    c.add(Box::new(Resistor::new("R1", vin, inv, 1_000.0)));
-    c.add(Box::new(Resistor::new("RF", inv, out, 22_000.0)));
-    c.add(Box::new(OpAmp::new("U1", out, Circuit::GROUND, inv).with_rails(-15.0, 15.0)));
+fn an_inverting_stage_spends_its_gain_bandwidth_product() {
+    // Gain and bandwidth are one quantity divided two ways. A part good for a
+    // megahertz asked for a gain of 22 has 45 kHz to give, and no amount of
+    // feedback buys any of it back — which is the single most useful thing to
+    // know about an op-amp and the thing an ideal one cannot tell you.
+    let build = |gbw: f64| {
+        let mut c = Circuit::new();
+        let vin = c.node("vin");
+        let inv = c.node("inv");
+        let out = c.node("out");
+        c.add(Box::new(
+            VoltageSource::new("V1", vin, Circuit::GROUND, Waveform::Dc { value: 0.0 })
+                .with_ac(1.0, 0.0),
+        ));
+        c.add(Box::new(Resistor::new("R1", vin, inv, 1_000.0)));
+        c.add(Box::new(Resistor::new("RF", inv, out, 22_000.0)));
+        let model = OpAmpModel { gbw, ..OpAmpModel::default() };
+        c.add(Box::new(OpAmp::new("U1", out, Circuit::GROUND, inv).with_model(model)));
+        c
+    };
 
-    let result = Simulator::default().ac_sweep(&mut c, AcConfig::new(1.0, 1e5)).unwrap();
+    let mut c = build(1e6);
+    let result = Simulator::default().ac_sweep(&mut c, AcConfig::new(1.0, 1e7)).unwrap();
 
-    for hz in [10.0, 1_000.0, 50_000.0] {
+    // Low down, the loop has gain to spare and the resistors decide everything.
+    for hz in [10.0, 100.0] {
         let (mag, phase) = at_frequency(&result, "v(out)", hz);
         assert!((mag - 22.0).abs() < 0.1, "gain at {hz} Hz was {mag}, expected 22");
-        // Inverting: 180 degrees out, whichever way the unwrapper walked to it.
-        assert!((phase.abs() - 180.0).abs() < 1.0, "phase at {hz} Hz was {phase}, expected ±180");
+        assert!((phase.abs() - 180.0).abs() < 1.0, "phase at {hz} Hz was {phase}");
     }
+
+    // At the corner it is down by root two, and the phase has begun to go with it.
+    let (corner, phase) = at_frequency(&result, "v(out)", 1e6 / 22.0);
+    assert!(
+        (corner - 22.0 / std::f64::consts::SQRT_2).abs() < 1.0,
+        "at the corner the gain was {corner}, expected about 15.6"
+    );
+    assert!((phase.abs() - 180.0).abs() > 30.0, "phase should have moved by now: {phase}");
+
+    // Well past it the product is the constant: gain times frequency is the
+    // gain-bandwidth, whatever the closed loop was asked for.
+    let (top, _) = at_frequency(&result, "v(out)", 1e6);
+    assert!(top < 1.5, "gain at the unity-gain frequency was {top}, expected about 1");
+
+    // And it moves with the part. Ten times the product is ten times the corner.
+    let mut fast = build(1e7);
+    let quick = Simulator::default().ac_sweep(&mut fast, AcConfig::new(1.0, 1e7)).unwrap();
+    let (still_flat, _) = at_frequency(&quick, "v(out)", 1e6 / 22.0);
+    assert!(
+        (still_flat - 22.0).abs() < 0.5,
+        "a decade more bandwidth should still be flat here, got {still_flat}"
+    );
 }
 
 #[test]
@@ -1317,4 +1362,96 @@ fn a_subcircuit_pasted_from_a_file_amplifies() {
     let (past, _) = at_frequency(&wide, "v(out)", 2e6);
     assert!((6.0..8.5).contains(&corner), "expected the corner near 100 kHz; gain was {corner:.3}");
     assert!(past < 1.0, "the internal pole did nothing: gain at 2 MHz was {past:.3}");
+}
+
+#[test]
+fn a_follower_cannot_move_faster_than_its_slew_rate() {
+    // The most visible thing an ideal op-amp gets wrong. Told to jump ten volts,
+    // a real one ramps, because the input stage can only deliver so much current
+    // into the compensation capacitor. Half a volt per microsecond means sixteen
+    // microseconds to cross the middle eight volts of that jump, and no feedback
+    // makes it any quicker: while it is slewing the amplifier has no gain at all.
+    let mut c = Circuit::new();
+    let vin = c.node("vin");
+    let out = c.node("out");
+    c.add(Box::new(VoltageSource::new("V1", vin, Circuit::GROUND, step(10.0))));
+    // Unity-gain follower: output straight back to the inverting input.
+    c.add(Box::new(OpAmp::new("U1", out, vin, out)));
+
+    let mut cfg = TransientConfig::new(60e-6);
+    cfg.max_step = 20e-9;
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+    let index = index_of(&result, "v(out)");
+    let signal = result.signal(index);
+
+    let crossing =
+        |level: f64| result.time[signal.iter().position(|&v| v >= level).expect("never got there")];
+    let ramp = crossing(9.0) - crossing(1.0);
+    let expected = 8.0 / 0.5e6;
+    assert!(
+        (ramp - expected).abs() < 0.15 * expected,
+        "crossed the middle eight volts in {ramp:.3e} s; half a volt per microsecond says {expected:.3e}"
+    );
+
+    // And it gets there in the end, rather than ramping forever.
+    let (_, high) = extremes(&result, index);
+    assert!((high - 10.0).abs() < 0.05, "settled at {high:.4} V");
+}
+
+#[test]
+fn an_amplifier_amplifies_its_own_offset_too() {
+    // Both inputs at zero and the output is not: the input pair is never quite
+    // matched, and whatever mismatch it has comes out multiplied by the gain the
+    // circuit was built for. It is why a high-gain DC amplifier needs trimming,
+    // and with an ideal op-amp there is nothing there to trim.
+    let gain_of = |v_os: f64| {
+        let mut c = Circuit::new();
+        let inv = c.node("inv");
+        let out = c.node("out");
+        // Non-inverting, gain of 101, input grounded.
+        c.add(Box::new(Resistor::new("RG", inv, Circuit::GROUND, 100.0)));
+        c.add(Box::new(Resistor::new("RF", inv, out, 10_000.0)));
+        let model = OpAmpModel { v_os, i_bias: 0.0, ..OpAmpModel::default() };
+        c.add(Box::new(OpAmp::new("U1", out, Circuit::GROUND, inv).with_model(model)));
+
+        let op = Simulator::default().operating_point(&mut c).unwrap();
+        op.solution[op.unknown_names.iter().position(|n| n == "v(out)").unwrap()]
+    };
+
+    let with = gain_of(1e-3);
+    assert!(
+        (with - 0.101).abs() < 0.002,
+        "a millivolt of offset times 101 is 101 mV; got {with:.4}"
+    );
+
+    // A perfectly matched part sits where an ideal one always did, so the offset
+    // is the only thing being measured here.
+    assert!(gain_of(0.0).abs() < 1e-6, "with no offset it should sit at zero");
+}
+
+#[test]
+fn an_op_amp_drives_a_load_through_its_output_resistance() {
+    // Open loop and hard against a rail, so nothing is correcting for it: what
+    // reaches the load is a divider between the part's output resistance and
+    // whatever is hanging off it. Closing a loop hides this at low frequencies
+    // and stops hiding it as the loop gain falls, which is the honest reason an
+    // op-amp's output impedance is on its datasheet.
+    let reached = |load: f64| {
+        let mut c = Circuit::new();
+        let plus = c.node("plus");
+        let out = c.node("out");
+        c.add(Box::new(VoltageSource::dc("V1", plus, Circuit::GROUND, 1.0)));
+        c.add(Box::new(Resistor::new("RL", out, Circuit::GROUND, load)));
+        c.add(Box::new(OpAmp::new("U1", out, plus, Circuit::GROUND)));
+        let op = Simulator::default().operating_point(&mut c).unwrap();
+        op.solution[op.unknown_names.iter().position(|n| n == "v(out)").unwrap()]
+    };
+
+    // A volt in, open loop: the gain node is pinned at the positive rail.
+    let light = reached(1e6);
+    assert!((light - 15.0).abs() < 0.05, "unloaded it should reach the rail, got {light:.3}");
+
+    // 75 ohms out into 75 ohms of load is half of it.
+    let heavy = reached(75.0);
+    assert!((heavy - 7.5).abs() < 0.2, "into an equal load, expected about half; got {heavy:.3}");
 }

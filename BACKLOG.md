@@ -23,7 +23,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | MOSFET | Gate capacitances are constant, not the bias-dependent Meyer model | Right for a datasheet's Ciss/Crss/Coss; a gate charge curve will not have its plateau in quite the right place |
 | Diode | No series resistance (`RS`) | Forward drop at high current is optimistic |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
-| Op-amp | Single-pole-free: infinite bandwidth, no slew limit, no input offset | An op-amp circuit will look better than the real one |
+| Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
 | Digital | No setup/hold checking, no X-propagation through timing | A metastable design simulates as if it were fine |
 | LED | Reverse breakdown not modelled | A real LED dies a few volts backwards; here it simply blocks |
@@ -91,8 +91,6 @@ because each step is what makes the next one worth having:
       makes `CGS` and `CGD` follow the operating region instead of sitting still.
       What a gate charge curve needs; the constant values are already enough for
       Miller and for a switching time.
-- [ ] **Op-amp with a finite gain-bandwidth product.** The current ideal model
-      makes unstable circuits look stable, which is actively misleading.
 - [ ] **Convergence diagnostics** — when a solve fails, say *which node* and *which
       device* stopped converging, not just that it did.
 
@@ -238,8 +236,12 @@ Kept short — it is here to show the direction, not to be a changelog.
 - Moving a part keeps its connections whether or not they were drawn: two pins
   resting on each other are joined by a wire as a drag pulls them apart, so the
   same picture behaves the same way regardless of how it was built.
+- The op-amp is a macromodel rather than an ideal: gain-bandwidth product, slew
+  rate, output resistance, input offset and input bias current, all falling out
+  of a transconductance into a compensated gain node. Every op-amp circuit here
+  used to look better than the real one.
 - A `.subckt` pasted from a vendor's file becomes a part you can place, flattened
-  into the circuit it stands for when the drawing compiles � so an op-amp can be
+  into the circuit it stands for when the drawing compiles — so an op-amp can be
   the one you are going to buy, with a bandwidth of its own, rather than an ideal.
 - A part can be a `.model` card pasted from the manufacturer instead of a row of
   numbers transcribed by hand, kept as the text it arrived as so it survives a

@@ -338,7 +338,12 @@ export function compileSchematic(schematic: Schematic): CompileResult {
 					input_minus: analogOf(instance, 'minus'),
 					gain: num(instance, 'gain', 1e5),
 					v_max: num(instance, 'v_max', 15),
-					v_min: num(instance, 'v_min', -15)
+					v_min: num(instance, 'v_min', -15),
+					gbw: num(instance, 'gbw', 1e6),
+					slew: num(instance, 'slew', 0.5e6),
+					r_out: num(instance, 'r_out', 75),
+					v_os: num(instance, 'v_os', 1e-3),
+					i_bias: num(instance, 'i_bias', 80e-9)
 				});
 				break;
 			case 'and':

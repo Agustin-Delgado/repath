@@ -624,7 +624,7 @@ export const EXAMPLES: Example[] = [
 		id: 'cmos-inverter',
 		name: 'CMOS inverter',
 		description:
-			'One MOSFET of each kind, gates tied together. Whichever way the input goes one device is on and the other is off, so the output reaches both rails and neither transistor passes any current once it has settled.',
+			'One MOSFET of each kind, gates tied together. Whichever way the input goes one device is on and the other is off, so the output reaches both rails and neither transistor passes any current once it has settled. Watch the spike on each edge: the gate is coupled to the drain through its own capacitance, and with nothing loading the output that charge pushes it past the supply until the body diodes catch it.',
 		stopTime: 4e-4,
 		build: () =>
 			build(
