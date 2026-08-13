@@ -656,6 +656,119 @@ fn nand_gate_truth_table_holds_over_time() {
     assert!(saw_both.0 && saw_both.1, "the output never exercised both levels");
 }
 
+/// Three clocks and a three-input NAND, in the JSON the editor emits for a gate
+/// whose input count was turned up. Written the way the compiler writes it
+/// rather than through the builder, because the thing being tested is the
+/// contract between the two.
+const WIDE_NAND: &str = r#"{"components":[],"bridges":[],"devices":[
+{"type":"clock","name":"CLK1","output":"a","frequency":1000000,"duty":0.5},
+{"type":"clock","name":"CLK2","output":"b","frequency":500000,"duty":0.5},
+{"type":"clock","name":"CLK3","output":"c","frequency":250000,"duty":0.5},
+{"type":"gate","name":"U1","kind":"nand","inputs":["a","b","c"],"output":"y","delay":1e-9},
+{"type":"gate","name":"U2","kind":"xnor","inputs":["a","b"],"output":"z","delay":1e-9}]}"#;
+
+#[test]
+fn a_three_input_gate_decides_in_one_delay_rather_than_two() {
+    // The reason input count is a property of the gate and not something you
+    // build out of two-input parts: a chain of two costs two propagation delays,
+    // and at any clock rate worth simulating that difference is the answer.
+    let netlist: Netlist =
+        serde_json::from_str(WIDE_NAND).expect("the editor's netlist should parse");
+    let mut c = netlist.compile().expect("and should compile");
+
+    let mut cfg = TransientConfig::new(8e-6);
+    cfg.max_step = 50e-9;
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+
+    let idx = |name: &str| result.net_names.iter().position(|n| n == name).unwrap();
+    let level_at = |net: usize, t: f64| {
+        result.digital[net]
+            .iter()
+            .rev()
+            .find(|(when, _)| *when <= t)
+            .map(|(_, s)| *s)
+            .unwrap_or(Logic::Unknown)
+    };
+
+    let (a, b, cc, y, z) = (idx("a"), idx("b"), idx("c"), idx("y"), idx("z"));
+    let mut seen = (false, false);
+    for k in 1..78 {
+        // Off the clock edges, which land on multiples of 500 ns.
+        let t = 50e-9 + k as f64 * 100e-9;
+        let (va, vb, vc) = (level_at(a, t), level_at(b, t), level_at(cc, t));
+        assert_eq!(
+            level_at(y, t),
+            va.and(vb).and(vc).invert(),
+            "at t = {t:.2e}: nand({va:?}, {vb:?}, {vc:?})"
+        );
+        assert_eq!(level_at(z, t), va.xor(vb).invert(), "at t = {t:.2e}: xnor({va:?}, {vb:?})");
+        match level_at(y, t) {
+            Logic::High => seen.0 = true,
+            Logic::Low => seen.1 = true,
+            _ => {}
+        }
+    }
+    assert!(seen.0 && seen.1, "the three-input output never exercised both levels");
+
+    // And it is one delay, not two. Every transition on the output has to land a
+    // nanosecond after an input moved — a chain of two-input gates would put the
+    // slow ones two nanoseconds out and this would not notice the difference in
+    // the truth table alone.
+    let edges: Vec<f64> =
+        [a, b, cc].iter().flat_map(|n| result.digital[*n].iter().map(|(t, _)| *t)).collect();
+    for (t, _) in result.digital[y].iter().filter(|(t, _)| *t > 0.0) {
+        let closest = edges.iter().map(|e| (t - e).abs()).fold(f64::INFINITY, f64::min);
+        assert!(
+            (closest - 1e-9).abs() < 1e-12,
+            "an output edge at {t:.4e} sat {closest:.2e} after its cause"
+        );
+    }
+}
+
+/// Two tri-state buffers sharing one wire, which is the only reason the part
+/// exists. `ea` and `eb` are driven by clocks that are never both high.
+const SHARED_BUS: &str = r#"{"components":[],"bridges":[],"devices":[
+{"type":"clock","name":"CLK1","output":"ea","frequency":250000,"duty":0.5},
+{"type":"gate","name":"U3","kind":"not","inputs":["ea"],"output":"eb","delay":1e-9},
+{"type":"clock","name":"CLK2","output":"da","frequency":1000000,"duty":0.5},
+{"type":"gate","name":"U4","kind":"not","inputs":["da"],"output":"db","delay":1e-9},
+{"type":"tri_state","name":"U1","input":"da","enable":"ea","output":"bus","delay":1e-9},
+{"type":"tri_state","name":"U2","input":"db","enable":"eb","output":"bus","delay":1e-9}]}"#;
+
+#[test]
+fn two_tri_states_take_turns_on_one_wire() {
+    let netlist: Netlist =
+        serde_json::from_str(SHARED_BUS).expect("the editor's netlist should parse");
+    let mut c = netlist.compile().expect("and should compile");
+
+    let mut cfg = TransientConfig::new(8e-6);
+    cfg.max_step = 50e-9;
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+
+    let idx = |name: &str| result.net_names.iter().position(|n| n == name).unwrap();
+    let level_at = |net: usize, t: f64| {
+        result.digital[net]
+            .iter()
+            .rev()
+            .find(|(when, _)| *when <= t)
+            .map(|(_, s)| *s)
+            .unwrap_or(Logic::Unknown)
+    };
+
+    let (ea, da, db, bus) = (idx("ea"), idx("da"), idx("db"), idx("bus"));
+    let mut drove = (false, false);
+    for k in 1..78 {
+        let t = 50e-9 + k as f64 * 100e-9;
+        // Whichever half of the cycle it is, exactly one buffer is enabled, so the
+        // wire carries that one's input and the other contributes nothing at all.
+        let enabled = level_at(ea, t);
+        let expected = if enabled == Logic::High { level_at(da, t) } else { level_at(db, t) };
+        assert_eq!(level_at(bus, t), expected, "at t = {t:.2e} with ea {enabled:?}");
+        if enabled == Logic::High { drove.0 = true } else { drove.1 = true }
+    }
+    assert!(drove.0 && drove.1, "only one of the two buffers ever had the wire");
+}
+
 // ---------------------------------------------------------------------------
 // Mixed signal
 // ---------------------------------------------------------------------------

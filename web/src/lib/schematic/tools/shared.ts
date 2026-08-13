@@ -4,7 +4,7 @@
 
 import { distance, type Painter, type SnapTarget, type ToolContext, type Vec2 } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
-import { definitionOf, pinPosition, pointKey, wireSegments, wireStart } from '../model';
+import { definitionFor, pinPosition, pointKey, wireSegments, wireStart } from '../model';
 import type { SchematicItem } from '../scene';
 import { instancePins } from '../scene';
 
@@ -68,7 +68,7 @@ export function constrainToAxis(from: Vec2, to: Vec2): Vec2 {
  */
 export function connectsAt(at: Vec2): boolean {
 	for (const instance of app.schematic.instances) {
-		for (const pin of definitionOf(instance.kind).pins) {
+		for (const pin of definitionFor(instance).pins) {
 			const p = pinPosition(instance, pin);
 			if (p.x === at.x && p.y === at.y) return true;
 		}

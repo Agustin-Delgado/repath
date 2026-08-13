@@ -11,7 +11,7 @@
  * where the leads drawn here end.
  */
 
-import { definitionOf, SUBCIRCUIT_PREFIX } from './model';
+import { definitionOf, gateInputCount, gatePins, gateReach, SUBCIRCUIT_PREFIX } from './model';
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
@@ -34,6 +34,9 @@ export interface SymbolGeometry {
 
 const path = (d: string, fill = false): Shape => ({ kind: 'path', d, fill });
 
+/** The gates drawn from their input count rather than from a fixed shape. */
+const GATES = new Set(['and', 'nand', 'or', 'nor', 'xor', 'xnor']);
+
 /** Lead length on a generated block, matching what the catalog places its pins at. */
 const LEAD = 16;
 
@@ -44,6 +47,13 @@ export function symbolVariant(kind: string, params: Record<string, unknown> = {}
 			return `diode:${String(params.model ?? 'silicon')}`;
 		case 'vsource':
 			return `vsource:${String(params.waveform ?? 'dc')}`;
+		case 'and':
+		case 'nand':
+		case 'or':
+		case 'nor':
+		case 'xor':
+		case 'xnor':
+			return `${kind}:${gateInputCount(params as Record<string, number | string>)}`;
 		default:
 			// An imported block's shape is its port list, so the port list *is* the
 			// cache key. Re-importing a definition under the same handle then misses
@@ -171,46 +181,6 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
-	and: {
-		shapes: [path('M-30 -10 H-18 M-30 10 H-18 M20 0 H30'), path('M-18 -18 H0 A18 18 0 0 1 0 18 H-18 Z')],
-		labels: []
-	},
-
-	nand: {
-		shapes: [
-			path('M-30 -10 H-18 M-30 10 H-18 M26 0 H30'),
-			path('M-18 -18 H0 A18 18 0 0 1 0 18 H-18 Z'),
-			{ kind: 'circle', cx: 23, cy: 0, r: 3.5 }
-		],
-		labels: []
-	},
-
-	or: {
-		shapes: [
-			path('M-30 -10 H-16 M-30 10 H-16 M20 0 H30'),
-			path('M-20 -18 Q-6 0 -20 18 Q6 18 20 0 Q6 -18 -20 -18 Z')
-		],
-		labels: []
-	},
-
-	nor: {
-		shapes: [
-			path('M-30 -10 H-16 M-30 10 H-16 M26 0 H30'),
-			path('M-20 -18 Q-6 0 -20 18 Q6 18 20 0 Q6 -18 -20 -18 Z'),
-			{ kind: 'circle', cx: 23, cy: 0, r: 3.5 }
-		],
-		labels: []
-	},
-
-	xor: {
-		shapes: [
-			path('M-30 -10 H-16 M-30 10 H-16 M20 0 H30'),
-			path('M-20 -18 Q-6 0 -20 18 Q6 18 20 0 Q6 -18 -20 -18 Z'),
-			path('M-26 -18 Q-12 0 -26 18')
-		],
-		labels: []
-	},
-
 	not: {
 		shapes: [
 			path('M-30 0 H-14 M22 0 H30'),
@@ -218,6 +188,22 @@ const STATIC: Record<string, SymbolGeometry> = {
 			{ kind: 'circle', cx: 18, cy: 0, r: 3.5 }
 		],
 		labels: []
+	},
+
+	buffer: {
+		shapes: [path('M-30 0 H-14 M14 0 H30'), path('M-14 -16 L14 0 L-14 16 Z')],
+		labels: []
+	},
+
+	tristate: {
+		shapes: [
+			path('M-30 0 H-14 M14 0 H30'),
+			path('M-14 -16 L14 0 L-14 16 Z'),
+			// The enable comes down onto the top edge, where it is read as a control
+			// rather than as another thing being buffered.
+			path('M0 -30 V-8')
+		],
+		labels: [{ x: 4, y: -18, text: 'EN', anchor: 'start', size: 8 }]
 	},
 
 	dff: {
@@ -243,6 +229,55 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	}
 };
+
+/**
+ * A gate, drawn for the number of inputs it actually has.
+ *
+ * The body stretches vertically and keeps its width, which is what a real
+ * schematic does: a three-input AND is the same D, taller. Scaling it in both
+ * directions instead would push the output pin off the grid and leave the wide
+ * gates twice the size of the narrow ones sitting next to them.
+ */
+function gate(kind: string, count: number): SymbolGeometry {
+	const half = gateReach(count);
+	const rounded = kind === 'and' || kind === 'nand';
+	const inverted = kind === 'nand' || kind === 'nor' || kind === 'xnor';
+	// Where the body ends on the right, which is where the bubble and the output
+	// lead have to start from.
+	const nose = rounded ? 18 : 20;
+
+	const body = rounded
+		? // A rectangle closed off by half an ellipse: tall gates keep the same
+			// nose because the radius across is fixed and only the radius down grows.
+			path(`M-18 ${-half} H0 A18 ${half} 0 0 1 0 ${half} H-18 Z`)
+		: path(
+				`M-20 ${-half} Q-6 0 -20 ${half} Q6 ${half} 20 0 Q6 ${-half} -20 ${-half} Z`
+			);
+
+	const shapes: Shape[] = [body];
+	if (kind === 'xor' || kind === 'xnor') {
+		// The second back, set off from the first. It is the whole difference
+		// between an OR and an exclusive one.
+		shapes.push(path(`M-26 ${-half} Q-12 0 -26 ${half}`));
+	}
+
+	// Leads to where the body is, not to where the widest part of it is: on a
+	// curved back the outer inputs meet it further left than the middle ones.
+	const stop = rounded ? -18 : -16;
+	for (const pin of gatePins(count)) {
+		if (pin.name === 'y') continue;
+		shapes.push(path(`M-30 ${pin.y} H${stop}`));
+	}
+
+	if (inverted) {
+		shapes.push({ kind: 'circle', cx: nose + 3.5, cy: 0, r: 3.5 });
+		shapes.push(path(`M${nose + 7} 0 H30`));
+	} else {
+		shapes.push(path(`M${nose} 0 H30`));
+	}
+
+	return { shapes, labels: [] };
+}
 
 function diode(variant: string): SymbolGeometry {
 	const shapes: Shape[] = [path('M-30 0 H-8'), path('M-8 -9 L-8 9 L8 0 Z', true)];
@@ -281,6 +316,9 @@ export function symbolGeometry(
 	let geometry: SymbolGeometry;
 	if (kind === 'diode') geometry = diode(String(params.model ?? 'silicon'));
 	else if (kind === 'vsource') geometry = voltageSource(String(params.waveform ?? 'dc'));
+	else if (GATES.has(kind)) {
+		geometry = gate(kind, gateInputCount(params as Record<string, number | string>));
+	}
 	else if (kind.startsWith(SUBCIRCUIT_PREFIX)) geometry = block(kind);
 	else geometry = STATIC[kind] ?? EMPTY;
 

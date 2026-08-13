@@ -14,6 +14,7 @@ import { rectExpand, type Painter, type Rect, type Vec2 } from '$lib/canvas';
 import { formatWithUnit } from '$lib/units';
 import { ledInk, ledRating } from './led';
 import {
+	definitionFor,
 	definitionOf,
 	rotatePoint,
 	wireStart,
@@ -341,7 +342,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 	const showLabels = scale > 0.35;
 
 	for (const instance of view.schematic.instances) {
-		const def = definitionOf(instance.kind);
+		const def = definitionFor(instance);
 		if (
 			instance.x + def.box.x - 40 > region.x + region.w ||
 			instance.x + def.box.x + def.box.w + 40 < region.x ||

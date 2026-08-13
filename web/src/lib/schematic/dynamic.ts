@@ -19,6 +19,7 @@ import type { FlowContext, FlowFrame } from './flow';
 import { brightness, ledColour, ledRating, type Burnout } from './led';
 import { formatWithUnit } from '$lib/units';
 import {
+	definitionFor,
 	definitionOf,
 	pointKey,
 	rotatePoint,
@@ -208,7 +209,7 @@ function drawReadings(
 	// overlapping the drawing and, on a source, sitting in the middle of the
 	// circle. A point out on the wiring says the same thing and can be read.
 	const bodies = view.schematic.instances.map((instance) => {
-		const box = definitionOf(instance.kind).box;
+		const box = definitionFor(instance).box;
 		const half = rotatePoint(box.w / 2, box.h / 2, instance.rotation);
 		return {
 			x: instance.x - Math.abs(half.x),
@@ -260,7 +261,7 @@ function drawReadings(
 		// Those two already sit on the side the leads leave clear, and that is the
 		// only side with room: dropping the reading anywhere else lands it on a wire
 		// for one orientation or the other.
-		const def = definitionOf(instance.kind);
+		const def = definitionFor(instance);
 		const reach = drawnReach(def, instance.rotation);
 		const sideways = leadAxis(def, instance.rotation) === 'x';
 		const clear = (sideways ? reach.y : reach.x) + LABEL_GAP;

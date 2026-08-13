@@ -28,6 +28,8 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Monte Carlo | Uniform draws, no correlation between parts, no worst-case corner search | Two halves of a matched pair drift independently here, and a random sweep can miss a corner a deliberate search would find |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
 | Digital | No setup/hold checking, no X-propagation through timing | A metastable design simulates as if it were fine |
+| Digital | One logic family for the whole drawing, and no fan-out limit | Two families on one board is a real design, and here every input is free to drive |
+| Digital | Gate delay is one number, the same for a rising and a falling edge | A real part is slower one way than the other, and slower again as it warms |
 | LED | Reverse breakdown not modelled | A real LED dies a few volts backwards; here it simply blocks |
 | LED | Failure is thermal-free: one dose rule, no junction temperature | A part in still air and one on a heatsink fail at the same instant |
 | Animation | BJT base current approximated as zero when distributing wire current | Base-net current dots are missing rather than wrong |
@@ -140,7 +142,8 @@ because each step is what makes the next one worth having:
 - [ ] Relay, pushbutton, SPDT switch.
 - [ ] Crystal / resonator.
 - [ ] Voltage-controlled oscillator, comparator with hysteresis.
-- [ ] Counters, shift registers, decoders, multiplexers, RAM/ROM.
+- [ ] Counters, shift registers, decoders, multiplexers, RAM/ROM. The gates,
+      the flip-flop and the tri-state buffer they are built from are in.
 - [ ] 7-segment display and bar graph, built on the LED that already lights.
 - [ ] Ideal transmission line.
 

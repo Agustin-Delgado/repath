@@ -10,7 +10,8 @@
  */
 
 import { ledDiodeModel, ledRating } from './led';
-import { definitionOf, subcircuitOf, type Instance, type Schematic } from './model';
+import { DEFAULT_FAMILY, logicFamily } from './logic';
+import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
 import { buildConnectivity, pinKey, type Connectivity, type Net } from './nets';
 import {
 	bjtFromCard,
@@ -170,7 +171,8 @@ function drawn(instance: Instance, key: string, nominal: number, seed: number): 
 export function compileSchematic(
 	schematic: Schematic,
 	temperature = 300.15,
-	seed = 0
+	seed = 0,
+	family = DEFAULT_FAMILY
 ): CompileResult {
 	const connectivity = buildConnectivity(schematic);
 	const errors: string[] = [];
@@ -197,7 +199,7 @@ export function compileSchematic(
 	}
 
 	for (const instance of schematic.instances) {
-		const def = definitionOf(instance.kind);
+		const def = definitionFor(instance);
 		for (const pin of def.pins) {
 			const index = connectivity.netOfPin.get(pinKey(instance.id, pin.name));
 			const net = index === undefined ? undefined : connectivity.nets[index];
@@ -407,21 +409,38 @@ export function compileSchematic(
 			case 'or':
 			case 'nor':
 			case 'xor':
+			case 'xnor':
 				devices.push({
 					type: 'gate',
 					name,
 					kind: instance.kind,
-					inputs: [digitalOf(instance, 'a'), digitalOf(instance, 'b')],
+					// Read off the pins the part actually grew rather than assumed to
+					// be two, so a three-input gate is one gate with a three-way
+					// decision in it and not a chain that costs an extra delay.
+					inputs: definitionFor(instance)
+						.pins.filter((pin) => pin.direction === 'in')
+						.map((pin) => digitalOf(instance, pin.name)),
 					output: digitalOf(instance, 'y'),
 					delay: num(instance, 'delay', 1e-9)
 				});
 				break;
 			case 'not':
+			case 'buffer':
 				devices.push({
 					type: 'gate',
 					name,
-					kind: 'not',
+					kind: instance.kind,
 					inputs: [digitalOf(instance, 'a')],
+					output: digitalOf(instance, 'y'),
+					delay: num(instance, 'delay', 1e-9)
+				});
+				break;
+			case 'tristate':
+				devices.push({
+					type: 'tri_state',
+					name,
+					input: digitalOf(instance, 'a'),
+					enable: digitalOf(instance, 'en'),
 					output: digitalOf(instance, 'y'),
 					delay: num(instance, 'delay', 1e-9)
 				});
@@ -510,7 +529,9 @@ export function compileSchematic(
 	}
 
 	return {
-		netlist: errors.length ? null : { components, devices, bridges, temperature },
+		netlist: errors.length
+			? null
+			: { components, devices, bridges, temperature, logic_family: logicFamily(family) },
 		names,
 		errors,
 		warnings,

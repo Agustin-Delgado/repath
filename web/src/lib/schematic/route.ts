@@ -16,7 +16,7 @@
  */
 
 import { snapTo, type Vec2 } from '$lib/canvas';
-import { definitionOf, rotatePoint, wireSegments, type Point, type Schematic } from './model';
+import { definitionFor, rotatePoint, wireSegments, type Point, type Schematic } from './model';
 
 export interface RouteOptions {
 	grid: number;
@@ -206,7 +206,7 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 	};
 
 	for (const instance of schematic.instances) {
-		for (const pin of definitionOf(instance.kind).pins) {
+		for (const pin of definitionFor(instance).pins) {
 			const offset = rotatePoint(pin.x, pin.y, instance.rotation);
 			const lead = leadDirection(pin);
 			const facing = rotatePoint(lead.x, lead.y, instance.rotation);
@@ -222,7 +222,7 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 
 	for (const instance of schematic.instances) {
 		if (options.ignoreInstances?.has(instance.id)) continue;
-		const def = definitionOf(instance.kind);
+		const def = definitionFor(instance);
 
 		const corners = [
 			{ x: def.box.x, y: def.box.y },

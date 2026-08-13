@@ -360,6 +360,65 @@ export const EXAMPLES: Example[] = [
 	},
 
 	{
+		id: 'full-adder',
+		name: 'Full adder',
+		description:
+			'The circuit inside every processor, three gates wide. Sum is the parity of the three inputs, so it is one XOR with three inputs rather than two in a row; the carry is the majority of them. Three clocks count through all eight combinations.',
+		stopTime: 8e-6,
+		build: () =>
+			build(
+				[
+					// A, B and Cin, each half the rate of the one above: between them they
+					// count through every combination in one 4 µs cycle.
+					{ kind: 'clock', name: 'CLK1', x: 100, y: 100, params: { frequency: 1e6, duty: 0.5 } },
+					{ kind: 'clock', name: 'CLK2', x: 100, y: 180, params: { frequency: 5e5, duty: 0.5 } },
+					{ kind: 'clock', name: 'CLK3', x: 100, y: 260, params: { frequency: 2.5e5, duty: 0.5 } },
+					// Sum. Parity of three, which is one decision and one delay.
+					{ kind: 'xor', name: 'U1', x: 330, y: 120, params: { inputs: 3 } },
+					// Carry out: any two of the three.
+					{ kind: 'and', name: 'U2', x: 330, y: 220 },
+					{ kind: 'and', name: 'U3', x: 330, y: 290 },
+					{ kind: 'and', name: 'U4', x: 330, y: 360 },
+					{ kind: 'or', name: 'U5', x: 470, y: 290, params: { inputs: 3 } }
+				],
+				[
+					// Three vertical rails down the left, tapped where each gate needs
+					// them. Crossing one costs nothing: two wires only join where one of
+					// them has a corner on the other.
+					[130, 100, 170, 100],
+					[170, 100, 170, 420],
+					[130, 180, 190, 180],
+					[190, 120, 190, 420],
+					[130, 260, 210, 260],
+					[210, 140, 210, 420],
+					// A
+					[170, 100, 300, 100],
+					[170, 210, 300, 210],
+					[170, 350, 300, 350],
+					// B
+					[190, 120, 300, 120],
+					[190, 230, 300, 230],
+					[190, 280, 300, 280],
+					// Cin
+					[210, 140, 300, 140],
+					[210, 300, 300, 300],
+					[210, 370, 300, 370],
+					// The three partial carries into the OR.
+					[360, 220, 400, 220],
+					[400, 220, 400, 270],
+					[400, 270, 440, 270],
+					[360, 290, 440, 290],
+					[360, 360, 410, 360],
+					[410, 310, 410, 360],
+					[410, 310, 440, 310],
+					// Sum and carry, brought out somewhere easy to look at.
+					[360, 120, 440, 120],
+					[500, 290, 560, 290]
+				]
+			)
+	},
+
+	{
 		id: 'voltage-divider',
 		name: 'Voltage divider',
 		description:

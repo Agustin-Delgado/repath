@@ -2,7 +2,7 @@
 	import { app } from '$lib/state.svelte';
 	import { ledRating } from '$lib/schematic/led';
 	import { pinKey } from '$lib/schematic/nets';
-	import { definitionOf, isParamVisible } from '$lib/schematic/model';
+	import { definitionFor, isParamVisible } from '$lib/schematic/model';
 	import { bjtFromCard, cardFor, diodeFromCard, mosfetFromCard, parseModelCards } from '$lib/spice';
 	import {
 		formatWithUnit,
@@ -15,7 +15,7 @@
 	} from '$lib/units';
 
 	const instance = $derived(app.selectedInstances.length === 1 ? app.selectedInstances[0] : null);
-	const def = $derived(instance ? definitionOf(instance.kind) : null);
+	const def = $derived(instance ? definitionFor(instance) : null);
 
 	/** Whether every pin of the selected part lands on the same net. */
 	const shorted = $derived.by(() => {

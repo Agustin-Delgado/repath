@@ -12,9 +12,11 @@ import { sampleIndexAt } from './schematic/flow';
 import { Trace, wireRef, type Step } from './trace';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
+import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import {
 	GRID,
 	defaultParams,
+	definitionFor,
 	definitionOf,
 	DIODE_PRESETS,
 	migrateInstance,
@@ -249,6 +251,14 @@ class AppState {
 	 */
 	temperature = $state(27);
 	/**
+	 * Which logic family the digital parts belong to.
+	 *
+	 * Only ever visible where the two domains meet: it decides what voltage a
+	 * gate puts out and what an input calls a one. One choice for the drawing,
+	 * because a board is normally built out of one family.
+	 */
+	logicFamily = $state(DEFAULT_FAMILY);
+	/**
 	 * Which sample of the circuit is being simulated.
 	 *
 	 * Zero means every part is exactly its marking, which is the circuit nobody
@@ -456,7 +466,7 @@ class AppState {
 	 */
 	private gesture: Step | null = null;
 
-	compiled = $derived(compileSchematic(this.schematic, this.temperature + 273.15, this.sample));
+	compiled = $derived(compileSchematic(this.schematic, this.temperature + 273.15, this.sample, this.logicFamily));
 
 	/** Probes placed on the drawing, in the order they were put there. */
 	probeInstances = $derived(this.schematic.instances.filter((i) => i.kind === 'probe'));
@@ -592,7 +602,7 @@ class AppState {
 	 * end is exactly what a series connection looks like.
 	 */
 	private makeRoomFor(instance: Instance): void {
-		const pins = definitionOf(instance.kind).pins.map((pin) => pinPosition(instance, pin));
+		const pins = definitionFor(instance).pins.map((pin) => pinPosition(instance, pin));
 		this.schematic.wires = openForPins(this.schematic, pins, freshId);
 	}
 
@@ -695,7 +705,7 @@ class AppState {
 		const gaps: Array<[Point, Point]> = [];
 		for (const instance of this.schematic.instances) {
 			if (!doomed.has(instance.id)) continue;
-			const pins = definitionOf(instance.kind).pins;
+			const pins = definitionFor(instance).pins;
 			if (pins.length !== 2) continue;
 			const [a, b] = pins.map((pin) => pinPosition(instance, pin));
 			if (wireEnds.has(pointKey(a.x, a.y)) && wireEnds.has(pointKey(b.x, b.y))) gaps.push([a, b]);
@@ -758,7 +768,7 @@ class AppState {
 		const stationaryPins = new Set<string>();
 		for (const instance of this.schematic.instances) {
 			if (chosen.has(instance.id)) continue;
-			for (const pin of definitionOf(instance.kind).pins) {
+			for (const pin of definitionFor(instance).pins) {
 				const at = pinPosition(instance, pin);
 				stationaryPins.add(pointKey(at.x, at.y));
 			}
@@ -767,12 +777,12 @@ class AppState {
 		// Where each pin was, and where it is about to be.
 		const moved = new Map<string, Point>();
 		for (const instance of rotating) {
-			const before = definitionOf(instance.kind).pins.map((pin) => pinPosition(instance, pin));
+			const before = definitionFor(instance).pins.map((pin) => pinPosition(instance, pin));
 			const at = orbit({ x: instance.x, y: instance.y });
 			instance.x = at.x;
 			instance.y = at.y;
 			instance.rotation = ((instance.rotation + 90) % 360) as Rotation;
-			const after = definitionOf(instance.kind).pins.map((pin) => pinPosition(instance, pin));
+			const after = definitionFor(instance).pins.map((pin) => pinPosition(instance, pin));
 			before.forEach((from, index) => {
 				const key = pointKey(from.x, from.y);
 				// A point also held by something stationary keeps its wire.
@@ -828,7 +838,7 @@ class AppState {
 
 		for (const instance of this.schematic.instances) {
 			const moving = chosen.has(instance.id);
-			for (const pin of definitionOf(instance.kind).pins) {
+			for (const pin of definitionFor(instance).pins) {
 				const at = pinPosition(instance, pin);
 				(moving ? movingPins : stationaryPins).add(pointKey(at.x, at.y));
 			}
@@ -1150,7 +1160,7 @@ class AppState {
 		for (const instance of this.schematic.instances) {
 			const from = origin.instances.get(instance.id);
 			if (!from) continue;
-			for (const pin of definitionOf(instance.kind).pins) {
+			for (const pin of definitionFor(instance).pins) {
 				const at = rotatePoint(pin.x, pin.y, instance.rotation);
 				out.push({ x: from.x + dx + at.x, y: from.y + dy + at.y });
 			}
@@ -1173,7 +1183,7 @@ class AppState {
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return null;
 
-		const param = definitionOf(instance.kind).params.find((p) => p.key === key);
+		const param = definitionFor(instance).params.find((p) => p.key === key);
 		const refusal = param ? validateParam(param, value) : null;
 		if (refusal) return refusal;
 
@@ -1391,7 +1401,7 @@ class AppState {
 
 	/** Pick a few interesting nets so a freshly loaded circuit plots something. */
 	autoProbe(): void {
-		const compiled = compileSchematic(this.schematic, this.temperature + 273.15, this.sample);
+		const compiled = compileSchematic(this.schematic, this.temperature + 273.15, this.sample, this.logicFamily);
 		const chosen: string[] = [];
 		for (const net of compiled.connectivity.nets) {
 			if (chosen.length >= 4) break;
@@ -1535,6 +1545,13 @@ class AppState {
 		this.temperature = clamped;
 	}
 
+	/** Set the logic family every digital part belongs to. */
+	setLogicFamily(value: string): void {
+		if (!isLogicFamily(value) || value === this.logicFamily) return;
+		this.trace.record({ op: 'logic', family: value });
+		this.logicFamily = value;
+	}
+
 	setStopTime(seconds: number): void {
 		if (!(seconds > 0) || seconds === this.stopTime) return;
 		this.trace.record({ op: 'stop', seconds });
@@ -1607,6 +1624,10 @@ class AppState {
 					break;
 				case 'temperature':
 					this.setTemperature(step.celsius);
+					break;
+				case 'logic':
+					if (!isLogicFamily(step.family)) return stop(`no logic family called ${step.family}`);
+					this.setLogicFamily(step.family);
 					break;
 				case 'sample':
 					this.setSample(step.seed);
@@ -1720,7 +1741,7 @@ class AppState {
 		}
 
 		for (let seed = 1; seed <= this.sweepCount; seed++) {
-			const compiled = compileSchematic(this.schematic, this.temperature + 273.15, seed);
+			const compiled = compileSchematic(this.schematic, this.temperature + 273.15, seed, this.logicFamily);
 			if (!compiled.netlist) continue;
 			let run;
 			try {

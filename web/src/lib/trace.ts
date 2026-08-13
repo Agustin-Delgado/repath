@@ -70,6 +70,7 @@ export type Step =
 	| { op: 'redo' }
 	| { op: 'stop'; seconds: number }
 	| { op: 'temperature'; celsius: number }
+	| { op: 'logic'; family: string }
 	| { op: 'sample'; seed: number }
 	| { op: 'sweep'; count: number }
 	| { op: 'analysis'; mode: string }
@@ -167,6 +168,8 @@ function format(step: Step): string {
 			return `stop ${step.seconds}`;
 		case 'temperature':
 			return `temperature ${step.celsius}`;
+		case 'logic':
+			return `logic ${step.family}`;
 		case 'sample':
 			return `sample ${step.seed}`;
 		case 'sweep':
@@ -260,6 +263,8 @@ function read(op: string, rest: string[]): Step {
 			return { op, seconds: number(rest[0]) };
 		case 'temperature':
 			return { op, celsius: number(rest[0]) };
+		case 'logic':
+			return { op, family: rest[0] };
 		case 'sample':
 			return { op, seed: number(rest[0]) };
 		case 'sweep':

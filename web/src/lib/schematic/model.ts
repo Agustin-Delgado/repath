@@ -399,12 +399,63 @@ const DELAY_PARAM: ParamDef = {
 	min: 0
 };
 
-/** Two inputs on the left, one output on the right — the shape every gate shares. */
-const gatePins = (): PinDef[] => [
-	digitalIn('a', -30, -10),
-	digitalIn('b', -30, 10),
-	digitalOut('y', 30, 0)
-];
+/**
+ * The gates whose input count is yours to choose.
+ *
+ * A two-input AND is a special case, not the device. Real logic comes in twos,
+ * threes and fours on the same part number — a 7410 is three three-input NANDs
+ * — and building one out of a chain of two-input gates is a different circuit:
+ * it costs an extra propagation delay per level, which is exactly the thing a
+ * simulation is meant to show you.
+ *
+ * NOT and buffer are left out on purpose. An inverter with two inputs is not an
+ * inverter.
+ */
+const WIDE_GATES = new Set(['and', 'nand', 'or', 'nor', 'xor', 'xnor']);
+
+export const MAX_GATE_INPUTS = 4;
+
+/** Vertical spacing between the inputs down the side of a gate. */
+const GATE_PITCH = 20;
+
+const INPUT_NAMES = ['a', 'b', 'c', 'd'];
+
+const INPUTS_PARAM: ParamDef = {
+	key: 'inputs',
+	label: 'Inputs',
+	unit: '',
+	default: 2,
+	min: 2,
+	max: MAX_GATE_INPUTS,
+	plain: true,
+	step: 1,
+	description: 'The symbol grows a pin for each one. Wiring only some of them leaves the rest unknown, which propagates.'
+};
+
+/** How many inputs a gate's parameters ask for, whatever they say. */
+export function gateInputCount(params: Record<string, number | string> = {}): number {
+	const raw = Number(params.inputs);
+	if (!Number.isFinite(raw)) return 2;
+	return Math.min(Math.max(Math.round(raw), 2), MAX_GATE_INPUTS);
+}
+
+/** Half the height of a gate body, big enough for the pins it has to carry. */
+export function gateReach(count: number): number {
+	return Math.max(18, ((count - 1) * GATE_PITCH) / 2 + 8);
+}
+
+/** Inputs down the left, one output on the right — the shape every gate shares. */
+export function gatePins(count = 2): PinDef[] {
+	const pins = INPUT_NAMES.slice(0, count).map((name, i) =>
+		digitalIn(name, -30, (i - (count - 1) / 2) * GATE_PITCH)
+	);
+	return [...pins, digitalOut('y', 30, 0)];
+}
+
+function gateBox(count: number): { x: number; y: number; w: number; h: number } {
+	const half = gateReach(count);
+	return { x: -30, y: -half, w: 60, h: half * 2 };
+}
 
 const SOURCE_PARAMS: ParamDef[] = [
 	{
@@ -818,49 +869,49 @@ export const CATALOG: ComponentDef[] = [
 			}
 		]
 	},
+	...(['and', 'nand', 'or', 'nor', 'xor', 'xnor'] as const).map(
+		(kind): ComponentDef => ({
+			kind,
+			box: gateBox(2),
+			label: kind.toUpperCase(),
+			group: 'logic',
+			prefix: 'U',
+			pins: gatePins(2),
+			params: [INPUTS_PARAM, DELAY_PARAM]
+		})
+	),
 	{
-		kind: 'and',
-		box: { x: -30, y: -18, w: 60, h: 36 },
-		label: 'AND',
+		/**
+		 * A buffer computes nothing, which is the point of it.
+		 *
+		 * What it buys is a delay you can place deliberately, and a fresh output
+		 * driving the net instead of whatever was struggling to. On a bench that is
+		 * a fan-out problem; here it is the part you reach for when one signal has
+		 * to arrive after the one beside it.
+		 */
+		kind: 'buffer',
+		box: { x: -30, y: -16, w: 60, h: 32 },
+		label: 'Buffer',
 		group: 'logic',
 		prefix: 'U',
-		pins: gatePins(),
+		pins: [digitalIn('a', -30, 0), digitalOut('y', 30, 0)],
 		params: [DELAY_PARAM]
 	},
 	{
-		kind: 'nand',
-		box: { x: -30, y: -18, w: 60, h: 36 },
-		label: 'NAND',
+		/**
+		 * The one gate that can decline to drive its output at all.
+		 *
+		 * With the enable low it lets go of the net rather than pulling it
+		 * anywhere, which is how several outputs come to share one wire. Two of
+		 * them enabled at once is a bus contention, and the net resolves to unknown
+		 * rather than to whichever driver happened to be stamped first.
+		 */
+		kind: 'tristate',
+		box: { x: -30, y: -30, w: 60, h: 46 },
+		label: 'Tri-state',
 		group: 'logic',
 		prefix: 'U',
-		pins: gatePins(),
-		params: [DELAY_PARAM]
-	},
-	{
-		kind: 'or',
-		box: { x: -30, y: -18, w: 60, h: 36 },
-		label: 'OR',
-		group: 'logic',
-		prefix: 'U',
-		pins: gatePins(),
-		params: [DELAY_PARAM]
-	},
-	{
-		kind: 'nor',
-		box: { x: -30, y: -18, w: 60, h: 36 },
-		label: 'NOR',
-		group: 'logic',
-		prefix: 'U',
-		pins: gatePins(),
-		params: [DELAY_PARAM]
-	},
-	{
-		kind: 'xor',
-		box: { x: -30, y: -18, w: 60, h: 36 },
-		label: 'XOR',
-		group: 'logic',
-		prefix: 'U',
-		pins: gatePins(),
+		pins: [digitalIn('a', -30, 0), digitalIn('en', 0, -30), digitalOut('y', 30, 0)],
 		params: [DELAY_PARAM]
 	},
 	{
@@ -906,6 +957,31 @@ export function definitionOf(kind: string): ComponentDef {
 	const def = BY_KIND.get(kind);
 	if (!def) throw new Error(`unknown component kind: ${kind}`);
 	return def;
+}
+
+const gateShapes = new Map<string, ComponentDef>();
+
+/**
+ * What a *placed* part looks like, which is not always what its kind says.
+ *
+ * A gate's pins and the box around them depend on how many inputs it was asked
+ * for, so everything that reads geometry — routing, hit testing, connectivity,
+ * the labels — has to ask about the instance rather than about the kind. The
+ * catalog entry stays the two-input one: that is what the palette offers and
+ * what a freshly placed part is.
+ */
+export function definitionFor(instance: Instance): ComponentDef {
+	const base = definitionOf(instance.kind);
+	if (!WIDE_GATES.has(instance.kind)) return base;
+
+	const count = gateInputCount(instance.params);
+	const key = `${instance.kind}:${count}`;
+	let shaped = gateShapes.get(key);
+	if (!shaped) {
+		shaped = { ...base, pins: gatePins(count), box: gateBox(count) };
+		gateShapes.set(key, shaped);
+	}
+	return shaped;
 }
 
 // ---------------------------------------------------------------------------

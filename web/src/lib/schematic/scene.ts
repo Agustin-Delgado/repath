@@ -17,6 +17,7 @@ import {
 	type Vec2
 } from '$lib/canvas';
 import {
+	definitionFor,
 	definitionOf,
 	pinPosition,
 	rotatePoint,
@@ -40,7 +41,7 @@ const INVERSE: Record<Rotation, Rotation> = { 0: 0, 90: 270, 180: 180, 270: 90 }
 
 /** World-space bounds of a placed component, accounting for its rotation. */
 export function instanceBounds(instance: Instance): Rect {
-	const { box } = definitionOf(instance.kind);
+	const { box } = definitionFor(instance);
 	const corners: Vec2[] = [
 		{ x: box.x, y: box.y },
 		{ x: box.x + box.w, y: box.y },
@@ -63,7 +64,7 @@ export function instanceBounds(instance: Instance): Rect {
 
 /** Is `point` (world space) inside this component's own, unrotated box? */
 export function hitInstance(instance: Instance, point: Vec2, tolerance: number): boolean {
-	const { box } = definitionOf(instance.kind);
+	const { box } = definitionFor(instance);
 	// Undo the placement, so the test is against the axis-aligned local box.
 	const local = rotatePoint(point.x - instance.x, point.y - instance.y, INVERSE[instance.rotation]);
 	return (
@@ -129,7 +130,7 @@ export function buildSnapTargets(schematic: Schematic): SnapTargets {
 	const points: SnapPoint[] = [];
 
 	for (const instance of schematic.instances) {
-		for (const pin of definitionOf(instance.kind).pins) {
+		for (const pin of definitionFor(instance).pins) {
 			const at = pinPosition(instance, pin);
 			points.push({
 				x: at.x,
@@ -164,5 +165,5 @@ export function buildSnapTargets(schematic: Schematic): SnapTargets {
 
 /** Every pin of a component, in world space. Used for drawing and for tools. */
 export function instancePins(instance: Instance): Array<{ pin: PinDef; at: Vec2 }> {
-	return definitionOf(instance.kind).pins.map((pin) => ({ pin, at: pinPosition(instance, pin) }));
+	return definitionFor(instance).pins.map((pin) => ({ pin, at: pinPosition(instance, pin) }));
 }

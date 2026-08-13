@@ -11,9 +11,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { EXAMPLES } from '../examples';
 import { compileSchematic } from './netlist';
 import {
 	defaultParams,
+	definitionFor,
 	definitionOf,
 	registerSubcircuits,
 	SUBCIRCUIT_PREFIX,
@@ -361,5 +363,138 @@ describe('component tolerance', () => {
 		expect(lo).toBeLessThan(915);
 		expect(hi).toBeGreaterThan(1085);
 		expect(Math.abs(mean - 1000)).toBeLessThan(10);
+	});
+});
+
+describe('logic gates', () => {
+	/** A gate with `inputs` inputs, one clock hung on each, compiled. */
+	function gate(kind: string, inputs: number) {
+		const g = at(kind, 'U1', 300, 300);
+		g.params = { ...g.params, inputs };
+		const def = definitionFor(g);
+		// A clock's output pin sits 30 to its right, so putting one there lands it
+		// exactly on the gate's input: pins that touch are one net, no wire needed.
+		const clocks = def.pins
+			.filter((pin) => pin.direction === 'in')
+			.map((pin, i) => at('clock', `CLK${i + 1}`, 300 + pin.x - 30, 300 + pin.y));
+		const netlist = compileSchematic(drawing([g, ...clocks], [])).netlist as {
+			devices: Array<Record<string, unknown>>;
+		};
+		return netlist.devices.find((d) => d.name === 'U1')!;
+	}
+
+	it('gives the engine as many inputs as the part grew pins for', () => {
+		// One gate deciding three ways, not two gates in a row: the chain would
+		// cost a second propagation delay, which is a different circuit.
+		const three = gate('nand', 3) as { kind: string; inputs: string[] };
+		expect(three.kind).toBe('nand');
+		expect(three.inputs).toHaveLength(3);
+		expect(new Set(three.inputs).size).toBe(3);
+		expect(gate('or', 4).inputs).toHaveLength(4);
+		expect(gate('xnor', 2).inputs).toHaveLength(2);
+	});
+
+	it('refuses an input count no gate has', () => {
+		// Whatever the parameter says, the pins and the netlist have to agree —
+		// a gate with one input is an inverter and one with nine is a fantasy.
+		expect(gate('and', 1).inputs).toHaveLength(2);
+		expect(gate('and', 9).inputs).toHaveLength(4);
+	});
+
+	it('sends a tri-state as one, enable and all', () => {
+		const device = gate('tristate', 2) as Record<string, string>;
+		expect(device.type).toBe('tri_state');
+		expect(device.enable).not.toBe(device.input);
+		expect(device.output).not.toBe(device.input);
+	});
+
+	it('carries the logic family the drawing was set to', () => {
+		const netlist = (family: string) =>
+			compileSchematic(drawing([at('clock', 'CLK1', 100, 100)], []), 300.15, 0, family)
+				.netlist as { logic_family: { v_high: number; v_ih: number } };
+		expect(netlist('cmos5').logic_family.v_high).toBe(5);
+		expect(netlist('cmos3v3').logic_family.v_high).toBeCloseTo(3.3, 6);
+		// TTL never reaches its rail, and decides much lower than CMOS does. A
+		// circuit that works with one family and not the other usually fails here.
+		expect(netlist('ttl').logic_family.v_high).toBeLessThan(4);
+		expect(netlist('ttl').logic_family.v_ih).toBeLessThan(netlist('cmos5').logic_family.v_ih);
+		// An unknown name is a build that moved on, not a reason to emit nothing.
+		expect(netlist('74xx-whatever').logic_family.v_high).toBe(5);
+	});
+});
+
+describe('the full adder that ships with the app', () => {
+	/** Every device in the example, by name. */
+	const devices = () => {
+		const example = EXAMPLES.find((e) => e.id === 'full-adder')!;
+		const result = compileSchematic(example.build());
+		expect(result.errors).toEqual([]);
+		const netlist = result.netlist as { devices: Array<Record<string, unknown>> };
+		return new Map(netlist.devices.map((d) => [d.name as string, d]));
+	};
+
+	it('is wired the way a full adder is wired', () => {
+		// A drawing is right or wrong in one place: which net each pin landed on.
+		// Everything else about this example — the layout, the rails, the crossings
+		// that must not connect — only matters because of what it produces here.
+		const by = devices();
+		const out = (name: string) => by.get(name)!.output as string;
+		const ins = (name: string) => new Set(by.get(name)!.inputs as string[]);
+
+		const [a, b, c] = ['CLK1', 'CLK2', 'CLK3'].map(out);
+		// Sum is the parity of all three, in one gate.
+		expect(by.get('U1')!.kind).toBe('xor');
+		expect(ins('U1')).toEqual(new Set([a, b, c]));
+
+		// The carry is any two of the three, so the three ANDs take the three
+		// distinct pairs — and none of them takes the same input twice.
+		const pairs = ['U2', 'U3', 'U4'].map(ins);
+		for (const pair of pairs) expect(pair.size).toBe(2);
+		expect(new Set(pairs.map((p) => [...p].sort().join('+'))).size).toBe(3);
+		expect(new Set(pairs.flatMap((p) => [...p]))).toEqual(new Set([a, b, c]));
+
+		expect(ins('U5')).toEqual(new Set(['U2', 'U3', 'U4'].map(out)));
+	});
+
+	it('keeps the crossing rails apart', () => {
+		// Three rails run down the left and every tap off one crosses the others.
+		// If a crossing joined, the three inputs would be one net and the adder
+		// would still simulate — it would just always answer zero.
+		const by = devices();
+		const rails = new Set(['CLK1', 'CLK2', 'CLK3'].map((n) => by.get(n)!.output as string));
+		expect(rails.size).toBe(3);
+	});
+});
+
+describe('a probe on a logic signal', () => {
+	/** A clock with a probe hung on its output, and nothing else. */
+	const probedClock = (label: string) => {
+		const clock = at('clock', 'CLK1', 100, 100);
+		const probe = at('probe', 'P1', 130, 100);
+		probe.params = { ...probe.params, label };
+		return compileSchematic(drawing([clock, probe], []));
+	};
+
+	it('does not turn the net analog, or ask for a ground that has no meaning', () => {
+		// Clipping a probe onto a gate output is the ordinary thing to do with one.
+		// A probe carries no current and changes nothing, so it must not conjure an
+		// analog node, a bridge to drive it, and a demand for a voltage reference.
+		const result = probedClock('clk');
+		expect(result.errors).toEqual([]);
+		const netlist = result.netlist as { bridges: unknown[]; components: unknown[] };
+		expect(netlist.bridges).toEqual([]);
+		expect(netlist.components).toEqual([]);
+		const named = [...result.names.values()].find((n) => n.digital);
+		expect(named?.digital).toBeTruthy();
+		expect(named?.analog).toBeUndefined();
+	});
+
+	it('still measures a voltage where there is no logic to name', () => {
+		// On bare wire there is nothing digital to point at, and a probe that read
+		// nothing at all would be a worse answer than an analog node reading zero.
+		const probe = at('probe', 'P1', 200, 200);
+		const result = compileSchematic(drawing([at('vsource', 'V1', 100, 200), at('ground', 'GND1', 100, 300), probe], [[200, 200, 260, 200]]));
+		const analog = [...result.names.values()].filter((n) => n.analog);
+		expect(analog.length).toBeGreaterThan(1);
 	});
 });

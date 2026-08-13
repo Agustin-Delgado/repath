@@ -7,6 +7,8 @@
 	import { ensureEngine, engineVersion } from '$lib/engine';
 	import { EXAMPLES } from '$lib/examples';
 	import { decodeCircuit, shareUrl } from '$lib/share';
+	import { definitionFor } from '$lib/schematic/model';
+	import { LOGIC_FAMILIES } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
 	import { formatValue, parseValue } from '$lib/units';
 
@@ -93,6 +95,13 @@
 	}
 
 	let tempField = $state(String(app.temperature));
+
+	/** Whether anything on the drawing has a digital pin to speak of. */
+	const hasDigital = $derived(
+		app.schematic.instances.some((instance) =>
+			definitionFor(instance).pins.some((pin) => pin.domain === 'digital')
+		)
+	);
 
 	function commitTemperature(value: string) {
 		const parsed = Number(value);
@@ -271,6 +280,24 @@
 				/>
 				<span class="unit">°C</span>
 			</label>
+
+			<!--
+				Only where it means something. On a purely analog drawing the family
+				decides nothing, and a control that changes nothing is worse than no
+				control: it invites the reader to believe it matters here.
+			-->
+			{#if hasDigital}
+				<select
+					aria-label="Logic family"
+					title="What a digital one and a digital zero are, in volts"
+					value={app.logicFamily}
+					onchange={(e) => app.setLogicFamily(e.currentTarget.value)}
+				>
+					{#each LOGIC_FAMILIES as option (option.value)}
+						<option value={option.value}>{option.label}</option>
+					{/each}
+				</select>
+			{/if}
 
 			<!--
 				One sample says nothing; half a dozen say whether the corner of a

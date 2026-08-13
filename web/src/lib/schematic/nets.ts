@@ -9,6 +9,7 @@
 
 import {
 	GRID,
+	definitionFor,
 	definitionOf,
 	pinPosition,
 	pointKey,
@@ -98,7 +99,7 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 	const pins: PinRef[] = [];
 
 	for (const instance of schematic.instances) {
-		for (const pin of definitionOf(instance.kind).pins) {
+		for (const pin of definitionFor(instance).pins) {
 			const { x, y } = pinPosition(instance, pin);
 			pins.push({ instance, pin, x, y });
 			set.find(pointKey(x, y));
@@ -154,13 +155,27 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 		ensure(key).points.push(key);
 	}
 
+	const probed = new Set<Net>();
 	for (const ref of pins) {
 		const net = ensure(pointKey(ref.x, ref.y));
 		net.pins.push(ref);
 		if (ref.instance.kind === 'ground') net.isGround = true;
-		else if (ref.pin.domain === 'analog') net.hasAnalog = true;
-		else if (ref.pin.direction === 'out') net.hasDigitalOutput = true;
+		// A probe is a name attached to a point, not a part on the net. Deciding
+		// here that its pin makes the net analog would mean that clipping one onto
+		// a gate output conjures an analog node, a bridge to drive it and — since
+		// every analog circuit needs a reference — a demand for a ground symbol
+		// that has nothing to do with what was drawn.
+		else if (ref.pin.domain === 'analog') {
+			if (ref.instance.kind === 'probe') probed.add(net);
+			else net.hasAnalog = true;
+		} else if (ref.pin.direction === 'out') net.hasDigitalOutput = true;
 		else net.hasDigitalInput = true;
+	}
+
+	// Where there is nothing digital to name instead, the probe is measuring a
+	// voltage: a probe on bare wire still has to read something.
+	for (const net of probed) {
+		if (!net.hasDigitalInput && !net.hasDigitalOutput) net.hasAnalog = true;
 	}
 
 	// A ground symbol makes the net analog by definition.
@@ -194,7 +209,7 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 export function mergeWireChains(schematic: Schematic): Wire[] {
 	const pins = new Set<string>();
 	for (const instance of schematic.instances) {
-		for (const pin of definitionOf(instance.kind).pins) {
+		for (const pin of definitionFor(instance).pins) {
 			const at = pinPosition(instance, pin);
 			pins.add(pointKey(at.x, at.y));
 		}
@@ -397,7 +412,7 @@ export function splitAtJunctions(schematic: Schematic, nextId: () => string): Wi
 		}
 	}
 	for (const instance of schematic.instances) {
-		for (const pin of definitionOf(instance.kind).pins) {
+		for (const pin of definitionFor(instance).pins) {
 			const at = pinPosition(instance, pin);
 			ends.add(pointKey(at.x, at.y));
 		}
