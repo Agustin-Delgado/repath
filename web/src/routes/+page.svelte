@@ -350,6 +350,13 @@
 				}}
 				aria-label="Load an example"
 			>
+				<!--
+					Selected on an empty sheet and on anything drawn since, so the menu
+					never claims one of these is what is on screen. Disabled because
+					there is nothing to go back to: clearing the drawing is what Clear
+					is for, and doing it by accident from a menu would be worse.
+				-->
+				<option value="" disabled>Examples</option>
 				{#each EXAMPLES as example (example.id)}
 					<option value={example.id}>{example.name}</option>
 				{/each}

@@ -646,7 +646,11 @@ export function compileSchematic(
 		}
 	}
 
-	if (components.length === 0 && devices.length === 0) {
+	// An empty sheet has already been told it is empty, and saying it twice on the
+	// first thing anybody sees is not twice as helpful. This is for the drawing
+	// that has parts on it and still builds nothing — a lone ground symbol, or a
+	// probe waiting for a circuit.
+	if (components.length === 0 && devices.length === 0 && schematic.instances.length > 0) {
 		errors.push('Nothing to simulate: place at least one component.');
 	}
 

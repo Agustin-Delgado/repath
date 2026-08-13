@@ -197,8 +197,27 @@ const HISTORY_LIMIT = 100;
  */
 const HISTORY_BYTES = 8 * 1024 * 1024;
 
+/**
+ * How long a run lasts before anybody has said otherwise.
+ *
+ * Five milliseconds: long enough to see a supply settle or an audio-rate signal
+ * go round a few times, short enough that a circuit doing something fast is not
+ * a vertical line. Every example carries its own; this is what an empty sheet
+ * starts with.
+ */
+const DEFAULT_STOP_TIME = 5e-3;
+
 class AppState {
-	schematic = $state<Schematic>(EXAMPLES[0].build());
+	/**
+	 * An empty sheet.
+	 *
+	 * It used to open on the first example, on the grounds that a simulator has
+	 * to show you something working before it asks you to build something. What
+	 * that actually does is put somebody else's circuit in the way of yours:
+	 * opening the app means clearing it first, every time. The examples are one
+	 * menu away and the palette is already open, which is invitation enough.
+	 */
+	schematic = $state<Schematic>({ instances: [], wires: [] });
 	tool = $state<Tool>({ mode: 'select' });
 	selection = $state<string[]>([]);
 	probes = $state<string[]>([]);
@@ -241,7 +260,7 @@ class AppState {
 		delete this.channels[key];
 		this.channels = { ...this.channels };
 	}
-	stopTime = $state(EXAMPLES[0].stopTime);
+	stopTime = $state(DEFAULT_STOP_TIME);
 	/**
 	 * What the whole circuit is sitting at, in degrees Celsius.
 	 *
@@ -285,7 +304,8 @@ class AppState {
 	 * the answer can move, not which draw moved it.
 	 */
 	envelope = $state<Envelope | null>(null);
-	exampleId = $state(EXAMPLES[0].id);
+	/** Which example is on screen, or empty for a drawing that is nobody's but yours. */
+	exampleId = $state('');
 
 	constructor() {
 		// The circuit the app opens with is assigned to the field above, which is

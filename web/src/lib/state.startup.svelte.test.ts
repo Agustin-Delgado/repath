@@ -1,22 +1,36 @@
 /**
- * The circuit the app opens with, before anything touches it.
+ * What the app hands over: an empty sheet, and an example when one is asked for.
  *
  * Its own file because every other suite here starts by clearing the editor, and
- * that clearing was hiding a real defect: the startup schematic was the one way
- * into the editor that skipped tidying. Tests that normalise the state first
- * cannot see a bug that lives in the state they normalised away — which is
- * exactly why this one was reported three times before it reproduced.
+ * that clearing was hiding a real defect: a schematic could reach the editor
+ * without being tidied. Tests that normalise the state first cannot see a bug
+ * that lives in the state they normalised away — which is exactly why that one
+ * was reported three times before it reproduced.
  *
- * Nothing in this file may reach for `loadExample` or `clear` before it looks.
+ * So the order below matters. The empty sheet is inspected before anything is
+ * loaded, and the example is inspected on the way in rather than after some
+ * other test has touched it.
  */
 
 import { describe, expect, it } from 'vitest';
 import { app } from './state.svelte';
+import { EXAMPLES } from './examples';
 import { routeWire } from './schematic/route';
 import { definitionOf, pinPosition, type Point } from './schematic/model';
 
-/** Captured at module load, so no test order can spoil it. */
-const pristine = app.schematic.wires.map((w) => w.points.map((p) => ({ ...p })));
+/**
+ * Captured at module load, so no test order can spoil it.
+ *
+ * Including what the compiler makes of it: a `describe` body runs while the file
+ * is being collected, so the example below is loaded before the first `it` in
+ * this file executes. Anything read live would be read after that.
+ */
+const opened = {
+	instances: app.schematic.instances.length,
+	wires: app.schematic.wires.length,
+	exampleId: app.exampleId,
+	errors: app.compiled.errors
+};
 
 const routeFor = (moving: Set<string>) => (from: Point, to: Point, settling: ReadonlySet<string>) =>
 	routeWire(app.schematic, from, to, {
@@ -26,7 +40,30 @@ const routeFor = (moving: Set<string>) => (from: Point, to: Point, settling: Rea
 		effort: 4000
 	});
 
-describe('the schematic the app hands over', () => {
+describe('the sheet the app opens on', () => {
+	it('is empty, and is nobody else’s circuit', () => {
+		// Opening on an example means clearing it before starting, every time. The
+		// examples are one menu away and the palette is already open.
+		expect({ ...opened, errors: undefined }).toEqual({
+			instances: 0,
+			wires: 0,
+			exampleId: '',
+			errors: undefined
+		});
+	});
+
+	it('says what to do rather than failing at you', () => {
+		expect(opened.errors).toEqual([
+			'The schematic is empty. Drag a component in from the palette to start.'
+		]);
+	});
+});
+
+describe('an example, on the way in', () => {
+	// Loaded once, here, and inspected below in the state that arrives.
+	app.loadExample(EXAMPLES[0].id);
+	const pristine = app.schematic.wires.map((w) => w.points.map((p) => ({ ...p })));
+
 	it('has its wires already folded into runs', () => {
 		const meetings = new Map<string, number>();
 		for (const points of pristine) {
