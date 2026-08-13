@@ -26,7 +26,7 @@ import {
 } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
-import { wireSegments, type Point } from '../model';
+import { OPERABLE, wireSegments, type Point } from '../model';
 import { elbow, routeWire } from '../route';
 import type { SchematicItem } from '../scene';
 import { connectsAt, drawSnapHint, netAt } from './shared';
@@ -366,13 +366,13 @@ export function createSelectTool(): Tool {
 					// so one component can be picked out of a group.
 					app.selection = [pressedId];
 				}
-				// A switch is the one part whose whole purpose is being operated, so
-				// pressing it operates it — a press that went nowhere, at least. A
-				// drag is still a drag, and shift-click is still adding to a
-				// selection rather than flipping whatever it lands on.
+				// Some parts exist to be operated — a switch, a logic toggle — so
+				// pressing one operates it, a press that went nowhere at least. A drag
+				// is still a drag, and shift-click is still adding to a selection
+				// rather than flipping whatever it lands on.
 				if (!moved && pressedId && !pointer.shift) {
 					const part = app.schematic.instances.find((i) => i.id === pressedId);
-					if (part?.kind === 'switch') app.toggleSwitch(pressedId);
+					if (part && OPERABLE.has(part.kind)) app.toggleSwitch(pressedId);
 				}
 			} else if (mode === 'marquee' && marquee) {
 				if (marquee.w > 2 || marquee.h > 2) {

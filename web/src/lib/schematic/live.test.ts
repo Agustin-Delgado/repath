@@ -310,3 +310,84 @@ describe('a button on a gate input', () => {
 		}
 	});
 });
+
+/**
+ * The logic toggle: the part that exists so the pull-down does not have to.
+ *
+ * A switch answers "what does this circuit do when the contact opens", which is
+ * a question about a contact. A toggle answers "what does this circuit do with A
+ * high and B low", which is a question about the logic — and for that a rail, a
+ * contact and a resistor are three parts standing in for one.
+ */
+describe('a logic toggle', () => {
+	function gated(a: 'low' | 'high', b: 'low' | 'high'): Schematic {
+		const t1 = at('toggle', 'T1', 200, 190);
+		const t2 = at('toggle', 'T2', 200, 290);
+		t1.params.state = a;
+		t2.params.state = b;
+		return drawing(
+			[t1, t2, at('and', 'U1', 400, 240)],
+			[
+				[230, 190, 370, 190],
+				[370, 190, 370, 230],
+				[230, 290, 370, 290],
+				[370, 290, 370, 250]
+			]
+		);
+	}
+
+	it('drives its net in both positions, so nothing has to pull it', () => {
+		for (const state of ['low', 'high'] as const) {
+			const compiled = compileSchematic(gated(state, state));
+			expect(compiled.errors).toEqual([]);
+			// No rail, no ground symbol, no pull-down — and no complaint, because
+			// there is no instant at which anything is left adrift.
+			expect(compiled.warnings.filter((w) => w.includes('pull-down'))).toEqual([]);
+			expect(compiled.floatingAt(new Set()).size).toBe(0);
+		}
+	});
+
+	it('needs no analog side at all', () => {
+		// The whole reason the resistor was needed is that a switch drags the net
+		// into the analog domain, where a node with no path to anywhere has no
+		// voltage. This never leaves the digital domain: no nodes, no bridges.
+		const netlist = compileSchematic(gated('high', 'low')).netlist as {
+			components: unknown[];
+			bridges: unknown[];
+			devices: Array<Record<string, unknown>>;
+		};
+		expect(netlist.components).toEqual([]);
+		expect(netlist.bridges).toEqual([]);
+		expect(netlist.devices.filter((d) => d.type === 'logic_source')).toHaveLength(2);
+	});
+
+	it('feeds the gate the level it is set to', () => {
+		for (const [a, b, expected] of [
+			['low', 'low', 'low'],
+			['high', 'low', 'low'],
+			['low', 'high', 'low'],
+			['high', 'high', 'high']
+		] as const) {
+			const { run } = simulate(gated(a, b));
+			const out = (run.digital.at(-1) ?? []).at(-1)?.state;
+			expect(out, `AND with ${a} and ${b}`).toBe(expected);
+		}
+	});
+
+	it('holds its level for the whole run rather than only at the start', () => {
+		const schematic = gated('high', 'high');
+		const { compiled, run } = simulate(schematic, 1e-3);
+
+		// T1's own net, by name, rather than whichever one happens to be last.
+		const net = compiled.connectivity.netOfPin.get(`${schematic.instances[0].id}:y`)!;
+		const label = compiled.names.get(net)!.digital!;
+		const transitions = run.digital[run.netNames.indexOf(label)] ?? [];
+
+		// It settles once and stays. A source that re-triggered itself — the way a
+		// clock does, by listening to its own output — would fill the run with
+		// events all saying the same thing.
+		expect(transitions.at(-1)?.state).toBe('high');
+		expect(transitions.filter((t) => t.state === 'high')).toHaveLength(1);
+		expect(transitions.length).toBeLessThan(3);
+	});
+});

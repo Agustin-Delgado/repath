@@ -1231,8 +1231,14 @@ class AppState {
 	 */
 	toggleSwitch(id: string): void {
 		const instance = this.schematic.instances.find((i) => i.id === id);
-		if (!instance || instance.kind !== 'switch') return;
-		this.setParam(id, 'start', instance.params.start === 'closed' ? 'open' : 'closed');
+		if (!instance) return;
+		if (instance.kind === 'switch') {
+			this.setParam(id, 'start', instance.params.start === 'closed' ? 'open' : 'closed');
+		} else if (instance.kind === 'toggle') {
+			this.setParam(id, 'state', instance.params.state === 'high' ? 'low' : 'high');
+		} else {
+			return;
+		}
 		if (this.live && this.analysis === 'transient') void this.run({ keepPlayback: true });
 	}
 

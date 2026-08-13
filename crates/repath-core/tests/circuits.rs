@@ -1804,3 +1804,54 @@ fn a_resistor_drifts_by_its_temperature_coefficient() {
     let expected = 10.0 * 1000.0 / (1000.0 * 1.016 + 1000.0);
     assert!((v - expected).abs() < 5e-3, "divider sat at {v:.4} V, expected {expected:.4}");
 }
+
+/// The logic toggle: a level somebody set, in the JSON the editor emits for it.
+///
+/// Its whole reason to exist is that it needs no analog side. A switch feeding a
+/// gate has to come from a rail through a contact, which is analog, so the gate
+/// input is an analog node — and an analog node with no path to anywhere has no
+/// voltage, which is what makes the pull-down resistor necessary. This never
+/// leaves the digital domain: no components, no bridges, nothing to pull.
+fn toggled_and(a: &str, b: &str) -> String {
+    format!(
+        r#"{{"components":[],"bridges":[],"devices":[
+{{"type":"logic_source","name":"T1","output":"da","state":"{a}"}},
+{{"type":"logic_source","name":"T2","output":"db","state":"{b}"}},
+{{"type":"gate","name":"U1","kind":"and","inputs":["da","db"],"output":"dy","delay":1e-9}}]}}"#
+    )
+}
+
+#[test]
+fn a_logic_source_holds_the_level_it_was_set_to() {
+    for (a, b, expected) in [
+        ("low", "low", Logic::Low),
+        ("high", "low", Logic::Low),
+        ("low", "high", Logic::Low),
+        ("high", "high", Logic::High),
+    ] {
+        let netlist: Netlist = serde_json::from_str(&toggled_and(a, b))
+            .expect("the editor's netlist should parse");
+        let mut c = netlist.compile().expect("and should compile");
+        let result = Simulator::default()
+            .transient(&mut c, TransientConfig::new(1e-6))
+            .unwrap();
+
+        let dy = result.net_names.iter().position(|n| n == "dy").unwrap();
+        // Sampled well past the gate delay, and again at the end: a source that
+        // only drove at t = 0 would let the net drift back to unknown, and one
+        // that re-triggered itself the way a clock does would still be moving.
+        for t in [100e-9, 1e-6] {
+            let level = result.digital[dy]
+                .iter()
+                .rev()
+                .find(|(when, _)| *when <= t)
+                .map(|(_, s)| *s)
+                .unwrap_or(Logic::Unknown);
+            assert_eq!(level, expected, "{a} and {b} at t = {t:.2e}");
+        }
+
+        // And it settled once rather than every timestep.
+        let da = result.net_names.iter().position(|n| n == "da").unwrap();
+        assert_eq!(result.digital[da].len(), 1, "the source kept re-driving its net");
+    }
+}

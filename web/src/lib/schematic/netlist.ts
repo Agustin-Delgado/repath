@@ -568,6 +568,14 @@ export function compileSchematic(
 					delay: num(instance, 'delay', 1e-9)
 				});
 				break;
+			case 'toggle':
+				devices.push({
+					type: 'logic_source',
+					name,
+					output: digitalOf(instance, 'y'),
+					state: str(instance, 'state', 'low') === 'high' ? 'high' : 'low'
+				});
+				break;
 			case 'clock':
 				devices.push({
 					type: 'clock',

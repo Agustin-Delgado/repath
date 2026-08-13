@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
-use crate::digital::{Clock, DFlipFlop, Gate, GateKind, TriStateBuffer};
+use crate::digital::{Clock, DFlipFlop, Gate, GateKind, Logic, LogicSource, TriStateBuffer};
 use crate::element::NodeId;
 use crate::elements::semiconductor::TNOM;
 use crate::elements::{
@@ -267,6 +267,12 @@ pub enum Device {
         #[serde(default = "default_gate_delay")]
         delay: f64,
     },
+    /// A level someone set, held for the whole run. See `digital::LogicSource`.
+    LogicSource {
+        name: String,
+        output: String,
+        state: Logic,
+    },
 }
 
 impl Device {
@@ -275,7 +281,8 @@ impl Device {
             Device::Gate { name, .. }
             | Device::Clock { name, .. }
             | Device::DFlipFlop { name, .. }
-            | Device::TriState { name, .. } => name,
+            | Device::TriState { name, .. }
+            | Device::LogicSource { name, .. } => name,
         }
     }
 }
@@ -539,6 +546,10 @@ impl Netlist {
             Device::TriState { name, input, enable, output, delay } => {
                 let (i, e, o) = (c.net(input), c.net(enable), c.net(output));
                 c.add_device(Box::new(TriStateBuffer::new(name, i, e, o, *delay)));
+            }
+            Device::LogicSource { name, output, state } => {
+                let out = c.net(output);
+                c.add_device(Box::new(LogicSource::new(name, out, *state)));
             }
         }
         Ok(())

@@ -360,6 +360,58 @@ impl DigitalDevice for Clock {
     }
 }
 
+/// A logic level somebody set, holding a net at it for the whole run.
+///
+/// The digital counterpart of a switch, and a genuinely different part rather
+/// than a convenience. A switch is a contact: it either connects a net to
+/// something or leaves it connected to nothing, and "nothing" is not a logic
+/// level — which is why a switch feeding a gate input needs a resistor to hold
+/// that input when the contact is open. This drives instead. Both of its
+/// positions are a level, so there is nothing to pull and no instant at which
+/// the net is adrift.
+///
+/// It has no inputs, so nothing in the circuit can move it and `evaluate` is
+/// never reached after the start. That is the point of it.
+#[derive(Debug, Clone)]
+pub struct LogicSource {
+    pub name: String,
+    pub output: NetId,
+    pub state: Logic,
+    inputs: Vec<NetId>,
+    outputs: Vec<NetId>,
+}
+
+impl LogicSource {
+    pub fn new(name: impl Into<String>, output: NetId, state: Logic) -> Self {
+        Self {
+            name: name.into(),
+            output,
+            state,
+            inputs: Vec::new(),
+            outputs: vec![output],
+        }
+    }
+}
+
+impl DigitalDevice for LogicSource {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn kind(&self) -> &'static str {
+        "logic_source"
+    }
+    fn input_nets(&self) -> &[NetId] {
+        &self.inputs
+    }
+    fn output_nets(&self) -> &[NetId] {
+        &self.outputs
+    }
+
+    fn evaluate(&mut self, ctx: &mut EvalCtx) {
+        ctx.drive(0, self.output, self.state, 0.0);
+    }
+}
+
 /// Positive-edge-triggered D flip-flop with an optional asynchronous reset.
 #[derive(Debug, Clone)]
 pub struct DFlipFlop {

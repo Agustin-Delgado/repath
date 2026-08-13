@@ -49,6 +49,8 @@ export function symbolVariant(kind: string, params: Record<string, unknown> = {}
 			return `vsource:${String(params.waveform ?? 'dc')}`;
 		case 'switch':
 			return `switch:${String(params.action ?? 'toggle')}:${String(params.start ?? 'open')}`;
+		case 'toggle':
+			return `toggle:${String(params.state ?? 'low')}`;
 		case 'and':
 		case 'nand':
 		case 'or':
@@ -324,6 +326,29 @@ function switchSymbol(action: string, start: string): SymbolGeometry {
 	return { shapes, labels: [] };
 }
 
+/**
+ * The logic toggle: a slider, with the knob at the end it is set to.
+ *
+ * Deliberately nothing like the switch. They are next to each other in the
+ * palette and do different things, and a reader who has to check the label to
+ * tell which one is on the drawing has been given two symbols for one idea. So:
+ * a closed body with a knob inside it and the level written on the face, rather
+ * than a blade over an air gap. Nothing about it opens, which is the whole
+ * point of the part.
+ */
+function toggleSymbol(state: string): SymbolGeometry {
+	const high = state === 'high';
+	return {
+		shapes: [
+			{ kind: 'rect', x: -26, y: -12, w: 44, h: 24 },
+			// The knob, over the half it is set to.
+			{ kind: 'rect', x: high ? -3 : -25, y: -11, w: 21, h: 22, fill: true },
+			path('M18 0 H30')
+		],
+		labels: [{ x: high ? -14 : 7, y: 0, text: high ? '1' : '0', anchor: 'middle', size: 13 }]
+	};
+}
+
 function diode(variant: string): SymbolGeometry {
 	const shapes: Shape[] = [path('M-30 0 H-8'), path('M-8 -9 L-8 9 L8 0 Z', true)];
 	// A zener's cathode bar is bent, which is the whole visual distinction.
@@ -364,6 +389,7 @@ export function symbolGeometry(
 	else if (kind === 'switch') {
 		geometry = switchSymbol(String(params.action ?? 'toggle'), String(params.start ?? 'open'));
 	}
+	else if (kind === 'toggle') geometry = toggleSymbol(String(params.state ?? 'low'));
 	else if (GATES.has(kind)) {
 		geometry = gate(kind, gateInputCount(params as Record<string, number | string>));
 	}

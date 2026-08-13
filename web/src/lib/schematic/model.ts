@@ -1075,8 +1075,53 @@ export const CATALOG: ComponentDef[] = [
 			{ key: 'frequency', label: 'Frequency', unit: 'Hz', default: 1e6 },
 			{ key: 'duty', label: 'Duty cycle', unit: '', default: 0.5 }
 		]
+	},
+	{
+		/**
+		 * A level you set, and a genuinely different part from a switch.
+		 *
+		 * A switch is a contact. It joins a net to something or it leaves it joined
+		 * to nothing, and nothing is not a logic level — so a switch feeding a gate
+		 * needs a resistor to hold that input while the contact is open, and
+		 * without one the input is undefined half the time. That is the physics and
+		 * it is worth learning once.
+		 *
+		 * It is also not what you want when the question is "what does this circuit
+		 * do with A high and B low". This drives the net instead: both of its
+		 * positions are a level, there is no rail to wire, nothing to pull, and no
+		 * instant at which the net is adrift. Click it to flip it, like a switch.
+		 */
+		kind: 'toggle',
+		box: { x: -26, y: -14, w: 56, h: 28 },
+		label: 'Logic toggle',
+		group: 'logic',
+		prefix: 'T',
+		pins: [digitalOut('y', 30, 0)],
+		params: [
+			{
+				key: 'state',
+				label: 'Level',
+				unit: '',
+				default: 'low',
+				choices: [
+					{ value: 'low', label: 'Low (0)' },
+					{ value: 'high', label: 'High (1)' }
+				],
+				description:
+					'Click it on the drawing to flip it. It drives the net in both positions, so unlike a switch it never leaves what it feeds floating.'
+			}
+		]
 	}
 ];
+
+/**
+ * Parts a plain click operates rather than merely selects.
+ *
+ * Both of them are things somebody puts on a drawing in order to move: a switch
+ * makes and breaks a contact, a logic toggle drives a level. Everything else is
+ * changed through its fields.
+ */
+export const OPERABLE = new Set(['switch', 'toggle']);
 
 const BY_KIND = new Map(CATALOG.map((d) => [d.kind, d]));
 
