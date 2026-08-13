@@ -498,3 +498,157 @@ describe('a probe on a logic signal', () => {
 		expect(analog.length).toBeGreaterThan(1);
 	});
 });
+
+describe('a switch', () => {
+	/** The switch and its actuator, out of a drawing that compiles. */
+	function switched(params: Record<string, number | string>) {
+		const s = at('switch', 'S1', 300, 200);
+		s.params = { ...s.params, ...params };
+		const result = compileSchematic(
+			drawing(
+				[at('vsource', 'V1', 100, 200), at('ground', 'GND1', 100, 320), s],
+				[
+					[100, 170, 270, 170],
+					[270, 170, 270, 200],
+					[100, 230, 100, 320]
+				]
+			)
+		);
+		const netlist = result.netlist as { components: Array<Record<string, unknown>> };
+		return {
+			contact: netlist.components.find((c) => c.type === 'switch')!,
+			control: (
+				netlist.components.find((c) => c.name === 'S1__actuator')!.waveform as {
+					points: Array<[number, number]>;
+				}
+			).points,
+			errors: result.errors
+		};
+	}
+
+	/** Levels the control passes through, with the ramps between them dropped. */
+	const levels = (points: Array<[number, number]>) =>
+		points.map(([, v]) => v).filter((v, i, all) => i === 0 || v !== all[i - 1]);
+
+	it('is a controlled switch with its control written out in advance', () => {
+		const { contact } = switched({});
+		expect(contact.control_plus).toBe('S1__contact');
+		expect(contact.control_minus).toBe('gnd');
+		// The two resistances are the part: an open switch is a big resistor and a
+		// closed one is a small resistor, and neither is infinite or zero.
+		const model = contact.model as Record<string, number>;
+		expect(model.r_on).toBeLessThan(1);
+		expect(model.r_off).toBeGreaterThan(1e6);
+	});
+
+	it('rests where the drawing says, then operates once', () => {
+		const closing = switched({ start: 'open', at: 2e-3, bounce: 0 });
+		expect(closing.control[0]).toEqual([0, 0]);
+		expect(levels(closing.control)).toEqual([0, 1]);
+		expect(closing.control[closing.control.length - 1][0]).toBeCloseTo(2e-3, 9);
+
+		// And the other way round: a switch drawn closed opens.
+		expect(levels(switched({ start: 'closed', bounce: 0 }).control)).toEqual([1, 0]);
+	});
+
+	it('springs back when it is a push-button', () => {
+		const { control } = switched({ action: 'momentary', at: 1e-3, hold: 5e-3, bounce: 0 });
+		expect(levels(control)).toEqual([0, 1, 0]);
+		// Pressed at one millisecond, released five later.
+		expect(control[control.length - 1][0]).toBeCloseTo(6e-3, 9);
+	});
+
+	it('chatters, and settles where it was going', () => {
+		// The reason a button wired to a counter counts three. A clean edge would
+		// hide the one behaviour anybody debounces against.
+		const { control } = switched({ at: 1e-3, bounce: 2e-3 });
+		const changes = levels(control);
+		expect(changes.length).toBeGreaterThan(3);
+		expect(changes[changes.length - 1]).toBe(1);
+		// All of it inside the bounce window, and none of it before the contact
+		// was touched.
+		const times = control.map(([t]) => t);
+		expect(Math.min(...times.slice(1))).toBeGreaterThan(0.9e-3);
+		expect(Math.max(...times)).toBeLessThanOrEqual(3e-3 + 1e-9);
+	});
+
+	it('is a clean edge with the bounce turned off', () => {
+		expect(switched({ bounce: 0 }).control).toHaveLength(3);
+	});
+});
+
+describe('the supply terminal', () => {
+	const rail = (parts: Instance[], wires: Array<[number, number, number, number]> = []) =>
+		compileSchematic(drawing(parts, wires));
+
+	it('is a source referred to ground, so a rail needs no wire back to it', () => {
+		const supply = at('supply', 'PWR1', 200, 100);
+		const result = rail(
+			[supply, at('resistor', 'R1', 200, 170, 90), at('ground', 'GND1', 200, 240)],
+			[
+				[200, 110, 200, 140],
+				[200, 200, 200, 230]
+			]
+		);
+		expect(result.errors).toEqual([]);
+		const netlist = result.netlist as { components: Array<Record<string, unknown>> };
+		const source = netlist.components.find((c) => c.name === 'PWR1')!;
+		expect(source.type).toBe('voltage_source');
+		expect(source.minus).toBe('gnd');
+		expect(source.plus).not.toBe('gnd');
+		expect(source.waveform).toEqual({ type: 'dc', value: 5 });
+	});
+
+	it('refuses to be a short across itself', () => {
+		// A rail on the ground net asks for five volts and nothing at one point.
+		// The solver would report a singular matrix; the drawing can say why.
+		const result = rail([at('supply', 'PWR1', 200, 100), at('ground', 'GND1', 200, 140)], [
+			[200, 110, 200, 130]
+		]);
+		expect(result.errors.some((e) => e.includes('PWR1'))).toBe(true);
+		expect(result.netlist).toBeNull();
+	});
+
+	it('builds one source where two symbols are wired together', () => {
+		// Two ideal sources in parallel is a short between two voltages, and the
+		// second is redundant anyway: this is one rail drawn twice.
+		const second = at('supply', 'PWR2', 300, 100);
+		second.params = { ...second.params, voltage: 12 };
+		const result = rail(
+			[
+				at('supply', 'PWR1', 200, 100),
+				second,
+				at('resistor', 'R1', 250, 170, 90),
+				at('ground', 'GND1', 250, 240)
+			],
+			[
+				[200, 110, 200, 140],
+				[200, 140, 300, 140],
+				[300, 110, 300, 140],
+				[250, 140, 250, 140],
+				[250, 200, 250, 230]
+			]
+		);
+		const netlist = result.netlist as { components: Array<Record<string, unknown>> };
+		expect(netlist.components.filter((c) => c.type === 'voltage_source')).toHaveLength(1);
+		// And the disagreement is named rather than silently resolved.
+		expect(result.warnings.some((w) => w.includes('12') && w.includes('PWR1'))).toBe(true);
+	});
+});
+
+describe('the switch example that ships with the app', () => {
+	it('is wired without a warning, which is most of what it is for', () => {
+		// It exists to be read as much as run: a supply symbol, a switch and the
+		// load resistor that stops the capacitor charging through an open contact.
+		const example = EXAMPLES.find((e) => e.id === 'switch-bounce')!;
+		const result = compileSchematic(example.build());
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toEqual([]);
+		const netlist = result.netlist as { components: Array<Record<string, unknown>> };
+		const contact = netlist.components.find((c) => c.type === 'switch')!;
+		// The switch is in series between the rail and the load, not across
+		// something: its two sides have to be different nets.
+		expect(contact.a).not.toBe(contact.b);
+		expect(contact.b).not.toBe('gnd');
+	});
+});

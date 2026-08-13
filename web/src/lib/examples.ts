@@ -360,6 +360,51 @@ export const EXAMPLES: Example[] = [
 	},
 
 	{
+		id: 'switch-bounce',
+		name: 'Switch and contact bounce',
+		description:
+			'A supply, a switch and an RC. The switch closes at one millisecond and the contacts chatter for one more before they settle — which is why anything counting edges has to be debounced. The 100 kΩ is not decoration: without a path to ground the capacitor would charge through the open switch.',
+		stopTime: 10e-3,
+		build: () =>
+			build(
+				[
+					{ kind: 'supply', name: 'PWR1', x: 200, y: 100, params: { voltage: 5 } },
+					{
+						kind: 'switch',
+						name: 'S1',
+						x: 200,
+						y: 170,
+						rotation: 90,
+						params: { action: 'toggle', start: 'open', at: 1e-3, bounce: 1e-3 }
+					},
+					{ kind: 'resistor', name: 'R1', x: 200, y: 260, rotation: 90, params: { resistance: 1000 } },
+					{
+						kind: 'resistor',
+						name: 'R2',
+						x: 200,
+						y: 350,
+						rotation: 90,
+						params: { resistance: 100000 }
+					},
+					{ kind: 'capacitor', name: 'C1', x: 320, y: 350, rotation: 90, params: { capacitance: 1e-6 } },
+					{ kind: 'probe', name: 'P1', x: 400, y: 290, params: { label: 'out' } },
+					{ kind: 'ground', name: 'GND1', x: 200, y: 440 }
+				],
+				[
+					[200, 110, 200, 140],
+					[200, 200, 200, 230],
+					[200, 290, 200, 320],
+					[200, 290, 320, 290],
+					[320, 290, 320, 320],
+					[320, 290, 400, 290],
+					[200, 380, 200, 430],
+					[200, 410, 320, 410],
+					[320, 380, 320, 410]
+				]
+			)
+	},
+
+	{
 		id: 'full-adder',
 		name: 'Full adder',
 		description:

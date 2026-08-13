@@ -656,6 +656,75 @@ fn nand_gate_truth_table_holds_over_time() {
     assert!(saw_both.0 && saw_both.1, "the output never exercised both levels");
 }
 
+/// An RC charged through a switch, in the JSON the editor emits for one: the
+/// contact is a voltage-controlled switch and the actuator is a PWL source on a
+/// node of its own. `CONTACT` is where the control goes; everything else is the
+/// circuit around it.
+fn switched_rc(contact: &str) -> String {
+    format!(
+        r#"{{"components":[
+{{"type":"voltage_source","name":"V1","plus":"in","minus":"gnd","waveform":{{"type":"dc","value":5}}}},
+{{"type":"voltage_source","name":"S1__actuator","plus":"S1__contact","minus":"gnd","waveform":{{"type":"pwl","points":[{contact}]}}}},
+{{"type":"switch","name":"S1","a":"in","b":"mid","control_plus":"S1__contact","control_minus":"gnd","model":{{"v_on":1,"v_off":0,"r_on":0.05,"r_off":1e9}}}},
+{{"type":"resistor","name":"R1","a":"mid","b":"out","resistance":1000}},
+{{"type":"resistor","name":"R2","a":"out","b":"gnd","resistance":100000}},
+{{"type":"capacitor","name":"C1","a":"out","b":"gnd","capacitance":1e-6}}],
+"devices":[],"bridges":[]}}"#
+    )
+}
+
+fn run_switched(contact: &str) -> TransientResult {
+    let netlist: Netlist =
+        serde_json::from_str(&switched_rc(contact)).expect("the editor's netlist should parse");
+    let mut c = netlist.compile().expect("and should compile");
+    Simulator::default().transient(&mut c, TransientConfig::new(8e-3)).unwrap()
+}
+
+#[test]
+fn a_switch_closes_when_it_is_told_to() {
+    // Open, the contact is 1 GΩ and the load sits at a millivolt of leakage;
+    // closed, it is an ordinary RC with a millisecond time constant. The whole
+    // part is which of those two the circuit is at any moment.
+    //
+    // The load resistor is not decoration. Without it the capacitor has no path
+    // to ground at DC, so the operating point charges it to the supply through
+    // the open contact and the switch appears to do nothing — which is exactly
+    // what a real circuit does, and why a floating node is worth avoiding.
+    let result = run_switched("[0,0],[0.000999,0],[0.001,1]");
+    let out = index_of(&result, "v(out)");
+
+    assert!(value_at(&result, out, 0.9e-3).abs() < 1e-3, "the open contact leaked");
+    // One time constant after it closes. 1 kΩ against a 100 kΩ load makes that
+    // 990 µs, and the rail it is heading for 4.95 V.
+    let one_tau = value_at(&result, out, 2e-3);
+    assert!(
+        (one_tau - 3.147).abs() < 0.06,
+        "expected 3.15 V one tau after closing, got {one_tau:.3}"
+    );
+    assert!(value_at(&result, out, 6e-3) > 4.85, "it never finished charging");
+}
+
+#[test]
+fn contact_bounce_holds_the_charge_back() {
+    // A real contact chatters for a millisecond before it settles, and a
+    // millisecond is a whole time constant here: the capacitor is charged in
+    // pieces and arrives late. This is the difference a debounce circuit exists
+    // to remove, and simulating a switch that lands cleanly hides it entirely.
+    let clean = run_switched("[0,0],[0.000999,0],[0.001,1]");
+    let bouncing = run_switched(
+        "[0,0],[0.000999,0],[0.001,1],[0.0014,1],[0.0015,0],[0.0017,0],[0.0018,1],[0.0019,1],[0.002,0],[0.0021,0],[0.0022,1]",
+    );
+
+    let a = value_at(&clean, index_of(&clean, "v(out)"), 2.2e-3);
+    let b = value_at(&bouncing, index_of(&bouncing, "v(out)"), 2.2e-3);
+    assert!(
+        b < a - 0.4,
+        "bouncing reached {b:.3} V against {a:.3} V clean; the chatter did nothing"
+    );
+    // And it still gets there, once the contact settles.
+    assert!(value_at(&bouncing, index_of(&bouncing, "v(out)"), 7e-3) > 4.85);
+}
+
 /// Three clocks and a three-input NAND, in the JSON the editor emits for a gate
 /// whose input count was turned up. Written the way the compiler writes it
 /// rather than through the builder, because the thing being tested is the

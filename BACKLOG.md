@@ -22,6 +22,8 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | MOSFET | Shichman-Hodges (level 1) only, bulk tied to source | No body effect, no subthreshold conduction, no short-channel behaviour |
 | MOSFET | Gate capacitances are constant, not the bias-dependent Meyer model | Right for a datasheet's Ciss/Crss/Coss; a gate charge curve will not have its plateau in quite the right place |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
+| Switch | Operates at a time you set, not at a click during the run | A run is computed end to end before any of it is drawn, so there is no instant during it for a click to land in |
+| Supply | Each symbol is its own ideal source to ground, not a named net | Three on one rail is three currents rather than one, and two wired together build one source and a warning |
 | Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
 | Temperature | One number for the whole circuit; no self-heating and no per-part rise | A resistor dissipating a watt is at the same temperature as the air around it |
 | Probe | Voltage only; no current probe and no differential pair | Measuring a current means reading it off the component, not putting a probe in the branch |
@@ -139,7 +141,9 @@ because each step is what makes the next one worth having:
 
 - [ ] Potentiometer, trimmer, variable capacitor.
 - [ ] Transformer and coupled inductors.
-- [ ] Relay, pushbutton, SPDT switch.
+- [ ] Relay, and an SPDT switch. The SPST toggle and the push-button are in,
+      with contact bounce; a changeover needs two contacts driven the opposite
+      way round, which the engine can already do.
 - [ ] Crystal / resonator.
 - [ ] Voltage-controlled oscillator, comparator with hysteresis.
 - [ ] Counters, shift registers, decoders, multiplexers, RAM/ROM. The gates,

@@ -47,6 +47,8 @@ export function symbolVariant(kind: string, params: Record<string, unknown> = {}
 			return `diode:${String(params.model ?? 'silicon')}`;
 		case 'vsource':
 			return `vsource:${String(params.waveform ?? 'dc')}`;
+		case 'switch':
+			return `switch:${String(params.action ?? 'toggle')}:${String(params.start ?? 'open')}`;
 		case 'and':
 		case 'nand':
 		case 'or':
@@ -101,6 +103,13 @@ const STATIC: Record<string, SymbolGeometry> = {
 
 	ground: {
 		shapes: [path('M0 -10 V0 M-11 0 H11 M-7 4 H7 M-3 8 H3')],
+		labels: []
+	},
+
+	supply: {
+		// Ground's mirror image, and read the same way: a stem up to a rail, with
+		// an arrow saying which way the potential goes.
+		shapes: [path('M0 10 V-4 M-11 -4 H11 M-6 -10 L0 -16 L6 -10')],
 		labels: []
 	},
 
@@ -279,6 +288,35 @@ function gate(kind: string, count: number): SymbolGeometry {
 	return { shapes, labels: [] };
 }
 
+/**
+ * A switch, drawn in the position it rests in and in the shape of its actuator.
+ *
+ * The position matters more than it looks: a schematic showing a closed switch
+ * and a run that starts with it open is a drawing that lies about the circuit
+ * before anything has happened.
+ */
+function switchSymbol(action: string, start: string): SymbolGeometry {
+	const closed = start === 'closed';
+	const shapes: Shape[] = [
+		path('M-30 0 H-14'),
+		path('M14 0 H30'),
+		{ kind: 'circle', cx: -14, cy: 0, r: 2 },
+		{ kind: 'circle', cx: 14, cy: 0, r: 2 }
+	];
+
+	if (action === 'momentary') {
+		// A bar on a plunger: pressing it drives the bar down onto the contacts,
+		// so a normally-closed button is drawn with the bar already resting there.
+		const bar = closed ? 0 : -8;
+		shapes.push(path(`M-14 ${bar} H14`));
+		shapes.push(path(`M0 ${bar} V-18 M-8 -18 H8`));
+	} else {
+		// A blade on a pivot, lifted clear when the switch is open.
+		shapes.push(closed ? path('M-14 -4 L14 0') : path('M-13 -2 L11 -16'));
+	}
+	return { shapes, labels: [] };
+}
+
 function diode(variant: string): SymbolGeometry {
 	const shapes: Shape[] = [path('M-30 0 H-8'), path('M-8 -9 L-8 9 L8 0 Z', true)];
 	// A zener's cathode bar is bent, which is the whole visual distinction.
@@ -316,6 +354,9 @@ export function symbolGeometry(
 	let geometry: SymbolGeometry;
 	if (kind === 'diode') geometry = diode(String(params.model ?? 'silicon'));
 	else if (kind === 'vsource') geometry = voltageSource(String(params.waveform ?? 'dc'));
+	else if (kind === 'switch') {
+		geometry = switchSymbol(String(params.action ?? 'toggle'), String(params.start ?? 'open'));
+	}
 	else if (GATES.has(kind)) {
 		geometry = gate(kind, gateInputCount(params as Record<string, number | string>));
 	}

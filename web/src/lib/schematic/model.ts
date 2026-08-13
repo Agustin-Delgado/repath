@@ -550,6 +550,83 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		/**
+		 * A pair of contacts that meet, or stop meeting, at a time you choose.
+		 *
+		 * Not a switch you click: a run is computed from end to end before any of
+		 * it is drawn, so there is no instant during it for a click to land in.
+		 * What there is instead is the question a switch is usually asked in a
+		 * simulator — what happens *when* it operates — and that is a time, which
+		 * is a parameter.
+		 */
+		kind: 'switch',
+		box: { x: -30, y: -20, w: 60, h: 28 },
+		label: 'Switch',
+		group: 'passive',
+		prefix: 'S',
+		pins: [analog('a', -30, 0), analog('b', 30, 0)],
+		params: [
+			{
+				key: 'action',
+				label: 'Action',
+				unit: '',
+				default: 'toggle',
+				choices: [
+					{ value: 'toggle', label: 'Toggle' },
+					{ value: 'momentary', label: 'Push-button' }
+				],
+				description: 'A toggle stays where it was put. A push-button springs back.'
+			},
+			{
+				key: 'start',
+				label: 'At rest',
+				unit: '',
+				default: 'open',
+				choices: [
+					{ value: 'open', label: 'Open' },
+					{ value: 'closed', label: 'Closed' }
+				]
+			},
+			{ key: 'at', label: 'Operates at', unit: 's', default: 1e-3, min: 0 },
+			{
+				key: 'hold',
+				label: 'Held for',
+				unit: 's',
+				default: 10e-3,
+				min: 0,
+				nonZero: true,
+				visibleWhen: { key: 'action', values: ['momentary'] }
+			},
+			{
+				key: 'bounce',
+				label: 'Contact bounce',
+				unit: 's',
+				default: 1e-3,
+				min: 0,
+				description:
+					'Contacts are springs, and they chatter for a millisecond or so before they settle. It is the whole reason a button wired to a counter counts three.'
+			},
+			{
+				key: 'r_on',
+				label: 'Closed resistance',
+				unit: 'Ω',
+				default: 0.05,
+				min: 0,
+				nonZero: true,
+				description: 'The metal and the contact pressure. Milliohms on a good switch, and the reason a bad one gets warm.'
+			},
+			{
+				key: 'r_off',
+				label: 'Open resistance',
+				unit: 'Ω',
+				default: 1e9,
+				min: 0,
+				nonZero: true,
+				description: 'Air, and whatever is condensed on the insulator beside it. Never actually infinite.'
+			}
+		]
+	},
+	{
+		/**
 		 * A place to measure, put where you want to measure it.
 		 *
 		 * Reading a trace called `n1` means counting nets by hand; reading one
@@ -582,6 +659,33 @@ export const CATALOG: ComponentDef[] = [
 		prefix: 'GND',
 		pins: [analog('g', 0, -10)],
 		params: []
+	},
+	{
+		/**
+		 * The other half of the ground symbol: a rail, without the wire back to it.
+		 *
+		 * Every supply symbol is its own ideal source referred to ground, rather
+		 * than a name that ties distant points into one net. For an ideal source
+		 * the two are the same circuit — each point is held at the same voltage
+		 * either way — and this one does not need a naming scheme to work. What it
+		 * costs is that each symbol carries its own current, so three of them on
+		 * one rail is three currents rather than one.
+		 */
+		kind: 'supply',
+		box: { x: -12, y: -18, w: 24, h: 28 },
+		label: 'Supply',
+		group: 'passive',
+		prefix: 'PWR',
+		pins: [analog('v', 0, 10)],
+		params: [
+			{
+				key: 'voltage',
+				label: 'Voltage',
+				unit: 'V',
+				default: 5,
+				description: 'Referred to ground, which the drawing still needs a symbol for.'
+			}
+		]
 	},
 	{
 		kind: 'vsource',

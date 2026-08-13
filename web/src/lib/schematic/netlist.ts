@@ -81,6 +81,70 @@ function waveform(instance: Instance): unknown {
 }
 
 /**
+ * How many times a contact makes and breaks before it settles.
+ *
+ * Four, which is at the quiet end of what a real one does and enough to be the
+ * thing it is here to be: a signal that has to be debounced. An even count so
+ * the chatter ends on the position the contact was moving to.
+ */
+const CHATTER = 4;
+
+/**
+ * The control voltage that drives one switch, as a piecewise-linear waveform.
+ *
+ * Zero is open and one is closed. The engine's switch interpolates between them
+ * in log-conductance, so the control only ever has to say which side of the
+ * threshold it is on — but the edges still have to be edges, because the solver
+ * puts a timepoint on every corner of a PWL and would otherwise ramp the
+ * resistance across nine decades over the whole run.
+ *
+ * Contacts are springs. They arrive, rebound, and arrive again a few times over
+ * a millisecond or so, with the gaps closing as the energy goes out of them —
+ * which is the entire reason a button wired straight to a counter counts three.
+ */
+function contactControl(instance: Instance): Array<[number, number]> {
+	const rest = str(instance, 'start', 'open') === 'closed' ? 1 : 0;
+	const at = Math.max(num(instance, 'at', 1e-3), 0);
+	const bounce = Math.max(num(instance, 'bounce', 0), 0);
+
+	// A push-button springs back; a toggle stays where it was put.
+	const operations =
+		str(instance, 'action', 'toggle') === 'momentary'
+			? [at, at + Math.max(num(instance, 'hold', 10e-3), 1e-12)]
+			: [at];
+
+	const points: Array<[number, number]> = [];
+	// Fast enough to read as a step beside a bounce a thousand times longer, and
+	// slow enough that the solver is not asked for a discontinuity.
+	const edge = Math.max(Math.min(bounce / 200, 1e-6), 1e-12);
+	let level = rest;
+	const move = (t: number, to: number) => {
+		if (to === level) return;
+		points.push([Math.max(t - edge, 0), level]);
+		points.push([Math.max(t, edge), to]);
+		level = to;
+	};
+
+	points.push([0, rest]);
+	for (const when of operations) {
+		const target = 1 - level;
+		if (bounce <= 0) {
+			move(when, target);
+			continue;
+		}
+		// Gaps halving each time, scaled so the whole train fits inside `bounce`.
+		const span = bounce / (1 - Math.pow(0.5, CHATTER));
+		move(when, target);
+		let elapsed = 0;
+		for (let k = 0; k < CHATTER; k++) {
+			elapsed += span * Math.pow(0.5, k + 1);
+			move(when + elapsed, k % 2 === 0 ? 1 - target : target);
+		}
+	}
+	return points;
+}
+
+/**
  * Fold a pasted `.model` card over what the part's own fields say.
  *
  * The card wins where the two overlap. Pasting one is an explicit statement that
@@ -242,6 +306,8 @@ export function compileSchematic(
 	// ---- components ------------------------------------------------------
 	const components: unknown[] = [];
 	const devices: unknown[] = [];
+	/** Nets already held at a voltage by a supply symbol, by net index. */
+	const railed = new Map<number, { name: string; volts: number }>();
 
 	for (const instance of schematic.instances) {
 		const name = instance.name;
@@ -252,6 +318,41 @@ export function compileSchematic(
 			// still joins a net, which is how it knows what it is measuring.
 			case 'probe':
 				break;
+			case 'supply': {
+				const index = connectivity.netOfPin.get(pinKey(instance.id, 'v'));
+				const net = index === undefined ? undefined : connectivity.nets[index];
+				const volts = num(instance, 'voltage', 5);
+				if (net?.isGround) {
+					errors.push(
+						`${name} sits on the ground net, which asks for ${volts} V and 0 V at the same point.`
+					);
+					break;
+				}
+				// Two symbols wired to each other are one rail drawn twice. A second
+				// ideal source across the first is a short between two voltages, so
+				// only the first is built — and if they disagree, that is worth
+				// saying, because one of the two numbers on the drawing is a lie.
+				const already = index === undefined ? undefined : railed.get(index);
+				if (already) {
+					if (already.volts !== volts) {
+						warnings.push(
+							`${name} and ${already.name} are on the same net but set to ${volts} V and ${already.volts} V. Using ${already.volts} V.`
+						);
+					}
+					break;
+				}
+				if (index !== undefined) railed.set(index, { name, volts });
+				components.push({
+					type: 'voltage_source',
+					name,
+					plus: analogOf(instance, 'v'),
+					minus: 'gnd',
+					waveform: { type: 'dc', value: volts },
+					ac_magnitude: 0,
+					ac_phase: 0
+				});
+				break;
+			}
 			case 'resistor':
 				components.push({
 					type: 'resistor',
@@ -279,6 +380,37 @@ export function compileSchematic(
 					inductance: drawn(instance, 'inductance', num(instance, 'inductance', 1e-3), seed)
 				});
 				break;
+			case 'switch': {
+				// The engine's switch is voltage-controlled, which is the general
+				// case and the one the digital output drivers are built on. A switch
+				// somebody flips is that with its control written out in advance, on
+				// a node of its own that nothing else can see.
+				const control = `${name}__contact`;
+				components.push({
+					type: 'voltage_source',
+					name: `${name}__actuator`,
+					plus: control,
+					minus: 'gnd',
+					waveform: { type: 'pwl', points: contactControl(instance) },
+					ac_magnitude: 0,
+					ac_phase: 0
+				});
+				components.push({
+					type: 'switch',
+					name,
+					a: analogOf(instance, 'a'),
+					b: analogOf(instance, 'b'),
+					control_plus: control,
+					control_minus: 'gnd',
+					model: {
+						v_on: 1,
+						v_off: 0,
+						r_on: num(instance, 'r_on', 0.05),
+						r_off: num(instance, 'r_off', 1e9)
+					}
+				});
+				break;
+			}
 			case 'vsource':
 				components.push({
 					type: 'voltage_source',

@@ -307,6 +307,12 @@ function valueLabel(instance: Instance): string | null {
 			return formatWithUnit(ledRating(instance), 'A');
 		case 'clock':
 			return formatWithUnit(Number(p.frequency), 'Hz');
+		case 'supply':
+			return formatWithUnit(Number(p.voltage), 'V');
+		case 'switch':
+			// When it operates, not what it is made of. A switch that never moves is
+			// a wire or a gap, and the drawing already says which.
+			return `${p.start === 'closed' ? 'opens' : 'closes'} ${formatWithUnit(Number(p.at), 's')}`;
 		default:
 			return null;
 	}
@@ -427,13 +433,17 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			const tx = sideways ? instance.x : instance.x + clear;
 			const align = sideways ? 'center' : 'left';
 
+			// A rail is named by its voltage. "5 V" says everything there is to say
+			// about it, and "PWR1" says nothing at all — so the value takes the
+			// place the designator would have had rather than sitting under it.
+			const rail = instance.kind === 'supply';
 			painter.text(
-				instance.name,
+				rail ? (valueLabel(instance) ?? instance.name) : instance.name,
 				{ x: tx, y: sideways ? instance.y - clear : instance.y - 6 },
 				{ size: labelSize, color: theme.labelStrong, align, baseline: 'bottom', minSize: 6 }
 			);
 
-			const value = valueLabel(instance);
+			const value = rail ? null : valueLabel(instance);
 			if (value) {
 				painter.text(
 					value,
