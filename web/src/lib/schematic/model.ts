@@ -635,7 +635,13 @@ export const CATALOG: ComponentDef[] = [
 				key: 'r_off',
 				label: 'Open resistance',
 				unit: 'Ω',
-				default: 1e9,
+				// A teraohm, not the gigaohm this used to be. A gigaohm across five
+				// volts is five nanoamps, and five nanoamps is not nothing — it is a
+				// hundred times the picoamp of leakage the solver puts on every node,
+				// so an open switch was the largest current in a circuit that was not
+				// conducting, and the animation dutifully scaled it up to a full flow.
+				// An open air gap between cleaned contacts is well past this.
+				default: 1e12,
 				min: 0,
 				nonZero: true,
 				description: 'Air, and whatever is condensed on the insulator beside it. Never actually infinite.'
@@ -1205,14 +1211,26 @@ export function migrateInstance(instance: Instance): Instance {
 	// Recognised by the whole default being untouched. Somebody who deliberately
 	// wanted a timed operation changed one of these three numbers to say when,
 	// and keeps it.
-	if (
-		instance.kind === 'switch' &&
-		instance.params.action === 'toggle' &&
-		instance.params.at === 1e-3 &&
-		instance.params.bounce === 1e-3 &&
-		instance.params.hold === 10e-3
-	) {
-		return { ...instance, params: { ...instance.params, action: 'manual' } };
+	//
+	// Accumulated rather than returned one at a time, because a switch drawn early
+	// enough carries both of these defaults and an early return would have applied
+	// whichever was written first and silently dropped the other.
+	if (instance.kind === 'switch') {
+		const params = { ...instance.params };
+		if (
+			params.action === 'toggle' &&
+			params.at === 1e-3 &&
+			params.bounce === 1e-3 &&
+			params.hold === 10e-3
+		) {
+			params.action = 'manual';
+		}
+		// The open contact used to be a gigaohm, which leaks nanoamps — enough to be
+		// the biggest current in a circuit that is switched off, and so enough to
+		// make the animation run dots through an open switch at full speed. Only the
+		// untouched default moves: a number somebody typed is a number they meant.
+		if (params.r_off === 1e9) params.r_off = 1e12;
+		return { ...instance, params };
 	}
 	return instance;
 }

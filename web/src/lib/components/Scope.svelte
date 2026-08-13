@@ -84,6 +84,34 @@
 	 */
 	let separate = $state(false);
 
+	/**
+	 * Turn the extremes of a signal into a window worth drawing it in.
+	 *
+	 * Filling the plot with whatever the signal did is right for a signal that did
+	 * something and badly wrong for one that did not. Two traces sitting on a 5 V
+	 * rail differ by half a millivolt, and scaled to themselves that half
+	 * millivolt filled the screen: five gridlines, all of them labelled `5V`,
+	 * with the traces apparently miles apart. Nothing about that reading was
+	 * false and none of it was useful.
+	 *
+	 * So a swing that is negligible beside the level it sits on is treated as no
+	 * swing, and the window opens out to include ground — which is the thing a
+	 * flat trace is actually telling you about. A signal that genuinely moves
+	 * keeps the close-up, and the gain knob is there for anyone who wants the
+	 * ripple on a rail.
+	 */
+	function windowFor(lo: number, hi: number) {
+		if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { lo: -1, hi: 1 };
+		const level = Math.max(Math.abs(lo), Math.abs(hi));
+		if (hi - lo < Math.max(level * 0.01, 1e-12)) {
+			if (level < 1e-12) return { lo: -0.5, hi: 0.5 };
+			lo = Math.min(lo, 0);
+			hi = Math.max(hi, 0);
+		}
+		const pad = (hi - lo) * 0.1;
+		return { lo: lo - pad, hi: hi + pad };
+	}
+
 	/** Range of one trace on its own, padded so nothing touches its band edge. */
 	function spanOf(series: Array<Float64Array | undefined>) {
 		let lo = Infinity;
@@ -95,13 +123,7 @@
 				if (v > hi) hi = v;
 			}
 		}
-		if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { lo: -1, hi: 1 };
-		if (hi - lo < 1e-12) {
-			const centre = (hi + lo) / 2 || 0;
-			return { lo: centre - 0.5, hi: centre + 0.5 };
-		}
-		const pad = (hi - lo) * 0.1;
-		return { lo: lo - pad, hi: hi + pad };
+		return windowFor(lo, hi);
 	}
 
 	/**
@@ -140,14 +162,7 @@
 				}
 			}
 		}
-		if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { lo: -1, hi: 1 };
-		if (hi - lo < 1e-12) {
-			// A perfectly flat trace still needs a window to be drawn inside.
-			const centre = (hi + lo) / 2 || 0;
-			return { lo: centre - 0.5, hi: centre + 0.5 };
-		}
-		const pad = (hi - lo) * 0.1;
-		return { lo: lo - pad, hi: hi + pad };
+		return windowFor(lo, hi);
 	});
 
 	function niceStep(span: number, target: number): number {

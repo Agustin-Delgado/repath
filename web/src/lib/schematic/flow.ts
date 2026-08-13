@@ -36,7 +36,16 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number]>> = {
 	resistor: [['a', -1], ['b', 1]],
 	capacitor: [['a', -1], ['b', 1]],
 	inductor: [['a', -1], ['b', 1]],
+	// A closed switch is a 50 mΩ resistor and carries every amp the loop does.
+	// Missing from this table it was invisible here, and the effect was not that
+	// the switch drew no current — it was that the *wire feeding it* drew none,
+	// because a net whose only part is unknown to the planner has nothing to
+	// accumulate. Half a working circuit animated and the other half looked dead.
+	switch: [['a', -1], ['b', 1]],
 	vsource: [['plus', -1], ['minus', 1]],
+	// One pin, like an op-amp output: the return is the ground the symbol means
+	// rather than a terminal on the drawing.
+	supply: [['v', -1]],
 	isource: [['plus', -1], ['minus', 1]],
 	diode: [['anode', -1], ['cathode', 1]],
 	led: [['anode', -1], ['cathode', 1]],

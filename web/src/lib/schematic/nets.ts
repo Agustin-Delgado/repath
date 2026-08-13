@@ -638,11 +638,40 @@ function short(pin: string): string {
 /**
  * Parts that do not carry a current at DC, and so cannot hold a node anywhere.
  *
- * A capacitor is an open circuit once everything has settled; a switch is one
- * whenever it happens to be open, which is the case worth worrying about; a
- * current source and a probe are high impedances by definition.
+ * A capacitor is an open circuit once everything has settled; a current source
+ * and a probe are high impedances by definition. A switch is not on this list:
+ * it is an open circuit when it is open and a piece of wire when it is closed,
+ * which is a fact about the moment rather than about the drawing.
  */
-const NO_DC_PATH = new Set(['capacitor', 'switch', 'isource', 'probe']);
+const NO_DC_PATH = new Set(['capacitor', 'isource', 'probe']);
+
+/** One conductive route between two nets. `via` is a switch that has to be closed. */
+interface DcEdge {
+	to: number;
+	via?: string;
+}
+
+export interface FloatingInput {
+	net: number;
+	instance: Instance;
+	pin: string;
+	/**
+	 * Whether closing a switch would give it a level.
+	 *
+	 * The two cases want opposite treatment and used to get the same one. An input
+	 * nothing can ever hold is undefined for the whole run, so the gate is better
+	 * off with `unknown` than with a level invented for it. An input a switch
+	 * feeds is perfectly defined while that switch is closed — which is the
+	 * circuit somebody drew, and the whole reason they drew a switch.
+	 */
+	conditional: boolean;
+}
+
+export interface FloatingAnalysis {
+	inputs: FloatingInput[];
+	/** Nets with no route to a rail given which switches are closed right now. */
+	floatingWith: (closed: ReadonlySet<string>) => Set<number>;
+}
 
 /**
  * Logic inputs left floating whenever the switches around them open.
@@ -656,8 +685,12 @@ const NO_DC_PATH = new Set(['capacitor', 'switch', 'isource', 'probe']);
  * real board the same circuit reads whatever the input capacitance picked up
  * from the mains, which is worse.
  *
- * Found by asking which nets can reach ground *without* going through a switch:
- * anything a switch is the only route from has no defined level once it opens.
+ * Found by asking which nets reach ground through something that conducts, with
+ * switches as edges that only exist while they are closed. Answering that once,
+ * with every switch treated as permanently open, is what made a button wired to
+ * a gate dead rather than undefined: closing it changed nothing, because the
+ * verdict had been reached before anybody touched it.
+ *
  * Multi-terminal parts are treated as joining all of their pins, which is not
  * true of a transistor gate and is deliberately the forgiving direction — this
  * should stay quiet unless it is sure.
@@ -665,22 +698,21 @@ const NO_DC_PATH = new Set(['capacitor', 'switch', 'isource', 'probe']);
 export function floatingLogicInputs(
 	schematic: Schematic,
 	connectivity: Connectivity
-): Array<{ net: number; instance: Instance; pin: string }> {
+): FloatingAnalysis {
 	const netOf = (instance: Instance, pin: string) =>
 		connectivity.netOfPin.get(pinKey(instance.id, pin));
 
-	// Nets that reach ground through something that conducts at DC.
-	const reachable = new Set<number>();
-	const edges = new Map<number, number[]>();
-	const join = (a: number, b: number) => {
+	const edges = new Map<number, DcEdge[]>();
+	const join = (a: number, b: number, via?: string) => {
 		if (a === b) return;
 		for (const [from, to] of [
 			[a, b],
 			[b, a]
 		]) {
+			const edge: DcEdge = via === undefined ? { to } : { to, via };
 			const list = edges.get(from);
-			if (list) list.push(to);
-			else edges.set(from, [to]);
+			if (list) list.push(edge);
+			else edges.set(from, [edge]);
 		}
 	};
 
@@ -702,32 +734,58 @@ export function floatingLogicInputs(
 			.pins.filter((pin) => pin.domain === 'analog')
 			.map((pin) => netOf(instance, pin.name))
 			.filter((index): index is number => index !== undefined);
-		for (let i = 1; i < on.length; i++) join(on[0], on[i]);
+		const via = instance.kind === 'switch' ? instance.id : undefined;
+		for (let i = 1; i < on.length; i++) join(on[0], on[i], via);
 	}
 
-	const queue = [GROUND];
-	while (queue.length > 0) {
-		const at = queue.pop()!;
-		for (const next of edges.get(at) ?? []) {
-			if (reachable.has(next)) continue;
-			reachable.add(next);
-			queue.push(next);
+	/** Nets reachable from the reference. `'all'` closes every switch at once. */
+	const reach = (closed: ReadonlySet<string> | 'all'): Set<number> => {
+		const seen = new Set<number>();
+		const queue = [GROUND];
+		while (queue.length > 0) {
+			const at = queue.pop()!;
+			for (const edge of edges.get(at) ?? []) {
+				if (edge.via !== undefined && closed !== 'all' && !closed.has(edge.via)) continue;
+				if (seen.has(edge.to)) continue;
+				seen.add(edge.to);
+				queue.push(edge.to);
+			}
 		}
-	}
+		return seen;
+	};
 
-	const floating: Array<{ net: number; instance: Instance; pin: string }> = [];
+	const NONE: ReadonlySet<string> = new Set();
+	const best = reach('all');
+	const worst = reach(NONE);
+
+	const inputs: FloatingInput[] = [];
+	const watched = new Set<number>();
 	for (const net of connectivity.nets) {
 		// Only where a level is going to be read off it. An analog node with no DC
 		// path is an ordinary AC-coupled node and nobody needs telling.
-		if (!net.hasDigitalInput || !net.hasAnalog || reachable.has(net.index)) continue;
+		if (!net.hasDigitalInput || !net.hasAnalog || worst.has(net.index)) continue;
 		// Something digital driving the net holds it at a rail through the bridge,
 		// which is a path to the reference by any other name.
 		if (net.hasDigitalOutput) continue;
+		watched.add(net.index);
 		for (const ref of net.pins) {
 			if (ref.pin.domain === 'digital' && ref.pin.direction === 'in') {
-				floating.push({ net: net.index, instance: ref.instance, pin: ref.pin.name });
+				inputs.push({
+					net: net.index,
+					instance: ref.instance,
+					pin: ref.pin.name,
+					conditional: best.has(net.index)
+				});
 			}
 		}
 	}
-	return floating;
+
+	return {
+		inputs,
+		floatingWith: (closed) => {
+			if (watched.size === 0) return new Set();
+			const held = reach(closed);
+			return new Set([...watched].filter((net) => !held.has(net)));
+		}
+	};
 }

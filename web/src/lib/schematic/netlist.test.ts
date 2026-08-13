@@ -717,7 +717,9 @@ describe('a logic input with nothing holding it', () => {
 			parts.push(at('resistor', 'R1', 100, 280, 90));
 			wires.push([100, 230, 100, 250], [100, 310, 100, 330]);
 		}
-		return compileSchematic(drawing(parts, wires)).warnings.filter((w) => w.includes('no path to either rail'));
+		return compileSchematic(drawing(parts, wires)).warnings.filter((w) =>
+			w.includes('pull-down')
+		);
 	}
 
 	it('says so, because the simulation is right and looks broken', () => {
@@ -728,7 +730,11 @@ describe('a logic input with nothing holding it', () => {
 		expect(said.length).toBeGreaterThan(0);
 		expect(said[0]).toContain('U1.');
 		expect(said[0]).toContain('pull-down');
-		expect(said[0]).toContain('unknown');
+		// And it says which mistake it is. This input is not undefined for the whole
+		// run — it is defined whenever the contact is closed, which is the circuit
+		// that was drawn. Reporting it as permanently undefined is how the switch
+		// came to do nothing at all.
+		expect(said[0]).toContain('while a switch is closed');
 	});
 
 	it('stays quiet once something pulls the input the other way', () => {
@@ -770,20 +776,65 @@ describe('what a floating input is handed to the engine as', () => {
 			wires.push([100, 230, 100, 250], [100, 310, 100, 330]);
 		}
 		const result = compileSchematic(drawing(parts, wires));
-		return result.netlist as { bridges: Array<Record<string, unknown>> };
+		return {
+			netlist: result.netlist as { bridges: Array<Record<string, unknown>> },
+			result
+		};
 	};
 
-	it('is not bridged at all, so the gate is given unknown', () => {
-		// The bridge would compare a voltage that leakage put there against a
-		// threshold and come back with a level — and a level that came from leakage
-		// looks exactly like one that came from the circuit. Unbridged, the digital
-		// net has no driver and stays unknown, which is what it is.
-		expect(built(false).bridges.filter((b) => b.direction === 'to_digital')).toEqual([]);
+	it('is still bridged when a switch can hold it, or closing it would do nothing', () => {
+		// This is the fix for the reported circuit. Deleting the bridge because the
+		// input floats *while the switch is open* also deletes it for every instant
+		// the switch is closed — and then the contact makes no difference to
+		// anything, which is exactly what was reported: five volts on the wire, the
+		// gate unmoved, and "floating" printed over a node holding five volts.
+		expect(built(false).netlist.bridges.filter((b) => b.direction === 'to_digital')).toHaveLength(
+			1
+		);
 	});
 
 	it('is bridged as soon as something holds it', () => {
-		const bridged = built(true).bridges.filter((b) => b.direction === 'to_digital');
+		const bridged = built(true).netlist.bridges.filter((b) => b.direction === 'to_digital');
 		expect(bridged).toHaveLength(1);
+	});
+
+	it('is called floating only at the instants when it is', () => {
+		const { result } = built(false);
+		const s1 = /** @type {const} */ (
+			result.connectivity.nets.flatMap((n) => n.pins).find((p) => p.instance.kind === 'switch')!
+		).instance;
+
+		// Open: nothing decides the node, and the drawing says so rather than
+		// printing the number leakage left on it.
+		expect(result.floatingAt(new Set()).size).toBe(1);
+		// Closed: the rail is on it through 50 mΩ. Calling that floating is the same
+		// lie in the other direction.
+		expect(result.floatingAt(new Set([s1.id]))).toEqual(new Set());
+	});
+
+	it('leaves an input no switch can reach unbridged, because that one really is undefined', () => {
+		// A gate input behind a capacitor — the AC-coupled input, which is the other
+		// classic way to leave one undefined. A capacitor is an open circuit at DC,
+		// and unlike a switch there is no position anybody can put it in that makes
+		// it conduct, so "unknown" is the whole truth about that node for the whole
+		// run.
+		const schematic = drawing(
+			[
+				at('supply', 'PWR1', 100, 100),
+				at('capacitor', 'C1', 100, 170, 90),
+				at('not', 'U1', 260, 230),
+				at('ground', 'GND1', 100, 340)
+			],
+			[
+				[100, 110, 100, 140],
+				[100, 200, 100, 230],
+				[100, 230, 230, 230]
+			]
+		);
+		const result = compileSchematic(schematic);
+		expect(result.warnings.some((w) => w.includes('no path to either rail'))).toBe(true);
+		const netlist = result.netlist as { bridges: Array<Record<string, unknown>> } | null;
+		expect(netlist?.bridges.filter((b) => b.direction === 'to_digital')).toEqual([]);
 	});
 });
 
@@ -794,8 +845,28 @@ describe('switches drawn before they could be clicked', () => {
 		// itself over a millisecond into every run and undoes whatever position it
 		// was put in, which reads as a switch with a mind of its own.
 		const old = at('switch', 'S1', 100, 100);
-		old.params = { ...old.params, action: 'toggle', at: 1e-3, bounce: 1e-3, hold: 10e-3 };
-		expect(migrateInstance(old).params.action).toBe('manual');
+		old.params = { ...old.params, action: 'toggle', at: 1e-3, bounce: 1e-3, hold: 10e-3, r_off: 1e9 };
+		const migrated = migrateInstance(old);
+		expect(migrated.params.action).toBe('manual');
+		// And both migrations land. A switch from that build carries both defaults,
+		// so returning after the first would fix the one written first and drop the
+		// other — the sort of bug that only appears on the oldest drawings, which
+		// are exactly the ones nobody re-tests.
+		expect(migrated.params.r_off).toBe(1e12);
+	});
+
+	it('stop drawing current through an open contact', () => {
+		// A gigaohm across five volts is five nanoamps, which was the largest
+		// current in any circuit that was switched off — so the animation normalised
+		// to it and ran the dots at full speed through an open switch.
+		const old = at('switch', 'S4', 100, 100);
+		old.params = { ...old.params, r_off: 1e9 };
+		expect(migrateInstance(old).params.r_off).toBe(1e12);
+
+		// A number somebody typed is a number they meant, even a bad one.
+		const chosen = at('switch', 'S5', 100, 100);
+		chosen.params = { ...chosen.params, r_off: 5e8 };
+		expect(migrateInstance(chosen).params.r_off).toBe(5e8);
 	});
 
 	it('leaves a schedule somebody chose alone', () => {

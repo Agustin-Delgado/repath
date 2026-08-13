@@ -41,13 +41,20 @@ export interface CompileResult {
 	/** Net index -> the names it was given. */
 	names: Map<number, NetNames>;
 	/**
-	 * Nets carrying a logic input that nothing holds at either rail.
+	 * Nets carrying a logic input that nothing holds at either rail, given which
+	 * switches are closed at the instant being drawn.
 	 *
 	 * Their voltage is whatever leakage decided, which is not a measurement of
 	 * anything — so the drawing shows them as undetermined rather than printing a
 	 * number that looks exactly like a real one.
+	 *
+	 * A question about an instant rather than about the drawing, and that is the
+	 * whole point of it: a node fed through a closed switch is being held, and
+	 * labelling it "floating" while five volts sits on it is the same lie as
+	 * printing a number for one that really is adrift. Pass an empty set for the
+	 * worst case, which is what a drawing with no run behind it is showing.
 	 */
-	floatingNets: Set<number>;
+	floatingAt: (closedSwitches: ReadonlySet<string>) => Set<number>;
 	errors: string[];
 	warnings: string[];
 	connectivity: Connectivity;
@@ -607,9 +614,25 @@ export function compileSchematic(
 	// mistake there is with a switch, and the one that looks least like a
 	// mistake: the level it reads is decided by leakage, so the gate answers with
 	// total confidence and the switch appears to do nothing.
-	const floating = new Set<number>();
-	for (const { net, instance, pin } of floatingLogicInputs(schematic, connectivity)) {
-		floating.add(net);
+	//
+	// Two cases, and they are not the same mistake. An input no switch can ever
+	// reach is undefined for the whole run, and giving the gate "unknown" is the
+	// only honest thing to do with it. An input a switch feeds is defined while
+	// that switch is closed — so it stays bridged, and the drawing reports it as
+	// floating only at the instants when it actually is. Treating both as the
+	// first is what left a button wired to a gate doing nothing at all: the
+	// verdict was reached at compile time and closing the contact came too late
+	// to change it.
+	const { inputs, floatingWith } = floatingLogicInputs(schematic, connectivity);
+	const undefinedNets = new Set<number>();
+	for (const { net, instance, pin, conditional } of inputs) {
+		if (conditional) {
+			warnings.push(
+				`${instance.name}.${pin} is held only while a switch is closed. With that switch open nothing decides what it reads, so it is left to leakage rather than to the circuit. A pull-down resistor to ground, or a pull-up to the supply, is what gives it a level either way.`
+			);
+			continue;
+		}
+		undefinedNets.add(net);
 		warnings.push(
 			`${instance.name}.${pin} has no path to either rail, so nothing decides what it reads — it is left to leakage, which is not a logic level. The gate is given "unknown" rather than a level invented for it. A pull-down resistor to ground, or a pull-up to the supply, is what fixes it.`
 		);
@@ -635,7 +658,7 @@ export function compileSchematic(
 		// input reported as a confident High is how somebody ships a board that
 		// works on the bench and not in the field. Left unbridged, the digital net
 		// has no driver and stays unknown, which is what it is.
-		if (net.hasDigitalInput && !floating.has(net.index)) {
+		if (net.hasDigitalInput && !undefinedNets.has(net.index)) {
 			bridges.push({
 				direction: 'to_digital',
 				name: `BAD${net.index}`,
@@ -659,7 +682,7 @@ export function compileSchematic(
 			? null
 			: { components, devices, bridges, temperature, logic_family: logicFamily(family) },
 		names,
-		floatingNets: floating,
+		floatingAt: floatingWith,
 		errors,
 		warnings,
 		connectivity

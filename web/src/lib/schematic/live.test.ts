@@ -1,0 +1,312 @@
+/**
+ * What the screen actually shows, end to end: draw, compile, simulate, animate.
+ *
+ * Every other suite in this directory stops at the netlist — it checks that the
+ * compiler emitted a `switch` with the right fields and calls that the switch
+ * working. It is not. Between the netlist and the picture there is the engine,
+ * and then there is `prepareFlow`, which decides which wires have current in
+ * them; a component the flow planner has never heard of compiles perfectly,
+ * simulates correctly and draws no current at all. Nothing above this file could
+ * see that, which is why it shipped.
+ *
+ * So these tests assert on the three things a person looks at: the voltage on a
+ * net, the current in each leg of wire, and the current through each part.
+ */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { beforeAll, describe, expect, it } from 'vitest';
+import init, { Simulation } from '../wasm/repath.js';
+import { compileSchematic } from './netlist';
+import { isFlowing } from './animate';
+import { prepareFlow, sampleFlow, sampleIndexAt, type FlowFrame } from './flow';
+import {
+	defaultParams,
+	pointKey,
+	type Instance,
+	type Rotation,
+	type Schematic
+} from './model';
+import type { TransientRun } from '$lib/engine';
+
+/**
+ * The engine, booted from bytes rather than fetched.
+ *
+ * `init()` on its own goes looking for a URL, which works in a browser and not
+ * here. Handing it the file is all it takes to make the real engine testable
+ * outside one — and the alternative, a hand-written stand-in, would agree with
+ * whatever this file assumed and prove nothing.
+ */
+beforeAll(async () => {
+	const wasm = fileURLToPath(new URL('../wasm/repath_bg.wasm', import.meta.url));
+	await init({ module_or_path: readFileSync(wasm) });
+});
+
+let counter = 0;
+
+function at(kind: string, name: string, x: number, y: number, rotation: Rotation = 0): Instance {
+	return { id: `i${++counter}`, kind, name, x, y, rotation, params: defaultParams(kind) };
+}
+
+function drawing(instances: Instance[], runs: Array<[number, number, number, number]>): Schematic {
+	return {
+		instances,
+		wires: runs.map(([x1, y1, x2, y2]) => ({
+			id: `w${++counter}`,
+			points: [
+				{ x: x1, y: y1 },
+				{ x: x2, y: y2 }
+			]
+		}))
+	};
+}
+
+/** Run a drawing the way the app does, and read the frame at `time`. */
+function simulate(schematic: Schematic, stop = 1e-3, time = stop) {
+	const compiled = compileSchematic(schematic);
+	expect(compiled.errors).toEqual([]);
+
+	const simulation = new Simulation(JSON.stringify(compiled.netlist));
+	let run: TransientRun;
+	try {
+		const meta = JSON.parse(simulation.runTransient(stop, stop / 400)) as {
+			unknown_names: string[];
+			node_count: number;
+			element_names: string[];
+			net_names: string[];
+			digital: Array<Array<{ time: number; state: string }>>;
+		};
+		const signals = new Map<string, Float64Array>();
+		const signalsByIndex = meta.unknown_names.map((name, index) => {
+			const samples = simulation.signal(index);
+			signals.set(name, samples);
+			return samples;
+		});
+		run = {
+			time: simulation.time(),
+			signals,
+			signalsByIndex,
+			unknownNames: meta.unknown_names,
+			nodeCount: meta.node_count,
+			elementNames: meta.element_names,
+			currents: meta.element_names.map((_, index) => simulation.current(index)),
+			netNames: meta.net_names,
+			digital: meta.digital as TransientRun['digital'],
+			failures: [],
+			stats: { accepted_steps: 0, rejected_steps: 0, newton_iterations: 0, digital_events: 0 },
+			elapsedMs: 0
+		};
+	} finally {
+		simulation.free();
+	}
+
+	const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
+	const frame = sampleFlow(context, sampleIndexAt(run.time, time));
+	return { compiled, run, context, frame };
+}
+
+/** What the drawing shows on the wire through a point, in amps. */
+function currentAt(schematic: Schematic, frame: FlowFrame, x: number, y: number): number {
+	const key = pointKey(x, y);
+	for (const wire of schematic.wires) {
+		for (let i = 0; i < wire.points.length - 1; i++) {
+			const a = wire.points[i];
+			const b = wire.points[i + 1];
+			if (pointKey(a.x, a.y) !== key && pointKey(b.x, b.y) !== key) continue;
+			return Math.abs(frame.wireCurrent.get(`${wire.id}#${i}`) ?? 0);
+		}
+	}
+	throw new Error(`no wire through ${key}`);
+}
+
+/** Volts on the net through a point. */
+function voltsAt(
+	schematic: Schematic,
+	compiled: ReturnType<typeof compileSchematic>,
+	frame: FlowFrame,
+	x: number,
+	y: number
+): number {
+	const net = compiled.connectivity.netOfPoint.get(pointKey(x, y));
+	if (net === undefined) throw new Error(`nothing at ${x},${y}`);
+	return frame.netVoltage.get(net) ?? 0;
+}
+
+/**
+ * The circuit anybody draws first: a supply, a switch, a resistor, a ground.
+ *
+ * Every wire in it carries the same current, because it is one series loop. That
+ * is the whole assertion — not that the netlist mentions a switch, but that the
+ * current the drawing shows is the current flowing.
+ */
+function lamp(start: 'open' | 'closed'): Schematic {
+	const supply = at('supply', 'PWR1', 100, 190);
+	const s1 = at('switch', 'S1', 200, 200);
+	s1.params.start = start;
+	return drawing(
+		[supply, s1, at('resistor', 'R1', 320, 200), at('ground', 'GND1', 420, 210)],
+		[
+			[100, 200, 170, 200],
+			[230, 200, 290, 200],
+			[350, 200, 420, 200]
+		]
+	);
+}
+
+describe('a switch in a series loop', () => {
+	it('puts the same current in every leg of wire when it is closed', () => {
+		const schematic = lamp('closed');
+		const { compiled, frame } = simulate(schematic);
+
+		// 5 V across 1 kΩ, give or take the contact.
+		const expected = 5 / 1000.05;
+		expect(frame.instanceCurrent.get(schematic.instances[2].id)).toBeCloseTo(expected, 6);
+
+		// One loop, so all three legs carry it: the one feeding the switch, the one
+		// between switch and resistor, and the return. A leg reading zero in a
+		// circuit that is passing 5 mA is the animation saying nothing flows here.
+		expect(currentAt(schematic, frame, 100, 200)).toBeCloseTo(expected, 6);
+		expect(currentAt(schematic, frame, 230, 200)).toBeCloseTo(expected, 6);
+		expect(currentAt(schematic, frame, 350, 200)).toBeCloseTo(expected, 6);
+
+		// And the supply is at its voltage, with the closed contact dropping ~nothing.
+		expect(voltsAt(schematic, compiled, frame, 100, 200)).toBeCloseTo(5, 6);
+		expect(voltsAt(schematic, compiled, frame, 290, 200)).toBeCloseTo(5, 3);
+	});
+
+	it('stops the current, and the node it feeds, when it is open', () => {
+		const schematic = lamp('open');
+		const { compiled, frame } = simulate(schematic);
+
+		expect(currentAt(schematic, frame, 100, 200)).toBeLessThan(1e-6);
+		expect(currentAt(schematic, frame, 350, 200)).toBeLessThan(1e-6);
+
+		// The far side is pulled to ground by the resistor. Reading 5 V here is the
+		// complaint that started this: an open switch that looks closed.
+		expect(voltsAt(schematic, compiled, frame, 290, 200)).toBeLessThan(0.01);
+		expect(voltsAt(schematic, compiled, frame, 100, 200)).toBeCloseTo(5, 6);
+	});
+
+	it('does not animate its own leakage as a flow when it is open', () => {
+		// Everything about the animation is relative to the biggest current in the
+		// run, and in a circuit that never conducts the biggest current is the
+		// leakage through the open contact. Normalised to itself, that drew dots at
+		// full speed through a switch nobody had closed.
+		const dark = lamp('open');
+		const open = simulate(dark);
+		expect(isFlowing(currentAt(dark, open.frame, 100, 200), open.context.currentScale)).toBe(false);
+
+		// And the working circuit is unaffected: 5 mA is still a flow.
+		const lit = lamp('closed');
+		const closed = simulate(lit);
+		expect(isFlowing(currentAt(lit, closed.frame, 100, 200), closed.context.currentScale)).toBe(
+			true
+		);
+	});
+
+	it('shows the current through the switch itself, not only around it', () => {
+		const schematic = lamp('closed');
+		const { context, frame } = simulate(schematic);
+		const s1 = schematic.instances[1];
+
+		// Without this the dots stop at one blade and start again at the other.
+		expect(context.instanceFlow.get(s1.id)).toEqual({ from: 'a', to: 'b' });
+		expect(frame.instanceCurrent.get(s1.id) ?? 0).toBeCloseTo(5 / 1000.05, 6);
+	});
+});
+
+describe('a supply terminal', () => {
+	it('carries the loop current like the source it is', () => {
+		const schematic = lamp('closed');
+		const { context, frame } = simulate(schematic);
+		const pwr = schematic.instances[0];
+
+		expect(context.instanceElement.has(pwr.id)).toBe(true);
+		expect(Math.abs(frame.instanceCurrent.get(pwr.id) ?? 0)).toBeCloseTo(5 / 1000.05, 6);
+	});
+});
+
+/**
+ * A switch feeding a logic input, with a pull-down holding it low when the
+ * switch is open. This is the correct way to wire a button to a gate, and it has
+ * to work: the reading on the gate's input net must follow the contact.
+ */
+function button(start: 'open' | 'closed'): Schematic {
+	const s1 = at('switch', 'S1', 200, 200);
+	s1.params.start = start;
+	const pulldown = at('resistor', 'R1', 300, 300, 90);
+	pulldown.params.resistance = 10000;
+	return drawing(
+		[at('supply', 'PWR1', 100, 190), s1, pulldown, at('not', 'U1', 400, 200), at('ground', 'GND1', 300, 340)],
+		[
+			[100, 200, 170, 200],
+			[230, 200, 370, 200],
+			[300, 200, 300, 270]
+		]
+	);
+}
+
+describe('a button on a gate input', () => {
+	it('is not called floating when a pull-down holds it', () => {
+		const { compiled } = simulate(button('open'));
+		expect(compiled.warnings.filter((w) => w.includes('no path to either rail'))).toEqual([]);
+		expect(compiled.floatingAt(new Set()).size).toBe(0);
+	});
+
+	it('reads low with the switch open and high with it closed', () => {
+		const open = button('open');
+		const closed = button('closed');
+
+		const low = simulate(open);
+		expect(voltsAt(open, low.compiled, low.frame, 370, 200)).toBeLessThan(0.5);
+
+		const high = simulate(closed);
+		expect(voltsAt(closed, high.compiled, high.frame, 370, 200)).toBeGreaterThan(4.5);
+	});
+
+	it('still drives the gate when there is no pull-down and the button is pressed', () => {
+		// The reported circuit, and the one the old compile-time verdict killed: no
+		// pull-down, so the input floats *while the switch is open*. That is a real
+		// complaint and it gets a warning — but it is not a reason to leave the gate
+		// unbridged, because then closing the contact changes nothing either.
+		const schematic = drawing(
+			[
+				at('supply', 'PWR1', 100, 190),
+				(() => {
+					const s = at('switch', 'S2', 200, 200);
+					s.params.start = 'closed';
+					return s;
+				})(),
+				at('not', 'U2', 400, 200),
+				at('ground', 'GND2', 600, 210)
+			],
+			[
+				[100, 200, 170, 200],
+				[230, 200, 370, 200]
+			]
+		);
+		const { compiled, run, frame } = simulate(schematic);
+
+		expect(compiled.warnings.some((w) => w.includes('while a switch is closed'))).toBe(true);
+		expect(voltsAt(schematic, compiled, frame, 370, 200)).toBeGreaterThan(4.5);
+		expect((run.digital.at(-1) ?? []).at(-1)?.state).toBe('low');
+
+		// And the node is reported as held while the contact is, rather than being
+		// labelled "floating" over five volts.
+		const s2 = schematic.instances[1];
+		expect(compiled.floatingAt(new Set([s2.id]))).toEqual(new Set());
+		expect(compiled.floatingAt(new Set()).size).toBe(1);
+	});
+
+	it('inverts what the button does, which is what the gate is for', () => {
+		for (const [start, expected] of [
+			['open', 'high'],
+			['closed', 'low']
+		] as const) {
+			const schematic = button(start);
+			const { run } = simulate(schematic);
+			const transitions = run.digital.at(-1) ?? [];
+			expect(transitions.at(-1)?.state, `U1 output with the switch ${start}`).toBe(expected);
+		}
+	});
+});

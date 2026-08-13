@@ -67,6 +67,21 @@ const REFERENCE_SPEED = 90;
 /** Below this fraction of the reference, nothing is drawn: it reads as noise. */
 const MOTION_FLOOR = 0.002;
 
+/**
+ * And below this current, nothing is drawn whatever the reference is.
+ *
+ * The fraction above is the right rule for a working circuit and the wrong one
+ * for a circuit that is switched off, because there the largest current in the
+ * run *is* the leakage — through the open contact, and through the picoamp of
+ * gmin the solver hangs on every node — so normalising to it drew that leakage
+ * as a full, brisk flow. An open switch animated exactly like a closed one.
+ *
+ * A nanoamp: three orders of magnitude above that gmin, and far below anything
+ * anybody watches move. A circuit whose signal really is a few picoamps is not
+ * one being read off dots on a wire, and it still has the scope.
+ */
+const CURRENT_FLOOR = 1e-9;
+
 export interface AnimationState {
 	/** Accumulated travel per wire or device, in schematic units. */
 	phase: Map<string, number>;
@@ -91,7 +106,10 @@ export function advance(
 ): void {
 	const step = (key: string, current: number) => {
 		const normalised = current / scale;
-		if (Math.abs(normalised) < MOTION_FLOOR) return;
+		// The same rule the drawing uses, so a dot never advances on a leg that is
+		// not being painted — otherwise a switch closed after a long open stretch
+		// would show its dots already halfway along.
+		if (!isFlowing(current, scale)) return;
 		const next = (state.phase.get(key) ?? 0) + normalised * REFERENCE_SPEED * dt;
 		// Wrap rather than grow without bound: after a few minutes of playback the
 		// accumulated value would start losing precision where it matters.
@@ -125,7 +143,7 @@ export function dotsAlong(a: Vec2, b: Vec2, phase: number): Vec2[] {
 
 /** Whether a current is worth animating at all. */
 export function isFlowing(current: number, scale: number): boolean {
-	return Math.abs(current / scale) >= MOTION_FLOOR;
+	return Math.abs(current) >= CURRENT_FLOOR && Math.abs(current / scale) >= MOTION_FLOOR;
 }
 
 /** Draw the moving dots for one segment. */

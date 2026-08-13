@@ -9,7 +9,7 @@
 	 */
 	import { CanvasEditor, type Painter } from '$lib/canvas';
 	import { createAnimationState } from '$lib/schematic/animate';
-	import { isActuatedAt } from '$lib/schematic/contacts';
+	import { isActuatedAt, isClosedAt } from '$lib/schematic/contacts';
 	import {
 		drawGrid,
 		drawSchematic,
@@ -103,6 +103,23 @@
 	 * say the same thing.
 	 */
 	let switchStates = new Map<string, boolean>();
+
+	/**
+	 * Which contacts are conducting at an instant, by instance id.
+	 *
+	 * Not the same question as `switchStates`, which is where the blade is *drawn*
+	 * and deliberately leaves the bounce out. This one is the electrical truth,
+	 * and it decides whether a node fed through a switch counts as held or as
+	 * floating — so it has to agree with what the engine was given, chatter and
+	 * all, rather than with what the symbol looks like.
+	 */
+	function closedSwitchesAt(time: number): Set<string> {
+		const closed = new Set<string>();
+		for (const instance of app.schematic.instances) {
+			if (instance.kind === 'switch' && isClosedAt(instance, time)) closed.add(instance.id);
+		}
+		return closed;
+	}
 
 	function view(): SchematicView {
 		return {
@@ -248,8 +265,7 @@
 	 */
 	$effect(() => {
 		const active = editor;
-		const context = flowContext;
-		if (!active || !context) {
+		if (!active) {
 			dynamicView = null;
 			return;
 		}
@@ -266,9 +282,16 @@
 		// `dynamicView` between the frame setting it and the layer drawing it. The
 		// whole live overlay went dark. Reads belong inside `step`, where they are
 		// not tracked.
+		//
+		// `flowContext` was making the same mistake for a different reason, and it
+		// is the one that got reported: it is rebuilt whenever a run finishes, so
+		// every re-solve tore this loop down, blanked `dynamicView` and put it back
+		// a frame later. Flipping a switch re-solves, which is why the whole overlay
+		// — colours, dots, readings — blinked off and on again on every click.
 		let lastPlayback: number | null = null;
 
 		const step = (now: number) => {
+			const context = flowContext;
 			// Clamped so a backgrounded tab does not resume with one enormous jump.
 			const dt = Math.min((now - last) / 1000, 0.1);
 			last = now;
@@ -299,7 +322,7 @@
 			// only when a layer is switched on. What each layer paints is the layer's
 			// business; a burnt part is drawn regardless of all three, and gating the
 			// whole view on them meant switching them off hid that too.
-			if (app.analysis === 'transient' && app.live) {
+			if (context && app.analysis === 'transient' && app.live) {
 				const index = sampleIndexAt(context.run.time, app.playbackTime);
 				dynamicView = {
 					schematic: app.schematic,
@@ -315,7 +338,7 @@
 					time: app.playbackTime,
 					stopTime: app.stopTime,
 					burnouts: burnoutMap,
-					floating: app.compiled.floatingNets,
+					floating: app.compiled.floatingAt(closedSwitchesAt(app.playbackTime)),
 					selection: selectionSet,
 					selectionColour: theme!.selection
 				};
