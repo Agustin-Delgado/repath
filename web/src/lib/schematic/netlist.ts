@@ -246,7 +246,24 @@ export function compileSchematic(
 	// ---- name every net -------------------------------------------------
 	let analogCounter = 0;
 	let digitalCounter = 0;
-	const grounded = connectivity.nets.some((n) => n.isGround);
+	/**
+	 * Whether anything in the drawing refers to the reference node at all.
+	 *
+	 * A ground symbol is the obvious way, and it is not the only one. A supply
+	 * terminal is a source with its negative end already on ground — that is what
+	 * the symbol means — so a drawing with one in it is referenced whether or not
+	 * anybody drew the return path. Demanding a ground symbol beside it was a
+	 * check that outlived the circuit it was written for: it read "no ground
+	 * symbol" and reported "no reference", which stopped being the same thing the
+	 * moment the supply terminal existed.
+	 *
+	 * A voltage source is not the same case. Both of its ends are pins on the
+	 * drawing, and if neither reaches ground the whole loop floats away from the
+	 * reference — which is a singular matrix rather than a circuit.
+	 */
+	const grounded =
+		connectivity.nets.some((n) => n.isGround) ||
+		schematic.instances.some((i) => i.kind === 'supply');
 
 	for (const net of connectivity.nets) {
 		const entry: NetNames = {};

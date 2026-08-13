@@ -30,6 +30,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Monte Carlo | Uniform draws, no correlation between parts, no worst-case corner search | Two halves of a matched pair drift independently here, and a random sweep can miss a corner a deliberate search would find |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
 | Digital | No setup/hold checking, no X-propagation through timing | A metastable design simulates as if it were fine |
+| Digital | Nothing notices a logic input with no pull to either rail | A switch feeding a gate with no pull-down reads high forever, here and on a real board, and neither says why |
 | Digital | One logic family for the whole drawing, and no fan-out limit | Two families on one board is a real design, and here every input is free to drive |
 | Digital | Gate delay is one number, the same for a rising and a falling edge | A real part is slower one way than the other, and slower again as it warms |
 | LED | Reverse breakdown not modelled | A real LED dies a few volts backwards; here it simply blocks |

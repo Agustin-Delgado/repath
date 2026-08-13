@@ -652,3 +652,30 @@ describe('the switch example that ships with the app', () => {
 		expect(contact.b).not.toBe('gnd');
 	});
 });
+
+describe('what counts as a voltage reference', () => {
+	const errorsOf = (parts: Instance[], wires: Array<[number, number, number, number]> = []) =>
+		compileSchematic(drawing(parts, wires)).errors;
+
+	it('takes a supply terminal as one, with no ground symbol drawn', () => {
+		// Reported from a shared link: a 5 V rail through two switches into a NAND,
+		// which was refused for having no ground. The supply's negative end *is*
+		// ground — that is what the symbol means — so the reference was there the
+		// whole time and the drawing was complete.
+		const supply = at('supply', 'PWR1', 200, 100);
+		const r = at('resistor', 'R1', 200, 170, 90);
+		expect(
+			errorsOf([supply, r], [[200, 110, 200, 140]]).filter((e) => e.includes('ground'))
+		).toEqual([]);
+	});
+
+	it('still refuses a drawing that names no reference at all', () => {
+		// A source and a resistor with neither end on ground is a loop floating away
+		// from the reference node, which is a singular matrix rather than a circuit.
+		const errors = errorsOf(
+			[at('vsource', 'V1', 100, 200), at('resistor', 'R1', 250, 170, 90)],
+			[[100, 170, 250, 170]]
+		);
+		expect(errors.some((e) => e.includes('No ground'))).toBe(true);
+	});
+});
