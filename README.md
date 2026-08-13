@@ -6,6 +6,10 @@ A free, open source, mixed-signal circuit simulator that runs entirely in your b
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 [![Engine: Rust + WebAssembly](https://img.shields.io/badge/engine-Rust%20%2B%20WebAssembly-orange.svg)](crates/repath-core)
 
+**[Try it](https://repath-lake.vercel.app)** — nothing to install, and nothing
+leaves your machine: the engine is WebAssembly and the whole simulation runs in
+the tab.
+
 Analog and digital in the same schematic. Draw a comparator into a NAND gate and it
 works — repath figures out where the two domains meet and inserts the converters
 itself.
