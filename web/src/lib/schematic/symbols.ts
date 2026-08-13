@@ -312,7 +312,14 @@ function switchSymbol(action: string, start: string): SymbolGeometry {
 		shapes.push(path(`M0 ${bar} V-18 M-8 -18 H8`));
 	} else {
 		// A blade on a pivot, lifted clear when the switch is open.
-		shapes.push(closed ? path('M-14 -4 L14 0') : path('M-13 -2 L11 -16'));
+		//
+		// Closed, it lies flat across both contacts. It was drawn on a slight
+		// slope to keep it from reading as a plain piece of wire, which put its
+		// left end above the pivot and its right end on the far contact — so it
+		// read as hinged at the wrong end, like the open one mirrored. A blade
+		// that is closed touches both contacts, and there is no way to say that
+		// on a slope; the two terminal circles are what mark it as a switch.
+		shapes.push(closed ? path('M-14 0 H14') : path('M-13 -2 L11 -16'));
 	}
 	return { shapes, labels: [] };
 }
