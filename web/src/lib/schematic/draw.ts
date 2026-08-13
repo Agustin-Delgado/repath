@@ -456,7 +456,13 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			const reach = drawnReach(def, instance.rotation);
 			// Above and below when the leads go sideways; stacked to the right when
 			// they go up and down. Either way the labels land where no wire does.
-			const sideways = leadAxis(def, instance.rotation) === 'x';
+			//
+			// A rail is forced above regardless. Its one lead points down, so the
+			// stacked-to-the-right placement puts its label level with the pin —
+			// which is exactly where the live reading for that net is drawn, and two
+			// "5 V" on top of each other read as a rendering fault rather than as a
+			// setting and a measurement agreeing.
+			const sideways = instance.kind === 'supply' || leadAxis(def, instance.rotation) === 'x';
 			const clear = (sideways ? reach.y : reach.x) + LABEL_GAP;
 			const tx = sideways ? instance.x : instance.x + clear;
 			const align = sideways ? 'center' : 'left';

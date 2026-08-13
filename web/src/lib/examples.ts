@@ -363,7 +363,7 @@ export const EXAMPLES: Example[] = [
 		id: 'switch-bounce',
 		name: 'Switch and contact bounce',
 		description:
-			'A supply, a switch and an RC. The switch closes at one millisecond and the contacts chatter for one more before they settle — which is why anything counting edges has to be debounced. The 100 kΩ is not decoration: without a path to ground the capacitor would charge through the open switch.',
+			'A supply, a switch and an RC. The switch closes at two milliseconds and the contacts chatter for one more before they settle — which is why anything counting edges has to be debounced. The 100 kΩ is not decoration: without a path to ground the capacitor would charge through the open switch.',
 		stopTime: 10e-3,
 		build: () =>
 			build(
@@ -375,7 +375,7 @@ export const EXAMPLES: Example[] = [
 						x: 200,
 						y: 170,
 						rotation: 90,
-						params: { action: 'toggle', start: 'open', at: 1e-3, bounce: 1e-3 }
+						params: { action: 'toggle', start: 'open', at: 2e-3, bounce: 1e-3 }
 					},
 					{ kind: 'resistor', name: 'R1', x: 200, y: 260, rotation: 90, params: { resistance: 1000 } },
 					{

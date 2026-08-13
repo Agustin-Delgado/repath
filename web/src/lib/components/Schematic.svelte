@@ -9,7 +9,7 @@
 	 */
 	import { CanvasEditor, type Painter } from '$lib/canvas';
 	import { createAnimationState } from '$lib/schematic/animate';
-	import { isClosedAt } from '$lib/schematic/contacts';
+	import { isActuatedAt } from '$lib/schematic/contacts';
 	import {
 		drawGrid,
 		drawSchematic,
@@ -131,7 +131,7 @@
 			if (instance.kind !== 'switch') continue;
 			seen.add(instance.id);
 			if (time === null) continue;
-			const closed = isClosedAt(instance, time);
+			const closed = isActuatedAt(instance, time);
 			if (switchStates.get(instance.id) !== closed) {
 				switchStates.set(instance.id, closed);
 				changed = true;
@@ -315,6 +315,7 @@
 					time: app.playbackTime,
 					stopTime: app.stopTime,
 					burnouts: burnoutMap,
+					floating: app.compiled.floatingNets,
 					selection: selectionSet,
 					selectionColour: theme!.selection
 				};

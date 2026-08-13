@@ -1197,6 +1197,23 @@ export function migrateInstance(instance: Instance): Instance {
 	if (instance.kind === 'diode' && instance.params.model === 'led') {
 		return { ...instance, kind: 'led', params: defaultParams('led') };
 	}
+	// A switch used to have no choice but to operate during the run: "toggle at
+	// one millisecond" was the default, so every switch anybody drew flipped
+	// itself over a millisecond in and undid whatever they had set it to. Left
+	// alone, that reads as a switch with a mind of its own.
+	//
+	// Recognised by the whole default being untouched. Somebody who deliberately
+	// wanted a timed operation changed one of these three numbers to say when,
+	// and keeps it.
+	if (
+		instance.kind === 'switch' &&
+		instance.params.action === 'toggle' &&
+		instance.params.at === 1e-3 &&
+		instance.params.bounce === 1e-3 &&
+		instance.params.hold === 10e-3
+	) {
+		return { ...instance, params: { ...instance.params, action: 'manual' } };
+	}
 	return instance;
 }
 

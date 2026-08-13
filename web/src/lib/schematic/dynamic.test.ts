@@ -43,6 +43,7 @@ function view(overrides: Partial<DynamicView> = {}): DynamicView {
 		context: { currentScale: 1 } as DynamicView['context'],
 		animation: createAnimationState(),
 		netOfPoint: new Map(),
+		floating: new Set<number>(),
 		showVoltage: false,
 		showCurrent: true,
 		showLight: false,

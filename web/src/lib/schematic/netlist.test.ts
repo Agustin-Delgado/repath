@@ -17,6 +17,7 @@ import {
 	defaultParams,
 	definitionFor,
 	definitionOf,
+	migrateInstance,
 	registerSubcircuits,
 	SUBCIRCUIT_PREFIX,
 	type Instance,
@@ -716,7 +717,7 @@ describe('a logic input with nothing holding it', () => {
 			parts.push(at('resistor', 'R1', 100, 280, 90));
 			wires.push([100, 230, 100, 250], [100, 310, 100, 330]);
 		}
-		return compileSchematic(drawing(parts, wires)).warnings.filter((w) => w.includes('floating'));
+		return compileSchematic(drawing(parts, wires)).warnings.filter((w) => w.includes('no path to either rail'));
 	}
 
 	it('says so, because the simulation is right and looks broken', () => {
@@ -727,6 +728,7 @@ describe('a logic input with nothing holding it', () => {
 		expect(said.length).toBeGreaterThan(0);
 		expect(said[0]).toContain('U1.');
 		expect(said[0]).toContain('pull-down');
+		expect(said[0]).toContain('unknown');
 	});
 
 	it('stays quiet once something pulls the input the other way', () => {
@@ -738,7 +740,7 @@ describe('a logic input with nothing holding it', () => {
 		// through the source, so the input has a level at every instant.
 		const example = EXAMPLES.find((e) => e.id === 'mixed-signal')!;
 		const warnings = compileSchematic(example.build()).warnings;
-		expect(warnings.filter((w) => w.includes('floating'))).toEqual([]);
+		expect(warnings.filter((w) => w.includes('no path to either rail'))).toEqual([]);
 	});
 
 	it('stays quiet for a gate driven by another gate', () => {
@@ -746,5 +748,71 @@ describe('a logic input with nothing holding it', () => {
 		// resolves them, and an undriven one is already unknown rather than wrong.
 		const example = EXAMPLES.find((e) => e.id === 'full-adder')!;
 		expect(compileSchematic(example.build()).warnings).toEqual([]);
+	});
+});
+
+describe('what a floating input is handed to the engine as', () => {
+	/** The reported circuit: a rail, a switch, and a gate input with no pull. */
+	const built = (pulldown: boolean) => {
+		const parts = [
+			at('supply', 'PWR1', 100, 100),
+			at('switch', 'S1', 100, 170, 90),
+			at('not', 'U1', 260, 230),
+			at('ground', 'GND1', 100, 340)
+		];
+		const wires: Array<[number, number, number, number]> = [
+			[100, 110, 100, 140],
+			[100, 200, 100, 230],
+			[100, 230, 230, 230]
+		];
+		if (pulldown) {
+			parts.push(at('resistor', 'R1', 100, 280, 90));
+			wires.push([100, 230, 100, 250], [100, 310, 100, 330]);
+		}
+		const result = compileSchematic(drawing(parts, wires));
+		return result.netlist as { bridges: Array<Record<string, unknown>> };
+	};
+
+	it('is not bridged at all, so the gate is given unknown', () => {
+		// The bridge would compare a voltage that leakage put there against a
+		// threshold and come back with a level — and a level that came from leakage
+		// looks exactly like one that came from the circuit. Unbridged, the digital
+		// net has no driver and stays unknown, which is what it is.
+		expect(built(false).bridges.filter((b) => b.direction === 'to_digital')).toEqual([]);
+	});
+
+	it('is bridged as soon as something holds it', () => {
+		const bridged = built(true).bridges.filter((b) => b.direction === 'to_digital');
+		expect(bridged).toHaveLength(1);
+	});
+});
+
+describe('switches drawn before they could be clicked', () => {
+	it('stop operating on their own when an old drawing is opened', () => {
+		// Every switch in a saved file or a shared link from that build carries the
+		// only default there was: toggle, at one millisecond. Left alone it flips
+		// itself over a millisecond into every run and undoes whatever position it
+		// was put in, which reads as a switch with a mind of its own.
+		const old = at('switch', 'S1', 100, 100);
+		old.params = { ...old.params, action: 'toggle', at: 1e-3, bounce: 1e-3, hold: 10e-3 };
+		expect(migrateInstance(old).params.action).toBe('manual');
+	});
+
+	it('leaves a schedule somebody chose alone', () => {
+		// Picking a time is what says the operation was wanted. Anyone who set one
+		// changed one of these numbers away from the default to say when.
+		const deliberate = at('switch', 'S2', 100, 100);
+		deliberate.params = { ...deliberate.params, action: 'toggle', at: 4e-3, bounce: 1e-3, hold: 10e-3 };
+		expect(migrateInstance(deliberate).params.action).toBe('toggle');
+
+		const button = at('switch', 'S3', 100, 100);
+		button.params = { ...button.params, action: 'momentary', at: 1e-3, bounce: 1e-3, hold: 10e-3 };
+		expect(migrateInstance(button).params.action).toBe('momentary');
+	});
+
+	it('keeps the shipped example operating, since it says when', () => {
+		const example = EXAMPLES.find((e) => e.id === 'switch-bounce')!;
+		const s1 = example.build().instances.find((i) => i.kind === 'switch')!;
+		expect(migrateInstance(s1).params.action).toBe('toggle');
 	});
 });

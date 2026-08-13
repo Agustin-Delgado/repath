@@ -30,7 +30,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Monte Carlo | Uniform draws, no correlation between parts, no worst-case corner search | Two halves of a matched pair drift independently here, and a random sweep can miss a corner a deliberate search would find |
 | Solver | Dense LU | Fine to a few hundred nodes, quadratic-ish past that |
 | Digital | No setup/hold checking, no X-propagation through timing | A metastable design simulates as if it were fine |
-| Digital | Nothing notices a logic input with no pull to either rail | A switch feeding a gate with no pull-down reads high forever, here and on a real board, and neither says why |
+| Digital | A logic input with no pull to either rail is refused rather than guessed | The gate is handed unknown and the node reads "floating"; what it would do on a real board depends on what its input capacitance picked up, which is not a thing to simulate |
 | Digital | One logic family for the whole drawing, and no fan-out limit | Two families on one board is a real design, and here every input is free to drive |
 | Digital | Gate delay is one number, the same for a rising and a falling edge | A real part is slower one way than the other, and slower again as it warms |
 | LED | Reverse breakdown not modelled | A real LED dies a few volts backwards; here it simply blocks |
@@ -38,6 +38,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Animation | BJT base current approximated as zero when distributing wire current | Base-net current dots are missing rather than wrong |
 | Animation | Wires closing a loop show no current | Genuinely undefined for ideal wires in parallel; shown as nothing rather than guessed |
 | Canvas | Layer-level invalidation, no dirty rectangles | A full-screen repaint per interaction on the affected layer |
+| Canvas | Labels are placed per part, with no collision avoidance between them | Two parts a symbol's width apart can have a name and a reading land on each other |
 | Editor | No touch or pen input | Unusable on a tablet |
 | Editor | Deleting heals a gap only for a two-pin part wired on both sides | Anything with three pins leaves stubs, since no pairing is obviously right |
 | Editor | History still stores whole-document snapshots | Bounded now (100 entries or 8 MB, whichever comes first) but not a delta log |

@@ -48,6 +48,16 @@ export interface DynamicView {
 	stopTime: number;
 	/** Instance id -> the moment that LED failed. */
 	burnouts: ReadonlyMap<string, Burnout>;
+	/**
+	 * Nets whose voltage is an artifact rather than a measurement.
+	 *
+	 * A node with nothing holding it sits whereever the leakage in the model puts
+	 * it, which here is somewhere near a rail. Printing that number beside the
+	 * wire, in the same style as every real reading on the drawing, is how a
+	 * floating input comes to look like a working one — so these say what they
+	 * are instead, and keep the wire's plain colour rather than a voltage's.
+	 */
+	floating: ReadonlySet<number>;
 	/** What is selected, and the halo colour — this layer paints over both. */
 	selection: ReadonlySet<string>;
 	selectionColour: string;
@@ -83,6 +93,9 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 			if (net === undefined) continue;
 			const volts = frame.netVoltage.get(net);
 			if (volts === undefined) continue;
+			// Left in the plain wire colour: colouring it by a voltage nothing
+			// decided would be the loudest claim on the drawing.
+			if (view.floating.has(net)) continue;
 			if (!wire.points.some((p) => inside(p.x, p.y))) continue;
 			// Painted opaquely over the static wire, so a selected one would stop
 			// looking selected the moment anything was running — which is exactly
@@ -245,7 +258,11 @@ function drawReadings(
 	for (const [net, { at }] of anchor) {
 		const volts = view.frame.netVoltage.get(net);
 		if (volts === undefined || !inside(at.x, at.y)) continue;
-		painter.text(formatWithUnit(volts, 'V', FIGURES), { x: at.x, y: at.y - 7 }, {
+		// Nothing holds this node, so the number the solver settled on is a
+		// property of the leakage in the model and not of the circuit. Saying so
+		// is the only honest reading.
+		const reading = view.floating.has(net) ? 'floating' : formatWithUnit(volts, 'V', FIGURES);
+		painter.text(reading, { x: at.x, y: at.y - 7 }, {
 			size,
 			color: VOLTS_INK,
 			align: 'center',

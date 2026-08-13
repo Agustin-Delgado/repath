@@ -665,7 +665,7 @@ const NO_DC_PATH = new Set(['capacitor', 'switch', 'isource', 'probe']);
 export function floatingLogicInputs(
 	schematic: Schematic,
 	connectivity: Connectivity
-): Array<{ instance: Instance; pin: string }> {
+): Array<{ net: number; instance: Instance; pin: string }> {
 	const netOf = (instance: Instance, pin: string) =>
 		connectivity.netOfPin.get(pinKey(instance.id, pin));
 
@@ -715,14 +715,17 @@ export function floatingLogicInputs(
 		}
 	}
 
-	const floating: Array<{ instance: Instance; pin: string }> = [];
+	const floating: Array<{ net: number; instance: Instance; pin: string }> = [];
 	for (const net of connectivity.nets) {
 		// Only where a level is going to be read off it. An analog node with no DC
 		// path is an ordinary AC-coupled node and nobody needs telling.
 		if (!net.hasDigitalInput || !net.hasAnalog || reachable.has(net.index)) continue;
+		// Something digital driving the net holds it at a rail through the bridge,
+		// which is a path to the reference by any other name.
+		if (net.hasDigitalOutput) continue;
 		for (const ref of net.pins) {
 			if (ref.pin.domain === 'digital' && ref.pin.direction === 'in') {
-				floating.push({ instance: ref.instance, pin: ref.pin.name });
+				floating.push({ net: net.index, instance: ref.instance, pin: ref.pin.name });
 			}
 		}
 	}

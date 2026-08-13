@@ -8,7 +8,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { contactControl, isClosedAt, isScheduled, restingContact } from './contacts';
+import {
+	contactControl,
+	isActuatedAt,
+	isClosedAt,
+	isScheduled,
+	restingContact
+} from './contacts';
 import { defaultParams, type Instance } from './model';
 
 function sw(params: Record<string, number | string> = {}): Instance {
@@ -96,5 +102,37 @@ describe('contact bounce', () => {
 	it('is one clean edge when it is turned off', () => {
 		const clean = sw({ action: 'toggle', at: 1e-3, bounce: 0 });
 		expect(contactControl(clean)).toHaveLength(3);
+	});
+});
+
+describe('what the blade is drawn doing', () => {
+	const bouncing = sw({ action: 'toggle', at: 1e-3, bounce: 1e-3 });
+
+	it('follows the actuator and not the chatter', () => {
+		// Contact bounce is a hundred microns of metal rebounding over a
+		// millisecond. You cannot see it — you see it on a scope, which is where
+		// this simulator shows it. Drawn as well, the symbol flicked open and shut
+		// on every operation, which reads as a rendering fault rather than physics.
+		expect(isActuatedAt(bouncing, 0.9e-3)).toBe(false);
+		for (let i = 0; i <= 100; i++) {
+			expect(isActuatedAt(bouncing, 1e-3 + (i / 100) * 1e-3)).toBe(true);
+		}
+		// While the electrical side keeps every bounce.
+		const chattered = Array.from({ length: 200 }, (_, i) =>
+			isClosedAt(bouncing, 1e-3 + (i / 200) * 1e-3)
+		);
+		expect(chattered.some((closed) => !closed)).toBe(true);
+	});
+
+	it('still springs back with a push-button', () => {
+		const button = sw({ action: 'momentary', at: 1e-3, hold: 3e-3, bounce: 1e-3 });
+		expect(isActuatedAt(button, 0.5e-3)).toBe(false);
+		expect(isActuatedAt(button, 2e-3)).toBe(true);
+		expect(isActuatedAt(button, 5e-3)).toBe(false);
+	});
+
+	it('is just the position for a switch nobody scheduled', () => {
+		expect(isActuatedAt(sw(), 1)).toBe(false);
+		expect(isActuatedAt(sw({ start: 'closed' }), 1)).toBe(true);
 	});
 });

@@ -116,3 +116,26 @@ export function isClosedAt(instance: Instance, time: number): boolean {
 	// only ever meant to be at one end or the other.
 	return level >= 0.5;
 }
+
+/**
+ * Where the blade is *drawn* at an instant, which is not quite the same thing.
+ *
+ * The chatter is left out. Contact bounce is a hundred microns of metal
+ * rebounding for a millisecond — you cannot see it, you see it on a scope, and
+ * that is exactly where this simulator shows it. Drawing it as well made the
+ * symbol flick open and shut a few times on every operation, which reads as a
+ * rendering fault rather than as physics, and hides the one thing the drawing
+ * is for: whether the switch is now open or closed.
+ *
+ * So this follows the actuator — the finger on the button — and the electrical
+ * side keeps every bounce.
+ */
+export function isActuatedAt(instance: Instance, time: number): boolean {
+	const rest = restingContact(instance) === 1;
+	if (!isScheduled(instance)) return rest;
+
+	const at = Math.max(num(instance, 'at', 1e-3), 0);
+	if (time < at) return rest;
+	if (str(instance, 'action', 'manual') !== 'momentary') return !rest;
+	return time < at + Math.max(num(instance, 'hold', 10e-3), 1e-12) ? !rest : rest;
+}

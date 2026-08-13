@@ -40,6 +40,14 @@ export interface CompileResult {
 	netlist: unknown | null;
 	/** Net index -> the names it was given. */
 	names: Map<number, NetNames>;
+	/**
+	 * Nets carrying a logic input that nothing holds at either rail.
+	 *
+	 * Their voltage is whatever leakage decided, which is not a measurement of
+	 * anything — so the drawing shows them as undetermined rather than printing a
+	 * number that looks exactly like a real one.
+	 */
+	floatingNets: Set<number>;
 	errors: string[];
 	warnings: string[];
 	connectivity: Connectivity;
@@ -595,12 +603,15 @@ export function compileSchematic(
 		}
 	}
 
-	// A logic input with nothing holding it at either rail reads the same level
-	// whatever the switch in front of it does — which looks exactly like a broken
-	// simulation, and is the most common mistake there is with a switch.
-	for (const { instance, pin } of floatingLogicInputs(schematic, connectivity)) {
+	// A logic input with nothing holding it at either rail is the most common
+	// mistake there is with a switch, and the one that looks least like a
+	// mistake: the level it reads is decided by leakage, so the gate answers with
+	// total confidence and the switch appears to do nothing.
+	const floating = new Set<number>();
+	for (const { net, instance, pin } of floatingLogicInputs(schematic, connectivity)) {
+		floating.add(net);
 		warnings.push(
-			`${instance.name}.${pin} is left floating whenever the switch feeding it opens: nothing holds it at either rail, so what it reads is decided by leakage rather than by the switch. A pull-down resistor to ground, or a pull-up to the supply, is what fixes it.`
+			`${instance.name}.${pin} has no path to either rail, so nothing decides what it reads — it is left to leakage, which is not a logic level. The gate is given "unknown" rather than a level invented for it. A pull-down resistor to ground, or a pull-up to the supply, is what fixes it.`
 		);
 	}
 
@@ -618,7 +629,13 @@ export function compileSchematic(
 				node: entry.analog
 			});
 		}
-		if (net.hasDigitalInput) {
+		// Nothing is read off a floating node. The bridge would compare a voltage
+		// that leakage put there against a threshold and come back with a level, in
+		// which case the answer looks the same as a real one — and an undefined
+		// input reported as a confident High is how somebody ships a board that
+		// works on the bench and not in the field. Left unbridged, the digital net
+		// has no driver and stays unknown, which is what it is.
+		if (net.hasDigitalInput && !floating.has(net.index)) {
 			bridges.push({
 				direction: 'to_digital',
 				name: `BAD${net.index}`,
@@ -638,6 +655,7 @@ export function compileSchematic(
 			? null
 			: { components, devices, bridges, temperature, logic_family: logicFamily(family) },
 		names,
+		floatingNets: floating,
 		errors,
 		warnings,
 		connectivity
