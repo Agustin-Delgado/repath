@@ -634,3 +634,97 @@ function short(pin: string): string {
 			return pin;
 	}
 }
+
+/**
+ * Parts that do not carry a current at DC, and so cannot hold a node anywhere.
+ *
+ * A capacitor is an open circuit once everything has settled; a switch is one
+ * whenever it happens to be open, which is the case worth worrying about; a
+ * current source and a probe are high impedances by definition.
+ */
+const NO_DC_PATH = new Set(['capacitor', 'switch', 'isource', 'probe']);
+
+/**
+ * Logic inputs left floating whenever the switches around them open.
+ *
+ * The mistake this catches is the most common one there is with a switch, and
+ * it is invisible: a switch from a rail into a gate input, with nothing pulling
+ * the input the other way. A logic input draws no current, so with the switch
+ * open nothing moves the node at all — it keeps the last voltage that leaked
+ * into it, which here means the rail, and the gate reads the same level whether
+ * the switch is open or closed. The simulation is right and looks broken. On a
+ * real board the same circuit reads whatever the input capacitance picked up
+ * from the mains, which is worse.
+ *
+ * Found by asking which nets can reach ground *without* going through a switch:
+ * anything a switch is the only route from has no defined level once it opens.
+ * Multi-terminal parts are treated as joining all of their pins, which is not
+ * true of a transistor gate and is deliberately the forgiving direction — this
+ * should stay quiet unless it is sure.
+ */
+export function floatingLogicInputs(
+	schematic: Schematic,
+	connectivity: Connectivity
+): Array<{ instance: Instance; pin: string }> {
+	const netOf = (instance: Instance, pin: string) =>
+		connectivity.netOfPin.get(pinKey(instance.id, pin));
+
+	// Nets that reach ground through something that conducts at DC.
+	const reachable = new Set<number>();
+	const edges = new Map<number, number[]>();
+	const join = (a: number, b: number) => {
+		if (a === b) return;
+		for (const [from, to] of [
+			[a, b],
+			[b, a]
+		]) {
+			const list = edges.get(from);
+			if (list) list.push(to);
+			else edges.set(from, [to]);
+		}
+	};
+
+	const GROUND = -1;
+	for (const net of connectivity.nets) {
+		if (net.isGround) join(net.index, GROUND);
+	}
+
+	for (const instance of schematic.instances) {
+		if (NO_DC_PATH.has(instance.kind)) continue;
+		// A supply terminal is a source with its far end on ground, so it ties its
+		// net to the reference just as surely as a wire to a ground symbol does.
+		if (instance.kind === 'supply') {
+			const index = netOf(instance, 'v');
+			if (index !== undefined) join(index, GROUND);
+			continue;
+		}
+		const on = definitionFor(instance)
+			.pins.filter((pin) => pin.domain === 'analog')
+			.map((pin) => netOf(instance, pin.name))
+			.filter((index): index is number => index !== undefined);
+		for (let i = 1; i < on.length; i++) join(on[0], on[i]);
+	}
+
+	const queue = [GROUND];
+	while (queue.length > 0) {
+		const at = queue.pop()!;
+		for (const next of edges.get(at) ?? []) {
+			if (reachable.has(next)) continue;
+			reachable.add(next);
+			queue.push(next);
+		}
+	}
+
+	const floating: Array<{ instance: Instance; pin: string }> = [];
+	for (const net of connectivity.nets) {
+		// Only where a level is going to be read off it. An analog node with no DC
+		// path is an ordinary AC-coupled node and nobody needs telling.
+		if (!net.hasDigitalInput || !net.hasAnalog || reachable.has(net.index)) continue;
+		for (const ref of net.pins) {
+			if (ref.pin.domain === 'digital' && ref.pin.direction === 'in') {
+				floating.push({ instance: ref.instance, pin: ref.pin.name });
+			}
+		}
+	}
+	return floating;
+}

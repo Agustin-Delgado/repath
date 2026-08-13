@@ -22,7 +22,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | MOSFET | Shichman-Hodges (level 1) only, bulk tied to source | No body effect, no subthreshold conduction, no short-channel behaviour |
 | MOSFET | Gate capacitances are constant, not the bias-dependent Meyer model | Right for a datasheet's Ciss/Crss/Coss; a gate charge curve will not have its plateau in quite the right place |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
-| Switch | Operates at a time you set, not at a click during the run | A run is computed end to end before any of it is drawn, so there is no instant during it for a click to land in |
+| Switch | Clicking one flips it and re-solves; a click cannot land *inside* a run | A run is computed end to end before it is drawn, so seeing the moment it operates means scheduling that moment rather than clicking during playback |
 | Supply | Each symbol is its own ideal source to ground, not a named net | Three on one rail is three currents rather than one, and two wired together build one source and a warning |
 | Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
 | Temperature | One number for the whole circuit; no self-heating and no per-part rise | A resistor dissipating a watt is at the same temperature as the air around it |

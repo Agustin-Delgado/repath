@@ -550,13 +550,18 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		/**
-		 * A pair of contacts that meet, or stop meeting, at a time you choose.
+		 * A pair of contacts you flip by clicking them.
 		 *
-		 * Not a switch you click: a run is computed from end to end before any of
-		 * it is drawn, so there is no instant during it for a click to land in.
-		 * What there is instead is the question a switch is usually asked in a
-		 * simulator — what happens *when* it operates — and that is a time, which
-		 * is a parameter.
+		 * Clicking sets where they rest, and the circuit is re-solved with them
+		 * there — which is what a switch is for, and how one behaves in every
+		 * simulator anybody has used.
+		 *
+		 * A run is still computed from end to end before any of it is drawn, so a
+		 * click cannot land *inside* one. That is what the schedule is for: a
+		 * switch can also be told to operate at a time, once or as a push-button,
+		 * and then the run contains the moment it happens. Two different questions
+		 * — what does this circuit do with the switch here, and what happens when
+		 * it moves — and the part answers both without pretending to be live.
 		 */
 		kind: 'switch',
 		box: { x: -30, y: -20, w: 60, h: 28 },
@@ -566,27 +571,38 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('a', -30, 0), analog('b', 30, 0)],
 		params: [
 			{
-				key: 'action',
-				label: 'Action',
-				unit: '',
-				default: 'toggle',
-				choices: [
-					{ value: 'toggle', label: 'Toggle' },
-					{ value: 'momentary', label: 'Push-button' }
-				],
-				description: 'A toggle stays where it was put. A push-button springs back.'
-			},
-			{
 				key: 'start',
-				label: 'At rest',
+				label: 'Position',
 				unit: '',
 				default: 'open',
 				choices: [
 					{ value: 'open', label: 'Open' },
 					{ value: 'closed', label: 'Closed' }
-				]
+				],
+				description:
+					'Click the switch on the drawing to flip it. With a run on screen the circuit is re-solved with it where you put it.'
 			},
-			{ key: 'at', label: 'Operates at', unit: 's', default: 1e-3, min: 0 },
+			{
+				key: 'action',
+				label: 'During the run',
+				unit: '',
+				default: 'manual',
+				choices: [
+					{ value: 'manual', label: 'Stays put' },
+					{ value: 'toggle', label: 'Operates once' },
+					{ value: 'momentary', label: 'Push-button' }
+				],
+				description:
+					'A run is solved end to end before it is drawn, so a click cannot land inside one. This is how the moment it moves gets into the run instead.'
+			},
+			{
+				key: 'at',
+				label: 'Operates at',
+				unit: 's',
+				default: 1e-3,
+				min: 0,
+				visibleWhen: { key: 'action', values: ['toggle', 'momentary'] }
+			},
 			{
 				key: 'hold',
 				label: 'Held for',
@@ -602,6 +618,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: 's',
 				default: 1e-3,
 				min: 0,
+				visibleWhen: { key: 'action', values: ['toggle', 'momentary'] },
 				description:
 					'Contacts are springs, and they chatter for a millisecond or so before they settle. It is the whole reason a button wired to a counter counts three.'
 			},

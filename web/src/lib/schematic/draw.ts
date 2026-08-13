@@ -258,6 +258,19 @@ export interface SchematicView {
 	probeColours: ReadonlyMap<number, string>;
 	/** Probe instance id -> the name and colour it appears under on the scope. */
 	probes?: ReadonlyMap<string, { label: string; colour: string }>;
+	/**
+	 * Switch instance id -> whether its contacts are touching right now.
+	 *
+	 * Empty when nothing has been run, in which case a switch is drawn resting
+	 * where its parameters put it. During playback it is drawn where the
+	 * simulation has it, which is the only honest thing to draw: a blade shown
+	 * open over a circuit that is behaving as though it were closed teaches
+	 * somebody to distrust the whole screen.
+	 *
+	 * This lives on the static layer rather than the animated one because it
+	 * changes a handful of times in a run, not sixty times a second.
+	 */
+	switchStates?: ReadonlyMap<string, boolean>;
 	junctions: readonly Vec2[];
 }
 
@@ -309,10 +322,16 @@ function valueLabel(instance: Instance): string | null {
 			return formatWithUnit(Number(p.frequency), 'Hz');
 		case 'supply':
 			return formatWithUnit(Number(p.voltage), 'V');
-		case 'switch':
-			// When it operates, not what it is made of. A switch that never moves is
-			// a wire or a gap, and the drawing already says which.
-			return `${p.start === 'closed' ? 'opens' : 'closes'} ${formatWithUnit(Number(p.at), 's')}`;
+		case 'switch': {
+			// What it is going to do, not what it is made of. A switch nobody
+			// scheduled says nothing at all: the blade is drawn open or closed and
+			// repeating that in words underneath is noise.
+			if (p.action === 'momentary') return `pressed ${formatWithUnit(Number(p.at), 's')}`;
+			if (p.action === 'toggle') {
+				return `${p.start === 'closed' ? 'opens' : 'closes'} ${formatWithUnit(Number(p.at), 's')}`;
+			}
+			return null;
+		}
 		default:
 			return null;
 	}
@@ -364,7 +383,16 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			: instance.kind === 'led'
 				? ledInk(instance.params.colour)
 				: theme.symbol;
-		const paths = symbolPaths(instance.kind, instance.params);
+		// A switch is drawn where the run has it rather than where it rests. Fed
+		// through the parameters the symbol is built from, so it goes on sharing
+		// the geometry cache with every other switch in that position.
+		const live = view.switchStates?.get(instance.id);
+		const paths = symbolPaths(
+			instance.kind,
+			live === undefined
+				? instance.params
+				: { ...instance.params, start: live ? 'closed' : 'open' }
+		);
 
 		painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
 			painter.strokePath(paths.stroke, { color: colour, width: 1.5 });

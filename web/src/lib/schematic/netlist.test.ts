@@ -515,13 +515,15 @@ describe('a switch', () => {
 			)
 		);
 		const netlist = result.netlist as { components: Array<Record<string, unknown>> };
+		const actuator = netlist.components.find((c) => c.name === 'S1__actuator')!.waveform as {
+			type: string;
+			value?: number;
+			points?: Array<[number, number]>;
+		};
 		return {
 			contact: netlist.components.find((c) => c.type === 'switch')!,
-			control: (
-				netlist.components.find((c) => c.name === 'S1__actuator')!.waveform as {
-					points: Array<[number, number]>;
-				}
-			).points,
+			actuator,
+			control: actuator.points ?? [],
 			errors: result.errors
 		};
 	}
@@ -541,14 +543,24 @@ describe('a switch', () => {
 		expect(model.r_off).toBeGreaterThan(1e6);
 	});
 
+	it('holds still unless something was scheduled', () => {
+		// The default. A switch you click is a switch that stays where you put it,
+		// and a constant says so without asking the solver to land a timepoint on
+		// anything.
+		expect(switched({}).actuator).toEqual({ type: 'dc', value: 0 });
+		expect(switched({ start: 'closed' }).actuator).toEqual({ type: 'dc', value: 1 });
+		// Even with a time set: what decides is whether anything is scheduled.
+		expect(switched({ at: 5e-3 }).actuator.type).toBe('dc');
+	});
+
 	it('rests where the drawing says, then operates once', () => {
-		const closing = switched({ start: 'open', at: 2e-3, bounce: 0 });
+		const closing = switched({ action: 'toggle', start: 'open', at: 2e-3, bounce: 0 });
 		expect(closing.control[0]).toEqual([0, 0]);
 		expect(levels(closing.control)).toEqual([0, 1]);
 		expect(closing.control[closing.control.length - 1][0]).toBeCloseTo(2e-3, 9);
 
 		// And the other way round: a switch drawn closed opens.
-		expect(levels(switched({ start: 'closed', bounce: 0 }).control)).toEqual([1, 0]);
+		expect(levels(switched({ action: 'toggle', start: 'closed', bounce: 0 }).control)).toEqual([1, 0]);
 	});
 
 	it('springs back when it is a push-button', () => {
@@ -561,7 +573,7 @@ describe('a switch', () => {
 	it('chatters, and settles where it was going', () => {
 		// The reason a button wired to a counter counts three. A clean edge would
 		// hide the one behaviour anybody debounces against.
-		const { control } = switched({ at: 1e-3, bounce: 2e-3 });
+		const { control } = switched({ action: 'toggle', at: 1e-3, bounce: 2e-3 });
 		const changes = levels(control);
 		expect(changes.length).toBeGreaterThan(3);
 		expect(changes[changes.length - 1]).toBe(1);
@@ -573,7 +585,7 @@ describe('a switch', () => {
 	});
 
 	it('is a clean edge with the bounce turned off', () => {
-		expect(switched({ bounce: 0 }).control).toHaveLength(3);
+		expect(switched({ action: 'toggle', bounce: 0 }).control).toHaveLength(3);
 	});
 });
 
@@ -677,5 +689,62 @@ describe('what counts as a voltage reference', () => {
 			[[100, 170, 250, 170]]
 		);
 		expect(errors.some((e) => e.includes('No ground'))).toBe(true);
+	});
+});
+
+describe('a logic input with nothing holding it', () => {
+	/**
+	 * The reported circuit, reduced: a rail, a switch, and a gate input. With
+	 * `pulldown` there is also a resistor to ground, which is the fix.
+	 */
+	function switchIntoGate(pulldown: boolean) {
+		const parts = [
+			at('supply', 'PWR1', 100, 100),
+			at('switch', 'S1', 100, 170, 90),
+			at('and', 'U1', 260, 210),
+			at('ground', 'GND1', 100, 340)
+		];
+		const wires: Array<[number, number, number, number]> = [
+			[100, 110, 100, 140],
+			[100, 200, 100, 230],
+			// Into both inputs of the gate.
+			[100, 230, 230, 230],
+			[230, 200, 230, 230],
+			[230, 220, 230, 230]
+		];
+		if (pulldown) {
+			parts.push(at('resistor', 'R1', 100, 280, 90));
+			wires.push([100, 230, 100, 250], [100, 310, 100, 330]);
+		}
+		return compileSchematic(drawing(parts, wires)).warnings.filter((w) => w.includes('floating'));
+	}
+
+	it('says so, because the simulation is right and looks broken', () => {
+		// A logic input draws no current, so with the switch open nothing moves the
+		// node at all: it keeps whatever leaked into it, and the gate reads the
+		// same level whether the switch is open or closed.
+		const said = switchIntoGate(false);
+		expect(said.length).toBeGreaterThan(0);
+		expect(said[0]).toContain('U1.');
+		expect(said[0]).toContain('pull-down');
+	});
+
+	it('stays quiet once something pulls the input the other way', () => {
+		expect(switchIntoGate(true)).toEqual([]);
+	});
+
+	it('stays quiet for an input a source drives directly', () => {
+		// The mixed-signal example: a sine straight into a gate. There is a DC path
+		// through the source, so the input has a level at every instant.
+		const example = EXAMPLES.find((e) => e.id === 'mixed-signal')!;
+		const warnings = compileSchematic(example.build()).warnings;
+		expect(warnings.filter((w) => w.includes('floating'))).toEqual([]);
+	});
+
+	it('stays quiet for a gate driven by another gate', () => {
+		// Purely digital nets have no analog node to float: the digital domain
+		// resolves them, and an undriven one is already unknown rather than wrong.
+		const example = EXAMPLES.find((e) => e.id === 'full-adder')!;
+		expect(compileSchematic(example.build()).warnings).toEqual([]);
 	});
 });

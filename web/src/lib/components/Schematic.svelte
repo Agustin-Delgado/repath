@@ -9,6 +9,7 @@
 	 */
 	import { CanvasEditor, type Painter } from '$lib/canvas';
 	import { createAnimationState } from '$lib/schematic/animate';
+	import { isClosedAt } from '$lib/schematic/contacts';
 	import {
 		drawGrid,
 		drawSchematic,
@@ -93,6 +94,16 @@
 		return prepareFlow(app.schematic, compiled.connectivity, compiled.names, run);
 	});
 
+	/**
+	 * Which switches are closed at the playhead.
+	 *
+	 * Deliberately not `$state`: the frame loop writes it and then invalidates the
+	 * schematic layer by hand, on the few frames where a contact actually moved.
+	 * Making it reactive would repaint the whole drawing sixty times a second to
+	 * say the same thing.
+	 */
+	let switchStates = new Map<string, boolean>();
+
 	function view(): SchematicView {
 		return {
 			schematic: app.schematic,
@@ -102,8 +113,37 @@
 			netOfPoint: app.compiled.connectivity.netOfPoint,
 			probeColours,
 			probes: probeLabels,
+			switchStates,
 			junctions
 		};
+	}
+
+	/**
+	 * Update the drawn contact positions, and say whether any of them moved.
+	 *
+	 * Cleared rather than left behind when there is nothing live: a switch with no
+	 * run behind it is drawn resting where its parameters put it.
+	 */
+	function trackSwitches(time: number | null): boolean {
+		let changed = false;
+		const seen = new Set<string>();
+		for (const instance of app.schematic.instances) {
+			if (instance.kind !== 'switch') continue;
+			seen.add(instance.id);
+			if (time === null) continue;
+			const closed = isClosedAt(instance, time);
+			if (switchStates.get(instance.id) !== closed) {
+				switchStates.set(instance.id, closed);
+				changed = true;
+			}
+		}
+		for (const id of switchStates.keys()) {
+			if (time === null || !seen.has(id)) {
+				switchStates.delete(id);
+				changed = true;
+			}
+		}
+		return changed;
 	}
 
 	$effect(() => {
@@ -282,6 +322,9 @@
 				// the same speed however fast the run is being played.
 				tick(dynamicView, moved / Math.max(app.playbackRate, 1e-9));
 				active.invalidate('dynamic');
+				// The blades live on the layer underneath, which is repainted only on
+				// the frames where one of them actually moves.
+				if (trackSwitches(app.playbackTime)) active.invalidate('schematic');
 				if (import.meta.env.DEV) {
 					const handle = (window as unknown as Record<string, Record<string, unknown>>).__repath;
 					if (handle) {
@@ -294,6 +337,9 @@
 				active.invalidate('dynamic');
 			}
 
+			// Nothing live to read a contact position off: back to resting.
+			if (!app.live && trackSwitches(null)) active.invalidate('schematic');
+
 			frame = requestAnimationFrame(step);
 		};
 
@@ -301,6 +347,7 @@
 		return () => {
 			cancelAnimationFrame(frame);
 			dynamicView = null;
+			if (trackSwitches(null)) editor?.invalidate('schematic');
 		};
 	});
 

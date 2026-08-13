@@ -1201,6 +1201,21 @@ class AppState {
 		return null;
 	}
 
+	/**
+	 * Flip a switch, and re-solve the circuit with it where it now is.
+	 *
+	 * The re-solve is the point. A switch you can move but whose circuit does not
+	 * answer is a picture of a switch, and the answer is what you flipped it to
+	 * find out. Only when something is already on screen, though: pressing Run is
+	 * a decision, and a click on a part should not make it for you.
+	 */
+	toggleSwitch(id: string): void {
+		const instance = this.schematic.instances.find((i) => i.id === id);
+		if (!instance || instance.kind !== 'switch') return;
+		this.setParam(id, 'start', instance.params.start === 'closed' ? 'open' : 'closed');
+		if (this.live && this.analysis === 'transient') void this.run({ keepPlayback: true });
+	}
+
 	/** Rename a component. Returns why it was refused, or null on success. */
 	rename(id: string, name: string): string | null {
 		const trimmed = name.trim();

@@ -9,10 +9,17 @@
  * converter symbol to remember to place.
  */
 
+import { contactControl, isScheduled, restingContact } from './contacts';
 import { ledDiodeModel, ledRating } from './led';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
-import { buildConnectivity, pinKey, type Connectivity, type Net } from './nets';
+import {
+	buildConnectivity,
+	floatingLogicInputs,
+	pinKey,
+	type Connectivity,
+	type Net
+} from './nets';
 import {
 	bjtFromCard,
 	cardFor,
@@ -78,70 +85,6 @@ function waveform(instance: Instance): unknown {
 		};
 	}
 	return { type: 'dc', value: amplitude };
-}
-
-/**
- * How many times a contact makes and breaks before it settles.
- *
- * Four, which is at the quiet end of what a real one does and enough to be the
- * thing it is here to be: a signal that has to be debounced. An even count so
- * the chatter ends on the position the contact was moving to.
- */
-const CHATTER = 4;
-
-/**
- * The control voltage that drives one switch, as a piecewise-linear waveform.
- *
- * Zero is open and one is closed. The engine's switch interpolates between them
- * in log-conductance, so the control only ever has to say which side of the
- * threshold it is on — but the edges still have to be edges, because the solver
- * puts a timepoint on every corner of a PWL and would otherwise ramp the
- * resistance across nine decades over the whole run.
- *
- * Contacts are springs. They arrive, rebound, and arrive again a few times over
- * a millisecond or so, with the gaps closing as the energy goes out of them —
- * which is the entire reason a button wired straight to a counter counts three.
- */
-function contactControl(instance: Instance): Array<[number, number]> {
-	const rest = str(instance, 'start', 'open') === 'closed' ? 1 : 0;
-	const at = Math.max(num(instance, 'at', 1e-3), 0);
-	const bounce = Math.max(num(instance, 'bounce', 0), 0);
-
-	// A push-button springs back; a toggle stays where it was put.
-	const operations =
-		str(instance, 'action', 'toggle') === 'momentary'
-			? [at, at + Math.max(num(instance, 'hold', 10e-3), 1e-12)]
-			: [at];
-
-	const points: Array<[number, number]> = [];
-	// Fast enough to read as a step beside a bounce a thousand times longer, and
-	// slow enough that the solver is not asked for a discontinuity.
-	const edge = Math.max(Math.min(bounce / 200, 1e-6), 1e-12);
-	let level = rest;
-	const move = (t: number, to: number) => {
-		if (to === level) return;
-		points.push([Math.max(t - edge, 0), level]);
-		points.push([Math.max(t, edge), to]);
-		level = to;
-	};
-
-	points.push([0, rest]);
-	for (const when of operations) {
-		const target = 1 - level;
-		if (bounce <= 0) {
-			move(when, target);
-			continue;
-		}
-		// Gaps halving each time, scaled so the whole train fits inside `bounce`.
-		const span = bounce / (1 - Math.pow(0.5, CHATTER));
-		move(when, target);
-		let elapsed = 0;
-		for (let k = 0; k < CHATTER; k++) {
-			elapsed += span * Math.pow(0.5, k + 1);
-			move(when + elapsed, k % 2 === 0 ? 1 - target : target);
-		}
-	}
-	return points;
 }
 
 /**
@@ -408,7 +351,11 @@ export function compileSchematic(
 					name: `${name}__actuator`,
 					plus: control,
 					minus: 'gnd',
-					waveform: { type: 'pwl', points: contactControl(instance) },
+					// A switch nobody scheduled holds still, and a constant says that
+					// without asking the solver to land a timepoint on anything.
+					waveform: isScheduled(instance)
+						? { type: 'pwl', points: contactControl(instance) }
+						: { type: 'dc', value: restingContact(instance) },
 					ac_magnitude: 0,
 					ac_phase: 0
 				});
@@ -646,6 +593,15 @@ export function compileSchematic(
 				break;
 			}
 		}
+	}
+
+	// A logic input with nothing holding it at either rail reads the same level
+	// whatever the switch in front of it does — which looks exactly like a broken
+	// simulation, and is the most common mistake there is with a switch.
+	for (const { instance, pin } of floatingLogicInputs(schematic, connectivity)) {
+		warnings.push(
+			`${instance.name}.${pin} is left floating whenever the switch feeding it opens: nothing holds it at either rail, so what it reads is decided by leakage rather than by the switch. A pull-down resistor to ground, or a pull-up to the supply, is what fixes it.`
+		);
 	}
 
 	// ---- automatic bridges ----------------------------------------------
