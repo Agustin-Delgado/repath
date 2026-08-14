@@ -37,6 +37,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | LED | Failure is thermal-free: one dose rule, no junction temperature | A part in still air and one on a heatsink fail at the same instant |
 | Animation | BJT base current approximated as zero when distributing wire current | Base-net current dots are missing rather than wrong |
 | Animation | Wires closing a loop show no current | Genuinely undefined for ideal wires in parallel; shown as nothing rather than guessed |
+| Animation | Speed is scaled to the 90th percentile of what is on screen, not the peak | A spike ten times everything else is drawn at full speed rather than flattening the rest of the circuit to a standstill |
 | Canvas | Layer-level invalidation, no dirty rectangles | A full-screen repaint per interaction on the affected layer |
 | Canvas | Labels are placed per part, with no collision avoidance between them | Two parts a symbol's width apart can have a name and a reading land on each other |
 | Editor | No touch or pen input | Unusable on a tablet |

@@ -29,11 +29,16 @@ import { instancePins } from './scene';
  * Which pins carry a device's current, and in which direction.
  *
  * The engine reports current flowing *into* an element at its first terminal, so
- * that pin drains the net (−1) and the return pin feeds it (+1). Terminals not
- * listed carry no current worth animating: a MOSFET gate draws exactly none in
- * this model, and a BJT base draws a few microamps against milliamps elsewhere.
+ * that pin drains the net (−1) and the return pin feeds it (+1).
+ *
+ * A three-terminal device cannot be described that way, and pretending otherwise
+ * is what made a CMOS inverter look broken: the supply poured milliamps into a
+ * transistor whose channel was carrying nothing, because all of it was going
+ * into the gate capacitance and the gate was not in this table. The engine now
+ * reports each terminal separately, under `M1:g` and `M1:s`, and the third
+ * column here names that series. The three add to zero, so the net adds up.
  */
-const PIN_FLOW: Record<string, Array<[pin: string, sign: number]>> = {
+const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string]>> = {
 	resistor: [['a', -1], ['b', 1]],
 	capacitor: [['a', -1], ['b', 1]],
 	inductor: [['a', -1], ['b', 1]],
@@ -50,10 +55,13 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number]>> = {
 	isource: [['plus', -1], ['minus', 1]],
 	diode: [['anode', -1], ['cathode', 1]],
 	led: [['anode', -1], ['cathode', 1]],
-	nmos: [['drain', -1], ['source', 1]],
-	pmos: [['drain', -1], ['source', 1]],
-	npn: [['collector', -1], ['emitter', 1]],
-	pnp: [['collector', -1], ['emitter', 1]],
+	// Every terminal reported into the device, so every one of them drains its
+	// net. Drain and source stay first, in that order: they are the path the
+	// dots are drawn along inside the symbol.
+	nmos: [['drain', -1], ['source', -1, ':s'], ['gate', -1, ':g']],
+	pmos: [['drain', -1], ['source', -1, ':s'], ['gate', -1, ':g']],
+	npn: [['collector', -1], ['emitter', -1, ':e'], ['base', -1, ':b']],
+	pnp: [['collector', -1], ['emitter', -1, ':e'], ['base', -1, ':b']],
 	opamp: [['out', -1]]
 };
 
@@ -109,8 +117,23 @@ export interface FlowContext {
 	instanceElement: Map<string, number>;
 	/** Instance id -> the two pins its current flows between. */
 	instanceFlow: Map<string, { from: string; to: string }>;
+	/**
+	 * What the colour ramp is stretched over. Grows to fit what has been seen and
+	 * never shrinks, so a wire does not change colour because something else left
+	 * the screen.
+	 */
 	voltageRange: { lo: number; hi: number };
-	/** Reference for scaling animation speed: the largest current in the run. */
+	/**
+	 * Reference for scaling animation speed.
+	 *
+	 * Not the largest current — that is one number away from ruining the whole
+	 * animation. A gate edge charging 25 pF draws milliamps for ten nanoseconds
+	 * while the circuit around it carries microamps; scaled to the spike,
+	 * everything else sits below the threshold at which a dot moves at all, and
+	 * the drawing reports a circuit with no current in it. This is a high
+	 * percentile over what is on screen instead: the spike is still the fastest
+	 * thing drawn, and everything else is still visible.
+	 */
 	currentScale: number;
 }
 
@@ -149,7 +172,9 @@ export function prepareFlow(
 		if (index === undefined) continue;
 		instanceElement.set(instance.id, index);
 		const flow = PIN_FLOW[instance.kind];
-		if (flow && flow.length === 2) {
+		// The first two are the conduction path — drain to source, collector to
+		// emitter — whatever else the device reports.
+		if (flow && flow.length >= 2) {
 			instanceFlow.set(instance.id, { from: flow[0][0], to: flow[1][0] });
 		}
 	}
@@ -200,12 +225,15 @@ export function prepareFlow(
 			if (!entry) continue;
 			const net = connectivity.netOfPoint.get(pointKey(at.x, at.y));
 			if (net === undefined) continue;
+			// A terminal with a series of its own, or the element's own current.
+			const source = entry[2] ? elementByName.get(`${instance.name}${entry[2]}`) : element;
+			if (source === undefined) continue;
 
 			let perNet = injectionsByNet.get(net);
 			if (!perNet) injectionsByNet.set(net, (perNet = new Map()));
 			const key = pointKey(at.x, at.y);
 			const list = perNet.get(key);
-			const injection = { element, sign: entry[1] };
+			const injection = { element: source, sign: entry[1] };
 			if (list) list.push(injection);
 			else perNet.set(key, [injection]);
 		}
@@ -219,7 +247,7 @@ export function prepareFlow(
 	}
 
 	const levels = { low: family.v_low, high: family.v_high };
-	return {
+	const context: FlowContext = {
 		run,
 		plans,
 		netSignal,
@@ -229,9 +257,58 @@ export function prepareFlow(
 		instanceFlow,
 		// A circuit with no analog side at all would otherwise scale its colours to
 		// a range of ±1 V and paint every logic high the same saturated end of it.
-		voltageRange: voltageRange(run, netLogic.size > 0 ? levels : null),
-		currentScale: currentScale(run)
+		voltageRange: netLogic.size > 0 ? { lo: Math.min(0, levels.low), hi: levels.high } : { lo: 0, hi: 0 },
+		currentScale: 1
 	};
+	rescale(context, run, 0, run.time.length - 1);
+	return context;
+}
+
+/**
+ * Fit the colour ramp and the animation speed to a stretch of the run.
+ *
+ * Called every frame with whatever is on screen, because a run that is still
+ * going has no final answer to scale against — and because the interesting
+ * currents move by orders of magnitude as a circuit switches.
+ */
+export function rescale(context: FlowContext, run: TransientRun, from: number, to: number): void {
+	const lo = Math.max(Math.min(from, to), 0);
+	const hi = Math.min(Math.max(from, to), run.time.length - 1);
+	if (hi < lo) return;
+
+	// Voltage: the range only ever grows. Colours that re-scaled every frame
+	// would have a steady rail changing colour because something else spiked.
+	let low = context.voltageRange.lo;
+	let high = context.voltageRange.hi;
+	for (let i = 0; i < run.nodeCount; i++) {
+		const samples = run.signalsByIndex[i];
+		if (!samples) continue;
+		for (let k = lo; k <= hi; k++) {
+			const v = samples[k];
+			if (v < low) low = v;
+			if (v > high) high = v;
+		}
+	}
+	context.voltageRange = high - low < 1e-9 ? { lo: -1, hi: 1 } : { lo: low, hi: high };
+
+	// Current: a high percentile of what is on screen, sampled rather than read
+	// in full — the answer is a scale for an animation, and a hundred rows say
+	// the same thing as ten thousand at a fraction of the frame budget.
+	const stride = Math.max(1, Math.floor((hi - lo + 1) / SCALE_ROWS));
+	const magnitudes: number[] = [];
+	for (const series of run.currents) {
+		for (let k = lo; k <= hi; k += stride) {
+			const magnitude = Math.abs(series[k]);
+			if (magnitude > 0 && Number.isFinite(magnitude)) magnitudes.push(magnitude);
+		}
+	}
+	if (magnitudes.length === 0) {
+		context.currentScale = 1;
+		return;
+	}
+	magnitudes.sort((a, b) => a - b);
+	const percentile = magnitudes[Math.floor((magnitudes.length - 1) * SCALE_PERCENTILE)];
+	context.currentScale = percentile > 0 ? percentile : magnitudes[magnitudes.length - 1];
 }
 
 /**
@@ -311,40 +388,16 @@ function planNet(
 	return order.reverse();
 }
 
-function voltageRange(
-	run: TransientRun,
-	logic: { low: number; high: number } | null
-): { lo: number; hi: number } {
-	// Starts at zero on both sides so the midpoint of the diverging scale always
-	// means something: no potential difference from ground.
-	let lo = 0;
-	let hi = 0;
-	for (let i = 0; i < run.nodeCount; i++) {
-		const samples = run.signalsByIndex[i];
-		if (!samples) continue;
-		for (const v of samples) {
-			if (v < lo) lo = v;
-			if (v > hi) hi = v;
-		}
-	}
-	if (logic) {
-		lo = Math.min(lo, logic.low, logic.high);
-		hi = Math.max(hi, logic.low, logic.high);
-	}
-	if (hi - lo < 1e-9) return { lo: -1, hi: 1 };
-	return { lo, hi };
-}
+/** Rows sampled when working out the current scale. */
+const SCALE_ROWS = 128;
 
-function currentScale(run: TransientRun): number {
-	let max = 0;
-	for (const series of run.currents) {
-		for (const i of series) {
-			const magnitude = Math.abs(i);
-			if (magnitude > max && Number.isFinite(magnitude)) max = magnitude;
-		}
-	}
-	return max > 0 ? max : 1;
-}
+/**
+ * Where in the spread of currents the animation's full speed sits.
+ *
+ * Not the top. A tenth of the samples being drawn faster than full speed is a
+ * far smaller lie than nine tenths of them being drawn as no flow at all.
+ */
+const SCALE_PERCENTILE = 0.9;
 
 /** Index of the sample at or just before `time`. Binary search on a sorted axis. */
 export function sampleIndexAt(times: ArrayLike<number>, time: number): number {
@@ -359,9 +412,13 @@ export function sampleIndexAt(times: ArrayLike<number>, time: number): number {
 	return lo;
 }
 
-/** Evaluate one timepoint. Cheap enough to call every frame. */
-export function sampleFlow(context: FlowContext, index: number): FlowFrame {
-	const { run } = context;
+/**
+ * Evaluate one timepoint. Cheap enough to call every frame.
+ *
+ * The run is passed in rather than read off the context: with a live capture the
+ * samples are still arriving, and the context was built when the run started.
+ */
+export function sampleFlow(context: FlowContext, run: TransientRun, index: number): FlowFrame {
 	const at = Math.min(Math.max(index, 0), Math.max(run.time.length - 1, 0));
 	const currentOf = (element: number) => run.currents[element]?.[at] ?? 0;
 

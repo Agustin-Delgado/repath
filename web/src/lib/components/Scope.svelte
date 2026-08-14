@@ -76,15 +76,20 @@
 			events: DigitalTransition[];
 			/** The level the net was already at when the memory opens. */
 			opening: LogicState;
+			/** Where the lane sits, in lane heights. The one knob a lane has. */
+			offset: number;
 		}> = [];
 		for (const probe of digitalProbes) {
 			const index = run.netNames.indexOf(probe.digital!);
 			if (index < 0) continue;
+			// Bridged nets are drawn as an analog trace as well, and that trace is
+			// what the gain knob is for; the lane only ever has a position.
 			out.push({
 				label: probe.label,
 				colour: probe.colour,
 				events: run.digital[index],
-				opening: app.capture?.openingState(index) ?? 'unknown'
+				opening: app.capture?.openingState(index) ?? 'unknown',
+				offset: app.channels[probe.key]?.offset ?? 0
 			});
 		}
 		return out;
@@ -397,7 +402,11 @@
 		const labels: Array<{ text: string; y: number }> = [];
 		ctx.lineWidth = 1.8;
 		digitalTraces.forEach((trace, index) => {
-			const top = plot.y + plot.h + index * lane + lane * 0.22;
+			// Moved by its own knob, in half-lane steps, so two lanes can be laid
+			// over each other to compare edges — which is what moving a channel on a
+			// scope is for.
+			const shift = trace.offset * lane * 0.5;
+			const top = plot.y + plot.h + index * lane + lane * 0.22 - shift;
 			const bottom = top + lane * 0.56;
 			ctx.strokeStyle = trace.colour;
 			ctx.beginPath();
@@ -766,16 +775,24 @@
 						{#if probe}
 							{@const knob = app.channels[probe.key] ?? { gain: 1, offset: 0 }}
 							<div class="knobs">
-								<span class="knob">
-									<button onclick={() => app.adjustGain(probe.key, -1)} title="Less gain">−</button>
-									<span class="reading">×{knob.gain}</span>
-									<button onclick={() => app.adjustGain(probe.key, 1)} title="More gain">+</button>
-								</span>
+								<!--
+									Gain, only where there is something to turn up. A logic lane is two
+									levels and a label: there is no amplitude to amplify, and a knob
+									that moves a number without moving anything on screen is worse
+									than no knob — it teaches you that the panel lies.
+								-->
+								{#if probe.analog}
+									<span class="knob">
+										<button onclick={() => app.adjustGain(probe.key, -1)} title="Less gain">−</button>
+										<span class="reading">×{knob.gain}</span>
+										<button onclick={() => app.adjustGain(probe.key, 1)} title="More gain">+</button>
+									</span>
+								{/if}
 								<span class="knob">
 									<button onclick={() => app.adjustOffset(probe.key, 1)} title="Move up">↑</button>
 									<button onclick={() => app.adjustOffset(probe.key, -1)} title="Move down">↓</button>
 								</span>
-								{#if knob.gain !== 1 || knob.offset !== 0}
+								{#if (probe.analog && knob.gain !== 1) || knob.offset !== 0}
 									<button
 										class="reset"
 										onclick={() => app.resetChannel(probe.key)}

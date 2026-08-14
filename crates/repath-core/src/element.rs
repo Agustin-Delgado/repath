@@ -223,6 +223,28 @@ pub trait Element: std::fmt::Debug + Send + AsAny {
         None
     }
 
+    /// Terminals this element reports a current for besides the first one.
+    ///
+    /// Empty for anything with two terminals: one figure describes both ends of a
+    /// series branch, and the other end is its negative. It is three-terminal
+    /// devices that need this — a MOSFET's gate carries the current that charges
+    /// its own capacitances, and with only the channel figure reported, a drawing
+    /// that adds up the currents on a net finds them not adding up. The wire into
+    /// the gate then shows nothing while the wire out of the source that supplies
+    /// it shows milliamps, which looks exactly like a bug and is one.
+    ///
+    /// The names are suffixes: a MOSFET called `M1` reporting `["g", "s"]` is
+    /// asked for `M1:g` and `M1:s`.
+    fn terminal_names(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Currents at those terminals, in the same order, each flowing *into* the
+    /// device from the net outside it.
+    fn terminal_currents(&self, x: &[f64], out: &mut Vec<f64>) {
+        let _ = (x, out);
+    }
+
     /// Current flowing into the first terminal, for probes. `None` if the element
     /// cannot report it cheaply.
     fn current(&self, x: &[f64]) -> Option<f64> {

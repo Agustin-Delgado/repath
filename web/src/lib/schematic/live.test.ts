@@ -103,7 +103,7 @@ function simulate(schematic: Schematic, stop = 1e-3, time = stop) {
 	}
 
 	const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
-	const frame = sampleFlow(context, sampleIndexAt(run.time, time));
+	const frame = sampleFlow(context, run, sampleIndexAt(run.time, time));
 	return { compiled, run, context, frame };
 }
 
@@ -428,7 +428,7 @@ describe('a logic toggle', () => {
 
 		const run = capture.run();
 		const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
-		const at = (t: number) => sampleFlow(context, sampleIndexAt(run.time, t));
+		const at = (t: number) => sampleFlow(context, run, sampleIndexAt(run.time, t));
 		expect(voltsAt(schematic, compiled, at(2e-4), 230, 190)).toBeCloseTo(0, 6);
 		expect(voltsAt(schematic, compiled, at(8e-4), 230, 190)).toBeCloseTo(5, 6);
 
@@ -472,5 +472,121 @@ describe('a logic toggle', () => {
 		for (let i = 0; i < upto; i++) {
 			expect(operated.time[i]).toBeCloseTo(untouched.time[i], 12);
 		}
+	});
+});
+
+/**
+ * A part with three terminals, and the wires around it adding up.
+ *
+ * The reported case: a CMOS inverter, whose gates are charged through 25 pF on
+ * every edge. That current is real, it comes out of a supply, and it has to
+ * arrive somewhere — but the engine only reported a MOSFET's channel current, so
+ * the drawing had milliamps leaving the supply and nothing reaching the
+ * transistor. Half a circuit animated and the other half looked dead.
+ */
+describe('a MOSFET being switched', () => {
+	function inverter(): Schematic {
+		const vdd = at('vsource', 'VDD', 120, 200);
+		vdd.params.waveform = 'dc';
+		vdd.params.value = 5;
+		const drive = at('vsource', 'V1', 120, 380);
+		drive.params.waveform = 'pulse';
+		drive.params.value = 5;
+		drive.params.frequency = 10000;
+		return drawing(
+			[vdd, drive, at('nmos', 'M1', 400, 260), at('ground', 'GND1', 120, 470)],
+			[
+				// Supply to the drain.
+				[120, 170, 410, 170],
+				[410, 170, 410, 230],
+				// Drive to the gate.
+				[120, 350, 300, 350],
+				[300, 350, 300, 260],
+				[300, 260, 370, 260],
+				// Returns. VDD's goes round the outside: straight down it would run
+				// through V1's own terminals and short the drive out.
+				[120, 230, 60, 230],
+				[60, 230, 60, 460],
+				[60, 460, 120, 460],
+				[120, 410, 120, 460],
+				[410, 290, 410, 460],
+				[410, 460, 120, 460]
+			]
+		);
+	}
+
+	it('has the current arriving at the gate that the source is supplying', () => {
+		const schematic = inverter();
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
+
+		const live = new LiveRun(compiled.netlist, 2e-8);
+		const capture = new Capture(
+			live.unknownNames,
+			live.elementNames,
+			live.netNames,
+			live.nodeCount
+		);
+		capture.add(live.first);
+		// Through the first edge, which is where the gate charge goes in.
+		capture.add(live.advance(60e-6));
+		live.free();
+
+		const run = capture.run();
+		const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
+
+		// The instant the gate wire is busiest.
+		const gateSeries = run.currents[run.elementNames.indexOf('M1:g')];
+		let peak = 0;
+		let index = 0;
+		for (let i = 0; i < gateSeries.length; i++) {
+			if (Math.abs(gateSeries[i]) > peak) {
+				peak = Math.abs(gateSeries[i]);
+				index = i;
+			}
+		}
+		expect(peak).toBeGreaterThan(1e-5);
+
+		const frame = sampleFlow(context, run, index);
+		const gate = currentAt(schematic, frame, 300, 350);
+		const source = currentAt(schematic, frame, 120, 350);
+		// One wire, drawn in two legs: whatever leaves the source arrives at the
+		// gate. Before the engine reported terminal currents this was `peak` at one
+		// end and zero at the other.
+		expect(gate).toBeCloseTo(peak, 9);
+		expect(source).toBeCloseTo(peak, 9);
+	});
+
+	it('does not let one edge decide that nothing else is flowing', () => {
+		// The scale is a high percentile of what is on screen rather than its peak.
+		// Taken from the peak, a ten-nanosecond gate spike a thousand times the
+		// steady current puts everything else below the threshold at which a dot
+		// moves at all — a circuit drawn as carrying nothing while it works.
+		const schematic = inverter();
+		const compiled = compileSchematic(schematic);
+		const live = new LiveRun(compiled.netlist, 2e-8);
+		const capture = new Capture(
+			live.unknownNames,
+			live.elementNames,
+			live.netNames,
+			live.nodeCount
+		);
+		capture.add(live.first);
+		capture.add(live.advance(60e-6));
+		live.free();
+
+		const run = capture.run();
+		const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
+		let biggest = 0;
+		for (const series of run.currents) {
+			for (const value of series) biggest = Math.max(biggest, Math.abs(value));
+		}
+		expect(context.currentScale).toBeLessThan(biggest);
+
+		// And the steady current through the device is still drawn as flowing.
+		const steady = sampleFlow(context, run, run.time.length - 1);
+		const through = Math.abs(steady.instanceCurrent.get(schematic.instances[2].id) ?? 0);
+		expect(through).toBeGreaterThan(0);
+		expect(isFlowing(through, context.currentScale)).toBe(true);
 	});
 });

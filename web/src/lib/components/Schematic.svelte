@@ -7,6 +7,7 @@
 	 * picking, snapping and tool behaviour lives in `$lib/canvas` and
 	 * `$lib/schematic`, where it can be tested without a browser.
 	 */
+	import { untrack } from 'svelte';
 	import { CanvasEditor, type Painter } from '$lib/canvas';
 	import { createAnimationState } from '$lib/schematic/animate';
 	import { isActuatedAt, isClosedAt, isHighAt } from '$lib/schematic/contacts';
@@ -19,7 +20,7 @@
 		type Theme
 	} from '$lib/schematic/draw';
 	import { drawDynamic, tick, type DynamicView } from '$lib/schematic/dynamic';
-	import { prepareFlow, sampleFlow, sampleIndexAt } from '$lib/schematic/flow';
+	import { prepareFlow, rescale, sampleFlow, sampleIndexAt } from '$lib/schematic/flow';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { burnoutsById } from '$lib/schematic/led';
 	import { GRID } from '$lib/schematic/model';
@@ -88,17 +89,25 @@
 		)
 	);
 
+	/**
+	 * The flow plan: which wire carries what, worked out once per run.
+	 *
+	 * Deliberately *not* rebuilt when samples arrive. The plan is a property of
+	 * the drawing — a spanning tree per net and a map from parts to the engine's
+	 * arrays — and rebuilding it on every acquired chunk meant building spanning
+	 * trees sixty times a second for an answer that had not changed. The samples
+	 * are read untracked here for exactly that reason, and handed to `sampleFlow`
+	 * fresh on every frame instead.
+	 */
 	const flowContext = $derived.by(() => {
-		const run = app.result;
-		if (!run) return null;
+		void app.acquiring;
 		const compiled = app.compiled;
-		return prepareFlow(
-			app.schematic,
-			compiled.connectivity,
-			compiled.names,
-			run,
-			logicFamily(app.logicFamily)
-		);
+		const family = logicFamily(app.logicFamily);
+		return untrack(() => {
+			const run = app.result;
+			if (!run) return null;
+			return prepareFlow(app.schematic, compiled.connectivity, compiled.names, run, family);
+		});
 	});
 
 	/**
@@ -215,6 +224,10 @@
 			(window as unknown as Record<string, unknown>).__repath = {
 				editor: created,
 				app,
+				/** The live overlay's own numbers — what each wire is being drawn as. */
+				get view() {
+					return dynamicView;
+				},
 				/**
 				 * Re-perform a trace someone handed over.
 				 *
@@ -324,9 +337,15 @@
 			// only when a layer is switched on. What each layer paints is the layer's
 			// business; a burnt part is drawn regardless of all three, and gating the
 			// whole view on them meant switching them off hid that too.
-			if (context && app.analysis === 'transient' && app.live) {
-				const index = sampleIndexAt(context.run.time, app.playbackTime);
-				const frame = sampleFlow(context, index);
+			const run = app.result;
+			if (context && run && app.analysis === 'transient' && app.live) {
+				const index = sampleIndexAt(run.time, app.playbackTime);
+				// Scaled to what is on screen, not to the whole of memory: the window
+				// is what somebody is looking at, and a spike that scrolled off it an
+				// hour ago should not still be deciding how fast the dots move.
+				const first = sampleIndexAt(run.time, app.playbackTime - app.stopTime);
+				rescale(context, run, first, index);
+				const frame = sampleFlow(context, run, index);
 				dynamicView = {
 					schematic: app.schematic,
 					frame,

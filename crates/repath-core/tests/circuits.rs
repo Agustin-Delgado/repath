@@ -2007,3 +2007,60 @@ fn a_logic_source_can_be_operated_while_the_run_is_going() {
     // One edge, recorded once — not one per chunk.
     assert_eq!(result.digital[dy].iter().filter(|(_, s)| *s == Logic::High).count(), 1);
 }
+
+/// The currents reported at a MOSFET's terminals add up to nothing.
+///
+/// Which is Kirchhoff, and the reason the drawing could not balance a net before
+/// this: with only the channel current reported, a gate being charged through
+/// 25 pF at a 5 V edge drew milliamps out of the supply that arrived nowhere.
+/// The animation showed current leaving a source and reaching no part.
+#[test]
+fn a_mosfet_reports_every_terminal_it_is_carrying() {
+    let mut c = Circuit::new();
+    let vdd = c.node("vdd");
+    let gate = c.node("gate");
+    let drain = c.node("drain");
+    c.add(Box::new(VoltageSource::dc("VDD", vdd, Circuit::GROUND, 5.0)));
+    // A fast edge on the gate, which is where the capacitive current comes from.
+    c.add(Box::new(VoltageSource::new(
+        "V1",
+        gate,
+        Circuit::GROUND,
+        Waveform::Pulse {
+            v1: 0.0,
+            v2: 5.0,
+            delay: 1e-6,
+            rise: 1e-8,
+            fall: 1e-8,
+            width: 5e-6,
+            period: 0.0,
+        },
+    )));
+    c.add(Box::new(Resistor::new("R1", vdd, drain, 1000.0)));
+    let mut model = MosfetModel::default();
+    model.channel = Channel::N;
+    c.add(Box::new(Mosfet::new("M1", drain, gate, Circuit::GROUND, model)));
+
+    let mut sim = Simulator::default();
+    let mut cfg = TransientConfig::new(4e-6);
+    cfg.max_step = 2e-9;
+    let result = sim.transient(&mut c, cfg).unwrap();
+
+    let index = |name: &str| result.element_index(name).unwrap_or_else(|| panic!("no {name}"));
+    let (d, g, s) = (index("M1"), index("M1:g"), index("M1:s"));
+
+    // Somewhere in the edge the gate is genuinely carrying something, or this
+    // test would pass on a device that reports three zeroes.
+    let peak_gate =
+        result.currents.iter().map(|row| row[g].abs()).fold(0.0f64, f64::max);
+    assert!(peak_gate > 1e-4, "the gate never drew anything: peak {peak_gate:.3e} A");
+
+    for (row, t) in result.currents.iter().zip(&result.time) {
+        let sum = row[d] + row[g] + row[s];
+        let largest = row[d].abs().max(row[g].abs()).max(row[s].abs());
+        assert!(
+            sum.abs() <= largest * 1e-9 + 1e-12,
+            "at t = {t:.3e} the terminals sum to {sum:.3e} A against {largest:.3e} A"
+        );
+    }
+}

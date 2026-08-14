@@ -236,8 +236,18 @@ impl Circuit {
     }
 
     /// Instance names, in the same order as [`Self::collect_currents`].
+    /// Names for every reported current, in the order [`Self::collect_currents`]
+    /// produces them: each element, then any extra terminals it reports, as
+    /// `M1:g`.
     pub fn element_names(&self) -> Vec<String> {
-        self.elements.iter().map(|e| e.name().to_string()).collect()
+        let mut names = Vec::with_capacity(self.elements.len());
+        for element in &self.elements {
+            names.push(element.name().to_string());
+            for terminal in element.terminal_names() {
+                names.push(format!("{}:{terminal}", element.name()));
+            }
+        }
+        names
     }
 
     /// Current through every element, in element order.
@@ -250,6 +260,7 @@ impl Circuit {
         out.reserve(self.elements.len());
         for element in &self.elements {
             out.push(element.current(x).unwrap_or(0.0));
+            element.terminal_currents(x, out);
         }
     }
 

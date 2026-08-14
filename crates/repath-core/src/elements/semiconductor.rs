@@ -229,6 +229,15 @@ impl ChargeBranch {
         }
     }
 
+    /// What this branch was carrying at the last accepted timepoint.
+    ///
+    /// A capacitance's current cannot be read off the solution the way a
+    /// resistor's can — it is a rate of change, and the rate is what the
+    /// companion model worked out on the way to that timepoint.
+    fn current(&self) -> f64 {
+        self.i_prev
+    }
+
     /// Roll the branch forward past a converged timepoint.
     fn accept(&mut self, v: f64, c: f64, ctx: &AcceptCtx) {
         if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
@@ -881,6 +890,42 @@ impl Mosfet {
         [(self.g, self.s, m.cgs), (self.g, self.d, m.cgd), (self.d, self.s, m.cds)]
     }
 
+    /// Current into each terminal from the net outside: drain, gate, source.
+    ///
+    /// The channel is only part of it. Each capacitance carries whatever its own
+    /// charge branch settled on at the last accepted timepoint, and those
+    /// currents arrive at real terminals: `cgd` bridges gate to drain, `cgs`
+    /// gate to source, `cds` drain to source. Kirchhoff over the whole device
+    /// then gives the source, which is why it is not computed separately — the
+    /// three have to add to zero, and this is the only way to be sure they do.
+    fn terminals(&self, x: &[f64]) -> (f64, f64, f64) {
+        let sign = self.model.channel.sign();
+        let v = |n: NodeId| node_index(n).map_or(0.0, |i| x[i]) * sign;
+        let (vd, vg, vs) = (v(self.d), v(self.g), v(self.s));
+        let swapped = vd < vs;
+        let (vhi, vlo) = if swapped { (vs, vd) } else { (vd, vs) };
+        let ids = self.evaluate(vg - vlo, vhi - vlo).ids;
+        let channel = ids * sign * if swapped { -1.0 } else { 1.0 };
+
+        // Plus whatever the body diode is passing, which is the whole of it when
+        // the device is off and the drain has been dragged the wrong way. Reporting
+        // only the channel would show a part carrying nothing while it clamps.
+        //
+        // The diode reports current into its own anode. In an n-channel device that
+        // is the source, so it arrives at the drain and counts negative; in a
+        // p-channel one the anode is the drain and it counts positive.
+        let body = self.body.current(x).unwrap_or(0.0) * -sign;
+
+        // The capacitive branches, in the real frame — a capacitance does not
+        // care which way round the device is. Each is the current flowing from
+        // the first named terminal to the second.
+        let (i_gs, i_gd, i_ds) = (self.q_gs.current(), self.q_gd.current(), self.q_ds.current());
+
+        let drain = channel + body + i_ds - i_gd;
+        let gate = i_gs + i_gd;
+        (drain, gate, -(drain + gate))
+    }
+
     /// Evaluate with `vgs`/`vds` already normalized to the n-channel convention
     /// and `vds >= 0` (the caller handles the swapped-terminal case).
     fn evaluate(&self, vgs: f64, vds: f64) -> MosOp {
@@ -1035,24 +1080,25 @@ impl Element for Mosfet {
         self.body.ac_stamp(sys, ctx);
     }
 
+    /// What the drain terminal is carrying, capacitances and all.
+    ///
+    /// Not just the channel. On a fast edge the current through this terminal is
+    /// mostly the charge going into `cgd` and `cds`, and a figure that left it
+    /// out described a device the drawing could not balance: milliamps leaving
+    /// the supply, nothing arriving at the transistor.
     fn current(&self, x: &[f64]) -> Option<f64> {
-        let sign = self.model.channel.sign();
-        let v = |n: NodeId| node_index(n).map_or(0.0, |i| x[i]) * sign;
-        let (vd, vg, vs) = (v(self.d), v(self.g), v(self.s));
-        let swapped = vd < vs;
-        let (vhi, vlo) = if swapped { (vs, vd) } else { (vd, vs) };
-        let ids = self.evaluate(vg - vlo, vhi - vlo).ids;
-        let channel = ids * sign * if swapped { -1.0 } else { 1.0 };
+        let (drain, _, _) = self.terminals(x);
+        Some(drain)
+    }
 
-        // Plus whatever the body diode is passing, which is the whole of it when
-        // the device is off and the drain has been dragged the wrong way. Reporting
-        // only the channel would show a part carrying nothing while it clamps.
-        //
-        // The diode reports current into its own anode. In an n-channel device that
-        // is the source, so it arrives at the drain and counts negative; in a
-        // p-channel one the anode is the drain and it counts positive.
-        let body = self.body.current(x).unwrap_or(0.0) * -sign;
-        Some(channel + body)
+    fn terminal_names(&self) -> &'static [&'static str] {
+        &["g", "s"]
+    }
+
+    fn terminal_currents(&self, x: &[f64], out: &mut Vec<f64>) {
+        let (_, gate, source) = self.terminals(x);
+        out.push(gate);
+        out.push(source);
     }
 }
 
@@ -1264,6 +1310,35 @@ impl Bjt {
     }
 }
 
+impl Bjt {
+    /// Current into each terminal from outside: collector, base, emitter.
+    ///
+    /// The junction capacitances are part of it. They are small, and at any
+    /// speed worth building a transistor for they are most of what the base
+    /// terminal is doing — which is why the three figures come from one place
+    /// and are made to add to zero rather than being reported independently.
+    fn terminals(&self, x: &[f64]) -> (f64, f64, f64) {
+        let m = &self.model;
+        let sign = m.polarity.sign();
+        let vt = thermal_voltage(m.temp);
+        let v = |n: NodeId| node_index(n).map_or(0.0, |i| x[i]) * sign;
+        let (vbe, vbc) = (v(self.b) - v(self.e), v(self.b) - v(self.c));
+        let is = self.at_temperature().0;
+        let i_f = is * (safe_exp(vbe / vt) - 1.0);
+        let i_r = is * (safe_exp(vbc / vt) - 1.0);
+
+        // Conduction, in the normalized frame, then back to the real one.
+        let collector_conducted = ((i_f - i_r) - i_r / m.br) * sign;
+        let base_conducted = (i_f / m.bf + i_r / m.br) * sign;
+
+        // The stored charge, which is already in the real frame.
+        let (i_be, i_bc) = (self.q_be.current(), self.q_bc.current());
+        let collector = collector_conducted - i_bc;
+        let base = base_conducted + i_be + i_bc;
+        (collector, base, -(collector + base))
+    }
+}
+
 impl Element for Bjt {
     fn kind(&self) -> &'static str {
         "bjt"
@@ -1441,16 +1516,20 @@ impl Element for Bjt {
         self.q_bc.reset();
     }
 
+    /// What the collector terminal carries, junction capacitances included.
     fn current(&self, x: &[f64]) -> Option<f64> {
-        let m = &self.model;
-        let sign = m.polarity.sign();
-        let vt = thermal_voltage(m.temp);
-        let v = |n: NodeId| node_index(n).map_or(0.0, |i| x[i]) * sign;
-        let (vbe, vbc) = (v(self.b) - v(self.e), v(self.b) - v(self.c));
-        let is = self.at_temperature().0;
-        let i_f = is * (safe_exp(vbe / vt) - 1.0);
-        let i_r = is * (safe_exp(vbc / vt) - 1.0);
-        Some(((i_f - i_r) - i_r / m.br) * sign)
+        let (collector, _, _) = self.terminals(x);
+        Some(collector)
+    }
+
+    fn terminal_names(&self) -> &'static [&'static str] {
+        &["b", "e"]
+    }
+
+    fn terminal_currents(&self, x: &[f64], out: &mut Vec<f64>) {
+        let (_, base, emitter) = self.terminals(x);
+        out.push(base);
+        out.push(emitter);
     }
 }
 
