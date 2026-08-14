@@ -9,7 +9,7 @@
 	 */
 	import { CanvasEditor, type Painter } from '$lib/canvas';
 	import { createAnimationState } from '$lib/schematic/animate';
-	import { isActuatedAt, isClosedAt } from '$lib/schematic/contacts';
+	import { isActuatedAt, isClosedAt, isHighAt } from '$lib/schematic/contacts';
 	import {
 		drawGrid,
 		drawSchematic,
@@ -20,6 +20,7 @@
 	} from '$lib/schematic/draw';
 	import { drawDynamic, tick, type DynamicView } from '$lib/schematic/dynamic';
 	import { prepareFlow, sampleFlow, sampleIndexAt } from '$lib/schematic/flow';
+	import { logicFamily } from '$lib/schematic/logic';
 	import { burnoutsById } from '$lib/schematic/led';
 	import { GRID } from '$lib/schematic/model';
 	import { routeWire } from '$lib/schematic/route';
@@ -91,7 +92,13 @@
 		const run = app.result;
 		if (!run) return null;
 		const compiled = app.compiled;
-		return prepareFlow(app.schematic, compiled.connectivity, compiled.names, run);
+		return prepareFlow(
+			app.schematic,
+			compiled.connectivity,
+			compiled.names,
+			run,
+			logicFamily(app.logicFamily)
+		);
 	});
 
 	/**
@@ -145,10 +152,15 @@
 		let changed = false;
 		const seen = new Set<string>();
 		for (const instance of app.schematic.instances) {
-			if (instance.kind !== 'switch') continue;
+			const operable = instance.kind === 'switch' || instance.kind === 'toggle';
+			if (!operable) continue;
 			seen.add(instance.id);
 			if (time === null) continue;
-			const closed = isActuatedAt(instance, time);
+			// Both parts are drawn where the run has them rather than where the
+			// parameters rest, and for the same reason: one that was thrown at three
+			// milliseconds is only in its new position from three milliseconds on.
+			const closed =
+				instance.kind === 'switch' ? isActuatedAt(instance, time) : isHighAt(instance, time);
 			if (switchStates.get(instance.id) !== closed) {
 				switchStates.set(instance.id, closed);
 				changed = true;
@@ -324,9 +336,10 @@
 			// whole view on them meant switching them off hid that too.
 			if (context && app.analysis === 'transient' && app.live) {
 				const index = sampleIndexAt(context.run.time, app.playbackTime);
+				const frame = sampleFlow(context, index);
 				dynamicView = {
 					schematic: app.schematic,
-					frame: sampleFlow(context, index),
+					frame,
 					context,
 					animation,
 					netOfPoint: app.compiled.connectivity.netOfPoint,
@@ -338,7 +351,12 @@
 					time: app.playbackTime,
 					stopTime: app.stopTime,
 					burnouts: burnoutMap,
-					floating: app.compiled.floatingAt(closedSwitchesAt(app.playbackTime)),
+					// Two ways of being at no particular potential, drawn the same way:
+					// an analog node nothing holds, and a digital net nothing drives.
+					floating: new Set([
+						...app.compiled.floatingAt(closedSwitchesAt(app.playbackTime)),
+						...frame.netUndriven
+					]),
 					selection: selectionSet,
 					selectionColour: theme!.selection
 				};
@@ -447,83 +465,12 @@
 		}
 	}
 
-	/** Where the rename field goes, in canvas pixels, and what it starts with. */
-	const renameAt = $derived.by(() => {
-		const id = app.renaming;
-		const view = editor?.viewport;
-		if (!id || !view) return null;
-		const instance = app.schematic.instances.find((i) => i.id === id);
-		if (!instance) return null;
-		const at = view.toScreen({ x: instance.x, y: instance.y });
-		return { x: at.x, y: at.y, name: instance.name };
-	});
-
-	let renameField = $state.raw<HTMLInputElement | null>(null);
-	/**
-	 * Whether the field has had its turn at the keyboard yet.
-	 *
-	 * The gesture that opens it is not finished when it appears: the `mousedown`
-	 * that follows the `pointerdown` lands on the canvas, which takes nothing
-	 * focusable with it, so the browser blanks the focus — and a blur handler that
-	 * closed on sight shut the field before anyone could type into it. Focus goes
-	 * in on the next frame instead, once the press is over, and a blur before that
-	 * is the gesture rather than the user leaving.
-	 */
-	let renameReady = false;
-
-	$effect(() => {
-		if (!renameAt || !renameField) {
-			renameReady = false;
-			return;
-		}
-		const field = renameField;
-		const id = requestAnimationFrame(() => {
-			field.select();
-			renameReady = true;
-		});
-		return () => cancelAnimationFrame(id);
-	});
-
-	function commitRename(value: string) {
-		if (!renameReady) return;
-		renameReady = false;
-		const id = app.renaming;
-		app.renaming = null;
-		if (id) app.rename(id, value);
-	}
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
 
 <div class="stage">
 	<div class="host" bind:this={host} role="application" aria-label="Schematic editor"></div>
-
-	<!--
-		Renaming happens where the name is. An input floated over the canvas rather
-		than drawn into it, so it is a real text field — selection, caret, undo, an
-		IME — none of which is worth reimplementing on a 2D context.
-	-->
-	{#if renameAt}
-		<input
-			class="rename"
-			style:left="{renameAt.x}px"
-			style:top="{renameAt.y}px"
-			bind:this={renameField}
-			value={renameAt.name}
-			onblur={(e) => commitRename(e.currentTarget.value)}
-			onkeydown={(e) => {
-				if (e.key === 'Enter') e.currentTarget.blur();
-				else if (e.key === 'Escape') {
-					// Put the old name back before blurring, so Escape cancels rather
-					// than committing whatever was half-typed.
-					e.currentTarget.value = renameAt?.name ?? '';
-					e.currentTarget.blur();
-				}
-				e.stopPropagation();
-			}}
-			aria-label="Component name"
-		/>
-	{/if}
 </div>
 
 <style>
@@ -532,21 +479,6 @@
 		width: 100%;
 		height: 100%;
 		min-height: 0;
-	}
-
-	.rename {
-		position: absolute;
-		transform: translate(-50%, -50%);
-		width: 6.5rem;
-		text-align: center;
-		font-size: 0.78rem;
-		font-family: var(--font-mono);
-		padding: 0.15rem 0.3rem;
-		border: 1px solid var(--accent);
-		border-radius: 4px;
-		background: var(--control-bg);
-		color: var(--label-strong);
-		z-index: 3;
 	}
 
 	.host {

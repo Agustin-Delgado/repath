@@ -10,9 +10,12 @@
 import { describe, expect, it } from 'vitest';
 import {
 	contactControl,
+	encodeOperations,
 	isActuatedAt,
 	isClosedAt,
+	isHighAt,
 	isScheduled,
+	operationTimes,
 	restingContact
 } from './contacts';
 import { defaultParams, type Instance } from './model';
@@ -134,5 +137,61 @@ describe('what the blade is drawn doing', () => {
 	it('is just the position for a switch nobody scheduled', () => {
 		expect(isActuatedAt(sw(), 1)).toBe(false);
 		expect(isActuatedAt(sw({ start: 'closed' }), 1)).toBe(true);
+	});
+});
+
+describe('a part somebody operated while it was playing', () => {
+	it('changes at the instant of the click, not from the start', () => {
+		const thrown = sw({ flips: '2e-3' });
+		expect(isClosedAt(thrown, 1e-3)).toBe(false);
+		expect(isClosedAt(thrown, 2e-3)).toBe(true);
+		expect(isActuatedAt(thrown, 1e-3)).toBe(false);
+		expect(isActuatedAt(thrown, 3e-3)).toBe(true);
+	});
+
+	it('gets a control with an edge in it, so the run has the step', () => {
+		// This is the whole point. A click written down as a new resting position
+		// would replay the run at the new level throughout, and the edge somebody
+		// clicked to see would be the one thing missing from the waveform.
+		const thrown = sw({ flips: '2e-3' });
+		expect(contactControl(thrown).length).toBeGreaterThan(1);
+		expect(contactControl(sw())).toEqual([[0, 0]]);
+	});
+
+	it('takes several operations, in the order they happened', () => {
+		const clicked = sw({ flips: '3e-3,1e-3' });
+		expect(operationTimes(clicked)).toEqual([1e-3, 3e-3]);
+		expect(isActuatedAt(clicked, 0.5e-3)).toBe(false);
+		expect(isActuatedAt(clicked, 2e-3)).toBe(true);
+		expect(isActuatedAt(clicked, 4e-3)).toBe(false);
+	});
+
+	it('stacks with a scheduled operation rather than replacing it', () => {
+		const both = sw({ action: 'toggle', at: 1e-3, bounce: 0, flips: '2e-3' });
+		expect(isActuatedAt(both, 0.5e-3)).toBe(false);
+		expect(isActuatedAt(both, 1.5e-3)).toBe(true);
+		expect(isActuatedAt(both, 3e-3)).toBe(false);
+	});
+
+	it('ignores rubbish rather than putting an edge at zero', () => {
+		// Zero and below are not moments inside a run, and a run that started with
+		// an edge already at t = 0 would be the flat replay this exists to avoid.
+		expect(operationTimes(sw({ flips: '0,-1,abc,2e-3' }))).toEqual([2e-3]);
+		expect(encodeOperations([3e-3, 1e-3, NaN])).toBe('0.001,0.003');
+	});
+
+	it('drives a logic toggle the same way', () => {
+		const toggle: Instance = {
+			id: 't1',
+			kind: 'toggle',
+			name: 'T1',
+			x: 0,
+			y: 0,
+			rotation: 0,
+			params: { ...defaultParams('toggle'), flips: '2e-3' }
+		};
+		expect(isHighAt(toggle, 1e-3)).toBe(false);
+		expect(isHighAt(toggle, 2e-3)).toBe(true);
+		expect(isHighAt({ ...toggle, params: { state: 'high', flips: '2e-3' } }, 3e-3)).toBe(false);
 	});
 });

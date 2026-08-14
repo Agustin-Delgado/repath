@@ -32,6 +32,7 @@ vi.stubGlobal(
 function view(overrides: Partial<DynamicView> = {}): DynamicView {
 	const frame: FlowFrame = {
 		netVoltage: new Map(),
+		netUndriven: new Set(),
 		wireCurrent: new Map([[WIRE, 1]]),
 		instanceCurrent: new Map()
 	};
@@ -145,6 +146,7 @@ describe('drawDynamic', () => {
 			showLight: true,
 			frame: {
 				netVoltage: new Map(),
+				netUndriven: new Set(),
 				wireCurrent: new Map(),
 				instanceCurrent: new Map([['d1', 0.02]])
 			},
@@ -239,6 +241,7 @@ describe('which way the dots travel', () => {
 				} as unknown as DynamicView['context'],
 				frame: {
 					netVoltage: new Map(),
+					netUndriven: new Set(),
 					wireCurrent: new Map([['w#0', 0.5]]),
 					instanceCurrent: new Map([['r1', 0.5]])
 				}

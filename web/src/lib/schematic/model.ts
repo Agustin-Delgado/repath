@@ -572,7 +572,7 @@ export const CATALOG: ComponentDef[] = [
 		params: [
 			{
 				key: 'start',
-				label: 'Position',
+				label: 'Starting position',
 				unit: '',
 				default: 'open',
 				choices: [
@@ -580,7 +580,7 @@ export const CATALOG: ComponentDef[] = [
 					{ value: 'closed', label: 'Closed' }
 				],
 				description:
-					'Click the switch on the drawing to flip it. With a run on screen the circuit is re-solved with it where you put it.'
+					'Where it starts. Clicking the switch on the drawing while something is playing throws it at the playhead instead, so the run keeps everything before that instant and the waveform gets the edge.'
 			},
 			{
 				key: 'action',
@@ -1100,7 +1100,7 @@ export const CATALOG: ComponentDef[] = [
 		params: [
 			{
 				key: 'state',
-				label: 'Level',
+				label: 'Starting level',
 				unit: '',
 				default: 'low',
 				choices: [
@@ -1108,7 +1108,7 @@ export const CATALOG: ComponentDef[] = [
 					{ value: 'high', label: 'High (1)' }
 				],
 				description:
-					'Click it on the drawing to flip it. It drives the net in both positions, so unlike a switch it never leaves what it feeds floating.'
+					'Where it starts. Clicking it on the drawing while something is playing operates it at the playhead instead, so the waveform gets the edge. It drives the net in both positions, so unlike a switch it never leaves what it feeds floating.'
 			}
 		]
 	}

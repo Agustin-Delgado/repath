@@ -247,16 +247,6 @@ export function createSelectTool(): Tool {
 
 			const item = ctx.scene.top(pointer.world, ctx.tolerance);
 
-			// A second click on a part opens its name for editing, where the name
-			// is: chasing the same field down in the inspector to change R1 to RB is
-			// a detour past the thing you were already pointing at.
-			if (pointer.detail === 2 && item && app.schematic.instances.some((i) => i.id === item.id)) {
-				app.selection = [item.id];
-				app.renaming = item.id;
-				ctx.invalidate('overlay');
-				return;
-			}
-
 			// Pressing a wire used to be ambiguous — a click to select it, or the
 			// start of a branch off it — resolved by watching what the pointer did
 			// next. It reads as a wire that runs away when you try to move it, which

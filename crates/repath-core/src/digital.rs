@@ -372,11 +372,19 @@ impl DigitalDevice for Clock {
 ///
 /// It has no inputs, so nothing in the circuit can move it and `evaluate` is
 /// never reached after the start. That is the point of it.
+///
+/// `flips` is when somebody moved it, in seconds from the start of the run: each
+/// entry inverts the level from that instant on. A run is replayed from zero
+/// every time the drawing changes, so an operation performed halfway through has
+/// to be part of the description of the circuit rather than something done to a
+/// running one — otherwise the past would be rewritten by every click, and the
+/// step you just made would be the one thing the waveform did not show.
 #[derive(Debug, Clone)]
 pub struct LogicSource {
     pub name: String,
     pub output: NetId,
     pub state: Logic,
+    pub flips: Vec<f64>,
     inputs: Vec<NetId>,
     outputs: Vec<NetId>,
 }
@@ -387,9 +395,17 @@ impl LogicSource {
             name: name.into(),
             output,
             state,
+            flips: Vec::new(),
             inputs: Vec::new(),
             outputs: vec![output],
         }
+    }
+
+    /// The same source, operated at each of these instants.
+    pub fn operated_at(mut self, flips: impl IntoIterator<Item = f64>) -> Self {
+        self.flips = flips.into_iter().filter(|t| t.is_finite() && *t > 0.0).collect();
+        self.flips.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        self
     }
 }
 
@@ -405,6 +421,22 @@ impl DigitalDevice for LogicSource {
     }
     fn output_nets(&self) -> &[NetId] {
         &self.outputs
+    }
+
+    /// The whole schedule goes on the queue before time starts.
+    ///
+    /// Nothing else can put it there: with no inputs this device is never
+    /// evaluated again, which is exactly the property that makes it stable.
+    fn initialize(&mut self, ctx: &mut EvalCtx) {
+        ctx.drive(0, self.output, self.state, 0.0);
+        let mut level = self.state;
+        for at in self.flips.clone() {
+            level = match level {
+                Logic::High => Logic::Low,
+                _ => Logic::High,
+            };
+            ctx.drive(0, self.output, level, at);
+        }
     }
 
     fn evaluate(&mut self, ctx: &mut EvalCtx) {

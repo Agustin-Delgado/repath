@@ -18,8 +18,9 @@
  * animation frame only re-runs the accumulation.
  */
 
-import type { TransientRun } from '$lib/engine';
+import type { DigitalTransition, LogicState, TransientRun } from '$lib/engine';
 import { definitionOf, pointKey, wireSegments, type Point, type Schematic } from './model';
+import { DEFAULT_FAMILY, logicFamily, type LogicFamily } from './logic';
 import type { Connectivity } from './nets';
 import type { NetNames } from './netlist';
 import { instancePins } from './scene';
@@ -89,6 +90,21 @@ export interface FlowContext {
 	plans: NetPlan[];
 	/** Net index -> index of its voltage in the solution, or -1 for ground. */
 	netSignal: Map<number, number>;
+	/**
+	 * Net index -> the transitions of its digital net, for nets with no node.
+	 *
+	 * A purely digital net has no voltage in the solution at all — the engine
+	 * works in states there and only puts a number on it where the two domains
+	 * meet. Drawn from the analog side alone, half a logic circuit came out with
+	 * no colour, no reading and no visible answer to a click: the part moved, the
+	 * gate obeyed, and the wire between them looked exactly the same either way.
+	 *
+	 * So the level is turned into the volts the family would actually put on that
+	 * wire, and from there it is a voltage like any other.
+	 */
+	netLogic: Map<number, DigitalTransition[]>;
+	/** What a one and a zero are worth on this drawing, in volts. */
+	logicLevels: { low: number; high: number };
 	/** Instance id -> element index in the run. */
 	instanceElement: Map<string, number>;
 	/** Instance id -> the two pins its current flows between. */
@@ -101,6 +117,15 @@ export interface FlowContext {
 export interface FlowFrame {
 	/** Net index -> volts. */
 	netVoltage: Map<number, number>;
+	/**
+	 * Digital nets sitting at neither level at this instant.
+	 *
+	 * Unknown or high-impedance: nothing is driving them, or two things are
+	 * driving them differently. There is no voltage to print, and the wire keeps
+	 * its plain colour rather than being coloured by a number nobody decided —
+	 * the same treatment a floating analog node gets, for the same reason.
+	 */
+	netUndriven: Set<number>;
 	/** `wireId#segmentIndex` -> amps, positive along the segment's own direction. */
 	wireCurrent: Map<string, number>;
 	/** Instance id -> amps through its main conduction path. */
@@ -112,7 +137,8 @@ export function prepareFlow(
 	schematic: Schematic,
 	connectivity: Connectivity,
 	names: ReadonlyMap<number, NetNames>,
-	run: TransientRun
+	run: TransientRun,
+	family: LogicFamily = logicFamily(DEFAULT_FAMILY)
 ): FlowContext {
 	const elementByName = new Map(run.elementNames.map((name, index) => [name, index] as const));
 
@@ -129,9 +155,20 @@ export function prepareFlow(
 	}
 
 	const netSignal = new Map<number, number>();
+	const netLogic = new Map<number, DigitalTransition[]>();
 	for (const [netIndex, entry] of names) {
-		if (!entry.analog) continue;
-		netSignal.set(netIndex, entry.analog === 'gnd' ? -1 : run.unknownNames.indexOf(`v(${entry.analog})`));
+		if (entry.analog) {
+			netSignal.set(
+				netIndex,
+				entry.analog === 'gnd' ? -1 : run.unknownNames.indexOf(`v(${entry.analog})`)
+			);
+			// A bridged net has both, and the node is the better answer: it is what
+			// the wire is really at, including a driver sagging under load.
+			continue;
+		}
+		if (!entry.digital) continue;
+		const index = run.netNames.indexOf(entry.digital);
+		if (index >= 0) netLogic.set(netIndex, run.digital[index] ?? []);
 	}
 
 	// Group wire segments and injections by net.
@@ -181,13 +218,18 @@ export function prepareFlow(
 		if (steps.length > 0) plans.push({ steps, injections });
 	}
 
+	const levels = { low: family.v_low, high: family.v_high };
 	return {
 		run,
 		plans,
 		netSignal,
+		netLogic,
+		logicLevels: levels,
 		instanceElement,
 		instanceFlow,
-		voltageRange: voltageRange(run),
+		// A circuit with no analog side at all would otherwise scale its colours to
+		// a range of ±1 V and paint every logic high the same saturated end of it.
+		voltageRange: voltageRange(run, netLogic.size > 0 ? levels : null),
 		currentScale: currentScale(run)
 	};
 }
@@ -269,7 +311,10 @@ function planNet(
 	return order.reverse();
 }
 
-function voltageRange(run: TransientRun): { lo: number; hi: number } {
+function voltageRange(
+	run: TransientRun,
+	logic: { low: number; high: number } | null
+): { lo: number; hi: number } {
 	// Starts at zero on both sides so the midpoint of the diverging scale always
 	// means something: no potential difference from ground.
 	let lo = 0;
@@ -281,6 +326,10 @@ function voltageRange(run: TransientRun): { lo: number; hi: number } {
 			if (v < lo) lo = v;
 			if (v > hi) hi = v;
 		}
+	}
+	if (logic) {
+		lo = Math.min(lo, logic.low, logic.high);
+		hi = Math.max(hi, logic.low, logic.high);
 	}
 	if (hi - lo < 1e-9) return { lo: -1, hi: 1 };
 	return { lo, hi };
@@ -321,6 +370,18 @@ export function sampleFlow(context: FlowContext, index: number): FlowFrame {
 		netVoltage.set(net, signal < 0 ? 0 : (run.signalsByIndex[signal]?.[at] ?? 0));
 	}
 
+	// The digital side, in volts. The events carry the instant they happened at
+	// rather than a sample index — the digital domain does not step on the
+	// solver's grid — so this is a search by time, not a lookup.
+	const netUndriven = new Set<number>();
+	const now = run.time[at] ?? 0;
+	for (const [net, transitions] of context.netLogic) {
+		const state = stateAt(transitions, now);
+		if (state === 'high') netVoltage.set(net, context.logicLevels.high);
+		else if (state === 'low') netVoltage.set(net, context.logicLevels.low);
+		else netUndriven.add(net);
+	}
+
 	const instanceCurrent = new Map<string, number>();
 	for (const [id, element] of context.instanceElement) {
 		instanceCurrent.set(id, currentOf(element));
@@ -342,5 +403,15 @@ export function sampleFlow(context: FlowContext, index: number): FlowFrame {
 		}
 	}
 
-	return { netVoltage, wireCurrent, instanceCurrent };
+	return { netVoltage, netUndriven, wireCurrent, instanceCurrent };
+}
+
+/** The state a digital net had settled on at an instant. */
+function stateAt(transitions: readonly DigitalTransition[], time: number): LogicState {
+	let state: LogicState = 'unknown';
+	for (const transition of transitions) {
+		if (transition.time > time) break;
+		state = transition.state;
+	}
+	return state;
 }

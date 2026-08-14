@@ -1855,3 +1855,38 @@ fn a_logic_source_holds_the_level_it_was_set_to() {
         assert_eq!(result.digital[da].len(), 1, "the source kept re-driving its net");
     }
 }
+
+/// Operating one partway through a run puts the edge partway through the run.
+///
+/// The point of the whole `flips` mechanism: a click while something is playing
+/// is an event at that instant, not a different initial condition. Written the
+/// other way, the replay would come out flat at the level it ended on and the
+/// step — the one thing somebody clicked to watch — would never be on screen.
+#[test]
+fn a_logic_source_can_be_operated_partway_through_the_run() {
+    let netlist: Netlist = serde_json::from_str(
+        r#"{"components":[],"bridges":[],"devices":[
+{"type":"logic_source","name":"T1","output":"da","state":"low","flips":[300e-9]},
+{"type":"logic_source","name":"T2","output":"db","state":"high"},
+{"type":"gate","name":"U1","kind":"and","inputs":["da","db"],"output":"dy","delay":1e-9}]}"#,
+    )
+    .expect("the editor's netlist should parse");
+    let mut c = netlist.compile().expect("and should compile");
+    let result = Simulator::default().transient(&mut c, TransientConfig::new(1e-6)).unwrap();
+
+    let dy = result.net_names.iter().position(|n| n == "dy").unwrap();
+    let level_at = |t: f64| {
+        result.digital[dy]
+            .iter()
+            .rev()
+            .find(|(when, _)| *when <= t)
+            .map(|(_, s)| *s)
+            .unwrap_or(Logic::Unknown)
+    };
+    assert_eq!(level_at(100e-9), Logic::Low, "before the flip");
+    assert_eq!(level_at(500e-9), Logic::High, "after it");
+
+    // And the output really has an edge in it, rather than one long level.
+    let edges = result.digital[dy].len();
+    assert!(edges >= 2, "the output settled {edges} time(s); the flip left no step");
+}

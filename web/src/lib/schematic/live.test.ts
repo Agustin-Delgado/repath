@@ -390,4 +390,39 @@ describe('a logic toggle', () => {
 		expect(transitions.filter((t) => t.state === 'high')).toHaveLength(1);
 		expect(transitions.length).toBeLessThan(3);
 	});
+
+	it('shows the level on the drawing, in the volts the family puts out', () => {
+		// The complaint that started this: a logic net has no node, so the drawing
+		// had no voltage for it — no colour, no reading, and no visible difference
+		// between a one and a zero on a wire somebody had just clicked.
+		const schematic = gated('high', 'low');
+		const { compiled, frame } = simulate(schematic, 1e-3);
+		expect(voltsAt(schematic, compiled, frame, 230, 190)).toBeCloseTo(5, 6);
+		expect(voltsAt(schematic, compiled, frame, 230, 290)).toBeCloseTo(0, 6);
+		expect(frame.netUndriven.size).toBe(0);
+	});
+
+	it('steps at the moment it was clicked, and holds both levels around it', () => {
+		// A click during playback is an event, not a different circuit. Written down
+		// as a new starting level the replay would come out flat at the new value,
+		// and the edge — the entire reason anybody clicked — would not be anywhere
+		// in the run.
+		const schematic = gated('low', 'high');
+		schematic.instances[0].params.flips = '4e-4';
+
+		const before = simulate(schematic, 1e-3, 2e-4);
+		const after = simulate(schematic, 1e-3, 8e-4);
+		expect(voltsAt(schematic, before.compiled, before.frame, 230, 190)).toBeCloseTo(0, 6);
+		expect(voltsAt(schematic, after.compiled, after.frame, 230, 190)).toBeCloseTo(5, 6);
+
+		// And the gate followed it, which is the answer the click was asking for.
+		const out = after.compiled.connectivity.netOfPin.get(`${schematic.instances[2].id}:y`)!;
+		const label = after.compiled.names.get(out)!.digital!;
+		const transitions = after.run.digital[after.run.netNames.indexOf(label)] ?? [];
+		const stateAt = (t: number) =>
+			transitions.filter((event) => event.time <= t).at(-1)?.state;
+		expect(stateAt(2e-4)).toBe('low');
+		expect(stateAt(8e-4)).toBe('high');
+		expect(transitions.some((t) => t.time > 3e-4 && t.time < 5e-4)).toBe(true);
+	});
 });

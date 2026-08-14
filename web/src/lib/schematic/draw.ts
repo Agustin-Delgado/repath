@@ -259,13 +259,14 @@ export interface SchematicView {
 	/** Probe instance id -> the name and colour it appears under on the scope. */
 	probes?: ReadonlyMap<string, { label: string; colour: string }>;
 	/**
-	 * Switch instance id -> whether its contacts are touching right now.
+	 * Operable instance id -> whether it is thrown right now.
 	 *
-	 * Empty when nothing has been run, in which case a switch is drawn resting
-	 * where its parameters put it. During playback it is drawn where the
-	 * simulation has it, which is the only honest thing to draw: a blade shown
-	 * open over a circuit that is behaving as though it were closed teaches
-	 * somebody to distrust the whole screen.
+	 * Contacts touching for a switch, a high level for a logic toggle. Empty when
+	 * nothing has been run, in which case the part is drawn resting where its
+	 * parameters put it. During playback it is drawn where the simulation has it,
+	 * which is the only honest thing to draw: a blade shown open over a circuit
+	 * that is behaving as though it were closed teaches somebody to distrust the
+	 * whole screen.
 	 *
 	 * This lives on the static layer rather than the animated one because it
 	 * changes a handful of times in a run, not sixty times a second.
@@ -391,7 +392,9 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			instance.kind,
 			live === undefined
 				? instance.params
-				: { ...instance.params, start: live ? 'closed' : 'open' }
+				: instance.kind === 'toggle'
+					? { ...instance.params, state: live ? 'high' : 'low' }
+					: { ...instance.params, start: live ? 'closed' : 'open' }
 		);
 
 		painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {

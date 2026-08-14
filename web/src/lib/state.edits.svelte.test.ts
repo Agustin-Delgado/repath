@@ -1094,3 +1094,50 @@ describe('a probe put where you want to measure', () => {
 		expect(app.activeProbes[0].label).toBe('P1');
 	});
 });
+
+describe('clicking a part somebody is watching run', () => {
+	beforeEach(() => {
+		app.place('toggle', 200, 200, 0);
+		app.stopTime = 5e-3;
+		app.playbackTime = 0;
+		app.live = false;
+	});
+
+	const toggle = () => app.schematic.instances.find((i) => i.kind === 'toggle')!;
+
+	it('sets where it starts when nothing is playing', () => {
+		app.toggleSwitch(toggle().id);
+		expect(toggle().params.state).toBe('high');
+		expect(toggle().params.flips ?? '').toBe('');
+	});
+
+	it('operates it at the playhead when something is', () => {
+		// The whole reason this is not a parameter edit: the run is replayed from
+		// zero, so a click written down as a new starting level comes back as a flat
+		// waveform at the new level, with no edge at the moment anybody clicked.
+		app.live = true;
+		app.result = { time: new Float64Array([0, 5e-3]) } as never;
+		app.playbackTime = 2e-3;
+		app.toggleSwitch(toggle().id);
+
+		expect(toggle().params.state).toBe('low');
+		expect(toggle().params.flips).toBe('0.002');
+
+		// A second click is a second operation rather than an overwrite.
+		app.playbackTime = 3e-3;
+		app.toggleSwitch(toggle().id);
+		expect(toggle().params.flips).toBe('0.002,0.003');
+
+		app.clearOperations(toggle().id);
+		expect(toggle().params.flips).toBe('');
+	});
+
+	it('sets the starting level again once the playhead is at either end', () => {
+		app.live = true;
+		app.result = { time: new Float64Array([0, 5e-3]) } as never;
+		app.playbackTime = app.stopTime;
+		app.toggleSwitch(toggle().id);
+		expect(toggle().params.state).toBe('high');
+		expect(toggle().params.flips ?? '').toBe('');
+	});
+});

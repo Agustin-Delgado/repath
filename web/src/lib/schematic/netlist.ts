@@ -9,7 +9,7 @@
  * converter symbol to remember to place.
  */
 
-import { contactControl, isScheduled, restingContact } from './contacts';
+import { contactControl, operationTimes, restingContact } from './contacts';
 import { ledDiodeModel, ledRating } from './led';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
@@ -361,16 +361,20 @@ export function compileSchematic(
 				// somebody flips is that with its control written out in advance, on
 				// a node of its own that nothing else can see.
 				const control = `${name}__contact`;
+				const controlPoints = contactControl(instance);
 				components.push({
 					type: 'voltage_source',
 					name: `${name}__actuator`,
 					plus: control,
 					minus: 'gnd',
-					// A switch nobody scheduled holds still, and a constant says that
-					// without asking the solver to land a timepoint on anything.
-					waveform: isScheduled(instance)
-						? { type: 'pwl', points: contactControl(instance) }
-						: { type: 'dc', value: restingContact(instance) },
+					// A switch nobody ever operates holds still, and a constant says that
+					// without asking the solver to land a timepoint on anything. Read off
+					// the control itself rather than off `action`, so a switch thrown by
+					// hand during playback gets its edge too.
+					waveform:
+						controlPoints.length > 1
+							? { type: 'pwl', points: controlPoints }
+							: { type: 'dc', value: restingContact(instance) },
 					ac_magnitude: 0,
 					ac_phase: 0
 				});
@@ -573,7 +577,10 @@ export function compileSchematic(
 					type: 'logic_source',
 					name,
 					output: digitalOf(instance, 'y'),
-					state: str(instance, 'state', 'low') === 'high' ? 'high' : 'low'
+					state: str(instance, 'state', 'low') === 'high' ? 'high' : 'low',
+					// Every instant it was clicked at, so the run reproduces the steps
+					// rather than replaying the whole thing at the level it ended on.
+					flips: operationTimes(instance)
 				});
 				break;
 			case 'clock':

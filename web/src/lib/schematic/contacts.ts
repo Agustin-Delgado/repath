@@ -44,6 +44,58 @@ export function isScheduled(instance: Instance): boolean {
 }
 
 /**
+ * When somebody operated the part by hand, in seconds from the start of the run.
+ *
+ * A click on a part is not an edit to its resting position: the run is replayed
+ * from zero whenever the drawing changes, so a switch thrown at three
+ * milliseconds has to be written down as *thrown at three milliseconds* or the
+ * replay would show it thrown from the beginning — the same waveform at a
+ * different level, with no edge anywhere. The edge is the thing you clicked to
+ * see.
+ *
+ * Kept as text so it travels in the same `params` record as everything else,
+ * through the file, the share link and undo, without any of them growing a case
+ * for it.
+ */
+export function operationTimes(instance: Instance): number[] {
+	const raw = str(instance, 'flips', '');
+	if (!raw) return [];
+	return raw
+		.split(',')
+		.map((part) => Number(part))
+		.filter((t) => Number.isFinite(t) && t > 0)
+		.sort((a, b) => a - b);
+}
+
+/** The same list as text, for writing back into `params`. */
+export function encodeOperations(times: readonly number[]): string {
+	return times
+		.filter((t) => Number.isFinite(t) && t > 0)
+		.sort((a, b) => a - b)
+		.join(',');
+}
+
+/**
+ * Every instant the contacts change position, soonest first.
+ *
+ * The scheduled operation and the ones somebody performed during playback are
+ * the same kind of event and are answered by one list, so the drawing, the
+ * netlist and the scope cannot disagree about a switch that was both.
+ */
+function operations(instance: Instance): number[] {
+	const times = operationTimes(instance);
+	if (isScheduled(instance)) {
+		const at = Math.max(num(instance, 'at', 1e-3), 0);
+		times.push(at);
+		// A push-button springs back on its own, which is a second operation.
+		if (str(instance, 'action', 'manual') === 'momentary') {
+			times.push(at + Math.max(num(instance, 'hold', 10e-3), 1e-12));
+		}
+	}
+	return times.sort((a, b) => a - b);
+}
+
+/**
  * The contact position over time, as a piecewise-linear control signal.
  *
  * The edges have to be edges: the solver puts a timepoint on every corner of a
@@ -57,15 +109,10 @@ export function isScheduled(instance: Instance): boolean {
 export function contactControl(instance: Instance): Array<[number, number]> {
 	const rest = restingContact(instance);
 	const points: Array<[number, number]> = [[0, rest]];
-	if (!isScheduled(instance)) return points;
+	const moments = operations(instance);
+	if (moments.length === 0) return points;
 
-	const at = Math.max(num(instance, 'at', 1e-3), 0);
 	const bounce = Math.max(num(instance, 'bounce', 0), 0);
-	// A push-button springs back; a toggle stays where it was put.
-	const operations =
-		str(instance, 'action', 'manual') === 'momentary'
-			? [at, at + Math.max(num(instance, 'hold', 10e-3), 1e-12)]
-			: [at];
 
 	// Fast enough to read as a step beside a bounce a thousand times longer, and
 	// slow enough that the solver is not asked for a discontinuity.
@@ -78,7 +125,7 @@ export function contactControl(instance: Instance): Array<[number, number]> {
 		level = to;
 	};
 
-	for (const when of operations) {
+	for (const when of moments) {
 		const target = 1 - level;
 		if (bounce <= 0) {
 			move(when, target);
@@ -131,11 +178,26 @@ export function isClosedAt(instance: Instance, time: number): boolean {
  * side keeps every bounce.
  */
 export function isActuatedAt(instance: Instance, time: number): boolean {
-	const rest = restingContact(instance) === 1;
-	if (!isScheduled(instance)) return rest;
+	let actuated = restingContact(instance) === 1;
+	for (const when of operations(instance)) {
+		if (when > time) break;
+		actuated = !actuated;
+	}
+	return actuated;
+}
 
-	const at = Math.max(num(instance, 'at', 1e-3), 0);
-	if (time < at) return rest;
-	if (str(instance, 'action', 'manual') !== 'momentary') return !rest;
-	return time < at + Math.max(num(instance, 'hold', 10e-3), 1e-12) ? !rest : rest;
+/**
+ * The level a logic toggle is putting out at an instant.
+ *
+ * The digital counterpart of `isActuatedAt`, and deliberately the same shape:
+ * both parts answer "where did the person leave this at that moment", and both
+ * are read by the drawing and by the netlist so the two cannot disagree.
+ */
+export function isHighAt(instance: Instance, time: number): boolean {
+	let high = str(instance, 'state', 'low') === 'high';
+	for (const when of operationTimes(instance)) {
+		if (when > time) break;
+		high = !high;
+	}
+	return high;
 }

@@ -267,11 +267,14 @@ pub enum Device {
         #[serde(default = "default_gate_delay")]
         delay: f64,
     },
-    /// A level someone set, held for the whole run. See `digital::LogicSource`.
+    /// A level someone set. See `digital::LogicSource`.
     LogicSource {
         name: String,
         output: String,
         state: Logic,
+        /// Seconds from the start of the run at which it was operated.
+        #[serde(default)]
+        flips: Vec<f64>,
     },
 }
 
@@ -547,9 +550,11 @@ impl Netlist {
                 let (i, e, o) = (c.net(input), c.net(enable), c.net(output));
                 c.add_device(Box::new(TriStateBuffer::new(name, i, e, o, *delay)));
             }
-            Device::LogicSource { name, output, state } => {
+            Device::LogicSource { name, output, state, flips } => {
                 let out = c.net(output);
-                c.add_device(Box::new(LogicSource::new(name, out, *state)));
+                c.add_device(Box::new(
+                    LogicSource::new(name, out, *state).operated_at(flips.iter().copied()),
+                ));
             }
         }
         Ok(())

@@ -2,6 +2,7 @@
 	import { app } from '$lib/state.svelte';
 	import { ledRating } from '$lib/schematic/led';
 	import { pinKey } from '$lib/schematic/nets';
+	import { operationTimes } from '$lib/schematic/contacts';
 	import { definitionFor, isParamVisible } from '$lib/schematic/model';
 	import { bjtFromCard, cardFor, diodeFromCard, mosfetFromCard, parseModelCards } from '$lib/spice';
 	import {
@@ -16,6 +17,9 @@
 
 	const instance = $derived(app.selectedInstances.length === 1 ? app.selectedInstances[0] : null);
 	const def = $derived(instance ? definitionFor(instance) : null);
+
+	/** When this part was clicked during playback, if it ever was. */
+	const operations = $derived(instance ? operationTimes(instance) : []);
 
 	/** Whether every pin of the selected part lands on the same net. */
 	const shorted = $derived.by(() => {
@@ -370,6 +374,25 @@
 		</div>
 
 		<!--
+			Operations somebody performed while the run was playing.
+
+			The click is written into the circuit rather than done to it — that is what
+			puts the edge in the waveform — so it has to be visible and undoable
+			somewhere other than the undo stack, and the level above is the level it
+			*starts* at, which reads as a contradiction until the operations are named.
+		-->
+		{#if operations.length > 0}
+			<p class="reading">
+				Operated
+				{operations.length === 1 ? 'once' : `${operations.length} times`} during the run, at
+				{operations.map((t) => formatWithUnit(t, 's', 3)).join(', ')}.
+				<button class="link" onclick={() => app.clearOperations(instance.id)}>
+					Clear operations
+				</button>
+			</p>
+		{/if}
+
+		<!--
 			Why an LED is not lighting is the question this readout exists to answer.
 			Brightness is not linear in current, so a part carrying a fiftieth of its
 			rating is very nearly dark, and there is no way to tell that from the
@@ -640,6 +663,16 @@
 	.actions {
 		display: flex;
 		gap: 0.35rem;
+	}
+
+	button.link {
+		border: 0;
+		background: none;
+		padding: 0;
+		font: inherit;
+		color: var(--accent);
+		cursor: pointer;
+		text-decoration: underline;
 	}
 
 	.actions button {

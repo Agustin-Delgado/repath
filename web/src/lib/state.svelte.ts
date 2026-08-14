@@ -9,6 +9,7 @@
 import { runFrequencySweep, runTransient, type FrequencyRun, type TransientRun } from './engine';
 import { EXAMPLES, exampleById } from './examples';
 import { sampleIndexAt } from './schematic/flow';
+import { encodeOperations, operationTimes } from './schematic/contacts';
 import { Trace, wireRef, type Step } from './trace';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
@@ -221,14 +222,6 @@ class AppState {
 	tool = $state<Tool>({ mode: 'select' });
 	selection = $state<string[]>([]);
 	probes = $state<string[]>([]);
-	/**
-	 * The part whose name is being edited on the canvas, if any.
-	 *
-	 * Held here rather than in the component because the canvas tool is what
-	 * starts it and the overlay is what finishes it, and those are two different
-	 * files that both already know about this object.
-	 */
-	renaming = $state<string | null>(null);
 	/**
 	 * Where each channel's knobs are set, by probe.
 	 *
@@ -1232,13 +1225,30 @@ class AppState {
 	toggleSwitch(id: string): void {
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return;
-		if (instance.kind === 'switch') {
+		if (instance.kind !== 'switch' && instance.kind !== 'toggle') return;
+
+		const live = this.live && this.analysis === 'transient' && this.result !== null;
+		// Inside a run, a click is something that happens *now*: it goes down as an
+		// operation at the playhead, the replay keeps everything before it, and the
+		// waveform gets the edge. Outside one — nothing run yet, or the playhead
+		// parked at either end of the timeline — there is no "now" to hang it on, so
+		// the click sets where the part starts instead.
+		const at = this.playbackTime;
+		if (live && at > 0 && at < this.stopTime) {
+			this.setParam(id, 'flips', encodeOperations([...operationTimes(instance), at]));
+		} else if (instance.kind === 'switch') {
 			this.setParam(id, 'start', instance.params.start === 'closed' ? 'open' : 'closed');
-		} else if (instance.kind === 'toggle') {
-			this.setParam(id, 'state', instance.params.state === 'high' ? 'low' : 'high');
 		} else {
-			return;
+			this.setParam(id, 'state', instance.params.state === 'high' ? 'low' : 'high');
 		}
+		if (this.live && this.analysis === 'transient') void this.run({ keepPlayback: true });
+	}
+
+	/** Wipe the operations somebody recorded on a part during playback. */
+	clearOperations(id: string): void {
+		const instance = this.schematic.instances.find((i) => i.id === id);
+		if (!instance || !instance.params.flips) return;
+		this.setParam(id, 'flips', '');
 		if (this.live && this.analysis === 'transient') void this.run({ keepPlayback: true });
 	}
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { measure } from '$lib/measure';
 	import { netLabel } from '$lib/schematic/nets';
+	import { logicFamily } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
 	import type { DigitalTransition } from '$lib/engine';
@@ -438,19 +439,38 @@
 	const readout = $derived.by(() => {
 		const run = app.result;
 		if (!run || !cursor || run.time.length === 0) return null;
-		const here = indexAt(run.time, cursor.time);
+		const at = cursor.time;
+		const here = indexAt(run.time, at);
 		const there = marker === null ? null : indexAt(run.time, marker);
+		const family = logicFamily(app.logicFamily);
 		return {
 			time: run.time[here],
 			delta: there === null ? null : run.time[here] - run.time[there],
 			values: traces.map((t) => ({
 				label: t.label,
 				colour: t.colour,
-				value: t.samples[here],
+				text: `${formatValue(t.samples[here], 4)}V`,
 				// The change between the two, which is the number nobody wants to do
 				// by subtracting two readings they wrote down.
-				delta: there === null ? null : t.samples[here] - t.samples[there]
-			}))
+				delta:
+					there === null ? null : `${formatValue(t.samples[here] - t.samples[there], 4)}V`
+			})),
+			// And the logic lanes, which read nothing at all until now: a lane is two
+			// levels and a label, so "is that a one, and what is a one here" was a
+			// question the panel underneath the trace could not answer.
+			logic: digitalTraces.map((t) => {
+				const state = t.events.filter((e) => e.time <= at).at(-1)?.state ?? 'unknown';
+				const volts =
+					state === 'high' ? family.v_high : state === 'low' ? family.v_low : null;
+				return {
+					label: t.label,
+					colour: t.colour,
+					text:
+						state === 'high' || state === 'low'
+							? `${state === 'high' ? 1 : 0} (${formatValue(volts ?? 0, 3)}V)`
+							: state
+				};
+			})
 		};
 	});
 
@@ -515,7 +535,7 @@
 			<p class="empty">Tick a net on the right to plot it.</p>
 		{/if}
 
-		{#if readout && readout.values.length > 0}
+		{#if readout && readout.values.length + readout.logic.length > 0}
 			<div class="readout">
 				<span class="time">
 					t = {formatValue(readout.time, 4)}s
@@ -525,11 +545,14 @@
 				</span>
 				{#each readout.values as entry (entry.label)}
 					<span class="value" style:color={entry.colour}>
-						{entry.label} = {formatValue(entry.value, 4)}V
+						{entry.label} = {entry.text}
 						{#if entry.delta !== null}
-							<span class="delta">Δ {formatValue(entry.delta, 4)}V</span>
+							<span class="delta">Δ {entry.delta}</span>
 						{/if}
 					</span>
+				{/each}
+				{#each readout.logic as entry (entry.label)}
+					<span class="value" style:color={entry.colour}>{entry.label} = {entry.text}</span>
 				{/each}
 				{#if marker === null}
 					<span class="hint">shift-click to measure from a point</span>
