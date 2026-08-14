@@ -10,12 +10,10 @@
 import { describe, expect, it } from 'vitest';
 import {
 	contactControl,
-	encodeOperations,
 	isActuatedAt,
 	isClosedAt,
 	isHighAt,
 	isScheduled,
-	operationTimes,
 	restingContact
 } from './contacts';
 import { defaultParams, type Instance } from './model';
@@ -140,44 +138,39 @@ describe('what the blade is drawn doing', () => {
 	});
 });
 
-describe('a part somebody operated while it was playing', () => {
+describe('a part operated by hand while it was running', () => {
 	it('changes at the instant of the click, not from the start', () => {
-		const thrown = sw({ flips: '2e-3' });
-		expect(isClosedAt(thrown, 1e-3)).toBe(false);
-		expect(isClosedAt(thrown, 2e-3)).toBe(true);
-		expect(isActuatedAt(thrown, 1e-3)).toBe(false);
-		expect(isActuatedAt(thrown, 3e-3)).toBe(true);
+		const thrown = sw();
+		expect(isClosedAt(thrown, 1e-3, [2e-3])).toBe(false);
+		expect(isClosedAt(thrown, 2e-3, [2e-3])).toBe(true);
+		expect(isActuatedAt(thrown, 1e-3, [2e-3])).toBe(false);
+		expect(isActuatedAt(thrown, 3e-3, [2e-3])).toBe(true);
 	});
 
 	it('gets a control with an edge in it, so the run has the step', () => {
-		// This is the whole point. A click written down as a new resting position
-		// would replay the run at the new level throughout, and the edge somebody
-		// clicked to see would be the one thing missing from the waveform.
-		const thrown = sw({ flips: '2e-3' });
-		expect(contactControl(thrown).length).toBeGreaterThan(1);
+		// This is what the engine is handed when somebody throws the switch: the
+		// same control it already had, with the operation in it. Everything before
+		// that instant has been solved already and is not revisited.
+		expect(contactControl(sw(), [2e-3]).length).toBeGreaterThan(1);
 		expect(contactControl(sw())).toEqual([[0, 0]]);
 	});
 
 	it('takes several operations, in the order they happened', () => {
-		const clicked = sw({ flips: '3e-3,1e-3' });
-		expect(operationTimes(clicked)).toEqual([1e-3, 3e-3]);
-		expect(isActuatedAt(clicked, 0.5e-3)).toBe(false);
-		expect(isActuatedAt(clicked, 2e-3)).toBe(true);
-		expect(isActuatedAt(clicked, 4e-3)).toBe(false);
+		const clicked = sw();
+		expect(isActuatedAt(clicked, 0.5e-3, [1e-3, 3e-3])).toBe(false);
+		expect(isActuatedAt(clicked, 2e-3, [1e-3, 3e-3])).toBe(true);
+		expect(isActuatedAt(clicked, 4e-3, [1e-3, 3e-3])).toBe(false);
 	});
 
 	it('stacks with a scheduled operation rather than replacing it', () => {
-		const both = sw({ action: 'toggle', at: 1e-3, bounce: 0, flips: '2e-3' });
-		expect(isActuatedAt(both, 0.5e-3)).toBe(false);
-		expect(isActuatedAt(both, 1.5e-3)).toBe(true);
-		expect(isActuatedAt(both, 3e-3)).toBe(false);
+		const both = sw({ action: 'toggle', at: 1e-3, bounce: 0 });
+		expect(isActuatedAt(both, 0.5e-3, [2e-3])).toBe(false);
+		expect(isActuatedAt(both, 1.5e-3, [2e-3])).toBe(true);
+		expect(isActuatedAt(both, 3e-3, [2e-3])).toBe(false);
 	});
 
-	it('ignores rubbish rather than putting an edge at zero', () => {
-		// Zero and below are not moments inside a run, and a run that started with
-		// an edge already at t = 0 would be the flat replay this exists to avoid.
-		expect(operationTimes(sw({ flips: '0,-1,abc,2e-3' }))).toEqual([2e-3]);
-		expect(encodeOperations([3e-3, 1e-3, NaN])).toBe('0.001,0.003');
+	it('ignores anything that is not a moment inside the run', () => {
+		expect(contactControl(sw(), [0, -1, NaN])).toEqual([[0, 0]]);
 	});
 
 	it('drives a logic toggle the same way', () => {
@@ -188,10 +181,10 @@ describe('a part somebody operated while it was playing', () => {
 			x: 0,
 			y: 0,
 			rotation: 0,
-			params: { ...defaultParams('toggle'), flips: '2e-3' }
+			params: { ...defaultParams('toggle') }
 		};
-		expect(isHighAt(toggle, 1e-3)).toBe(false);
-		expect(isHighAt(toggle, 2e-3)).toBe(true);
-		expect(isHighAt({ ...toggle, params: { state: 'high', flips: '2e-3' } }, 3e-3)).toBe(false);
+		expect(isHighAt(toggle, 1e-3, [2e-3])).toBe(false);
+		expect(isHighAt(toggle, 2e-3, [2e-3])).toBe(true);
+		expect(isHighAt({ ...toggle, params: { state: 'high' } }, 3e-3, [2e-3])).toBe(false);
 	});
 });

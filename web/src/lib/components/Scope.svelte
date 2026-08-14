@@ -4,7 +4,7 @@
 	import { logicFamily } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
-	import type { DigitalTransition } from '$lib/engine';
+	import type { DigitalTransition, LogicState } from '$lib/engine';
 	import BodePlot from './BodePlot.svelte';
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
@@ -47,7 +47,11 @@
 			const key = `v(${probe.analog})`;
 			const samples = run.signals.get(key);
 			if (!samples) continue;
-			const band = app.envelope;
+			// Only while it lines up. The tolerance band is a batch answer over one
+			// window, and a sweep that has rolled past that window shares no time
+			// axis with it — drawing it anyway would put the spread of one stretch of
+			// time underneath a trace from another.
+			const band = app.envelope?.time.length === run.time.length ? app.envelope : null;
 			const knobs = app.channels[probe.key] ?? { gain: 1, offset: 0 };
 			out.push({
 				label: probe.label,
@@ -66,12 +70,71 @@
 	const digitalTraces = $derived.by(() => {
 		const run = app.result;
 		if (!run) return [];
-		const out: Array<{ label: string; colour: string; events: DigitalTransition[] }> = [];
+		const out: Array<{
+			label: string;
+			colour: string;
+			events: DigitalTransition[];
+			/** The level the net was already at when the memory opens. */
+			opening: LogicState;
+		}> = [];
 		for (const probe of digitalProbes) {
 			const index = run.netNames.indexOf(probe.digital!);
-			if (index >= 0) out.push({ label: probe.label, colour: probe.colour, events: run.digital[index] });
+			if (index < 0) continue;
+			out.push({
+				label: probe.label,
+				colour: probe.colour,
+				events: run.digital[index],
+				opening: app.capture?.openingState(index) ?? 'unknown'
+			});
 		}
 		return out;
+	});
+
+	/**
+	 * What the screen covers, in simulated seconds.
+	 *
+	 * Running, it follows the sweep: a window of the chosen width with the newest
+	 * instant at its right edge, so the trace rolls leftwards the way a roll-mode
+	 * scope's does. Stopped, it stays wherever it was left and can be dragged and
+	 * zoomed — inside what memory still holds, which is the honest limit. Nothing
+	 * outside that was kept, and a scope that let you scroll to it would be
+	 * drawing a blank and calling it a measurement.
+	 */
+	let view = $state<{ from: number; to: number } | null>(null);
+
+	/**
+	 * The ends of what is still in memory.
+	 *
+	 * Read off `app.result` rather than off the capture itself, and that is not
+	 * incidental: the capture is a plain object that mutates in place, so nothing
+	 * watching it would ever be told it had grown. The run *object* is replaced on
+	 * every chunk, which is what makes this recompute — and what makes the window
+	 * follow the sweep instead of freezing where it was first drawn.
+	 */
+	const held = $derived.by(() => {
+		const time = app.result?.time;
+		if (!time || time.length === 0) return { earliest: 0, now: 0 };
+		return { earliest: time[0], now: time[time.length - 1] };
+	});
+
+	const span = $derived.by(() => {
+		const width = Math.max(app.stopTime, 1e-12);
+		if (!app.result) return { from: 0, to: width };
+		// A running sweep follows itself. Whatever the window was dragged to while
+		// it was stopped is kept for when it stops again, but it cannot hold the
+		// screen still over a run that has moved on.
+		if (view && !app.playing) return view;
+		// Before the first full window has gone by, the axis holds still and the
+		// trace grows into it; after that the window slides along with the sweep.
+		const to = Math.max(held.now, width);
+		return { from: to - width, to };
+	});
+
+	// A new acquisition is a new picture: whatever the last one was zoomed into
+	// belonged to a run that no longer exists.
+	$effect(() => {
+		void app.acquiring;
+		view = null;
 	});
 
 	/**
@@ -207,8 +270,9 @@
 		};
 
 		const run = app.result;
-		const stop = run && run.time.length ? run.time[run.time.length - 1] : app.stopTime;
-		const toX = (t: number) => plot.x + (t / (stop || 1)) * plot.w;
+		const { from, to } = span;
+		const width = Math.max(to - from, 1e-15);
+		const toX = (t: number) => plot.x + ((t - from) / width) * plot.w;
 
 		// Where each trace lives and what it is scaled against. Shared, they all
 		// have the whole plot and one range; separated, a band each and their own.
@@ -251,10 +315,10 @@
 			ctx.fillText(`${formatValue(v, 3)}V`, plot.x - 8, y);
 		}
 
-		const tStep = niceStep(stop || 1, 6);
+		const tStep = niceStep(width, 6);
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'top';
-		for (let t = 0; t <= (stop || 1) + tStep / 2; t += tStep) {
+		for (let t = Math.ceil(from / tStep) * tStep; t <= to + tStep / 2; t += tStep) {
 			const x = toX(t);
 			ctx.beginPath();
 			ctx.moveTo(x, plot.y);
@@ -266,6 +330,14 @@
 		}
 
 		if (!run) return;
+
+		// Clipped, which a whole-run plot never had to be: the memory holds more
+		// than the window shows, and without this the traces would be painted over
+		// the axis labels and out into the panel.
+		ctx.save();
+		ctx.beginPath();
+		ctx.rect(plot.x, plot.y - 6, plot.w, plot.h + laneHeight + 12);
+		ctx.clip();
 
 		// The spread first, so the nominal trace sits on top of its own band. A
 		// filled shape rather than two lines: the useful reading is how much room
@@ -322,6 +394,7 @@
 		});
 
 		// Digital lanes below the analog plot.
+		const labels: Array<{ text: string; y: number }> = [];
 		ctx.lineWidth = 1.8;
 		digitalTraces.forEach((trace, index) => {
 			const top = plot.y + plot.h + index * lane + lane * 0.22;
@@ -329,10 +402,15 @@
 			ctx.strokeStyle = trace.colour;
 			ctx.beginPath();
 
-			let previousY = bottom;
-			let started = false;
 			const levelY = (state: string) =>
 				state === 'high' ? top : state === 'low' ? bottom : (top + bottom) / 2;
+
+			// Starting from what the net was already at when the memory opens: a net
+			// that has not changed in a while has no transition inside the window, and
+			// left to the events alone its lane would simply be empty.
+			let previousY = levelY(trace.opening);
+			let started = true;
+			ctx.moveTo(toX(from), previousY);
 
 			for (const event of trace.events) {
 				const x = toX(event.time);
@@ -346,18 +424,22 @@
 				}
 				previousY = y;
 			}
-			if (started) ctx.lineTo(toX(stop), previousY);
+			if (started) ctx.lineTo(toX(to), previousY);
 			ctx.stroke();
 
-			ctx.fillStyle = colour('--label-dim');
-			ctx.textAlign = 'right';
-			ctx.textBaseline = 'middle';
-			ctx.fillText(trace.label, plot.x - 8, (top + bottom) / 2);
+			labels.push({ text: trace.label, y: (top + bottom) / 2 });
 		});
+		ctx.restore();
 
-		// Playhead: where the live overlay on the schematic is showing.
+		// Lane names, outside the clip so they sit in the margin like the volts do.
+		ctx.fillStyle = colour('--label-dim');
+		ctx.textAlign = 'right';
+		ctx.textBaseline = 'middle';
+		for (const label of labels) ctx.fillText(label.text, plot.x - 8, label.y);
+
+		// Playhead: the instant the drawing is showing.
 		if (app.result) {
-			const x = toX(Math.min(app.playbackTime, stop));
+			const x = toX(Math.min(Math.max(app.playbackTime, from), to));
 			ctx.strokeStyle = colour('--accent');
 			ctx.lineWidth = 1.5;
 			ctx.beginPath();
@@ -415,12 +497,40 @@
 		return Math.round((app.playbackTime / stop) * plotW);
 	});
 
-	function seekTo(event: PointerEvent) {
-		if (!canvas || !app.result) return;
+	/** Simulated time under a pointer. */
+	function timeAt(clientX: number): number | null {
+		if (!canvas) return null;
 		const rect = canvas.getBoundingClientRect();
-		const stop = app.result.time[app.result.time.length - 1] || app.stopTime;
 		const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
-		app.seek(((event.clientX - rect.left - PADDING.left) / plotW) * stop);
+		const fraction = (clientX - rect.left - PADDING.left) / plotW;
+		return span.from + fraction * (span.to - span.from);
+	}
+
+	function seekTo(event: PointerEvent) {
+		const t = timeAt(event.clientX);
+		if (t !== null) app.seek(t);
+	}
+
+	/**
+	 * Put the window somewhere, bounded by what is still in memory.
+	 *
+	 * Both ways: a scope will not scroll back past what it kept, and it will not
+	 * scroll forward past the last thing it caught. There is nothing there.
+	 */
+	function place(from: number, width: number) {
+		if (!app.result) return;
+		let start = Math.max(from, held.earliest);
+		start = Math.min(start, Math.max(held.now - width, held.earliest));
+		view = { from: start, to: start + width };
+	}
+
+	/** Zoom about the pointer, so whatever is under it stays under it. */
+	function zoom(factor: number, about: number) {
+		if (!app.result) return;
+		const memory = Math.max(held.now - held.earliest, 1e-12);
+		const width = Math.min(Math.max((span.to - span.from) * factor, 1e-9), memory);
+		const share = (about - span.from) / Math.max(span.to - span.from, 1e-15);
+		place(about - share * width, width);
 	}
 
 	/** Index of the sample nearest a time. */
@@ -474,18 +584,32 @@
 		};
 	});
 
+	/** Where a drag started, in screen pixels and in seconds. */
+	let dragging: { x: number; from: number } | null = null;
+
 	function onMove(event: PointerEvent) {
 		if (!canvas) return;
 		const rect = canvas.getBoundingClientRect();
 		const x = event.clientX - rect.left;
-		const run = app.result;
-		const stop = run && run.time.length ? run.time[run.time.length - 1] : app.stopTime;
-		const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
-		const t = ((x - PADDING.left) / plotW) * stop;
-		cursor = t >= 0 && t <= stop ? { x, time: t } : null;
-		// Dragging scrubs; a plain hover only reads values off. Shift is measuring,
-		// so it must not drag the playhead around while you do it.
-		if (event.buttons & 1 && !event.shiftKey) seekTo(event);
+		const t = timeAt(event.clientX);
+		cursor = t !== null && t >= span.from && t <= span.to ? { x, time: t } : null;
+
+		// Dragging pans the window — and only when the sweep has stopped, because a
+		// running acquisition has nowhere to be dragged to: the newest instant is
+		// the only one there is. Shift is measuring and must not move anything.
+		if (dragging && event.buttons & 1 && !event.shiftKey) {
+			const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
+			const width = span.to - span.from;
+			place(dragging.from + ((dragging.x - x) / plotW) * width, width);
+		}
+	}
+
+	function onWheel(event: WheelEvent) {
+		if (app.playing || !app.result) return;
+		const about = timeAt(event.clientX);
+		if (about === null) return;
+		event.preventDefault();
+		zoom(event.deltaY > 0 ? 1.25 : 0.8, about);
 	}
 
 	$effect(() => {
@@ -499,7 +623,20 @@
 
 	$effect(() => {
 		// Redraw whenever anything the plot depends on changes.
-		void [app.result, traces, digitalTraces, range, lanes, separate, marker, size, cursor, playheadPx, app.channels];
+		void [
+			app.result,
+			traces,
+			digitalTraces,
+			range,
+			lanes,
+			separate,
+			marker,
+			size,
+			cursor,
+			playheadPx,
+			span,
+			app.channels
+		];
 		draw();
 	});
 </script>

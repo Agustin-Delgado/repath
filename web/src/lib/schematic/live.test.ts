@@ -17,6 +17,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import init, { Simulation } from '../wasm/repath.js';
+import { LiveRun } from '$lib/engine';
+import { Capture } from '$lib/capture';
 import { compileSchematic } from './netlist';
 import { isFlowing } from './animate';
 import { prepareFlow, sampleFlow, sampleIndexAt, type FlowFrame } from './flow';
@@ -402,27 +404,73 @@ describe('a logic toggle', () => {
 		expect(frame.netUndriven.size).toBe(0);
 	});
 
-	it('steps at the moment it was clicked, and holds both levels around it', () => {
-		// A click during playback is an event, not a different circuit. Written down
-		// as a new starting level the replay would come out flat at the new value,
-		// and the edge — the entire reason anybody clicked — would not be anywhere
-		// in the run.
+	it('steps at the moment it was operated, with the run carrying on through it', () => {
+		// The whole model, end to end: the run is going, somebody moves a toggle
+		// partway through, and the engine carries on from where it was. Everything
+		// solved before the click keeps whatever it had — nothing is recomputed —
+		// and the edge lands at the instant of the click rather than at zero.
 		const schematic = gated('low', 'high');
-		schematic.instances[0].params.flips = '4e-4';
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
 
-		const before = simulate(schematic, 1e-3, 2e-4);
-		const after = simulate(schematic, 1e-3, 8e-4);
-		expect(voltsAt(schematic, before.compiled, before.frame, 230, 190)).toBeCloseTo(0, 6);
-		expect(voltsAt(schematic, after.compiled, after.frame, 230, 190)).toBeCloseTo(5, 6);
+		const live = new LiveRun(compiled.netlist, 5e-6);
+		const capture = new Capture(
+			live.unknownNames,
+			live.elementNames,
+			live.netNames,
+			live.nodeCount
+		);
+		capture.add(live.first);
+		capture.add(live.advance(4e-4));
+		expect(live.setLogic('T1', 'high', live.time)).toBe(true);
+		capture.add(live.advance(1e-3));
+		live.free();
+
+		const run = capture.run();
+		const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
+		const at = (t: number) => sampleFlow(context, sampleIndexAt(run.time, t));
+		expect(voltsAt(schematic, compiled, at(2e-4), 230, 190)).toBeCloseTo(0, 6);
+		expect(voltsAt(schematic, compiled, at(8e-4), 230, 190)).toBeCloseTo(5, 6);
 
 		// And the gate followed it, which is the answer the click was asking for.
-		const out = after.compiled.connectivity.netOfPin.get(`${schematic.instances[2].id}:y`)!;
-		const label = after.compiled.names.get(out)!.digital!;
-		const transitions = after.run.digital[after.run.netNames.indexOf(label)] ?? [];
-		const stateAt = (t: number) =>
-			transitions.filter((event) => event.time <= t).at(-1)?.state;
+		const out = compiled.connectivity.netOfPin.get(`${schematic.instances[2].id}:y`)!;
+		const label = compiled.names.get(out)!.digital!;
+		const transitions = run.digital[run.netNames.indexOf(label)] ?? [];
+		const stateAt = (t: number) => transitions.filter((event) => event.time <= t).at(-1)?.state;
 		expect(stateAt(2e-4)).toBe('low');
 		expect(stateAt(8e-4)).toBe('high');
 		expect(transitions.some((t) => t.time > 3e-4 && t.time < 5e-4)).toBe(true);
+	});
+
+	it('keeps the samples it had, so the past is not re-solved', () => {
+		// A recording would have been rewritten from zero by that click. This is the
+		// evidence it was not: the timepoints before the operation are the same
+		// numbers, sample for sample, as a run nobody touched.
+		const schematic = gated('low', 'high');
+		const compiled = compileSchematic(schematic);
+
+		const sweep = (operate: boolean) => {
+			const live = new LiveRun(compiled.netlist, 5e-6);
+			const capture = new Capture(
+				live.unknownNames,
+				live.elementNames,
+				live.netNames,
+				live.nodeCount
+			);
+			capture.add(live.first);
+			capture.add(live.advance(4e-4));
+			if (operate) live.setLogic('T1', 'high', live.time);
+			capture.add(live.advance(1e-3));
+			live.free();
+			return capture.run();
+		};
+
+		const untouched = sweep(false);
+		const operated = sweep(true);
+		const upto = Array.from(untouched.time).filter((t) => t <= 4e-4).length;
+		expect(upto).toBeGreaterThan(10);
+		for (let i = 0; i < upto; i++) {
+			expect(operated.time[i]).toBeCloseTo(untouched.time[i], 12);
+		}
 	});
 });

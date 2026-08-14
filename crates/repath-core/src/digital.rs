@@ -705,6 +705,27 @@ impl DigitalDomain {
         self.queue.push(time, driver, net, state);
     }
 
+    /// Move a named source to a level from `at` onwards, as a hand would.
+    ///
+    /// Only meaningful for a device that drives without listening — a logic
+    /// source. Anything with inputs is told what to do by its inputs, and forcing
+    /// its output would last exactly until the next thing it heard.
+    ///
+    /// Returns whether such a device exists.
+    pub fn operate(&mut self, name: &str, state: Logic, at: f64) -> bool {
+        let Some(index) = self.devices.iter().position(|d| d.name() == name) else {
+            return false;
+        };
+        if !self.devices[index].input_nets().is_empty() {
+            return false;
+        }
+        let Some(&net) = self.devices[index].output_nets().first() else {
+            return false;
+        };
+        self.queue.push(at, DriverId(self.driver_base[index]), net, state);
+        true
+    }
+
     /// Time of the earliest pending event.
     pub fn next_event_time(&self) -> Option<f64> {
         self.queue.next_time()

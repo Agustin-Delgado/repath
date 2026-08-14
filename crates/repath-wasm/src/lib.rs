@@ -69,7 +69,9 @@ fn to_js_error(e: impl std::fmt::Display) -> JsError {
 pub struct Simulation {
     circuit: Circuit,
     simulator: Simulator,
+    /// The whole run, or — once it is live — the piece solved most recently.
     result: Option<TransientResult>,
+    running: Option<Running>,
 }
 
 #[wasm_bindgen]
@@ -79,7 +81,7 @@ impl Simulation {
     pub fn new(netlist_json: &str) -> Result<Simulation, JsError> {
         let netlist: Netlist = serde_json::from_str(netlist_json).map_err(to_js_error)?;
         let circuit = netlist.compile().map_err(to_js_error)?;
-        Ok(Simulation { circuit, simulator: Simulator::default(), result: None })
+        Ok(Simulation { circuit, simulator: Simulator::default(), result: None, running: None })
     }
 
     /// Solve the DC operating point. Returns `{ names, values }` as JSON.
@@ -112,40 +114,8 @@ impl Simulation {
             cfg.initial_step = max_step.min(cfg.initial_step);
         }
         let result = self.simulator.transient(&mut self.circuit, cfg).map_err(to_js_error)?;
-
-        let meta = RunMeta {
-            unknown_names: result.unknown_names.clone(),
-            node_count: result.node_count,
-            point_count: result.time.len(),
-            element_names: result.element_names.clone(),
-            net_names: result.net_names.clone(),
-            digital: result
-                .digital
-                .iter()
-                .map(|trace| {
-                    trace
-                        .iter()
-                        .map(|(t, s)| DigitalTransition { time: *t, state: logic_name(*s) })
-                        .collect()
-                })
-                .collect(),
-            failures: result
-                .failures
-                .iter()
-                .map(|f| PartFailure {
-                    name: f.name.clone(),
-                    time: f.time,
-                    peak: f.peak,
-                    rated: f.rated,
-                })
-                .collect(),
-            stats: RunStats {
-                accepted_steps: result.stats.accepted_steps,
-                rejected_steps: result.stats.rejected_steps,
-                newton_iterations: result.stats.newton_iterations,
-                digital_events: result.stats.digital_events,
-            },
-        };
+        let meta = meta_of(&result, true);
+        self.running = None;
         self.result = Some(result);
         serde_json::to_string(&meta).map_err(to_js_error)
     }
@@ -169,6 +139,111 @@ impl Simulation {
     #[wasm_bindgen(js_name = indexOf)]
     pub fn index_of(&self, name: &str) -> i32 {
         self.result.as_ref().and_then(|r| r.index_of(name)).map_or(-1, |i| i as i32)
+    }
+
+    /// Start a run that will be carried forward a piece at a time.
+    ///
+    /// Returns the same metadata a whole run does, plus the single timepoint at
+    /// t = 0 — so the drawing has something to show the instant it starts rather
+    /// than a frame of nothing.
+    #[wasm_bindgen(js_name = beginLive)]
+    pub fn begin_live(&mut self, max_step: f64) -> Result<String, JsError> {
+        let step = if max_step > 0.0 { max_step } else { 1e-6 };
+        // `stop` only sets defaults here; a live run has no end, and every limit
+        // that used to be derived from it is derived from the step instead.
+        let mut cfg = TransientConfig::new(step * 200.0);
+        cfg.max_step = step;
+        cfg.initial_step = step / 5.0;
+
+        let (run, result) =
+            self.simulator.begin_transient(&mut self.circuit, cfg).map_err(to_js_error)?;
+        let meta = meta_of(&result, true);
+        self.running = Some(run);
+        self.result = Some(result);
+        serde_json::to_string(&meta).map_err(to_js_error)
+    }
+
+    /// Carry the live run to `until`, in simulated seconds from its start.
+    ///
+    /// Only the samples solved during this call are kept: the caller holds the
+    /// history, and a run that never ends cannot keep all of it here.
+    pub fn advance(&mut self, until: f64) -> Result<String, JsError> {
+        let Some(run) = self.running.as_mut() else {
+            return Err(JsError::new("no live run has been started"));
+        };
+        let chunk =
+            self.simulator.advance_transient(&mut self.circuit, run, until).map_err(to_js_error)?;
+        let meta = meta_of(&chunk, false);
+        self.result = Some(chunk);
+        serde_json::to_string(&meta).map_err(to_js_error)
+    }
+
+    /// How far the live run has got, in seconds.
+    #[wasm_bindgen(js_name = liveTime)]
+    pub fn live_time(&self) -> f64 {
+        self.running.as_ref().map_or(0.0, |r| r.time())
+    }
+
+    /// Give a source a new waveform from here on — a hand on a switch.
+    ///
+    /// The waveform is the JSON the netlist uses, so the caller can hand over a
+    /// contact's whole bounce train anchored wherever it likes.
+    #[wasm_bindgen(js_name = setSourceWaveform)]
+    pub fn set_source_waveform(&mut self, name: &str, waveform_json: &str) -> Result<bool, JsError> {
+        let waveform: Waveform = serde_json::from_str(waveform_json).map_err(to_js_error)?;
+        Ok(self.circuit.set_source_waveform(name, waveform))
+    }
+
+    /// Move a logic source to a level, from `at` onwards.
+    #[wasm_bindgen(js_name = setLogic)]
+    pub fn set_logic(&mut self, name: &str, state: &str, at: f64) -> bool {
+        let level = match state {
+            "high" => Logic::High,
+            "low" => Logic::Low,
+            "highz" => Logic::HighZ,
+            _ => Logic::Unknown,
+        };
+        self.circuit.operate_logic(name, level, at)
+    }
+}
+
+/// What a run, or one piece of one, has to say for itself.
+///
+/// Names travel only with the first piece: they are settled when the run is
+/// compiled and repeating them on every frame would be the bulk of the traffic.
+fn meta_of(result: &TransientResult, with_names: bool) -> RunMeta {
+    RunMeta {
+        unknown_names: if with_names { result.unknown_names.clone() } else { Vec::new() },
+        node_count: result.node_count,
+        point_count: result.time.len(),
+        element_names: if with_names { result.element_names.clone() } else { Vec::new() },
+        net_names: if with_names { result.net_names.clone() } else { Vec::new() },
+        digital: result
+            .digital
+            .iter()
+            .map(|trace| {
+                trace
+                    .iter()
+                    .map(|(t, s)| DigitalTransition { time: *t, state: logic_name(*s) })
+                    .collect()
+            })
+            .collect(),
+        failures: result
+            .failures
+            .iter()
+            .map(|f| PartFailure {
+                name: f.name.clone(),
+                time: f.time,
+                peak: f.peak,
+                rated: f.rated,
+            })
+            .collect(),
+        stats: RunStats {
+            accepted_steps: result.stats.accepted_steps,
+            rejected_steps: result.stats.rejected_steps,
+            newton_iterations: result.stats.newton_iterations,
+            digital_events: result.stats.digital_events,
+        },
     }
 }
 

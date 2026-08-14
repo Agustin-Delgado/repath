@@ -1890,3 +1890,120 @@ fn a_logic_source_can_be_operated_partway_through_the_run() {
     let edges = result.digital[dy].len();
     assert!(edges >= 2, "the output settled {edges} time(s); the flip left no step");
 }
+
+// ---------------------------------------------------------------------------
+// Running a circuit rather than replaying one
+// ---------------------------------------------------------------------------
+
+/// An RC charging, solved in one go and again in twenty pieces.
+///
+/// The pieces do not land on the same timepoints — each call ends on its own
+/// boundary — so this compares the answer, not the grid. If a run picked up
+/// halfway had lost so much as the capacitor's charge, the two curves would
+/// separate immediately.
+#[test]
+fn a_run_advanced_in_pieces_matches_the_same_run_solved_at_once() {
+    let build = || {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        let out = c.node("out");
+        c.add(Box::new(VoltageSource::dc("V1", a, Circuit::GROUND, 5.0)));
+        c.add(Box::new(Resistor::new("R1", a, out, 1000.0)));
+        c.add(Box::new(Capacitor::new("C1", out, Circuit::GROUND, 1e-6)));
+        c
+    };
+
+    let cfg = TransientConfig::new(5e-3);
+    let mut whole = build();
+    let batch = Simulator::default().transient(&mut whole, cfg).unwrap();
+
+    let mut piecewise = build();
+    let mut sim = Simulator::default();
+    let (mut run, mut result) = sim.begin_transient(&mut piecewise, cfg).unwrap();
+    for k in 1..=20 {
+        result.append(sim.advance_transient(&mut piecewise, &mut run, cfg.stop * k as f64 / 20.0).unwrap());
+    }
+
+    let index = batch.index_of("v(out)").unwrap();
+    for step in 0..=10 {
+        let t = cfg.stop * step as f64 / 10.0;
+        let (one, many) = (value_at(&batch, index, t), value_at(&result, index, t));
+        assert!((one - many).abs() < 1e-6, "at t = {t:.2e}: {one:.9} vs {many:.9}");
+    }
+    assert!((run.time() - cfg.stop).abs() < 1e-9, "the run stopped at {}", run.time());
+}
+
+/// Throwing a switch partway through changes the future and leaves the past.
+///
+/// This is the whole point of a live run. Written the other way — as a property
+/// of the circuit, re-solved from zero — the lamp would have been on since the
+/// beginning, and the edge somebody threw the switch to see would not exist.
+#[test]
+fn a_switch_thrown_mid_run_leaves_everything_before_it_alone() {
+    let mut c = Circuit::new();
+    let supply = c.node("supply");
+    let lamp = c.node("lamp");
+    let control = c.node("ctl");
+    c.add(Box::new(VoltageSource::dc("V1", supply, Circuit::GROUND, 5.0)));
+    // The actuator: a source of its own, which is what gets rewritten.
+    c.add(Box::new(VoltageSource::dc("S1__actuator", control, Circuit::GROUND, 0.0)));
+    c.add(Box::new(Switch::new(
+        "S1",
+        supply,
+        lamp,
+        control,
+        Circuit::GROUND,
+        SwitchModel { v_on: 1.0, v_off: 0.0, r_on: 0.05, r_off: 1e12 },
+    )));
+    c.add(Box::new(Resistor::new("R1", lamp, Circuit::GROUND, 1000.0)));
+
+    let cfg = TransientConfig::new(4e-3);
+    let mut sim = Simulator::default();
+    let (mut run, mut result) = sim.begin_transient(&mut c, cfg).unwrap();
+    result.append(sim.advance_transient(&mut c, &mut run, 2e-3).unwrap());
+
+    // Half past, and the lamp is dark. Now somebody closes the contact.
+    let index = result.index_of("v(lamp)").unwrap();
+    assert!(value_at(&result, index, 1e-3) < 0.01, "the lamp was lit before anybody touched it");
+    assert!(c.set_source_waveform("S1__actuator", Waveform::Dc { value: 1.0 }));
+
+    result.append(sim.advance_transient(&mut c, &mut run, 4e-3).unwrap());
+
+    // The past is untouched and the future is lit.
+    assert!(value_at(&result, index, 1e-3) < 0.01, "closing the switch rewrote the past");
+    assert!(value_at(&result, index, 3e-3) > 4.9, "the lamp never came on");
+}
+
+/// The same, for the digital half.
+#[test]
+fn a_logic_source_can_be_operated_while_the_run_is_going() {
+    let netlist: Netlist = serde_json::from_str(
+        r#"{"components":[],"bridges":[],"devices":[
+{"type":"logic_source","name":"T1","output":"da","state":"low"},
+{"type":"logic_source","name":"T2","output":"db","state":"high"},
+{"type":"gate","name":"U1","kind":"and","inputs":["da","db"],"output":"dy","delay":1e-9}]}"#,
+    )
+    .unwrap();
+    let mut c = netlist.compile().unwrap();
+
+    let cfg = TransientConfig::new(1e-6);
+    let mut sim = Simulator::default();
+    let (mut run, mut result) = sim.begin_transient(&mut c, cfg).unwrap();
+    result.append(sim.advance_transient(&mut c, &mut run, 400e-9).unwrap());
+    assert!(c.operate_logic("T1", Logic::High, run.time()));
+    result.append(sim.advance_transient(&mut c, &mut run, 1e-6).unwrap());
+
+    let dy = result.net_names.iter().position(|n| n == "dy").unwrap();
+    let level_at = |t: f64| {
+        result.digital[dy]
+            .iter()
+            .rev()
+            .find(|(when, _)| *when <= t)
+            .map(|(_, s)| *s)
+            .unwrap_or(Logic::Unknown)
+    };
+    assert_eq!(level_at(200e-9), Logic::Low, "before the click");
+    assert_eq!(level_at(800e-9), Logic::High, "after it");
+    // One edge, recorded once — not one per chunk.
+    assert_eq!(result.digital[dy].iter().filter(|(_, s)| *s == Logic::High).count(), 1);
+}

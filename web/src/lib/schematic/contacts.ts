@@ -44,46 +44,18 @@ export function isScheduled(instance: Instance): boolean {
 }
 
 /**
- * When somebody operated the part by hand, in seconds from the start of the run.
- *
- * A click on a part is not an edit to its resting position: the run is replayed
- * from zero whenever the drawing changes, so a switch thrown at three
- * milliseconds has to be written down as *thrown at three milliseconds* or the
- * replay would show it thrown from the beginning — the same waveform at a
- * different level, with no edge anywhere. The edge is the thing you clicked to
- * see.
- *
- * Kept as text so it travels in the same `params` record as everything else,
- * through the file, the share link and undo, without any of them growing a case
- * for it.
- */
-export function operationTimes(instance: Instance): number[] {
-	const raw = str(instance, 'flips', '');
-	if (!raw) return [];
-	return raw
-		.split(',')
-		.map((part) => Number(part))
-		.filter((t) => Number.isFinite(t) && t > 0)
-		.sort((a, b) => a - b);
-}
-
-/** The same list as text, for writing back into `params`. */
-export function encodeOperations(times: readonly number[]): string {
-	return times
-		.filter((t) => Number.isFinite(t) && t > 0)
-		.sort((a, b) => a - b)
-		.join(',');
-}
-
-/**
  * Every instant the contacts change position, soonest first.
  *
- * The scheduled operation and the ones somebody performed during playback are
- * the same kind of event and are answered by one list, so the drawing, the
- * netlist and the scope cannot disagree about a switch that was both.
+ * Two kinds of thing end up in one list, deliberately. There is the operation
+ * somebody scheduled — "close at one millisecond" — which is part of the
+ * drawing. And there are the ones performed by hand on a running simulation,
+ * which are not: those are handed in as `flips`, live seconds from the start of
+ * the run, and they belong to the run rather than to the circuit. The drawing,
+ * the waveform sent to the engine and the blade on screen all read this one
+ * answer, so none of them can disagree about a switch that was both.
  */
-function operations(instance: Instance): number[] {
-	const times = operationTimes(instance);
+function operations(instance: Instance, flips: readonly number[] = []): number[] {
+	const times = flips.filter((t) => Number.isFinite(t) && t > 0);
 	if (isScheduled(instance)) {
 		const at = Math.max(num(instance, 'at', 1e-3), 0);
 		times.push(at);
@@ -106,10 +78,13 @@ function operations(instance: Instance): number[] {
  * a millisecond or so, with the gaps closing as the energy goes out of them —
  * which is the entire reason a button wired straight to a counter counts three.
  */
-export function contactControl(instance: Instance): Array<[number, number]> {
+export function contactControl(
+	instance: Instance,
+	flips: readonly number[] = []
+): Array<[number, number]> {
 	const rest = restingContact(instance);
 	const points: Array<[number, number]> = [[0, rest]];
-	const moments = operations(instance);
+	const moments = operations(instance, flips);
 	if (moments.length === 0) return points;
 
 	const bounce = Math.max(num(instance, 'bounce', 0), 0);
@@ -151,8 +126,12 @@ export function contactControl(instance: Instance): Array<[number, number]> {
  * one millisecond is closed at exactly one millisecond, which is where the
  * playhead lands when somebody drags the scrubber to the moment it operates.
  */
-export function isClosedAt(instance: Instance, time: number): boolean {
-	const points = contactControl(instance);
+export function isClosedAt(
+	instance: Instance,
+	time: number,
+	flips: readonly number[] = []
+): boolean {
+	const points = contactControl(instance, flips);
 	let level = points[0][1];
 	for (const [t, value] of points) {
 		if (t > time) break;
@@ -177,9 +156,13 @@ export function isClosedAt(instance: Instance, time: number): boolean {
  * So this follows the actuator — the finger on the button — and the electrical
  * side keeps every bounce.
  */
-export function isActuatedAt(instance: Instance, time: number): boolean {
+export function isActuatedAt(
+	instance: Instance,
+	time: number,
+	flips: readonly number[] = []
+): boolean {
 	let actuated = restingContact(instance) === 1;
-	for (const when of operations(instance)) {
+	for (const when of operations(instance, flips)) {
 		if (when > time) break;
 		actuated = !actuated;
 	}
@@ -193,9 +176,13 @@ export function isActuatedAt(instance: Instance, time: number): boolean {
  * both parts answer "where did the person leave this at that moment", and both
  * are read by the drawing and by the netlist so the two cannot disagree.
  */
-export function isHighAt(instance: Instance, time: number): boolean {
+export function isHighAt(
+	instance: Instance,
+	time: number,
+	flips: readonly number[] = []
+): boolean {
 	let high = str(instance, 'state', 'low') === 'high';
-	for (const when of operationTimes(instance)) {
+	for (const when of [...flips].sort((a, b) => a - b)) {
 		if (when > time) break;
 		high = !high;
 	}

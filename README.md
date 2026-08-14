@@ -16,8 +16,8 @@ itself.
 
 ![A sine wave driving an inverter, whose output drives an RC network. Wires are
 coloured by voltage; the scope below shows both analog traces and the digital
-rails they resolve to, with a playhead partway through the
-run.](docs/screenshot.png)
+rails they resolve to, with the playhead at the newest instant of the
+sweep.](docs/screenshot.png)
 
 <sub>A 10 kHz sine into a logic inverter, its output filtered by an RC. One
 schematic, both domains, no converters placed by hand.</sub>
@@ -240,11 +240,12 @@ eyeballed — ΔE 22 under protanopia, 32 under tritanopia, 32 with normal visio
 all clearing 3:1 against the canvas — and colour is never the only channel, since
 the same values are on the scope and in the readout.
 
-Everything in this layer is a function of the playback instant and nothing else,
-with one exception: the current dots carry a phase that accumulates in real time,
-because motion cannot be read off a single frozen moment. That is the one thing
-that has to be told when the transport stops, and it is — dots still crawling
-under a paused clock would report a flow the readouts beside them call frozen.
+Everything in this layer is a function of the instant being shown and nothing
+else, with one exception: the current dots carry a phase that accumulates as
+simulated time passes, because motion cannot be read off a single frozen moment.
+That is the one thing that has to be told when the sweep stops, and it is — dots
+still crawling under a stopped clock would report a flow the readouts beside them
+call frozen.
 
 LEDs light from the same currents. Brightness follows a power law rather than the
 current itself, since a fifth of the current still reads as about half the light,
@@ -296,14 +297,23 @@ would show you.
 | Copy / cut / paste | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` — paste lands at the cursor |
 | Duplicate | `Ctrl+D` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
-| Play / pause the overlay | `Space` |
+| Run / stop the sweep | `Space` |
 | Simulate | press Run — nothing runs until you ask |
 | Plot a net | tick it in the Signals list |
 
-Nothing simulates on load. Press **Run** once and the results then follow the
-circuit: change a value and it re-simulates on its own, keeping the playhead where
-it was. Moving a part around does not count as a change, since the circuit it
-describes has not changed.
+Nothing simulates on load. Press **Run** and the simulation starts and keeps
+going, the way an instrument does: simulated time moves forward, the scope rolls,
+and the drawing shows the newest instant. There is no scrubber, because a running
+acquisition has nothing to scrub — **Stop** freezes what was caught, and only then
+can the window be dragged and zoomed over what memory still holds. **Single**
+sweeps one window and stops at the end of it.
+
+Clicking a switch or a logic toggle while it is running operates it *now*: the
+engine is carried on from where it was, so everything already solved stays solved
+and the waveform gets the edge at the instant of the click. Change a value instead
+and the sweep restarts from zero — a different circuit is a different run. Moving a
+part around does not count as a change, since the circuit it describes has not
+changed.
 
 A wire has to land on something at both ends — a pin, or another wire. A run that
 would finish in mid-air is drawn in red as you make it and declined on release,

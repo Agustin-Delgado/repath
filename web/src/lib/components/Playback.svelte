@@ -1,9 +1,11 @@
 <script lang="ts">
 	/**
-	 * Transport for the live overlay.
+	 * The instrument's front panel.
 	 *
-	 * The scrubber is the same time axis as the scope below it, so dragging here
-	 * moves the playhead there and the schematic shows that instant.
+	 * Run, Stop, Single — a scope's transport, and deliberately not a player's.
+	 * There is no scrubber, because there is nothing to scrub: the run is going
+	 * on now, the newest instant is the only one that exists while it is, and the
+	 * way to look at something that has already happened is to stop.
 	 */
 	import { VOLTAGE_SCALE } from '$lib/schematic/animate';
 	import { app } from '$lib/state.svelte';
@@ -11,49 +13,67 @@
 
 	const SPEEDS = [0.25, 1, 4];
 
-	// A result that is no longer being kept up to date is a record, not something
-	// to play: Stop clears `live`, and without this the transport happily ran a
-	// playhead across a schematic with no overlay on it at all.
-	const disabled = $derived(!app.result || !app.live);
-	const progress = $derived(app.stopTime > 0 ? app.playbackTime / app.stopTime : 0);
+	const started = $derived(app.acquiring !== null);
+	/**
+	 * How far behind the timebase the engine is running, once it is far enough
+	 * behind to be worth saying. A stiff circuit cannot always be solved as fast
+	 * as it is being asked for, and that shows up as slow motion — better named
+	 * than left for somebody to discover by timing it against a clock.
+	 */
+	const keeping = $derived.by(() => {
+		// The clock is what changes every frame; the acquisition object is the same
+		// one throughout, and a plain field on it would never announce itself.
+		void app.playbackTime;
+		return app.acquiring?.keeping ?? 1;
+	});
+	const lagging = $derived(app.playing && keeping < 0.85);
 </script>
 
 <div class="playback">
 	<button
 		class="play"
 		onclick={() => app.togglePlay()}
-		{disabled}
-		title={app.playing ? 'Pause (Space)' : 'Play (Space)'}
-		aria-label={app.playing ? 'Pause' : 'Play'}
+		title={app.playing ? 'Stop the sweep (Space)' : 'Run (Space)'}
+		aria-label={app.playing ? 'Stop' : 'Run'}
 	>
 		{#if app.playing}
-			<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 2h2.2v8H3zM6.8 2H9v8H6.8z" /></svg>
+			<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="2.5" width="7" height="7" /></svg>
+			Stop
 		{:else}
 			<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2l6 4-6 4z" /></svg>
+			Run
 		{/if}
 	</button>
 
-	<input
-		class="scrub"
-		type="range"
-		min="0"
-		max="1"
-		step="0.0005"
-		value={progress}
-		{disabled}
-		oninput={(e) => app.seek(Number(e.currentTarget.value) * app.stopTime)}
-		aria-label="Playback position"
-		style:--progress="{progress * 100}%"
-	/>
+	<button
+		onclick={() => app.single()}
+		disabled={app.playing}
+		title="Sweep one window and stop there"
+	>
+		Single
+	</button>
 
-	<span class="clock">{formatValue(app.playbackTime, 3)}s</span>
+	<span class="clock" class:running={app.playing}>
+		{formatValue(app.playbackTime, 3)}s
+	</span>
+	{#if !started}
+		<span class="hint">nothing running</span>
+	{:else if lagging}
+		<span class="hint lag" title="The circuit is being solved slower than the timebase asks for">
+			{Math.round(keeping * 100)}% of the timebase
+		</span>
+	{:else if !app.playing}
+		<span class="hint">stopped &middot; drag the scope to look around</span>
+	{/if}
 
-	<div class="speeds" role="group" aria-label="Playback speed">
+	<span class="spacer"></span>
+
+	<div class="speeds" role="group" aria-label="Sweep speed">
 		{#each SPEEDS as speed (speed)}
 			<button
 				class:active={app.playbackSpeed === speed}
 				onclick={() => (app.playbackSpeed = speed)}
-				{disabled}>{speed}×</button
+				title="{speed}× — a window every {formatValue(4 / speed, 2)} seconds">{speed}×</button
 			>
 		{/each}
 	</div>
@@ -140,41 +160,17 @@
 		fill: currentColor;
 	}
 
-	.scrub {
+	.spacer {
 		flex: 1;
-		min-width: 5rem;
-		appearance: none;
-		height: 4px;
-		border-radius: 2px;
-		/* The filled part shows how far through the run the overlay is. */
-		background: linear-gradient(
-			90deg,
-			var(--accent) var(--progress, 0%),
-			var(--border) var(--progress, 0%)
-		);
-		cursor: pointer;
 	}
 
-	.scrub::-webkit-slider-thumb {
-		appearance: none;
-		width: 11px;
-		height: 11px;
-		border-radius: 50%;
-		background: var(--accent);
-		border: none;
+	.hint {
+		color: var(--label-dim);
+		white-space: nowrap;
 	}
 
-	.scrub::-moz-range-thumb {
-		width: 11px;
-		height: 11px;
-		border-radius: 50%;
-		background: var(--accent);
-		border: none;
-	}
-
-	.scrub:disabled {
-		opacity: 0.4;
-		cursor: default;
+	.hint.lag {
+		color: #ffb066;
 	}
 
 	.clock {
@@ -182,6 +178,11 @@
 		color: var(--label-dim);
 		min-width: 4.5rem;
 		text-align: right;
+	}
+
+	/* Running, the clock is the one number on the panel that is moving. */
+	.clock.running {
+		color: var(--text);
 	}
 
 	.speeds,

@@ -6,10 +6,18 @@
  * simulator quietly runs the circuit you drew a minute ago.
  */
 
-import { runFrequencySweep, runTransient, type FrequencyRun, type TransientRun } from './engine';
+import {
+	ensureEngine,
+	runFrequencySweep,
+	runTransient,
+	type FrequencyRun,
+	type TransientRun
+} from './engine';
 import { EXAMPLES, exampleById } from './examples';
 import { sampleIndexAt } from './schematic/flow';
-import { encodeOperations, operationTimes } from './schematic/contacts';
+import { contactControl, isHighAt } from './schematic/contacts';
+import { Acquisition } from './acquire';
+import type { Capture } from './capture';
 import { Trace, wireRef, type Step } from './trace';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
@@ -334,7 +342,26 @@ class AppState {
 	}
 
 	running = $state(false);
+	/**
+	 * Everything the instrument still remembers, in the shape a finished run has.
+	 *
+	 * Replaced on every acquired chunk rather than at the end of a run, because
+	 * there is no end: this is a window onto a sweep that is still going.
+	 */
 	result = $state<TransientRun | null>(null);
+	/** The rolling memory behind `result`. */
+	capture = $state<Capture | null>(null);
+	/** The sweep itself, or null when nothing has been started. */
+	acquiring = $state<Acquisition | null>(null);
+	/**
+	 * When each part was operated by hand during this run, by instance id.
+	 *
+	 * Belongs to the run and not to the drawing: it is a record of what somebody
+	 * did while it was going, and the next run starts from the circuit as drawn.
+	 * The engine has already been told; this is so the blade on screen agrees
+	 * with it.
+	 */
+	operations = $state<Map<string, number[]>>(new Map());
 	error = $state<string | null>(null);
 	/**
 	 * Whether results are being kept up to date with the circuit.
@@ -376,12 +403,27 @@ class AppState {
 		)
 	);
 
-	// -- playback ---------------------------------------------------------
+	// -- acquisition -------------------------------------------------------
 
+	/**
+	 * Whether the simulation is going.
+	 *
+	 * Not "whether a recording is being replayed", which is what this used to
+	 * mean. Time only moves forward here, and it moves because the engine is
+	 * being asked for the next piece of the run — so a switch thrown at this
+	 * instant is thrown at this instant, once, and the past keeps whatever it
+	 * already had in it.
+	 */
 	playing = $state(false);
-	/** Where in simulated time the live overlay is showing. */
+	/**
+	 * The instant the drawing is showing.
+	 *
+	 * The newest sample while the run is going. Frozen — and movable, within what
+	 * memory still holds — once it is stopped, which is the one place a scope lets
+	 * you look at something that has already happened.
+	 */
 	playbackTime = $state(0);
-	/** How many times faster or slower than the default four-second replay. */
+	/** How many times faster or slower than the default four-second sweep. */
 	playbackSpeed = $state(1);
 	showVoltage = $state(true);
 	showCurrent = $state(true);
@@ -432,33 +474,44 @@ class AppState {
 	}
 
 	/**
-	 * Stop simulating and put the drawing back the way it was.
+	 * Stop the sweep, and keep what is on the screen.
 	 *
-	 * Not the same as pausing playback, which freezes the overlay at an instant so
-	 * it can be read. This clears the overlay off the schematic entirely — no
-	 * voltage colours, no current, no lit LEDs — because the button that does it
-	 * is the one that started the whole thing, and the opposite of running should
-	 * be not running rather than running very slowly.
-	 *
-	 * The results themselves are kept: the scope still holds the traces, which are
-	 * the record of the run and not something anyone asked to throw away.
+	 * A scope's Stop: the trace freezes where it is and stays there to be
+	 * measured. The drawing keeps its colours and its readings too — they are the
+	 * last instant of a real run, not a leftover — which is the opposite of what
+	 * this used to do, when stopping wiped the overlay off entirely.
 	 */
 	stop(): void {
 		this.playing = false;
-		this.live = false;
+		this.acquiring?.stop();
 	}
 
 	togglePlay(): void {
-		// Nothing to play once the run has been stopped: the overlay is gone, so
-		// the only thing that would move is a cursor over a static drawing.
-		if (!this.result || !this.live) return;
-		// Restarting from the end rather than sitting there doing nothing.
-		if (!this.playing && this.playbackTime >= this.stopTime) this.playbackTime = 0;
-		this.playing = !this.playing;
+		if (this.playing) {
+			this.stop();
+			return;
+		}
+		// Picking a stopped sweep back up carries on from where it got to. Starting
+		// from nothing is a new run, which is the Run button's job.
+		if (!this.acquiring) {
+			void this.run();
+			return;
+		}
+		this.playing = true;
+		this.acquiring.start();
 	}
 
+	/**
+	 * Move the instant being looked at.
+	 *
+	 * Only while stopped, and only within what memory still holds. There is
+	 * nothing to seek to in a running acquisition: the newest sample is the only
+	 * instant that exists, and dragging backwards through one is the recording
+	 * this stopped being.
+	 */
 	seek(time: number): void {
-		this.playbackTime = Math.min(Math.max(time, 0), this.stopTime);
+		if (this.playing || !this.capture) return;
+		this.playbackTime = Math.min(Math.max(time, this.capture.earliest), this.capture.now);
 	}
 
 	private past: HistoryEntry[] = [];
@@ -1227,29 +1280,39 @@ class AppState {
 		if (!instance) return;
 		if (instance.kind !== 'switch' && instance.kind !== 'toggle') return;
 
-		const live = this.live && this.analysis === 'transient' && this.result !== null;
-		// Inside a run, a click is something that happens *now*: it goes down as an
-		// operation at the playhead, the replay keeps everything before it, and the
-		// waveform gets the edge. Outside one — nothing run yet, or the playhead
-		// parked at either end of the timeline — there is no "now" to hang it on, so
-		// the click sets where the part starts instead.
-		const at = this.playbackTime;
-		if (live && at > 0 && at < this.stopTime) {
-			this.setParam(id, 'flips', encodeOperations([...operationTimes(instance), at]));
-		} else if (instance.kind === 'switch') {
+		// With a simulation going, this is a hand on the part: the engine is told to
+		// move it at the instant the sweep has reached, and everything already
+		// solved stays solved. Nothing is written into the drawing, which is what
+		// keeps the operation from being replayed on the next run — and what keeps
+		// an edit-triggered restart from happening on a click.
+		const acquiring = this.acquiring;
+		if (acquiring && this.analysis === 'transient') {
+			const at = acquiring.time;
+			const flips = [...(this.operations.get(id) ?? []), at];
+			this.operations = new Map(this.operations).set(id, flips);
+			if (instance.kind === 'switch') {
+				acquiring.setWaveform(`${instance.name}__actuator`, {
+					type: 'pwl',
+					points: contactControl(instance, flips)
+				});
+			} else {
+				acquiring.setLogic(instance.name, isHighAt(instance, at, flips) ? 'high' : 'low');
+			}
+			return;
+		}
+
+		// Nothing running: the click sets where the part starts, which is a property
+		// of the circuit and belongs in the drawing.
+		if (instance.kind === 'switch') {
 			this.setParam(id, 'start', instance.params.start === 'closed' ? 'open' : 'closed');
 		} else {
 			this.setParam(id, 'state', instance.params.state === 'high' ? 'low' : 'high');
 		}
-		if (this.live && this.analysis === 'transient') void this.run({ keepPlayback: true });
 	}
 
-	/** Wipe the operations somebody recorded on a part during playback. */
-	clearOperations(id: string): void {
-		const instance = this.schematic.instances.find((i) => i.id === id);
-		if (!instance || !instance.params.flips) return;
-		this.setParam(id, 'flips', '');
-		if (this.live && this.analysis === 'transient') void this.run({ keepPlayback: true });
+	/** When a part was operated by hand during this run. */
+	operationsOf(id: string): number[] {
+		return this.operations.get(id) ?? [];
 	}
 
 	/** Rename a component. Returns why it was refused, or null on success. */
@@ -1486,12 +1549,11 @@ class AppState {
 			this.acStop = example.frequencyRange.stop;
 		}
 		this.selection = [];
-		this.result = null;
+		this.discardRun();
 		this.acResult = null;
 		this.error = null;
 		this.notice = null;
 		this.live = false;
-		this.playing = false;
 		this.autoProbe();
 	}
 
@@ -1504,11 +1566,10 @@ class AppState {
 		this.stopTime = circuit.stopTime;
 		this.exampleId = '';
 		this.selection = [];
-		this.result = null;
+		this.discardRun();
 		this.error = null;
 		this.notice = null;
 		this.live = false;
-		this.playing = false;
 		this.autoProbe();
 	}
 
@@ -1555,11 +1616,10 @@ class AppState {
 		this.stopTime = parsed.stopTime ?? 1e-3;
 		this.probes = parsed.probes ?? [];
 		this.selection = [];
-		this.result = null;
+		this.discardRun();
 		this.error = null;
 		this.notice = null;
 		this.live = false;
-		this.playing = false;
 	}
 
 	/** Change the length of a run, and write it down. */
@@ -1817,14 +1877,25 @@ class AppState {
 		this.envelope = { time, low, high };
 	}
 
-	async run(options: { keepPlayback?: boolean } = {}): Promise<void> {
-		// Only a deliberate press. A live re-run after an edit follows from the edit
+	/**
+	 * Start simulating.
+	 *
+	 * A new sweep, from zero, on the circuit as it is drawn — which is why the
+	 * drawing holds a starting position for every switch. `single` sweeps one
+	 * window's worth and stops there, the way a scope catches one event.
+	 *
+	 * There is no "keep playback" any more, because there is no playback: an edit
+	 * to the circuit starts a new run of a new circuit, and the old samples belong
+	 * to something that no longer exists.
+	 */
+	async run(options: { quiet?: boolean; single?: boolean } = {}): Promise<void> {
+		// Only a deliberate press. A restart after an edit follows from the edit
 		// that is already written down, and logging it would double every line.
-		if (!options.keepPlayback) this.trace.record({ op: 'run' });
+		if (!options.quiet) this.trace.record({ op: 'run' });
 		const compiled = this.compiled;
 		if (!compiled.netlist) {
 			this.error = compiled.errors.join(' ');
-			this.result = null;
+			this.discardRun();
 			return;
 		}
 		this.running = true;
@@ -1840,27 +1911,71 @@ class AppState {
 				this.acResult = await runFrequencySweep(compiled.netlist, this.acStart, this.acStop);
 				if (this.probes.length === 0) this.autoProbe();
 			} else {
-				// At least a few hundred points, so a flat trace still looks like a
+				await ensureEngine();
+				this.discardRun();
+				// At least a couple of hundred points per window, so a flat trace is a
 				// line rather than two dots joined up.
-				const was = { time: this.playbackTime, playing: this.playing };
-				this.result = await runTransient(compiled.netlist, this.stopTime, this.stopTime / 400);
+				const acquiring = new Acquisition(compiled.netlist, this.stopTime / 200, {
+					onChunk: () => this.absorb(),
+					onError: (message) => {
+						this.error = message;
+						this.playing = false;
+					},
+					rate: () => this.playbackRate
+				});
+				this.acquiring = acquiring;
+				this.capture = acquiring.capture;
+				this.operations = new Map();
+				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
-				await this.sweepTolerances();
-				if (options.keepPlayback) {
-					this.playbackTime = Math.min(was.time, this.stopTime);
-					this.playing = was.playing;
-				} else {
-					this.playbackTime = 0;
-					this.playing = true;
-				}
+				this.playing = true;
+				if (options.single) acquiring.startSingle(this.stopTime);
+				else acquiring.start();
 			}
 		} catch (cause) {
 			this.error = cause instanceof Error ? cause.message : String(cause);
 			if (this.analysis === 'frequency') this.acResult = null;
-			else this.result = null;
+			else this.discardRun();
 		} finally {
 			this.running = false;
 		}
+	}
+
+	/** Sweep one window and stop, the way a scope catches a single event. */
+	single(): void {
+		void this.run({ single: true });
+	}
+
+	/** Take what has been acquired so far and put it where the screen reads it. */
+	private absorb(): void {
+		const capture = this.capture;
+		const acquiring = this.acquiring;
+		if (!capture || !acquiring) return;
+		this.result = capture.run();
+		// While the sweep is going, the instant on the drawing is the newest one
+		// there is. Stopped, it stays where it was left, to be measured.
+		if (acquiring.sweeping) {
+			this.playbackTime = capture.now;
+			return;
+		}
+		const ended = this.playing;
+		this.playing = false;
+		// A single sweep that has finished is a window with two ends, which is the
+		// only shape a tolerance band fits: every sample of it can be put beside the
+		// same instant of another run. A sweep that is still rolling has no such
+		// axis to compare against.
+		if (ended && acquiring.single && this.sweepCount > 0) void this.sweepTolerances();
+	}
+
+	private discardRun(): void {
+		this.acquiring?.close();
+		this.acquiring = null;
+		this.capture = null;
+		this.result = null;
+		this.operations = new Map();
+		this.envelope = null;
+		this.playing = false;
+		this.playbackTime = 0;
 	}
 }
 

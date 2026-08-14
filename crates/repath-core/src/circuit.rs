@@ -6,6 +6,7 @@ use crate::bridge::{AdcBridge, DacBridge, LogicFamily};
 use crate::complex::{C64, ComplexSystem};
 use crate::digital::{DigitalDevice, DigitalDomain, Logic, NetId};
 use crate::element::{AcCtx, Element, NodeId, StampCtx};
+use crate::elements::{VoltageSource, Waveform};
 use crate::linalg::LinearSystem;
 
 /// Everything the simulator is asked to solve.
@@ -269,6 +270,33 @@ impl Circuit {
     /// Resolved state of a digital net.
     pub fn net_state(&self, net: NetId) -> Logic {
         self.digital.state(net)
+    }
+
+    /// Give a voltage source a new waveform in the middle of a run.
+    ///
+    /// This is somebody's hand on a switch. The waveform a switch's actuator
+    /// carries is written from the instant it is thrown, so the run keeps every
+    /// timepoint solved before then and the contact moves from here on — which is
+    /// what makes an operation an event in the circuit's life rather than a
+    /// different circuit that has to be solved from the beginning.
+    ///
+    /// Returns whether a source by that name was found.
+    pub fn set_source_waveform(&mut self, name: &str, waveform: Waveform) -> bool {
+        for element in &mut self.elements {
+            if element.name() != name {
+                continue;
+            }
+            if let Some(source) = element.as_any_mut().downcast_mut::<VoltageSource>() {
+                source.waveform = waveform;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Move a named logic source to a level, from `at` onwards.
+    pub fn operate_logic(&mut self, name: &str, state: Logic, at: f64) -> bool {
+        self.digital.operate(name, state, at)
     }
 }
 

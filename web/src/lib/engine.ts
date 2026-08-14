@@ -151,6 +151,108 @@ export async function runTransient(
 	}
 }
 
+/** One piece of a live run: the timepoints solved since the last call. */
+export interface Chunk {
+	time: Float64Array;
+	/** Samples per unknown, aligned with `time`. */
+	signalsByIndex: Float64Array[];
+	/** Samples per element, aligned with `time`. */
+	currents: Float64Array[];
+	/** Transitions that happened during this piece, per digital net. */
+	digital: DigitalTransition[][];
+	failures: PartFailure[];
+	stats: RunStats;
+}
+
+/**
+ * A simulation that is still going.
+ *
+ * The engine keeps the circuit and the solver state; this side keeps nothing but
+ * the handle. Every call to `advance` carries the run further and hands back only
+ * what happened on the way — nothing is ever recomputed, which is what makes an
+ * operation performed halfway through stay done.
+ */
+export class LiveRun {
+	private simulation: Simulation;
+	readonly unknownNames: string[];
+	readonly elementNames: string[];
+	readonly netNames: string[];
+	readonly nodeCount: number;
+	/** The first chunk: the single timepoint at t = 0. */
+	readonly first: Chunk;
+	private freed = false;
+
+	constructor(netlist: unknown, maxStep: number) {
+		try {
+			this.simulation = new Simulation(JSON.stringify(netlist));
+		} catch (cause) {
+			throw toEngineError(cause);
+		}
+		try {
+			const meta = JSON.parse(this.simulation.beginLive(maxStep)) as RunMeta;
+			this.unknownNames = meta.unknown_names;
+			this.elementNames = meta.element_names;
+			this.netNames = meta.net_names;
+			this.nodeCount = meta.node_count;
+			this.first = this.collect(meta);
+		} catch (cause) {
+			this.simulation.free();
+			this.freed = true;
+			throw toEngineError(cause);
+		}
+	}
+
+	/** Simulated seconds reached so far. */
+	get time(): number {
+		return this.freed ? 0 : this.simulation.liveTime();
+	}
+
+	/** Carry the run to `until`, in seconds from its start. */
+	advance(until: number): Chunk {
+		if (this.freed) throw new EngineError('the run has been closed');
+		try {
+			const meta = JSON.parse(this.simulation.advance(until)) as RunMeta;
+			return this.collect(meta);
+		} catch (cause) {
+			throw toEngineError(cause);
+		}
+	}
+
+	/**
+	 * Give a source a new waveform from here on — somebody's hand on a switch.
+	 *
+	 * The waveform is written in the netlist's own shape, so a contact can hand
+	 * over its whole bounce train anchored at the instant it was thrown.
+	 */
+	setWaveform(name: string, waveform: unknown): boolean {
+		if (this.freed) return false;
+		return this.simulation.setSourceWaveform(name, JSON.stringify(waveform));
+	}
+
+	/** Move a logic source to a level, from `at` onwards. */
+	setLogic(name: string, state: LogicState, at: number): boolean {
+		if (this.freed) return false;
+		return this.simulation.setLogic(name, state, at);
+	}
+
+	free(): void {
+		if (this.freed) return;
+		this.simulation.free();
+		this.freed = true;
+	}
+
+	private collect(meta: RunMeta): Chunk {
+		return {
+			time: this.simulation.time(),
+			signalsByIndex: this.unknownNames.map((_, index) => this.simulation.signal(index)),
+			currents: this.elementNames.map((_, index) => this.simulation.current(index)),
+			digital: meta.digital,
+			failures: meta.failures ?? [],
+			stats: meta.stats
+		};
+	}
+}
+
 export interface FrequencyRun {
 	frequencies: Float64Array;
 	unknownNames: string[];

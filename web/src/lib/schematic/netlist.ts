@@ -9,7 +9,7 @@
  * converter symbol to remember to place.
  */
 
-import { contactControl, operationTimes, restingContact } from './contacts';
+import { contactControl, restingContact } from './contacts';
 import { ledDiodeModel, ledRating } from './led';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
@@ -577,10 +577,10 @@ export function compileSchematic(
 					type: 'logic_source',
 					name,
 					output: digitalOf(instance, 'y'),
-					state: str(instance, 'state', 'low') === 'high' ? 'high' : 'low',
-					// Every instant it was clicked at, so the run reproduces the steps
-					// rather than replaying the whole thing at the level it ended on.
-					flips: operationTimes(instance)
+					// Where it starts. Clicking it during a run does not come through
+					// here at all: the engine is told to move it at that instant, and
+					// the drawing keeps saying what the circuit was built as.
+					state: str(instance, 'state', 'low') === 'high' ? 'high' : 'low'
 				});
 				break;
 			case 'clock':

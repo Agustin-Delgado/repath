@@ -123,7 +123,8 @@
 	function closedSwitchesAt(time: number): Set<string> {
 		const closed = new Set<string>();
 		for (const instance of app.schematic.instances) {
-			if (instance.kind === 'switch' && isClosedAt(instance, time)) closed.add(instance.id);
+			if (instance.kind !== 'switch') continue;
+			if (isClosedAt(instance, time, app.operationsOf(instance.id))) closed.add(instance.id);
 		}
 		return closed;
 	}
@@ -159,8 +160,13 @@
 			// Both parts are drawn where the run has them rather than where the
 			// parameters rest, and for the same reason: one that was thrown at three
 			// milliseconds is only in its new position from three milliseconds on.
+			// Including what somebody has done to it during this run, which the
+			// drawing knows about and the netlist deliberately does not.
+			const flips = app.operationsOf(instance.id);
 			const closed =
-				instance.kind === 'switch' ? isActuatedAt(instance, time) : isHighAt(instance, time);
+				instance.kind === 'switch'
+					? isActuatedAt(instance, time, flips)
+					: isHighAt(instance, time, flips);
 			if (switchStates.get(instance.id) !== closed) {
 				switchStates.set(instance.id, closed);
 				changed = true;
@@ -283,9 +289,8 @@
 		}
 
 		let frame = 0;
-		let last = performance.now();
-		// Where playback was on the previous frame, so a drag of the scrubber shows
-		// up here as a distance rather than as a jump nobody can see.
+		// Where simulated time was on the previous frame, so the dots are carried
+		// along by however far the sweep got rather than by the wall clock.
 		//
 		// Left unset rather than seeded from `app.playbackTime`, and that is not a
 		// style choice. A read here is a read in the effect *body*, which subscribes
@@ -302,29 +307,14 @@
 		// — colours, dots, readings — blinked off and on again on every click.
 		let lastPlayback: number | null = null;
 
-		const step = (now: number) => {
+		const step = () => {
 			const context = flowContext;
-			// Clamped so a backgrounded tab does not resume with one enormous jump.
-			const dt = Math.min((now - last) / 1000, 0.1);
-			last = now;
 
-			// How far playback moved this frame, which is what the current dots run
-			// on. Zero while paused and untouched, negative when the scrubber is
-			// dragged backwards, large when it is dragged fast.
-			let moved = 0;
-			if (app.playing) {
-				const next = app.playbackTime + dt * app.playbackRate;
-				if (next >= app.stopTime) {
-					// Looping back to the start is not a rewind anybody performed, so it
-					// does not spin the dots backwards through the whole run.
-					app.playbackTime = 0;
-				} else {
-					app.playbackTime = next;
-					moved = dt * app.playbackRate;
-				}
-			} else if (lastPlayback !== null) {
-				moved = app.playbackTime - lastPlayback;
-			}
+			// How far simulated time moved this frame, which is what the current dots
+			// run on. It is *read* here rather than advanced: the acquisition owns the
+			// clock now, and this loop only draws what it has reached. Zero while the
+			// sweep is stopped and untouched.
+			const moved = lastPlayback === null ? 0 : app.playbackTime - lastPlayback;
 			lastPlayback = app.playbackTime;
 
 			// The live overlay belongs to the transient result. Leaving it running

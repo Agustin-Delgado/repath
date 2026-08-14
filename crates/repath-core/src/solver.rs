@@ -193,6 +193,67 @@ impl TransientResult {
     pub fn is_empty(&self) -> bool {
         self.time.is_empty()
     }
+
+    /// Take on a later piece of the same run.
+    ///
+    /// Names are kept from whichever side has them: a chunk from
+    /// [`Simulator::advance_transient`] carries none, since they were settled
+    /// when the run began.
+    pub fn append(&mut self, mut other: TransientResult) {
+        if self.unknown_names.is_empty() {
+            self.unknown_names = std::mem::take(&mut other.unknown_names);
+            self.node_count = other.node_count;
+        }
+        if self.element_names.is_empty() {
+            self.element_names = std::mem::take(&mut other.element_names);
+        }
+        if self.net_names.is_empty() {
+            self.net_names = std::mem::take(&mut other.net_names);
+        }
+        self.time.append(&mut other.time);
+        self.solution.append(&mut other.solution);
+        self.currents.append(&mut other.currents);
+        if self.digital.len() < other.digital.len() {
+            self.digital.resize(other.digital.len(), Vec::new());
+        }
+        for (net, events) in other.digital.iter_mut().enumerate() {
+            self.digital[net].append(events);
+        }
+        self.failures.append(&mut other.failures);
+        self.stats = other.stats;
+    }
+}
+
+/// A transient run that has started and can be carried further.
+///
+/// Everything the loop would otherwise keep on its stack. Handing it back to
+/// [`Simulator::advance_transient`] picks the run up exactly where it stopped —
+/// the circuit itself holds the rest of the state, so anything changed on it in
+/// between is simply what the circuit is from that instant on.
+#[derive(Debug, Clone)]
+pub struct Running {
+    cfg: TransientConfig,
+    /// Simulated time reached so far.
+    t: f64,
+    dt: f64,
+    euler_steps: usize,
+    min_step: f64,
+    stats: Stats,
+    /// Level last written into each net's trace.
+    last_logic: Vec<Logic>,
+    /// How many destroyed parts the caller has already been told about.
+    reported_failures: usize,
+}
+
+impl Running {
+    /// How far the run has got, in seconds.
+    pub fn time(&self) -> f64 {
+        self.t
+    }
+
+    pub fn stats(&self) -> &Stats {
+        &self.stats
+    }
 }
 
 /// A single DC operating point.
@@ -553,12 +614,35 @@ impl Simulator {
         })
     }
 
-    /// Run a mixed-signal transient analysis.
+    /// Run a mixed-signal transient analysis from zero to `cfg.stop`.
+    ///
+    /// A convenience over [`Self::begin_transient`] and [`Self::advance_transient`]
+    /// for the case where the whole answer is wanted at once.
     pub fn transient(
         &mut self,
         circuit: &mut Circuit,
         cfg: TransientConfig,
     ) -> Result<TransientResult, SimError> {
+        let (mut run, mut result) = self.begin_transient(circuit, cfg)?;
+        let rest = self.advance_transient(circuit, &mut run, cfg.stop)?;
+        result.append(rest);
+        result.stats = run.stats.clone();
+        Ok(result)
+    }
+
+    /// Start a transient run and solve its first instant.
+    ///
+    /// The returned [`Running`] holds everything the loop needs to be picked up
+    /// again — where it got to, what step it was taking, how many Euler steps it
+    /// still owes — so the caller can advance it a little at a time and watch it
+    /// happen. That is the difference between a simulation and a recording of
+    /// one: nothing here is ever recomputed, so anything done to the circuit
+    /// partway through stays done.
+    pub fn begin_transient(
+        &mut self,
+        circuit: &mut Circuit,
+        cfg: TransientConfig,
+    ) -> Result<(Running, TransientResult), SimError> {
         self.prepare(circuit)?;
         circuit.reset();
 
@@ -610,17 +694,65 @@ impl Simulator {
         self.accept_timepoint(circuit, start_mode, Integration::BackwardEuler, 0.0, 0.0);
         self.x_accepted.copy_from_slice(&self.x);
         self.record(&mut result, circuit, 0.0);
-        self.exchange_with_digital(circuit, 0.0, &mut result, &mut stats);
 
-        let min_step = (cfg.stop * MIN_STEP_FRACTION).max(f64::MIN_POSITIVE);
-        let mut t = 0.0;
-        let mut dt = cfg.initial_step.min(cfg.max_step).max(min_step);
-        // The trapezoidal rule rings if it is started from a step; a couple of
-        // backward-Euler steps damp the transient out first.
-        let mut euler_steps = 2usize;
+        let mut last_logic: Vec<Logic> =
+            (0..circuit.digital.net_count()).map(|n| circuit.digital.state(n)).collect();
+        self.exchange_with_digital(circuit, 0.0, &mut result, &mut stats, &mut last_logic);
 
-        while t < cfg.stop - min_step {
-            if stats.accepted_steps >= cfg.max_steps {
+        // Measured against the step ceiling rather than the run length, because a
+        // run that is advanced piece by piece has no length to measure against —
+        // and for a batch run the two are the same number, since `max_step`
+        // defaults to a two-hundredth of the stop time.
+        let min_step = (cfg.max_step * MIN_STEP_FRACTION * 200.0).max(f64::MIN_POSITIVE);
+        let run = Running {
+            cfg,
+            t: 0.0,
+            dt: cfg.initial_step.min(cfg.max_step).max(min_step),
+            // The trapezoidal rule rings if it is started from a step; a couple of
+            // backward-Euler steps damp the transient out first.
+            euler_steps: 2,
+            min_step,
+            stats,
+            last_logic,
+            reported_failures: 0,
+        };
+        Ok((run, result))
+    }
+
+    /// Carry a run forward to `until`, and report only what happened on the way.
+    ///
+    /// The chunk carries no names — those were settled when the run began and do
+    /// not change — only the timepoints solved during this call.
+    pub fn advance_transient(
+        &mut self,
+        circuit: &mut Circuit,
+        run: &mut Running,
+        until: f64,
+    ) -> Result<TransientResult, SimError> {
+        let cfg = run.cfg;
+        let min_step = run.min_step;
+        let mut stats = std::mem::take(&mut run.stats);
+        let started_at = stats.accepted_steps;
+        let mut result = TransientResult {
+            digital: vec![Vec::new(); circuit.digital.net_count()],
+            ..Default::default()
+        };
+        let mut t = run.t;
+        let mut dt = run.dt;
+        let mut euler_steps = run.euler_steps;
+        let restore = |run: &mut Running, t: f64, dt: f64, euler_steps: usize, stats: Stats| {
+            run.t = t;
+            run.dt = dt;
+            run.euler_steps = euler_steps;
+            run.stats = stats;
+        };
+
+        while t < until - min_step {
+            // Counted from where this call started rather than from zero: a run
+            // that is advanced forever would otherwise trip the safety valve on
+            // nothing worse than having been left running.
+            if stats.accepted_steps - started_at >= cfg.max_steps {
+                restore(run, t, dt, euler_steps, stats);
                 return Err(SimError::StepLimit { time: t });
             }
 
@@ -629,7 +761,7 @@ impl Simulator {
 
             let mut step = dt
                 .min(cfg.max_step)
-                .min(cfg.stop - t)
+                .min(until - t)
                 .min(self.element_step_limit(circuit, t))
                 .min(self.dac_step_limit(circuit, t));
 
@@ -672,10 +804,14 @@ impl Simulator {
                         integration = Integration::BackwardEuler;
                         euler_steps = euler_steps.max(2);
                         if attempt < min_step {
+                            restore(run, t, dt, euler_steps, stats);
                             return Err(SimError::TimestepTooSmall { time: t, step: attempt });
                         }
                     }
-                    Err(other) => return Err(other),
+                    Err(other) => {
+                        restore(run, t, dt, euler_steps, stats);
+                        return Err(other);
+                    }
                 }
             }
 
@@ -686,21 +822,27 @@ impl Simulator {
             euler_steps = euler_steps.saturating_sub(1);
 
             self.record(&mut result, circuit, t);
-            self.exchange_with_digital(circuit, t, &mut result, &mut stats);
+            self.exchange_with_digital(circuit, t, &mut result, &mut stats, &mut run.last_logic);
 
             // Grow back gradually. Doubling every step overshoots straight into
             // the next rejection.
             dt = (attempt * 2.0).min(cfg.max_step);
         }
 
-        result.failures = circuit
+        let mut failures: Vec<Failure> = circuit
             .elements()
             .iter()
             .filter_map(|e| e.as_any().downcast_ref::<Diode>()?.failure())
             .collect();
-        result.failures.sort_by(|a, b| a.time.total_cmp(&b.time));
+        failures.sort_by(|a, b| a.time.total_cmp(&b.time));
+        // Only the ones nobody has been told about yet. A part is destroyed once,
+        // and reporting it again in every chunk would have it explode on the
+        // drawing every frame for the rest of the run.
+        result.failures = failures.split_off(run.reported_failures.min(failures.len()));
+        run.reported_failures += result.failures.len();
 
-        result.stats = stats;
+        result.stats = stats.clone();
+        restore(run, t, dt, euler_steps, stats);
         Ok(result)
     }
 
@@ -750,6 +892,7 @@ impl Simulator {
         t: f64,
         result: &mut TransientResult,
         stats: &mut Stats,
+        last: &mut [Logic],
     ) {
         // Analog -> digital.
         let mut pending: Vec<(f64, DriverId, NetId, Logic)> = Vec::new();
@@ -777,11 +920,17 @@ impl Simulator {
             .collect();
 
         // Digital -> analog, and into the recorded waveforms.
+        //
+        // The "did it really change" test is against the level carried by the run
+        // rather than against the last entry in this result: a run advanced in
+        // pieces hands back one result per piece, and a chunk that starts empty
+        // would take the first sample of an unchanged net as a transition.
         for (net, state) in &changed {
-            if let Some(trace) = result.digital.get_mut(*net)
-                && trace.last().map(|(_, s)| *s) != Some(*state)
+            if let (Some(trace), Some(previous)) = (result.digital.get_mut(*net), last.get_mut(*net))
+                && *previous != *state
             {
                 trace.push((t, *state));
+                *previous = *state;
             }
         }
         if !changed.is_empty() {

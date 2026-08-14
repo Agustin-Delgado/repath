@@ -1095,7 +1095,7 @@ describe('a probe put where you want to measure', () => {
 	});
 });
 
-describe('clicking a part somebody is watching run', () => {
+describe('clicking a part while it is running', () => {
 	beforeEach(() => {
 		app.place('toggle', 200, 200, 0);
 		app.stopTime = 5e-3;
@@ -1105,39 +1105,62 @@ describe('clicking a part somebody is watching run', () => {
 
 	const toggle = () => app.schematic.instances.find((i) => i.kind === 'toggle')!;
 
-	it('sets where it starts when nothing is playing', () => {
+	it('sets where it starts when nothing is running', () => {
 		app.toggleSwitch(toggle().id);
 		expect(toggle().params.state).toBe('high');
-		expect(toggle().params.flips ?? '').toBe('');
+		expect(app.operationsOf(toggle().id)).toEqual([]);
 	});
 
-	it('operates it at the playhead when something is', () => {
-		// The whole reason this is not a parameter edit: the run is replayed from
-		// zero, so a click written down as a new starting level comes back as a flat
-		// waveform at the new level, with no edge at the moment anybody clicked.
-		app.live = true;
-		app.result = { time: new Float64Array([0, 5e-3]) } as never;
-		app.playbackTime = 2e-3;
-		app.toggleSwitch(toggle().id);
+	it('operates the live circuit instead of editing the drawing', () => {
+		// The click has to reach the engine rather than the schematic. Written into
+		// the drawing it would be a different circuit, which restarts the sweep —
+		// and the moment somebody clicked would take the run back to zero instead of
+		// putting an edge in it.
+		const moved: Array<[string, string]> = [];
+		app.acquiring = {
+			time: 2e-3,
+			sweeping: true,
+			setLogic: (name: string, state: string) => {
+				moved.push([name, state]);
+				return true;
+			},
+			setWaveform: () => true
+		} as never;
 
+		app.toggleSwitch(toggle().id);
 		expect(toggle().params.state).toBe('low');
-		expect(toggle().params.flips).toBe('0.002');
+		expect(moved).toEqual([['T1', 'high']]);
+		expect(app.operationsOf(toggle().id)).toEqual([2e-3]);
 
-		// A second click is a second operation rather than an overwrite.
-		app.playbackTime = 3e-3;
+		// A second click is a second operation, and puts it back.
 		app.toggleSwitch(toggle().id);
-		expect(toggle().params.flips).toBe('0.002,0.003');
+		expect(moved.at(-1)).toEqual(['T1', 'low']);
+		expect(app.operationsOf(toggle().id)).toEqual([2e-3, 2e-3]);
 
-		app.clearOperations(toggle().id);
-		expect(toggle().params.flips).toBe('');
+		app.acquiring = null;
 	});
 
-	it('sets the starting level again once the playhead is at either end', () => {
-		app.live = true;
-		app.result = { time: new Float64Array([0, 5e-3]) } as never;
-		app.playbackTime = app.stopTime;
-		app.toggleSwitch(toggle().id);
-		expect(toggle().params.state).toBe('high');
-		expect(toggle().params.flips ?? '').toBe('');
+	it('hands a switch its whole contact waveform, anchored at the click', () => {
+		app.place('switch', 400, 200, 0);
+		const s1 = app.schematic.instances.find((i) => i.kind === 'switch')!;
+		const sent: Array<{ source: string; points: Array<[number, number]> }> = [];
+		app.acquiring = {
+			time: 2e-3,
+			sweeping: true,
+			setLogic: () => true,
+			setWaveform: (source: string, waveform: { points: Array<[number, number]> }) => {
+				sent.push({ source, points: waveform.points });
+				return true;
+			}
+		} as never;
+
+		app.toggleSwitch(s1.id);
+		expect(sent[0].source).toBe('S1__actuator');
+		// It starts open, and closes — with its bounce — from the instant of the click.
+		expect(sent[0].points[0]).toEqual([0, 0]);
+		expect(sent[0].points.some(([t]) => t >= 2e-3)).toBe(true);
+		expect(s1.params.start).toBe('open');
+
+		app.acquiring = null;
 	});
 });

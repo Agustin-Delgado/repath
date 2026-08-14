@@ -72,7 +72,11 @@
 		pending = setTimeout(() => {
 			if (!app.live || app.running) return;
 			lastSignature = app.netlistSignature;
-			app.run({ keepPlayback: true });
+			// A different circuit is a different run: the samples on screen were
+			// solved for the old one, and carrying them over would be a chart of two
+			// circuits spliced together. So this starts again from zero — which is
+			// also why operating a switch deliberately does not come through here.
+			app.run({ quiet: true });
 		}, 120);
 
 		return () => clearTimeout(pending);
@@ -189,30 +193,34 @@
 
 		<div class="controls">
 			<!--
-				One button for the whole thing. Running is a state you are in or out
-				of, and having to hunt for a different control to leave it is what made
-				a paused overlay sit there looking like a live one.
+				One button for the whole thing. Running is a state you are in or out of,
+				and having to hunt for a different control to leave it is what made a
+				stopped sweep sit there looking like a live one.
+
+				Run always starts a new sweep from zero, the way pressing it on a scope
+				restarts the acquisition. Picking a stopped one back up is the transport
+				underneath the drawing, which is where the timebase lives.
 			-->
 			<button
 				class="run"
-				class:stopping={app.live && !app.running}
-				onclick={() => (app.live && !app.running ? app.stop() : app.run())}
+				class:stopping={app.playing && !app.running}
+				onclick={() => (app.playing && !app.running ? app.stop() : app.run())}
 				disabled={app.running}
-				title={app.live
-					? 'Stop simulating and put the drawing back'
-					: 'Simulate and show it on the schematic'}
+				title={app.playing
+					? 'Stop the sweep and freeze what is on screen'
+					: 'Start a new sweep from zero'}
 			>
 				<svg viewBox="0 0 12 12" aria-hidden="true">
 					{#if app.running}
 						<circle cx="6" cy="6" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"
 							stroke-dasharray="6 20" stroke-linecap="round" />
-					{:else if app.live}
-						<path d="M3 2.5h2.2v7H3zM6.8 2.5H9v7H6.8z" />
+					{:else if app.playing}
+						<rect x="2.5" y="2.5" width="7" height="7" />
 					{:else}
 						<path d="M3.5 2l6 4-6 4z" />
 					{/if}
 				</svg>
-				{app.running ? 'Running…' : app.live ? 'Stop' : 'Run'}
+				{app.running ? 'Starting…' : app.playing ? 'Stop' : 'Run'}
 			</button>
 
 			<select
@@ -248,15 +256,20 @@
 					<span class="unit">Hz</span>
 				</label>
 			{:else}
-				<label class="stop">
-					<span>for</span>
+				<!--
+					The timebase: how much simulated time the screen covers. Not a length
+					any more — the run does not have one — but the width of the window it
+					is watched through, and what Single captures one of.
+				-->
+				<label class="stop" title="How much simulated time the screen covers">
+					<span>window</span>
 					<input
 						bind:value={stopField}
 						onblur={(e) => commitStopTime(e.currentTarget.value)}
 						onkeydown={(e) => {
 							if (e.key === 'Enter') e.currentTarget.blur();
 						}}
-						aria-label="Simulation length"
+						aria-label="Timebase: seconds across the screen"
 					/>
 					<span class="unit">s</span>
 				</label>
