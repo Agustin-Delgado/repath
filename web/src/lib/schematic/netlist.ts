@@ -91,7 +91,17 @@ function waveform(instance: Instance): unknown {
 	const frequency = Math.max(num(instance, 'frequency', 1000), 1e-9);
 
 	if (kind === 'sine') {
-		return { type: 'sine', offset, amplitude, frequency, delay: 0, damping: 0, phase: 0 };
+		// `delay` and `damping` the engine has and nothing here sets: a delayed or
+		// decaying sine is a different waveform rather than a knob on this one.
+		return {
+			type: 'sine',
+			offset,
+			amplitude,
+			frequency,
+			delay: 0,
+			damping: 0,
+			phase: num(instance, 'phase', 0)
+		};
 	}
 	if (kind === 'pulse') {
 		const period = 1 / frequency;

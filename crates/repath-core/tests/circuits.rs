@@ -1836,7 +1836,9 @@ fn a_diode_drops_two_millivolts_less_for_every_degree_warmer() {
 /// transistor and quietly did nothing to the other half of the drawing.
 #[test]
 fn the_temperature_on_the_drawing_reaches_every_part() {
-    fn currents(celsius: f64) -> (f64, f64) {
+    /// `(volts across the sense resistor, drain current)` at a gate bias set by
+    /// the divider `RG`/`RGL`.
+    fn measure(celsius: f64, rg: f64, rgl: f64) -> (f64, f64) {
         let json = format!(
             r#"{{"temperature": {},
                 "components": [
@@ -1845,9 +1847,9 @@ fn the_temperature_on_the_drawing_reaches_every_part() {
                   {{"type":"resistor","name":"RSENSE","a":"vcc","b":"rload","resistance":1000,
                     "tc1":0.002}},
                   {{"type":"resistor","name":"RB","a":"rload","b":"gnd","resistance":1000}},
-                  {{"type":"resistor","name":"RD","a":"vcc","b":"drain","resistance":10000}},
-                  {{"type":"resistor","name":"RG","a":"vcc","b":"gate","resistance":1000}},
-                  {{"type":"resistor","name":"RGL","a":"gate","b":"gnd","resistance":400}},
+                  {{"type":"resistor","name":"RD","a":"vcc","b":"drain","resistance":1000}},
+                  {{"type":"resistor","name":"RG","a":"vcc","b":"gate","resistance":{rg}}},
+                  {{"type":"resistor","name":"RGL","a":"gate","b":"gnd","resistance":{rgl}}},
                   {{"type":"mosfet","name":"M1","drain":"drain","gate":"gate","source":"gnd",
                     "model":{{"channel":"n","vto":2,"kp":2e-5,"lambda":0.02,"w":100,"l":1}}}}
                 ]}}"#,
@@ -1861,27 +1863,45 @@ fn the_temperature_on_the_drawing_reaches_every_part() {
         c.collect_currents(&op.solution, &mut currents);
         let names = c.element_names();
         (
-            // Through the divider, which moves only if the sense resistor drifted.
+            // Across the divider, which moves only if the sense resistor drifted.
             at("v(vcc)") - at("v(rload)"),
-            currents[names.iter().position(|n| n == "M1").unwrap()],
+            currents[names.iter().position(|n| n == "M1").unwrap()].abs(),
         )
     }
 
-    let (r_cold, m_cold) = currents(-40.0);
-    let (r_hot, m_hot) = currents(125.0);
-
+    // A resistor nobody could reach the coefficients of was a resistor the
+    // temperature control did nothing to, however hot the drawing said it was.
     // 2000 ppm/K over 165 K is about a third of the value, so the divider's
     // midpoint has to move by percent, not by rounding.
+    let (r_cold, _) = measure(-40.0, 1000.0, 400.0);
+    let (r_hot, _) = measure(125.0, 1000.0, 400.0);
     assert!(
         (r_hot - r_cold).abs() / r_cold > 0.05,
         "a resistor with a temperature coefficient did not drift: {r_cold:.6} V vs {r_hot:.6} V"
     );
-    // Mobility falls with temperature, so the hot device carries less at the same
-    // gate drive. That is the direction, and it is the whole reason two MOSFETs
-    // can share a load without one of them running away with it.
+
+    // The MOSFET has two temperature effects and they pull opposite ways, which
+    // is the whole reason this is worth modelling rather than picking one.
+    //
+    // Driven hard, mobility wins: a hot device carries less for the same
+    // overdrive. That is what lets two of them share a load without one running
+    // away with it.
+    let (_, hard_cold) = measure(-40.0, 600.0, 400.0);
+    let (_, hard_hot) = measure(125.0, 600.0, 400.0);
     assert!(
-        m_hot.abs() < m_cold.abs() * 0.9,
-        "the MOSFET carried {m_cold:.6e} A cold and {m_hot:.6e} A hot"
+        hard_hot < hard_cold * 0.8,
+        "well above threshold, hot should carry less: {hard_cold:.6e} A cold, {hard_hot:.6e} A hot"
+    );
+
+    // Barely on, the threshold wins: it falls a couple of millivolts a degree, so
+    // the overdrive a warm device has is most of what it has at all. A part that
+    // is nearly off in the cold conducts freely once it warms up — which is the
+    // thing a designer is watching for, and it is invisible with mobility alone.
+    let (_, soft_cold) = measure(-40.0, 770.0, 230.0);
+    let (_, soft_hot) = measure(125.0, 770.0, 230.0);
+    assert!(
+        soft_hot > soft_cold * 2.0,
+        "barely on, hot should carry more: {soft_cold:.6e} A cold, {soft_hot:.6e} A hot"
     );
 }
 

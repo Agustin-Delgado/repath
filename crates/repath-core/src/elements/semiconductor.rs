@@ -842,6 +842,24 @@ pub struct MosfetModel {
     /// Temperature the parameters above were measured at.
     #[serde(default = "default_tnom")]
     pub tnom: f64,
+    /// How far the threshold moves per kelvin, volts.
+    ///
+    /// Negative, and that sign is the point: a hot device turns on at a lower
+    /// gate voltage while carrying less current for a given overdrive, because
+    /// mobility is falling at the same time. The two fight, and where they
+    /// cancel is the zero-temperature-coefficient bias every power designer
+    /// knows about — a device biased above it runs cooler under load and one
+    /// biased below it runs away.
+    ///
+    /// Two millivolts a degree is what a discrete part's datasheet shows. Zero
+    /// would be a device whose threshold does not move, which is not a simpler
+    /// MOSFET; it is one that cannot be built.
+    #[serde(default = "default_tcv")]
+    pub tcv: f64,
+}
+
+fn default_tcv() -> f64 {
+    -2e-3
 }
 
 impl Default for MosfetModel {
@@ -862,6 +880,7 @@ impl Default for MosfetModel {
             cds: default_cds(),
             temp: TNOM,
             tnom: TNOM,
+            tcv: default_tcv(),
         }
     }
 }
@@ -873,6 +892,17 @@ impl MosfetModel {
 
     pub fn pmos() -> Self {
         Self { channel: Channel::P, ..Self::default() }
+    }
+
+    /// Threshold at the temperature this part is actually at.
+    ///
+    /// `vto` is a magnitude for both channel types, so the drift shrinks it
+    /// either way. Clamped at zero: a coefficient large enough to take a
+    /// threshold through it is describing a depletion device, which is a
+    /// different part rather than this one very hot.
+    #[inline]
+    fn threshold(&self) -> f64 {
+        (self.vto + self.tcv * (self.temp - self.tnom)).max(0.0)
     }
 
     #[inline]
@@ -1027,7 +1057,7 @@ impl Mosfet {
     fn evaluate(&self, vgs: f64, vds: f64) -> MosOp {
         let beta = self.model.beta();
         let lambda = self.model.lambda;
-        let vgst = vgs - self.model.vto;
+        let vgst = vgs - self.model.threshold();
 
         if vgst <= 0.0 {
             // Cutoff. A true zero would leave the drain floating, so the caller

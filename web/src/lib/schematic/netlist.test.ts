@@ -910,6 +910,22 @@ describe('a pulse source', () => {
 		};
 	}
 
+	it('carries the phase it was set to', () => {
+		// The engine has had this all along; nothing could set it, so every sine on
+		// every drawing started at zero and a quadrature pair could not be drawn.
+		const schematic = drawing(
+			[at('vsource', 'V1', 100, 200), at('ground', 'GND1', 100, 300)],
+			[[100, 230, 100, 290]]
+		);
+		Object.assign(schematic.instances[0].params, { waveform: 'sine', phase: 90 });
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
+		const components = (compiled.netlist as { components: Array<Record<string, unknown>> })
+			.components;
+		const waveform = components.find((c) => c.name === 'V1')!.waveform as Record<string, number>;
+		expect(waveform.phase).toBe(90);
+	});
+
 	it('is high for the fraction of the period it was asked for', () => {
 		// The engine measures `width` from the top of the rising edge, so handing the
 		// duty over as-is came out long by one edge: a pulse asked to be high half

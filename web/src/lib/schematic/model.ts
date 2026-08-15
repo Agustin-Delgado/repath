@@ -487,6 +487,17 @@ const SOURCE_PARAMS: ParamDef[] = [
 		visibleWhen: { key: 'waveform', values: ['sine', 'pulse'] }
 	},
 	{
+		key: 'phase',
+		label: 'Phase',
+		unit: '°',
+		default: 0,
+		plain: true,
+		step: 15,
+		visibleWhen: { key: 'waveform', values: ['sine'] },
+		description:
+			'Where in the cycle the run starts. Two sources ninety degrees apart is a quadrature pair, and one at 180 is the other half of a differential drive.'
+	},
+	{
 		key: 'duty',
 		label: 'Duty cycle',
 		unit: '',

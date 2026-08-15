@@ -367,9 +367,6 @@ much they would change what repath is good for:
   junction and gate capacitances and a diode's series resistance are all in, which
   is what gives a stage a top end and a rectifier a recovery.
 - **More logic**: counters, registers, decoders, memory.
-- **A MOSFET threshold that drifts.** Mobility already falls with temperature;
-  the threshold moves the other way by a couple of millivolts per degree, and this
-  model has no parameter for it.
 
 ## Testing
 
