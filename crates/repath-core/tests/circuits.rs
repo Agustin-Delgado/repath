@@ -2054,6 +2054,55 @@ fn a_logic_source_can_be_operated_while_the_run_is_going() {
     assert_eq!(result.digital[dy].iter().filter(|(_, s)| *s == Logic::High).count(), 1);
 }
 
+/// A transistor reports the current the solver actually gave it.
+///
+/// The device's own answer and the resistor's have to be the same number: they
+/// are the same amperes. They were not — the stamp carried the Early factor and
+/// the temperature-corrected gain, and the figures handed to a probe carried
+/// neither, so the scope drew a collector current a few percent under the one the
+/// node voltages beside it had been solved for. Neither number looked wrong on
+/// its own, which is why this went unnoticed.
+#[test]
+fn a_transistor_reports_the_current_the_circuit_was_solved_for() {
+    /// Collector current, as the device says it and as the load resistor says it.
+    fn measured(celsius: f64) -> (f64, f64) {
+        let mut c = Circuit::new();
+        let vcc = c.node("vcc");
+        let col = c.node("col");
+        let base = c.node("base");
+
+        c.add(Box::new(VoltageSource::dc("V1", vcc, Circuit::GROUND, 10.0)));
+        c.add(Box::new(Resistor::new("RC", vcc, col, 1000.0)));
+        c.add(Box::new(Resistor::new("RB", vcc, base, 470_000.0)));
+        // A stage biased by one base resistor, which is the arrangement that walks
+        // its operating point with temperature — so the gain correction is doing
+        // something here rather than sitting at one.
+        let model = BjtModel { temp: celsius + 273.15, ..BjtModel::npn() };
+        c.add(Box::new(Bjt::new("Q1", col, base, Circuit::GROUND, model)));
+
+        let mut sim = Simulator::default();
+        let op = sim.operating_point(&mut c).unwrap();
+        let at = |name: &str| op.solution[op.unknown_names.iter().position(|n| n == name).unwrap()];
+
+        let mut currents = Vec::new();
+        c.collect_currents(&op.solution, &mut currents);
+        let names = c.element_names();
+        let reported = currents[names.iter().position(|n| n == "Q1").unwrap()];
+
+        (reported, (at("v(vcc)") - at("v(col)")) / 1000.0)
+    }
+
+    for celsius in [-40.0, 27.0, 125.0] {
+        let (reported, through_load) = measured(celsius);
+        assert!(through_load > 1e-4, "at {celsius} C the stage should be conducting");
+        assert!(
+            (reported - through_load).abs() / through_load < 1e-3,
+            "at {celsius} C the transistor reports {reported:.6e} A \
+             while its load carries {through_load:.6e} A"
+        );
+    }
+}
+
 /// A transistor's reported base current agrees with the net it is drawn on,
 /// whichever way round the device is.
 ///

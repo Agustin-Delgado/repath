@@ -1339,6 +1339,67 @@ impl Bjt {
         let is = self.at_temperature().0;
         (is * safe_exp(vbe / vt) / vt, is * safe_exp(vbc / vt) / vt)
     }
+
+    /// What the device is doing at a pair of junction voltages, in the
+    /// polarity-normalized frame.
+    ///
+    /// The one place the transistor's conduction is written down. It was written
+    /// twice — once to stamp and once to report — and the two drifted: the stamp
+    /// carried the Early factor and the temperature-corrected gain, and the
+    /// figures handed to a probe carried neither. So the scope drew a collector
+    /// current a few percent below the one the node voltages beside it had been
+    /// solved for, and nothing was wrong with either number on its own.
+    fn operate(&self, vbe: f64, vbc: f64) -> BjtOp {
+        let m = &self.model;
+        let vt = thermal_voltage(m.temp);
+        let (is, bf) = self.at_temperature();
+
+        let ef = safe_exp(vbe / vt);
+        let er = safe_exp(vbc / vt);
+        let i_f = is * (ef - 1.0);
+        let i_r = is * (er - 1.0);
+        // How much more current crosses each junction for a millivolt more across
+        // it. Everything else is built from these.
+        let gif_j = is * ef / vt;
+        let gir_j = is * er / vt;
+
+        // Base-width modulation. Gummel-Poon's base charge factor with high-level
+        // injection left out, which is the term that matters here: the transport
+        // current is divided by `qb`, and `1/qb` grows as the collector rises.
+        //
+        // Clamped away from zero because the factor goes through it in hard
+        // saturation, where the model has nothing useful to say anyway and an
+        // unclamped value would flip the sign of the transport current.
+        let (early, d_early) = match m.vaf {
+            Some(vaf) if vaf > 0.0 => ((1.0 - vbc / vaf).max(0.01), -1.0 / vaf),
+            _ => (1.0, 0.0),
+        };
+
+        // The transport current is the part that reaches the far terminal, so it
+        // carries the Early factor. Base recombination does not: it is the
+        // fraction of each junction's own current that recombines in the base.
+        let ict = i_f - i_r;
+        let ibe = i_f / bf;
+        let ibc = i_r / m.br;
+
+        BjtOp { i_f, i_r, gif_j, gir_j, early, d_early, ic: ict * early - ibc, ib: ibe + ibc }
+    }
+}
+
+/// A transistor's conduction at one bias, in the polarity-normalized frame.
+struct BjtOp {
+    /// Forward and reverse transport currents.
+    i_f: f64,
+    i_r: f64,
+    /// The two junction conductances, before base-width modulation.
+    gif_j: f64,
+    gir_j: f64,
+    /// Base charge factor, and its slope in `vbc`.
+    early: f64,
+    d_early: f64,
+    /// Current into the collector and into the base.
+    ic: f64,
+    ib: f64,
 }
 
 impl Bjt {
@@ -1349,18 +1410,18 @@ impl Bjt {
     /// terminal is doing — which is why the three figures come from one place
     /// and are made to add to zero rather than being reported independently.
     fn terminals(&self, x: &[f64]) -> (f64, f64, f64) {
-        let m = &self.model;
-        let sign = m.polarity.sign();
-        let vt = thermal_voltage(m.temp);
+        let sign = self.model.polarity.sign();
         let v = |n: NodeId| node_index(n).map_or(0.0, |i| x[i]) * sign;
         let (vbe, vbc) = (v(self.b) - v(self.e), v(self.b) - v(self.c));
-        let is = self.at_temperature().0;
-        let i_f = is * (safe_exp(vbe / vt) - 1.0);
-        let i_r = is * (safe_exp(vbc / vt) - 1.0);
 
-        // Conduction, in the normalized frame, then back to the real one.
-        let collector_conducted = ((i_f - i_r) - i_r / m.br) * sign;
-        let base_conducted = (i_f / m.bf + i_r / m.br) * sign;
+        // The same device the stamp solved, not a second reading of it — via the
+        // one function that says what this transistor conducts. Written out again
+        // here, it lost the Early factor and the temperature-corrected gain, and
+        // reported a collector current five percent under the one the circuit
+        // around it had been solved for.
+        let op = self.operate(vbe, vbc);
+        let collector_conducted = op.ic * sign;
+        let base_conducted = op.ib * sign;
 
         // The stored charge, in the normalized frame like everything else here:
         // the branches were handed `vbe` and `vbc` with the polarity already taken
@@ -1415,28 +1476,12 @@ impl Element for Bjt {
         self.vbe_prev = vbe;
         self.vbc_prev = vbc;
 
-        // Forward and reverse transport currents and their conductances.
-        let (is, bf) = self.at_temperature();
-        let ef = safe_exp(vbe / vt);
-        let er = safe_exp(vbc / vt);
-        let i_f = is * (ef - 1.0);
-        let i_r = is * (er - 1.0);
-        // The junction conductances: how much more current crosses each junction
-        // for a millivolt more across it. Everything else is built from these.
-        let gif_j = is * ef / vt;
-        let gir_j = is * er / vt;
+        // Forward and reverse transport currents and their conductances, from the
+        // one place that says what this device conducts.
+        let op = self.operate(vbe, vbc);
+        let BjtOp { i_f, i_r, gif_j, gir_j, early, d_early, ic, ib } = op;
+        let bf = self.at_temperature().1;
 
-        // Base-width modulation. Gummel-Poon's base charge factor with high-level
-        // injection left out, which is the term that matters here: the transport
-        // current is divided by `qb`, and `1/qb` grows as the collector rises.
-        //
-        // Clamped away from zero because the factor goes through it in hard
-        // saturation, where the model has nothing useful to say anyway and an
-        // unclamped value would flip the sign of the transport current.
-        let (early, d_early) = match m.vaf {
-            Some(vaf) if vaf > 0.0 => ((1.0 - vbc / vaf).max(0.01), -1.0 / vaf),
-            _ => (1.0, 0.0),
-        };
         // The stored charge follows the current actually crossing each junction.
         let (cbe, cbc) = self.capacitances(vbe, vbc, gif_j, gir_j);
 
@@ -1446,18 +1491,16 @@ impl Element for Bjt {
         let gif = gif_j * early;
         let gir = gir_j * early - ict * d_early;
 
-        // Base recombination, which does not. It is the fraction of each junction's
-        // own current that recombines in the base, so it is built from the junction
-        // conductances rather than from the transport ones.
+        // Base recombination does not. It is the fraction of each junction's own
+        // current that recombines in the base, so its conductances are built from
+        // the junction ones rather than from the transport ones.
         //
-        // Taking it from the transport conductances instead — which is what this
+        // Taking them from the transport conductances instead — which is what this
         // did first — divides the Early term by `br` and leaves the base looking at
         // the collector through about eighty kilohms. Miller multiplies that by the
         // stage gain, so a stage whose input resistance should be a kilohm measured
         // under two hundred ohms: the DC current gain stayed at 200 while the
         // small-signal one came out at 34.
-        let ibe = i_f / bf;
-        let ibc = i_r / m.br;
         let gbe = gif_j / bf + ctx.gmin;
         let gbc = gir_j / m.br + ctx.gmin;
 
@@ -1465,9 +1508,6 @@ impl Element for Bjt {
         self.op_gir = gir;
         self.op_gbe = gbe;
         self.op_gbc = gbc;
-
-        let ic = ict * early - ibc;
-        let ib = ibe + ibc;
 
         // Linearized: ic = gif*vbe - (gir+gbc)*vbc + iceq
         //             ib = gbe*vbe + gbc*vbc      + ibeq
