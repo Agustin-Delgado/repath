@@ -1531,15 +1531,22 @@ class AppState {
 	autoProbe(): void {
 		const compiled = compileSchematic(this.schematic, this.temperature + 273.15, this.sample, this.logicFamily);
 		const chosen: string[] = [];
-		for (const net of compiled.connectivity.nets) {
-			if (chosen.length >= 4) break;
-			if (net.isGround) continue;
-			const names = compiled.names.get(net.index);
-			if (!names?.analog && !names?.digital) continue;
-			// Prefer nets with a wire on them; a lone pin is rarely what you want.
-			if (net.points.length < 2) continue;
-			const pin = net.pins[0];
-			chosen.push(pin ? probePin(pin.instance.id, pin.pin.name) : net.points[0]);
+		// Wired nets first — a lone pin is rarely what you want — and pin-only ones
+		// after, rather than never. An output with nothing hanging off it is exactly
+		// what you want when the circuit is small enough that there is nothing else,
+		// and requiring a wire is why the clock divider example carried a stub of wire
+		// running to no part at all: it existed only to make Q plottable.
+		for (const wired of [true, false]) {
+			for (const net of compiled.connectivity.nets) {
+				if (chosen.length >= 4) break;
+				if (net.isGround) continue;
+				const names = compiled.names.get(net.index);
+				if (!names?.analog && !names?.digital) continue;
+				if ((net.points.length >= 2) !== wired) continue;
+				const pin = net.pins[0];
+				const handle = pin ? probePin(pin.instance.id, pin.pin.name) : net.points[0];
+				if (handle !== undefined && !chosen.includes(handle)) chosen.push(handle);
+			}
 		}
 		this.probes = chosen;
 	}

@@ -13,13 +13,17 @@
 import { describe, expect, it } from 'vitest';
 import { EXAMPLES } from '../examples';
 import { compileSchematic } from './netlist';
+import { instancePins } from './scene';
 import {
 	defaultParams,
 	definitionFor,
 	definitionOf,
 	migrateInstance,
+	pointKey,
 	registerSubcircuits,
+	wireSegments,
 	SUBCIRCUIT_PREFIX,
+	type Point,
 	type Instance,
 	type Rotation,
 	type Schematic
@@ -933,6 +937,44 @@ describe('a pulse source', () => {
 		for (const duty of [0.1, 0.5, 0.9]) {
 			const w = pulseOf(duty);
 			expect((w.rise + w.width) / w.period).toBeCloseTo(duty, 9);
+		}
+	});
+});
+
+describe('the clock divider that ships with the app', () => {
+	/** Where each pin of each part sits, as grid points. */
+	function pinPoints(schematic: Schematic): Set<string> {
+		const points = new Set<string>();
+		for (const instance of schematic.instances) {
+			for (const { at } of instancePins(instance)) points.add(pointKey(at.x, at.y));
+		}
+		return points;
+	}
+
+	const onSegment = (p: Point, a: Point, b: Point): boolean =>
+		Math.min(a.x, b.x) <= p.x &&
+		p.x <= Math.max(a.x, b.x) &&
+		Math.min(a.y, b.y) <= p.y &&
+		p.y <= Math.max(a.y, b.y) &&
+		Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) < 1e-9;
+
+	it('ends every wire on a pin or another wire', () => {
+		// It used to carry a stub off Q that ran to no part and no other wire —
+		// there only because picking what to plot skipped nets with no wire on them,
+		// so without it Q never reached the scope. On a drawing with four parts that
+		// read as an unfinished circuit. Fixed where it belonged, in the picking.
+		const schematic = EXAMPLES.find((e) => e.id === 'divider')!.build();
+		const pins = pinPoints(schematic);
+		for (const wire of schematic.wires) {
+			for (const end of [wire.points[0], wire.points[wire.points.length - 1]]) {
+				const met =
+					pins.has(pointKey(end.x, end.y)) ||
+					schematic.wires.some(
+						(other) =>
+							other.id !== wire.id && wireSegments(other).some((s) => onSegment(end, s.a, s.b))
+					);
+				expect(met, `wire ending at ${end.x},${end.y}`).toBe(true);
+			}
 		}
 	});
 });

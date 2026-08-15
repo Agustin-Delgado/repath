@@ -1260,3 +1260,20 @@ describe('replacing the whole drawing', () => {
 		expect(app.playing).toBe(false);
 	});
 });
+
+describe('picking what to plot on a freshly loaded circuit', () => {
+	it('takes an output pin when there is no wire hanging off it', () => {
+		// Wired nets are still preferred — a lone pin usually is not what you want.
+		// But "usually" was written as "never", so the flip-flop's Q, which has
+		// nothing but a pin, could not be plotted at all. The example carried a stub
+		// of wire off it purely to get around that, and the stub is what a person
+		// saw: a wire running to no part on a drawing with four parts on it.
+		app.loadExample('divider');
+		const ff = app.schematic.instances.find((i) => i.kind === 'dff')!;
+		expect(app.probes).toContain(`pin:${ff.id}:q`);
+		// And the clock, which does have a wire, is still there — the pin-only nets
+		// come after the wired ones rather than instead of them.
+		const clock = app.schematic.instances.find((i) => i.kind === 'clock')!;
+		expect(app.probes).toContain(`pin:${clock.id}:out`);
+	});
+});
