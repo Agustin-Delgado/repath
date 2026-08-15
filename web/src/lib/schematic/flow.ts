@@ -100,7 +100,7 @@ export interface FlowContext {
 	/** Net index -> index of its voltage in the solution, or -1 for ground. */
 	netSignal: Map<number, number>;
 	/**
-	 * Net index -> the transitions of its digital net, for nets with no node.
+	 * Net index -> which of the run's digital nets it is, for nets with no node.
 	 *
 	 * A purely digital net has no voltage in the solution at all — the engine
 	 * works in states there and only puts a number on it where the two domains
@@ -110,8 +110,15 @@ export interface FlowContext {
 	 *
 	 * So the level is turned into the volts the family would actually put on that
 	 * wire, and from there it is a voltage like any other.
+	 *
+	 * Held as *where to look* rather than as the transitions themselves. A live
+	 * run hands over a fresh list on every acquired chunk, and a context built
+	 * once at the start kept the list it was handed then — which, at the start, is
+	 * the seed at t = 0 and nothing else. The clock wire stayed at the level it
+	 * began on and every driven net read as high-impedance for the whole run,
+	 * while the scope beside it drew those very nets switching.
 	 */
-	netLogic: Map<number, DigitalTransition[]>;
+	netLogic: Map<number, number>;
 	/** What a one and a zero are worth on this drawing, in volts. */
 	logicLevels: { low: number; high: number };
 	/** Instance id -> element index in the run. */
@@ -186,7 +193,7 @@ export function prepareFlow(
 	}
 
 	const netSignal = new Map<number, number>();
-	const netLogic = new Map<number, DigitalTransition[]>();
+	const netLogic = new Map<number, number>();
 	for (const [netIndex, entry] of names) {
 		if (entry.analog) {
 			netSignal.set(
@@ -199,7 +206,7 @@ export function prepareFlow(
 		}
 		if (!entry.digital) continue;
 		const index = run.netNames.indexOf(entry.digital);
-		if (index >= 0) netLogic.set(netIndex, run.digital[index] ?? []);
+		if (index >= 0) netLogic.set(netIndex, index);
 	}
 
 	// Group wire segments and injections by net.
@@ -508,8 +515,11 @@ export function sampleFlow(
 	// solver's grid — so this is a search by time, not a lookup.
 	const netUndriven = new Set<number>();
 	const now = run.time[at] ?? 0;
-	for (const [net, transitions] of context.netLogic) {
-		const state = stateAt(transitions, now);
+	for (const [net, index] of context.netLogic) {
+		// From the run handed over for this frame, not from the one the context was
+		// built against: on a live run those are different objects, and the older one
+		// stopped at the seed transition.
+		const state = stateAt(run.digital[index] ?? [], now);
 		if (state === 'high') netVoltage.set(net, context.logicLevels.high);
 		else if (state === 'low') netVoltage.set(net, context.logicLevels.low);
 		else netUndriven.add(net);

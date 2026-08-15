@@ -412,6 +412,56 @@ describe('a logic toggle', () => {
 		expect(frame.netUndriven.size).toBe(0);
 	});
 
+	it('reads the transitions of the run it is handed, not the one it was planned on', () => {
+		// A live run hands over a fresh snapshot on every acquired chunk, and the
+		// context is planned once because the topology does not change mid-run. It
+		// used to keep the transition lists it was planned with — which, at the moment
+		// a run starts, are the seed at t = 0 and nothing else. So a clock wire sat at
+		// the level it began on for the whole sweep and every driven net read as
+		// high-impedance, while the scope beside it drew those very nets switching.
+		// Analog never showed it: those samples come from the run passed in per frame,
+		// which is exactly what this now does too.
+		const clock = at('clock', 'CLK1', 120, 220);
+		clock.params = { frequency: 1e6, duty: 0.5 };
+		const schematic = drawing([clock], [[150, 220, 260, 220]]);
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
+
+		const live = new LiveRun(compiled.netlist, 5e-8);
+		const capture = () =>
+			new Capture(live.unknownNames, live.elementNames, live.netNames, live.nodeCount);
+		const planned = capture();
+		const carried = capture();
+		const seed = live.first;
+		planned.add(seed);
+		carried.add(seed);
+		carried.add(live.advance(4e-6));
+		live.free();
+
+		// Planned on the snapshot that has only the seed, sampled against the one that
+		// has the whole sweep — the situation every live run is in.
+		const context = prepareFlow(
+			schematic,
+			compiled.connectivity,
+			compiled.names,
+			planned.run(),
+			undefined,
+			compiled.portFlow
+		);
+		const run = carried.run();
+		const net = compiled.connectivity.netOfPin.get(`${clock.id}:out`)!;
+
+		const levels = new Set<number>();
+		for (let t = 0; t <= 4e-6; t += 1e-7) {
+			const frame = sampleFlow(context, run, sampleIndexAt(run.time, t));
+			const volts = frame.netVoltage.get(net);
+			if (volts !== undefined) levels.add(volts);
+			expect(frame.netUndriven.has(net)).toBe(false);
+		}
+		// Four microseconds of a one megahertz clock: both levels, several times.
+		expect([...levels].sort((a, b) => a - b)).toEqual([0, 5]);
+	});
+
 	it('steps at the moment it was operated, with the run carrying on through it', () => {
 		// The whole model, end to end: the run is going, somebody moves a toggle
 		// partway through, and the engine carries on from where it was. Everything
