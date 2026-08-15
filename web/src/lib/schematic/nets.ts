@@ -78,6 +78,49 @@ export function pinKey(instanceId: string, pinName: string): string {
 	return `${instanceId}:${pinName}`;
 }
 
+/**
+ * A probe handle for a pin.
+ *
+ * The durable form: a pin survives being moved, rotated or re-routed, which a
+ * bare coordinate does not. A net with no pins on it falls back to a grid point,
+ * and those are stored as they are.
+ */
+export function probePin(instanceId: string, pinName: string): string {
+	return `pin:${pinKey(instanceId, pinName)}`;
+}
+
+/**
+ * Point probe handles at instances that have been given fresh ids.
+ *
+ * Ids are minted on every load — that is what keeps a pasted circuit from
+ * colliding with what is already open — so a handle read out of a file or a link
+ * names an instance that no longer exists. Left untranslated it resolves to
+ * nothing and the probe disappears without a word, which is what opening a saved
+ * circuit used to do to every signal somebody had chosen to watch.
+ *
+ * A handle whose part did not survive the load is dropped rather than kept
+ * pointing at nothing.
+ */
+export function remapProbes(
+	probes: readonly string[],
+	remap: ReadonlyMap<string, string>
+): string[] {
+	const out: string[] = [];
+	for (const handle of probes) {
+		if (!handle.startsWith('pin:')) {
+			// A grid point. The drawing did not move, so neither did it.
+			out.push(handle);
+			continue;
+		}
+		const rest = handle.slice('pin:'.length);
+		const cut = rest.indexOf(':');
+		if (cut < 0) continue;
+		const moved = remap.get(rest.slice(0, cut));
+		if (moved) out.push(probePin(moved, rest.slice(cut + 1)));
+	}
+	return out;
+}
+
 /** Does `(x, y)` land strictly inside an axis-aligned segment, not on its ends? */
 export function liesWithin(x: number, y: number, a: Point, b: Point): boolean {
 	if (a.x === b.x && x === a.x) {

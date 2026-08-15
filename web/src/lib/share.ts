@@ -11,6 +11,7 @@
  */
 
 import { migrateInstance, registerSubcircuits, type Schematic } from './schematic/model';
+import { probePin } from './schematic/nets';
 
 export interface SharedCircuit {
 	schematic: Schematic;
@@ -20,6 +21,15 @@ export interface SharedCircuit {
 
 /** Bumped if the payload shape ever changes incompatibly. */
 const VERSION = 1;
+
+/**
+ * A probe as it travels: a pin, as the position of its part and the pin's name,
+ * or a grid point written out as it stands.
+ *
+ * Added without bumping the version, because it can be: a link written before
+ * this simply has no probes in it, and a build from before this ignores the field.
+ */
+type TravellingProbe = string | [number, string];
 
 const PREFIX = 'c';
 
@@ -59,6 +69,10 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array | null> {
  * of a chat message does not get clicked.
  */
 function compact(circuit: SharedCircuit): unknown {
+	// Probes name a pin by *which* instance rather than by its id, because ids are
+	// exactly what does not travel: they are dropped here and minted again on the
+	// far side. An index survives that by construction, and is shorter besides.
+	const at = new Map(circuit.schematic.instances.map((n, index) => [n.id, index] as const));
 	return {
 		v: VERSION,
 		t: circuit.stopTime,
@@ -68,7 +82,17 @@ function compact(circuit: SharedCircuit): unknown {
 		w: circuit.schematic.wires.map((w) => w.points.flatMap((p) => [p.x, p.y])),
 		// Imported definitions travel with the drawing. A link that carried a part
 		// but not what it is made of would open as a hole in someone's circuit.
-		x: circuit.schematic.subcircuits?.map((s) => [s.id, s.name, s.ports, s.source])
+		x: circuit.schematic.subcircuits?.map((s) => [s.id, s.name, s.ports, s.source]),
+		// What the sender was watching. A link is usually sent *because* of a
+		// signal, and one that arrived with the scope empty made the person
+		// receiving it go and find it again.
+		p: (circuit.probes ?? []).flatMap((handle): TravellingProbe[] => {
+			if (!handle.startsWith('pin:')) return [handle];
+			const rest = handle.slice('pin:'.length);
+			const cut = rest.indexOf(':');
+			const index = cut < 0 ? undefined : at.get(rest.slice(0, cut));
+			return index === undefined ? [] : [[index, rest.slice(cut + 1)]];
+		})
 	};
 }
 
@@ -79,6 +103,7 @@ function expand(raw: unknown): SharedCircuit {
 		i?: Array<[string, string, number, number, number, Record<string, number | string>]>;
 		w?: number[][];
 		x?: Array<[string, string, string[], string]>;
+		p?: Array<string | [number, string]>;
 	};
 	if (data.v !== VERSION) throw new Error('That link was made by a different version of repath.');
 
@@ -96,23 +121,33 @@ function expand(raw: unknown): SharedCircuit {
 	}));
 	registerSubcircuits({ instances: [], wires: [], subcircuits });
 
+	const instances = (data.i ?? []).map(([kind, name, x, y, rotation, params]) =>
+		// A link outlives the catalog it was written against, so what comes out of
+		// one is brought up to date before anything else touches it.
+		migrateInstance({
+			id: id(),
+			kind,
+			name,
+			x,
+			y,
+			rotation: rotation as 0 | 90 | 180 | 270,
+			params: params ?? {}
+		})
+	);
+
 	return {
 		stopTime: data.t ?? 1e-3,
+		// A pin probe travelled as the position of its part, so it is pointed back
+		// at whatever id that part has just been given. A probe on bare wire
+		// travelled as the grid point it sits on, which did not move.
+		probes: (data.p ?? []).flatMap((entry) => {
+			if (typeof entry === 'string') return [entry];
+			const instance = instances[entry[0]];
+			return instance ? [probePin(instance.id, entry[1])] : [];
+		}),
 		schematic: {
 			subcircuits,
-			instances: (data.i ?? []).map(([kind, name, x, y, rotation, params]) =>
-				// A link outlives the catalog it was written against, so what comes out
-				// of one is brought up to date before anything else touches it.
-				migrateInstance({
-					id: id(),
-					kind,
-					name,
-					x,
-					y,
-					rotation: rotation as 0 | 90 | 180 | 270,
-					params: params ?? {}
-				})
-			),
+			instances,
 			wires: (data.w ?? [])
 				.map((flat) => {
 					const points: Array<{ x: number; y: number }> = [];

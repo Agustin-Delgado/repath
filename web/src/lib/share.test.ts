@@ -167,6 +167,32 @@ describe('an imported part in a link', () => {
 		expect(back.schematic.instances[0].kind).toBe('x:opamp1');
 	});
 
+	it('carries what the sender was watching', async () => {
+		// A link is usually sent *because* of a signal. Arriving with the scope
+		// empty made whoever received it go and find it again — and the field was
+		// declared on the payload the whole time, just never written or read.
+		const original = { ...circuit(), probes: ['pin:b:a', '170,230'] };
+		const decoded = await decodeCircuit(await encodeCircuit(original));
+
+		// Ids are minted fresh on the far side, so the handle cannot come back
+		// verbatim: it has to point at whatever the resistor is called now.
+		const resistor = decoded.schematic.instances.find((i) => i.name === 'R1')!;
+		expect(decoded.probes).toEqual([`pin:${resistor.id}:a`, '170,230']);
+		expect(resistor.id).not.toBe('b');
+	});
+
+	it('drops a probe on a part the link does not carry', async () => {
+		const original = { ...circuit(), probes: ['pin:gone:a'] };
+		const decoded = await decodeCircuit(await encodeCircuit(original));
+		// Better than a handle that resolves to nothing and sits in the list.
+		expect(decoded.probes).toEqual([]);
+	});
+
+	it('opens a link written before probes travelled', async () => {
+		const decoded = await decodeCircuit(await encodeCircuit(circuit()));
+		expect(decoded.probes).toEqual([]);
+	});
+
 	it('is a part the catalog knows about by the time the instances are read', async () => {
 		// Ordering, not content: the loop that reads instances asks the catalog what
 		// each one is, so a definition registered afterwards would already have

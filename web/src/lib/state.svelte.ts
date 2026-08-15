@@ -54,6 +54,8 @@ import {
 	netLabel,
 	openForPins,
 	pinPartition,
+	probePin,
+	remapProbes,
 	splitAtJunctions,
 	trimOverlaps
 } from './schematic/nets';
@@ -544,10 +546,10 @@ class AppState {
 		// A probe on the drawing measures whether or not anyone asked it to: that
 		// is what putting one there means. Its own name wins over anything derived
 		// from the net, because someone chose it.
-		const placed = this.probeInstances.map((i) => `pin:${i.id}:p`);
+		const placed = this.probeInstances.map((i) => probePin(i.id, 'p'));
 		const named = new Map<string, string>(
 			this.probeInstances.map((i) => [
-				`pin:${i.id}:p`,
+				probePin(i.id, 'p'),
 				String(i.params.label || '').trim() || i.name
 			])
 		);
@@ -1504,7 +1506,7 @@ class AppState {
 		if (netIndex === undefined) return null;
 		const net = this.compiled.connectivity.nets[netIndex];
 		const pin = net?.pins[0];
-		return pin ? `pin:${pin.instance.id}:${pin.pin.name}` : pointKeyValue;
+		return pin ? probePin(pin.instance.id, pin.pin.name) : pointKeyValue;
 	}
 
 	toggleProbe(key: string): void {
@@ -1537,7 +1539,7 @@ class AppState {
 			// Prefer nets with a wire on them; a lone pin is rarely what you want.
 			if (net.points.length < 2) continue;
 			const pin = net.pins[0];
-			chosen.push(pin ? `pin:${pin.instance.id}:${pin.pin.name}` : net.points[0]);
+			chosen.push(pin ? probePin(pin.instance.id, pin.pin.name) : net.points[0]);
 		}
 		this.probes = chosen;
 	}
@@ -1570,7 +1572,7 @@ class AppState {
 	}
 
 	/** Adopt a circuit that arrived in a link. */
-	loadShared(circuit: { schematic: Schematic; stopTime: number }): void {
+	loadShared(circuit: { schematic: Schematic; stopTime: number; probes?: string[] }): void {
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = adopt(circuit.schematic);
@@ -1582,7 +1584,11 @@ class AppState {
 		this.error = null;
 		this.notice = null;
 		this.live = false;
-		this.autoProbe();
+		// What the sender was watching, where the link carried it. Falling back to
+		// picking a few nets is for a link written before probes travelled, and for
+		// one sent with nothing probed.
+		this.probes = circuit.probes ?? [];
+		if (this.probes.length === 0) this.autoProbe();
 	}
 
 	// -- persistence ------------------------------------------------------
@@ -1626,7 +1632,12 @@ class AppState {
 		this.schematic = { instances, wires, subcircuits };
 		this.tidyWires();
 		this.stopTime = parsed.stopTime ?? 1e-3;
-		this.probes = parsed.probes ?? [];
+		// Pointed at the ids this load minted, not the ones the file was written
+		// with. The map was being built here and never used, so every probe on a
+		// saved circuit resolved to nothing and vanished on opening it — the
+		// signals somebody had chosen to watch were the one part of their work that
+		// did not survive being saved.
+		this.probes = remapProbes(parsed.probes ?? [], remap);
 		this.selection = [];
 		this.discardRun();
 		this.error = null;

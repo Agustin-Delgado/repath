@@ -1221,6 +1221,33 @@ describe('replacing the whole drawing', () => {
 		expect(app.playbackTime).toBe(0);
 	});
 
+	it('keeps the probes a saved file was carrying', () => {
+		app.place('resistor', 200, 200, 0);
+		app.addWire(230, 200, 300, 200);
+		app.toggleProbe('230,200');
+		expect(app.activeProbes.map((p) => p.label)).toHaveLength(1);
+
+		const saved = app.toJSON();
+		const before = app.schematic.instances[0].id;
+		app.fromJSON(saved);
+
+		// Every load mints fresh ids, so the handle in the file names a part that
+		// no longer exists. Untranslated it resolved to nothing and the probe
+		// disappeared without a word — the signals somebody had chosen to watch
+		// were the one part of their work that did not survive being saved.
+		expect(app.schematic.instances[0].id).not.toBe(before);
+		expect(app.activeProbes).toHaveLength(1);
+		expect(app.probes[0]).toBe(`pin:${app.schematic.instances[0].id}:b`);
+	});
+
+	it('drops a probe whose part the file does not have', () => {
+		app.place('resistor', 200, 200, 0);
+		const saved = JSON.parse(app.toJSON());
+		saved.probes = ['pin:nothing-like-this:b'];
+		app.fromJSON(JSON.stringify(saved));
+		expect(app.probes).toEqual([]);
+	});
+
 	it('opening a file stops it too', () => {
 		app.place('resistor', 200, 200, 0);
 		const saved = app.toJSON();

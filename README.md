@@ -41,9 +41,9 @@ schematic, both domains, no converters placed by hand.</sub>
 
 Usable, and honest about what it does. The engine handles DC, transient, AC and
 mixed-signal, and every claim in this file is covered by a test that checks the
-answer against something derived independently. What is not here yet — subcircuits,
-SPICE model import, a sparse solver — is in the [Roadmap](#roadmap) rather than
-half-implemented.
+answer against something derived independently. What is not here yet — a sparse
+solver, noise and distortion analysis, MOSFET models past Shichman-Hodges — is in
+the [Roadmap](#roadmap) rather than half-implemented.
 
 ## Running it
 
@@ -110,9 +110,11 @@ Without it a single overshooting iterate produces `exp(500)` and the solve dies.
 
 ### Timestep control
 
-Reactive elements record their charge or flux at each accepted timepoint. The third
-divided difference of that history estimates the local truncation error, and the
-solver takes the tightest step any element asks for. Below a noise floor derived
+Capacitors and inductors record their charge or flux at each accepted timepoint. The
+third divided difference of that history estimates the local truncation error, and
+the solver takes the tightest step any element asks for. (A transistor's junction
+capacitances and an op-amp's compensation do not yet ask for one; they are bounded
+by the step ceiling instead, which is on the [Roadmap](#roadmap).) Below a noise floor derived
 from floating-point precision the estimate is ignored — a straight line's third
 divided difference is rounding error amplified by `1/h³`, and steering by it would
 collapse the timestep for no reason.
@@ -269,12 +271,14 @@ would show you.
 
 | | |
 |---|---|
-| **Passive** | resistor, capacitor, inductor, ground |
+| **Passive** | resistor, capacitor, inductor, switch you can click, ground, supply terminal |
 | **Sources** | voltage and current, with DC / sine / pulse waveforms |
-| **Semiconductors** | diode (silicon, zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP |
-| **Analog** | op-amp with finite gain and rail saturation, voltage-controlled switch, VCVS, VCCS |
-| **Logic** | AND, NAND, OR, NOR, XOR, NOT, D flip-flop, tri-state buffer, clock |
-| **Analyses** | DC operating point, DC sweep, mixed-signal transient, AC frequency sweep |
+| **Semiconductors** | diode (five presets, one of them a zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP |
+| **Analog** | op-amp with finite gain, bandwidth, slew rate and rail saturation; voltage-controlled switch; VCVS; VCCS |
+| **Logic** | AND, NAND, OR, NOR, XOR, XNOR — two to four inputs each — NOT, buffer, D flip-flop, tri-state buffer, clock, logic toggle |
+| **Imported** | `.model` cards pasted onto a part, and `.subckt` definitions placed as one |
+| **Instruments** | probe, scope with cursors and per-channel gain, Bode plot |
+| **Analyses** | DC operating point, mixed-signal transient, AC frequency sweep |
 
 ## Using the editor
 
@@ -342,19 +346,21 @@ The full list — including every known limitation and what is deliberately out 
 scope — is in [BACKLOG.md](BACKLOG.md). The headlines, roughly in order of how
 much they would change what repath is good for:
 
-- **SPICE model import.** Reading `.model` and `.subckt` from a manufacturer's
-  datasheet is the difference between a toy and a tool.
-- **Subcircuits.** Draw a block once, use it everywhere, nest it.
 - **Sparse matrix solver.** The dense LU is fine to a few hundred nodes and then it
   is not.
+- **A timestep every charge asks for.** Plain capacitors and inductors steer the
+  step by their own truncation error; a transistor's junction capacitances and an
+  op-amp's compensation do not yet, so they are bounded by the step ceiling.
+- **Drawn subcircuits.** One pasted from a file is a part today; drawing a block
+  once and nesting it is not.
 - **Dirty-rectangle repaint.** Layer-level invalidation plus viewport culling
   covers most of the benefit today; per-region repaint is the next step up.
 - **Noise and distortion analysis**, once AC has proved itself.
 - **Netlist import/export** in SPICE format.
-- **Richer device models** — junction and gate capacitances, so an AC sweep has a
-  rolloff to show; diode series resistance; MOSFET levels beyond Shichman-Hodges.
-  The Early effect and channel-length modulation are in, which is what stopped a
-  stage into a high impedance amplifying without limit.
+- **Richer device models** — MOSFET levels beyond Shichman-Hodges, and a BJT with
+  high-level injection in it. The Early effect, channel-length modulation, the
+  junction and gate capacitances and a diode's series resistance are all in, which
+  is what gives a stage a top end and a rectifier a recovery.
 - **More logic**: counters, registers, decoders, memory.
 
 ## Testing
