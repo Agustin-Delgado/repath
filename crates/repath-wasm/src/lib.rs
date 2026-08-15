@@ -201,11 +201,16 @@ impl Simulation {
     /// Move a logic source to a level, from `at` onwards.
     #[wasm_bindgen(js_name = setLogic)]
     pub fn set_logic(&mut self, name: &str, state: &str, at: f64) -> bool {
+        // A name nobody recognises is a caller error, not a request for `X`.
+        // Mapping it to unknown meant a typo drove the net to something the
+        // circuit then propagated, and the call still answered that it had
+        // worked.
         let level = match state {
             "high" => Logic::High,
             "low" => Logic::Low,
             "highz" => Logic::HighZ,
-            _ => Logic::Unknown,
+            "unknown" => Logic::Unknown,
+            _ => return false,
         };
         self.circuit.operate_logic(name, level, at)
     }

@@ -27,7 +27,9 @@ import {
 	expandSubcircuit,
 	mosfetFromCard,
 	parseSubcircuits,
-	type ModelCard
+	portInjections,
+	type ModelCard,
+	type PortInjection
 } from '../spice';
 
 export interface NetNames {
@@ -58,6 +60,16 @@ export interface CompileResult {
 	errors: string[];
 	warnings: string[];
 	connectivity: Connectivity;
+	/**
+	 * Where the current at each terminal of a placed subcircuit comes from.
+	 *
+	 * A subcircuit is flattened before the engine sees it, so there is no element
+	 * by that name to ask: its current lives spread across `X1.R1`, `X1.Q1:b` and
+	 * the rest. The drawing needs that spelled out or it has nothing to accumulate
+	 * at those pins, and a net whose only part is an imported one animates as
+	 * carrying nothing.
+	 */
+	portFlow: Map<string, PortInjection[]>;
 }
 
 function num(instance: Instance, key: string, fallback = 0): number {
@@ -84,10 +96,14 @@ function waveform(instance: Instance): unknown {
 	if (kind === 'pulse') {
 		const period = 1 / frequency;
 		const duty = Math.min(Math.max(num(instance, 'duty', 0.5), 0.01), 0.99);
-		const width = period * duty;
+		const high = period * duty;
 		// Fast but finite edges. Instantaneous ones are not physical and give the
 		// transient loop nothing to land on.
-		const edge = Math.min(period / 1000, width / 10);
+		const edge = Math.min(period / 1000, high / 10);
+		// The engine measures `width` from the top of the rising edge, so a duty
+		// cycle handed over as-is came out long by one edge — a pulse asked to be
+		// high half the time was high a little more than half.
+		const width = Math.max(high - edge, edge);
 		return {
 			type: 'pulse',
 			v1: offset,
@@ -281,6 +297,7 @@ export function compileSchematic(
 	// ---- components ------------------------------------------------------
 	const components: unknown[] = [];
 	const devices: unknown[] = [];
+	const portFlow = new Map<string, PortInjection[]>();
 	/** Nets already held at a voltage by a supply symbol, by net index. */
 	const railed = new Map<number, { name: string; volts: number }>();
 
@@ -619,6 +636,7 @@ export function compileSchematic(
 					sub.ports.map((port) => analogOf(instance, port))
 				);
 				components.push(...inner);
+				portFlow.set(instance.id, portInjections(parsed, name));
 				if (skipped.length > 0) {
 					warnings.push(
 						`${name}: ${sub.name} uses ${skipped.join(', ')}, which this simulator cannot build.`
@@ -704,7 +722,8 @@ export function compileSchematic(
 		floatingAt: floatingWith,
 		errors,
 		warnings,
-		connectivity
+		connectivity,
+		portFlow
 	};
 }
 

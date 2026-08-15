@@ -24,6 +24,7 @@ import { isFlowing } from './animate';
 import { prepareFlow, sampleFlow, sampleIndexAt, type FlowFrame } from './flow';
 import {
 	defaultParams,
+	registerSubcircuits,
 	pointKey,
 	type Instance,
 	type Rotation,
@@ -102,7 +103,14 @@ function simulate(schematic: Schematic, stop = 1e-3, time = stop) {
 		simulation.free();
 	}
 
-	const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
+	const context = prepareFlow(
+		schematic,
+		compiled.connectivity,
+		compiled.names,
+		run,
+		undefined,
+		compiled.portFlow
+	);
 	const frame = sampleFlow(context, run, sampleIndexAt(run.time, time));
 	return { compiled, run, context, frame };
 }
@@ -427,7 +435,14 @@ describe('a logic toggle', () => {
 		live.free();
 
 		const run = capture.run();
-		const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
+		const context = prepareFlow(
+		schematic,
+		compiled.connectivity,
+		compiled.names,
+		run,
+		undefined,
+		compiled.portFlow
+	);
 		const at = (t: number) => sampleFlow(context, run, sampleIndexAt(run.time, t));
 		expect(voltsAt(schematic, compiled, at(2e-4), 230, 190)).toBeCloseTo(0, 6);
 		expect(voltsAt(schematic, compiled, at(8e-4), 230, 190)).toBeCloseTo(5, 6);
@@ -533,7 +548,14 @@ describe('a MOSFET being switched', () => {
 		live.free();
 
 		const run = capture.run();
-		const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
+		const context = prepareFlow(
+		schematic,
+		compiled.connectivity,
+		compiled.names,
+		run,
+		undefined,
+		compiled.portFlow
+	);
 
 		// The instant the gate wire is busiest.
 		const gateSeries = run.currents[run.elementNames.indexOf('M1:g')];
@@ -576,7 +598,14 @@ describe('a MOSFET being switched', () => {
 		live.free();
 
 		const run = capture.run();
-		const context = prepareFlow(schematic, compiled.connectivity, compiled.names, run);
+		const context = prepareFlow(
+		schematic,
+		compiled.connectivity,
+		compiled.names,
+		run,
+		undefined,
+		compiled.portFlow
+	);
 		let biggest = 0;
 		for (const series of run.currents) {
 			for (const value of series) biggest = Math.max(biggest, Math.abs(value));
@@ -590,5 +619,46 @@ describe('a MOSFET being switched', () => {
 		const through = Math.abs(on.instanceCurrent.get(schematic.instances[2].id) ?? 0);
 		expect(through).toBeGreaterThan(1e-6);
 		expect(isFlowing(through, context.currentScale)).toBe(true);
+	});
+});
+
+describe('an imported subcircuit', () => {
+	// A resistive divider written the way a vendor's file writes one. Simple on
+	// purpose: what is being tested is that the drawing can find the current at a
+	// terminal of a part the engine has no element for, not the part itself.
+	const SOURCE = `
+.SUBCKT DIV in out
+R1 in out 1k
+R2 out 0 1k
+.ENDS
+`;
+
+	it('carries current at its terminals like any other part', () => {
+		const sub = { id: 'div', name: 'DIV', ports: ['in', 'out'], source: SOURCE };
+		registerSubcircuits({ instances: [], wires: [], subcircuits: [sub] });
+
+		// Supply -> subcircuit input, with the divider's own R2 returning to ground
+		// inside it. The wire into the part has to show the current it draws.
+		const schematic: Schematic = {
+			...drawing(
+				[at('supply', 'PWR1', 100, 100), at('x:div', 'X1', 200, 200)],
+				[
+					[100, 110, 100, 200],
+					[100, 200, 160, 200]
+				]
+			),
+			subcircuits: [sub]
+		};
+
+		const { frame, compiled } = simulate(schematic, 1e-4);
+		expect(compiled.portFlow.size).toBe(1);
+
+		// 5 V across two kilohms in series is 2.5 mA, and that is what the wire
+		// feeding the part carries. Before the planner knew how to reach inside a
+		// flattened subcircuit there was nothing to accumulate here at all, and the
+		// whole net animated as dead.
+		const feeding = currentAt(schematic, frame, 100, 200);
+		expect(feeding).toBeGreaterThan(1e-3);
+		expect(feeding).toBeCloseTo(2.5e-3, 4);
 	});
 });

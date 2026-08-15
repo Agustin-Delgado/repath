@@ -172,6 +172,21 @@ describe('what a card becomes', () => {
 		expect(ignored).not.toContain('IBV');
 	});
 
+	it('will not take a width without a length', () => {
+		// The two mean something together and nothing apart. Taking one and leaving
+		// the other at its default put a metre beside a micrometre, and the ratio —
+		// all this model level uses — came out six orders of magnitude out.
+		const [card] = parseModelCards('.model M1 NMOS(VTO=1.5 KP=20u W=2m)');
+		const { model, ignored } = mosfetFromCard(card);
+		expect(model.w).toBeUndefined();
+		expect(model.l).toBeUndefined();
+		expect(ignored).toContain('W');
+		// And a pair is taken as a pair.
+		const [both] = parseModelCards('.model M2 NMOS(VTO=1.5 KP=20u W=2m L=2u)');
+		expect(mosfetFromCard(both).model.w).toBeCloseTo(2e-3, 12);
+		expect(mosfetFromCard(both).model.l).toBeCloseTo(2e-6, 12);
+	});
+
 	it('scales a MOSFET overlap capacitance by the width it is quoted against', () => {
 		// CGSO is farads per metre of gate. It means nothing on its own.
 		const [card] = parseModelCards('.model M1 NMOS(VTO=1.5 KP=20u W=2m L=2u CGSO=300p CGDO=100p)');

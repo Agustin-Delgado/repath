@@ -106,7 +106,14 @@
 		return untrack(() => {
 			const run = app.result;
 			if (!run) return null;
-			return prepareFlow(app.schematic, compiled.connectivity, compiled.names, run, family);
+			return prepareFlow(
+				app.schematic,
+				compiled.connectivity,
+				compiled.names,
+				run,
+				family,
+				compiled.portFlow
+			);
 		});
 	});
 

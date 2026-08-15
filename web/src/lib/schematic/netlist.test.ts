@@ -887,3 +887,36 @@ describe('switches drawn before they could be clicked', () => {
 		expect(migrateInstance(s1).params.action).toBe('toggle');
 	});
 });
+
+describe('a pulse source', () => {
+	function pulseOf(duty: number) {
+		const schematic = drawing(
+			[at('vsource', 'V1', 100, 200), at('ground', 'GND1', 100, 300)],
+			[[100, 230, 100, 290]]
+		);
+		Object.assign(schematic.instances[0].params, {
+			waveform: 'pulse',
+			frequency: 1000,
+			duty
+		});
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
+		const components = (compiled.netlist as { components: Array<Record<string, unknown>> })
+			.components;
+		return components.find((c) => c.name === 'V1')!.waveform as {
+			rise: number;
+			width: number;
+			period: number;
+		};
+	}
+
+	it('is high for the fraction of the period it was asked for', () => {
+		// The engine measures `width` from the top of the rising edge, so handing the
+		// duty over as-is came out long by one edge: a pulse asked to be high half
+		// the time was high a little more than half, every cycle.
+		for (const duty of [0.1, 0.5, 0.9]) {
+			const w = pulseOf(duty);
+			expect((w.rise + w.width) / w.period).toBeCloseTo(duty, 9);
+		}
+	});
+});

@@ -160,7 +160,10 @@
 		link.href = url;
 		link.download = 'circuit.repath.json';
 		link.click();
-		URL.revokeObjectURL(url);
+		// After the click has been dispatched, not during it. Revoking inside the
+		// same turn is a race the common browsers happen to win and Safari does
+		// not, and losing it means the Save button doing nothing at all.
+		setTimeout(() => URL.revokeObjectURL(url), 0);
 	}
 
 	async function load(event: Event) {

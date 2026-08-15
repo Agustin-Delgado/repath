@@ -23,6 +23,7 @@ import { definitionOf, pointKey, wireSegments, type Point, type Schematic } from
 import { DEFAULT_FAMILY, logicFamily, type LogicFamily } from './logic';
 import type { Connectivity } from './nets';
 import type { NetNames } from './netlist';
+import type { PortInjection } from '../spice';
 import { instancePins } from './scene';
 
 /**
@@ -161,7 +162,12 @@ export function prepareFlow(
 	connectivity: Connectivity,
 	names: ReadonlyMap<number, NetNames>,
 	run: TransientRun,
-	family: LogicFamily = logicFamily(DEFAULT_FAMILY)
+	family: LogicFamily = logicFamily(DEFAULT_FAMILY),
+	/**
+	 * Per placed subcircuit, which reported series arrives at each of its
+	 * terminals. Empty for a drawing with none, which is most of them.
+	 */
+	portFlow: ReadonlyMap<string, PortInjection[]> = new Map()
 ): FlowContext {
 	const elementByName = new Map(run.elementNames.map((name, index) => [name, index] as const));
 
@@ -214,6 +220,33 @@ export function prepareFlow(
 	}
 
 	const injectionsByNet = new Map<number, Map<string, Injection[]>>();
+	const inject = (at: Point, element: number, sign: number) => {
+		const net = connectivity.netOfPoint.get(pointKey(at.x, at.y));
+		if (net === undefined) return;
+		let perNet = injectionsByNet.get(net);
+		if (!perNet) injectionsByNet.set(net, (perNet = new Map()));
+		const key = pointKey(at.x, at.y);
+		const list = perNet.get(key);
+		const injection = { element, sign };
+		if (list) list.push(injection);
+		else perNet.set(key, [injection]);
+	};
+
+	// A flattened subcircuit has no element of its own to point at, so its pins
+	// are fed from the pieces it was built out of. Several series can arrive at
+	// one terminal — a `.subckt` is free to hang three things off a port — and
+	// they simply add.
+	for (const instance of schematic.instances) {
+		const ports = portFlow.get(instance.id);
+		if (!ports) continue;
+		const pins = new Map(instancePins(instance).map(({ pin, at }) => [pin.name, at] as const));
+		for (const { port, element, sign } of ports) {
+			const at = pins.get(port);
+			const index = elementByName.get(element);
+			if (at && index !== undefined) inject(at, index, sign);
+		}
+	}
+
 	for (const instance of schematic.instances) {
 		const element = instanceElement.get(instance.id);
 		if (element === undefined) continue;
@@ -223,19 +256,10 @@ export function prepareFlow(
 		for (const { pin, at } of instancePins(instance)) {
 			const entry = flow.find(([name]) => name === pin.name);
 			if (!entry) continue;
-			const net = connectivity.netOfPoint.get(pointKey(at.x, at.y));
-			if (net === undefined) continue;
 			// A terminal with a series of its own, or the element's own current.
 			const source = entry[2] ? elementByName.get(`${instance.name}${entry[2]}`) : element;
 			if (source === undefined) continue;
-
-			let perNet = injectionsByNet.get(net);
-			if (!perNet) injectionsByNet.set(net, (perNet = new Map()));
-			const key = pointKey(at.x, at.y);
-			const list = perNet.get(key);
-			const injection = { element: source, sign: entry[1] };
-			if (list) list.push(injection);
-			else perNet.set(key, [injection]);
+			inject(at, source, entry[1]);
 		}
 	}
 

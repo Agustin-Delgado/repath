@@ -240,7 +240,7 @@ export function bjtFromCard(card: ModelCard): Applied {
  * inventing the number rather than reading it.
  */
 export function mosfetFromCard(card: ModelCard): Applied {
-	return take(card.params, MOSFET, (out, params) => {
+	const applied = take(card.params, MOSFET, (out, params) => {
 		const used = new Set<string>();
 		const w = params.get('W');
 		if (w === undefined || w <= 0) return used;
@@ -255,6 +255,19 @@ export function mosfetFromCard(card: ModelCard): Applied {
 		}
 		return used;
 	});
+
+	// A width and a length mean something together and nothing apart. Taking one
+	// and leaving the other at its default put a metre beside a micrometre: the
+	// ratio, which is all this model level uses, came out six orders of magnitude
+	// away from anything the file said.
+	const hasW = applied.model.w !== undefined;
+	const hasL = applied.model.l !== undefined;
+	if (hasW !== hasL) {
+		delete applied.model.w;
+		delete applied.model.l;
+		applied.ignored.push(hasW ? 'W' : 'L');
+	}
+	return applied;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +523,14 @@ export function expandSubcircuit(
 						}
 					});
 				} else {
+					// The engine's MOSFET ties its bulk to its source, which is how a
+					// three-terminal part is drawn and is not what a `.subckt`
+					// necessarily says. Where the file puts it somewhere else the
+					// device really is a different one, so it is reported rather than
+					// quietly built as though the fourth node were not there.
+					if (n[3] !== undefined && n[3] !== n[2]) {
+						skipped.push(`${element.name} (a bulk that is not its source)`);
+					}
 					components.push({
 						type: 'mosfet',
 						name: named(element),
@@ -576,6 +597,67 @@ export function kindForCard(card: ModelCard): string | null {
 export function cardFor(text: string, kind: string): ModelCard | null {
 	if (!text.trim()) return null;
 	const cards = parseModelCards(text);
-	const wanted = kind === 'led' || kind === 'zener' ? 'diode' : kind;
+	// An LED is a diode with different numbers in it, so a diode card suits one.
+	const wanted = kind === 'led' ? 'diode' : kind;
 	return cards.find((c) => kindForCard(c) === wanted) ?? null;
+}
+
+/**
+ * Which reported current arrives at each terminal of an element, and whether it
+ * drains that node or feeds it.
+ *
+ * The engine reports current flowing *into* an element at its first terminal, so
+ * that terminal drains the net it sits on and the return one feeds it. A device
+ * with more than two terminals reports each of them separately, under a suffixed
+ * name, and every one of those is into the device.
+ *
+ * `null` where nothing is reported: a voltage-controlled source's control pins
+ * carry no current, and a `G` element has no branch to read at all.
+ */
+const TERMINAL_FLOW: Record<SubElement['kind'], Array<{ sign: number; series?: string } | null>> = {
+	resistor: [{ sign: -1 }, { sign: 1 }],
+	capacitor: [{ sign: -1 }, { sign: 1 }],
+	inductor: [{ sign: -1 }, { sign: 1 }],
+	vsource: [{ sign: -1 }, { sign: 1 }],
+	isource: [{ sign: -1 }, { sign: 1 }],
+	diode: [{ sign: -1 }, { sign: 1 }],
+	bjt: [{ sign: -1 }, { sign: -1, series: ':b' }, { sign: -1, series: ':e' }],
+	mosfet: [{ sign: -1 }, { sign: -1, series: ':g' }, { sign: -1, series: ':s' }, null],
+	vcvs: [{ sign: -1 }, { sign: 1 }, null, null],
+	vccs: [null, null, null, null]
+};
+
+/** One reported series arriving at a subcircuit's terminal. */
+export interface PortInjection {
+	/** Port name, which is also the pin name on the placed part. */
+	port: string;
+	/** Name the engine reports this current under, e.g. `X1.Q1:b`. */
+	element: string;
+	sign: number;
+}
+
+/**
+ * Where the current at each terminal of a placed subcircuit comes from.
+ *
+ * A subcircuit is flattened before the engine sees it, so there is no element
+ * called `X1` to ask — its current lives spread across `X1.R1`, `X1.Q1:b` and the
+ * rest. Without this the drawing had nothing to accumulate at those pins, so a
+ * net whose only part was an imported one animated as carrying nothing at all.
+ */
+export function portInjections(sub: Subcircuit, instanceName: string): PortInjection[] {
+	const ports = new Set(sub.ports);
+	const out: PortInjection[] = [];
+	for (const element of sub.elements) {
+		const flow = TERMINAL_FLOW[element.kind];
+		element.nodes.forEach((node, index) => {
+			const terminal = flow[index];
+			if (!terminal || !ports.has(node)) return;
+			out.push({
+				port: node,
+				element: `${instanceName}.${element.name}${terminal.series ?? ''}`,
+				sign: terminal.sign
+			});
+		});
+	}
+	return out;
 }

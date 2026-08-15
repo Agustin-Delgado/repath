@@ -84,9 +84,22 @@ export interface OperatingPointRun {
 
 let booted: Promise<void> | null = null;
 
-/** Load the wasm module. Safe to call repeatedly; the work happens once. */
+/**
+ * Load the wasm module. Safe to call repeatedly; the work happens once.
+ *
+ * A failure is not cached. Holding on to the rejected promise meant one bad
+ * fetch — a flaky network, a proxy in the way — left the engine permanently
+ * unavailable for the life of the page, with Run reporting the same error
+ * forever and reloading the only way out.
+ */
 export function ensureEngine(): Promise<void> {
-	booted ??= init().then(() => undefined);
+	booted ??= init().then(
+		() => undefined,
+		(cause) => {
+			booted = null;
+			throw cause;
+		}
+	);
 	return booted;
 }
 
