@@ -145,6 +145,17 @@
 		return closed;
 	}
 
+	/**
+	 * Which contacts were conducting on the previous frame.
+	 *
+	 * Kept so a change can be noticed, because a contact opening or closing is the
+	 * one thing that makes the current readings' fall time a lie: it is not the
+	 * same circuit any more. The blade positions are the wrong signal for this —
+	 * they deliberately leave the bounce out, and the bounce is exactly when it
+	 * matters.
+	 */
+	let conducting = new Set<string>();
+
 	function view(): SchematicView {
 		return {
 			schematic: app.schematic,
@@ -358,6 +369,7 @@
 				const first = sampleIndexAt(run.time, app.playbackTime - app.stopTime);
 				rescale(context, run, first, index);
 				const frame = sampleFlow(context, run, index, since);
+				const closed = closedSwitchesAt(app.playbackTime);
 				dynamicView = {
 					schematic: app.schematic,
 					frame,
@@ -374,32 +386,30 @@
 					burnouts: burnoutMap,
 					// Two ways of being at no particular potential, drawn the same way:
 					// an analog node nothing holds, and a digital net nothing drives.
-					floating: new Set([
-						...app.compiled.floatingAt(closedSwitchesAt(app.playbackTime)),
-						...frame.netUndriven
-					]),
+					floating: new Set([...app.compiled.floatingAt(closed), ...frame.netUndriven]),
 					selection: selectionSet,
 					selectionColour: theme!.selection
 				};
-				// Asked before the dots are advanced, because a contact that has just
-				// moved changes what advancing them means.
-				const contactsMoved = trackSwitches(app.playbackTime);
-				// A closed contact opening is not the same circuit any more, and the
-				// readings carry a fall time so that a burst too short to see is still
-				// visible. Coasting that across the transition drew a switch with its
-				// blade open beside a label reading milliamps — the drawing arguing
-				// with itself. Dropped here so the next frame reads the circuit that
-				// exists now: the branch the contact fed goes quiet at once, and
-				// whatever else is still carrying — a capacitor discharging into its
-				// load, say — keeps its dots, because those are measured afresh.
-				if (contactsMoved) forget(animation);
+				// A contact opening is not the same circuit any more, and the readings
+				// carry a fall time so that a burst too short to see is still visible.
+				// Coasting that across the transition drew milliamps through a contact
+				// the engine had at five picoamps, all the way through a quarter of a
+				// millisecond of bounce. Dropped here, before the dots are advanced, so
+				// the frame reads the circuit that exists now: the branch the contact
+				// fed goes quiet at once, and whatever else is still carrying — a
+				// capacitor discharging into its load, say — keeps its dots, because
+				// those are measured afresh every frame.
+				if (closed.size !== conducting.size || [...closed].some((id) => !conducting.has(id))) {
+					forget(animation);
+					conducting = closed;
+				}
 				// In seconds of wall clock, so a given current draws the dots along at
 				// the same speed however fast the run is being played.
 				tick(dynamicView, moved / Math.max(app.playbackRate, 1e-9));
 				active.invalidate('dynamic');
 				// The blades live on the layer underneath, which is repainted only on
 				// the frames where one of them actually moves.
-				if (contactsMoved) active.invalidate('schematic');
+				if (trackSwitches(app.playbackTime)) active.invalidate('schematic');
 				if (import.meta.env.DEV) {
 					const handle = (window as unknown as Record<string, Record<string, unknown>>).__repath;
 					if (handle) {
@@ -413,7 +423,12 @@
 			}
 
 			// Nothing live to read a contact position off: back to resting.
-			if (!app.live && trackSwitches(null)) active.invalidate('schematic');
+			if (!app.live) {
+				if (trackSwitches(null)) active.invalidate('schematic');
+				// And nothing conducting to remember either, so the next run does not
+				// open by comparing itself against the end of the last one.
+				conducting = new Set();
+			}
 
 			lastPlayback = app.playbackTime;
 			frame = requestAnimationFrame(step);
