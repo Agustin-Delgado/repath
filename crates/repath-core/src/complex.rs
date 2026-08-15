@@ -200,16 +200,28 @@ impl ComplexSystem {
             return Ok(());
         }
 
+        // Judged against each row's own largest entry, for the reason written out
+        // on the real solver: an admittance matrix spans twenty decades by design,
+        // so "small" only means anything beside something.
+        let mut scale = vec![0.0f64; n];
+        for (r, s) in scale.iter_mut().enumerate() {
+            let largest = self.a[r * n..r * n + n].iter().fold(0.0f64, |acc, v| acc.max(v.abs()));
+            if largest == 0.0 {
+                return Err(SingularMatrix { row: r });
+            }
+            *s = 1.0 / largest;
+        }
+
         for k in 0..n {
-            let (mut pivot_row, mut pivot_mag) = (k, self.a[k * n + k].norm_squared());
-            for r in (k + 1)..n {
-                let mag = self.a[r * n + k].norm_squared();
+            let (mut pivot_row, mut pivot_mag) = (k, 0.0);
+            for (r, s) in scale.iter().enumerate().skip(k) {
+                let mag = s * self.a[r * n + k].abs();
                 if mag > pivot_mag {
                     pivot_row = r;
                     pivot_mag = mag;
                 }
             }
-            if pivot_mag < 1e-40 {
+            if pivot_mag < 1e-14 {
                 return Err(SingularMatrix { row: k });
             }
             if pivot_row != k {
@@ -217,6 +229,7 @@ impl ComplexSystem {
                     self.a.swap(k * n + c, pivot_row * n + c);
                 }
                 self.b.swap(k, pivot_row);
+                scale.swap(k, pivot_row);
             }
 
             let pivot = self.a[k * n + k];

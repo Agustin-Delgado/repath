@@ -266,6 +266,20 @@ pub trait Element: std::fmt::Debug + Send + AsAny {
     /// Discard all history and return to the pre-simulation state.
     fn reset(&mut self) {}
 
+    /// Throw away whatever a failed attempt at a timepoint left behind, and go
+    /// back to what the last accepted one did.
+    ///
+    /// Almost nothing needs this. It is for the state a device carries *between
+    /// Newton iterations* rather than between timepoints — a junction voltage kept
+    /// so the next timepoint can start from where the last one ended. When a step
+    /// is rejected the solver puts the unknowns back; without this the devices
+    /// were left holding the last guess of the attempt that failed, and since that
+    /// guess is the seed for iteration zero, the answer to the retry depended on
+    /// how many rejections had come before it. Not wrong — Newton arrives at the
+    /// same place — but it means the same circuit, stepped the same way, is not
+    /// obliged to produce the same numbers.
+    fn rewind(&mut self) {}
+
     /// Largest step this element can take from the current point without
     /// exceeding the local truncation error budget. `INFINITY` means no opinion.
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {

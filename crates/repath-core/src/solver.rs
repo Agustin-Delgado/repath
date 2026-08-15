@@ -283,6 +283,12 @@ impl AcConfig {
     pub fn frequencies(&self) -> Vec<f64> {
         let (lo, hi) = (self.start_hz.min(self.stop_hz), self.start_hz.max(self.stop_hz));
         let decades = (hi / lo).log10();
+        // One frequency asked for is one frequency swept. Rounding a span of
+        // nothing up to a single step handed back the same point twice, and a
+        // plot then drew a segment between a point and itself.
+        if decades.is_nan() || decades <= 0.0 {
+            return vec![lo];
+        }
         let steps = ((decades * self.points_per_decade as f64).round() as usize).max(1);
         (0..=steps).map(|k| lo * 10f64.powf(decades * k as f64 / steps as f64)).collect()
     }
@@ -552,20 +558,27 @@ impl Simulator {
 
         for (i, value) in values.iter().enumerate() {
             apply(circuit, *value);
-            if i == 0 {
+            // Seeded from the previous point, which is what makes an I-V curve
+            // solve where a cold start would not. When that is not enough the
+            // convergence aids are still there: a sweep that walks into a region
+            // the seed cannot reach used to abandon the whole curve at the first
+            // point it could not manage, rather than starting that one over.
+            let seeded = i > 0
+                && self
+                    .newton(
+                        circuit,
+                        Mode::OperatingPoint,
+                        Integration::BackwardEuler,
+                        0.0,
+                        0.0,
+                        self.config.gmin,
+                        1.0,
+                        self.config.dc_max_iterations,
+                        &mut stats,
+                    )
+                    .is_ok();
+            if !seeded {
                 self.solve_operating_point(circuit, &mut stats)?;
-            } else {
-                self.newton(
-                    circuit,
-                    Mode::OperatingPoint,
-                    Integration::BackwardEuler,
-                    0.0,
-                    0.0,
-                    self.config.gmin,
-                    1.0,
-                    self.config.dc_max_iterations,
-                    &mut stats,
-                )?;
             }
             out.push(self.x.clone());
         }
@@ -800,7 +813,15 @@ impl Simulator {
             let mut attempt = step;
             let mut integration = integration;
             loop {
+                // Every attempt starts from the last accepted timepoint and from
+                // nothing else. The unknowns were always put back; the devices were
+                // not, so a nonlinear part went into the retry seeded with the last
+                // guess of the attempt that had just failed — and the answer to a
+                // step therefore depended on how many rejections preceded it.
                 self.x.copy_from_slice(&self.x_accepted);
+                for element in circuit.elements_mut() {
+                    element.rewind();
+                }
                 match self.newton(
                     circuit,
                     Mode::Transient,

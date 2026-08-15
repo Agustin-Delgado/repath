@@ -418,6 +418,9 @@ pub struct Diode {
     pub m: NodeId,
     pub model: DiodeModel,
     v_prev_iter: f64,
+    /// Junction voltage as of the last accepted timepoint, so a rejected attempt
+    /// can be undone rather than left as the seed for the next one.
+    v_accepted: f64,
     /// Small-signal conductance at the operating point, kept for AC analysis.
     gd_op: f64,
     /// The junction's stored charge.
@@ -440,6 +443,7 @@ impl Diode {
             m,
             model,
             v_prev_iter: 0.0,
+            v_accepted: 0.0,
             gd_op: 0.0,
             charge: ChargeBranch::default(),
             dose: 0.0,
@@ -709,8 +713,13 @@ impl Element for Diode {
         // history from a place the charge never was, and a rectifier's recovery
         // ground its timestep down to nothing trying to reconcile the two.
         let vd = self.v_prev_iter;
+        self.v_accepted = vd;
         let (_, gd) = self.evaluate(vd);
         self.charge.accept(vd, self.capacitance(vd, gd + 1e-12), ctx);
+    }
+
+    fn rewind(&mut self) {
+        self.v_prev_iter = self.v_accepted;
     }
 
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
@@ -731,6 +740,7 @@ impl Element for Diode {
 
     fn reset(&mut self) {
         self.v_prev_iter = 0.0;
+        self.v_accepted = 0.0;
         self.gd_op = 0.0;
         self.charge.reset();
         self.dose = 0.0;
@@ -760,9 +770,18 @@ impl Element for Diode {
         // conduction term hid reverse recovery from every probe and every trace
         // while the solver was modelling it perfectly well.
         //
-        // `i_prev` is this timepoint's, not the last one's: elements are accepted
-        // before the point is recorded.
-        Some(self.evaluate(vd).0 + self.charge.i_prev)
+        // The mean the branch carried, and not the companion model's endpoint
+        // value, for the reason written out on `ChargeBranch::current`: with the
+        // voltage settled the trapezoidal rule leaves that endpoint alternating
+        // every timestep and never damping. It is the same choice every other
+        // device here makes, and the diode was the one still reading the figure
+        // the rest of them exist to avoid.
+        Some(self.evaluate(vd).0 + self.charge.current())
+    }
+
+    fn is_ringing(&self) -> bool {
+        // The branch has been watching for this all along and nobody was asking.
+        self.charge.ringing()
     }
 }
 
@@ -1121,6 +1140,10 @@ impl Element for Mosfet {
         self.body.accept(ctx);
     }
 
+    fn rewind(&mut self) {
+        self.body.rewind();
+    }
+
     fn reset(&mut self) {
         self.op_gm = 0.0;
         self.op_gds = 0.0;
@@ -1329,6 +1352,9 @@ pub struct Bjt {
     pub model: BjtModel,
     vbe_prev: f64,
     vbc_prev: f64,
+    /// The pair as of the last accepted timepoint. See `Element::rewind`.
+    vbe_accepted: f64,
+    vbc_accepted: f64,
     /// Small-signal conductances at the operating point: the two junction
     /// conductances and the two transport transconductances.
     op_gif: f64,
@@ -1350,6 +1376,8 @@ impl Bjt {
             model,
             vbe_prev: 0.0,
             vbc_prev: 0.0,
+            vbe_accepted: 0.0,
+            vbc_accepted: 0.0,
             op_gif: 0.0,
             op_gir: 0.0,
             op_gbe: 0.0,
@@ -1644,15 +1672,23 @@ impl Element for Bjt {
 
     fn accept(&mut self, ctx: &AcceptCtx) {
         let (vbe, vbc) = self.junction_voltages(ctx);
+        (self.vbe_accepted, self.vbc_accepted) = (vbe, vbc);
         let (gif, gir) = self.junction_conductances(vbe, vbc);
         let (cbe, cbc) = self.capacitances(vbe, vbc, gif, gir);
         self.q_be.accept(vbe, cbe, ctx);
         self.q_bc.accept(vbc, cbc, ctx);
     }
 
+    fn rewind(&mut self) {
+        self.vbe_prev = self.vbe_accepted;
+        self.vbc_prev = self.vbc_accepted;
+    }
+
     fn reset(&mut self) {
         self.vbe_prev = 0.0;
         self.vbc_prev = 0.0;
+        self.vbe_accepted = 0.0;
+        self.vbc_accepted = 0.0;
         self.op_gif = 0.0;
         self.op_gir = 0.0;
         self.op_gbe = 0.0;
@@ -1771,6 +1807,58 @@ mod tests {
         let op = m.evaluate(3.0, 5.0);
         // beta/2 * (vgs-vto)^2 = (1e-4 * 10)/2 * 4 = 2e-3
         assert!((op.ids - 2e-3).abs() < 1e-12, "got {}", op.ids);
+    }
+
+    #[test]
+    fn a_rejected_attempt_does_not_leave_the_junction_where_it_failed() {
+        let mut d = Diode::new("D1", 1, 0, DiodeModel::default());
+
+        let push = |d: &mut Diode, volts: f64, iteration: usize| {
+            let mut sys = LinearSystem::new(1);
+            let x = [volts];
+            let ctx = StampCtx {
+                mode: Mode::OperatingPoint,
+                integration: Integration::BackwardEuler,
+                time: 0.0,
+                dt: 0.0,
+                gmin: 1e-12,
+                source_scale: 1.0,
+                x: &x,
+                iteration,
+            };
+            d.stamp(&mut sys, &ctx);
+        };
+
+        // Settle on a timepoint, and accept it.
+        for iteration in 0..8 {
+            push(&mut d, 0.7, iteration);
+        }
+        let x = [0.7];
+        d.accept(&AcceptCtx {
+            mode: Mode::OperatingPoint,
+            integration: Integration::BackwardEuler,
+            time: 0.0,
+            dt: 0.0,
+            x: &x,
+        });
+        let settled = d.current(&x).unwrap();
+
+        // Now an attempt at the next timepoint that the solver will throw away.
+        for iteration in 1..8 {
+            push(&mut d, 3.0, iteration);
+        }
+        assert!(
+            (d.current(&x).unwrap() - settled).abs() / settled > 0.01,
+            "the failed attempt has to have moved the junction, or this proves nothing"
+        );
+
+        // Rejected: the solver puts the unknowns back, and the part goes back too.
+        d.rewind();
+        assert!(
+            (d.current(&x).unwrap() - settled).abs() / settled < 1e-12,
+            "after a rejected step the junction reads {} against {settled} accepted",
+            d.current(&x).unwrap()
+        );
     }
 
     #[test]

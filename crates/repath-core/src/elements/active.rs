@@ -8,7 +8,8 @@
 
 use crate::complex::{C64, ComplexSystem};
 use crate::element::{
-    AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, StampCtx, StampReport, node_index,
+    AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, RingDetector, StampCtx, StampReport,
+    node_index,
 };
 use crate::linalg::LinearSystem;
 use crate::lte::Trace;
@@ -128,6 +129,10 @@ pub struct OpAmp {
     i_prev: f64,
     /// Charge on the compensation capacitor, for the step controller.
     charge: Trace,
+    /// Mean current into it over the step just accepted, and a watch on whether
+    /// that current is alternating rather than doing anything.
+    i_mean: f64,
+    ring: RingDetector,
     /// First extra unknown: the gain node. Second: the output branch current.
     first: usize,
 }
@@ -145,6 +150,8 @@ impl OpAmp {
             v_prev: 0.0,
             i_prev: 0.0,
             charge: Trace::default(),
+            i_mean: 0.0,
+            ring: RingDetector::default(),
             first: 0,
         }
     }
@@ -317,6 +324,8 @@ impl Element for OpAmp {
         if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
             let (geq, ieq) = self.companion(ctx.integration, ctx.dt);
             self.i_prev = geq * v - ieq;
+            self.i_mean = CC * (v - self.v_prev) / ctx.dt;
+            self.ring.push(self.i_mean);
         }
         self.v_prev = v;
         self.charge.push(ctx.time, CC * v);
@@ -332,11 +341,22 @@ impl Element for OpAmp {
         self.charge.suggested_step()
     }
 
+    fn is_ringing(&self) -> bool {
+        // A settled output has a compensation capacitor carrying nothing, and the
+        // trapezoidal rule will happily alternate about that nothing forever. It
+        // shows up on the drawing as current jittering back and forth into a part
+        // that has finished doing anything, which is what this test is for
+        // everywhere else in the engine.
+        self.ring.ringing()
+    }
+
     fn reset(&mut self) {
         self.op_gm = 0.0;
         self.op_g = 0.0;
         self.v_prev = 0.0;
         self.i_prev = 0.0;
+        self.i_mean = 0.0;
+        self.ring.reset();
         self.charge = Trace::default();
     }
 

@@ -12,6 +12,8 @@ pub struct LinearSystem {
     b: Vec<f64>,
     /// Scratch permutation vector reused across solves.
     perm: Vec<usize>,
+    /// Reciprocal of each row's largest entry, for scaled pivoting. Scratch.
+    scale: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +25,13 @@ pub enum SolveError {
 
 impl LinearSystem {
     pub fn new(n: usize) -> Self {
-        Self { n, a: vec![0.0; n * n], b: vec![0.0; n], perm: (0..n).collect() }
+        Self {
+            n,
+            a: vec![0.0; n * n],
+            b: vec![0.0; n],
+            perm: (0..n).collect(),
+            scale: vec![0.0; n],
+        }
     }
 
     #[inline]
@@ -91,17 +99,41 @@ impl LinearSystem {
             *p = i;
         }
 
-        // Doolittle LU with partial pivoting.
+        // How big an entry is in this row's own terms.
+        //
+        // A circuit matrix spans twenty decades on purpose: `gmin` is a picosiemens
+        // and a closed switch is a gigasiemens, and both are meant. Judging a pivot
+        // against a fixed number therefore answers the wrong question in both
+        // directions — a well-conditioned matrix of small entries was reported
+        // singular, while a matrix of large ones whose rows were multiples of each
+        // other sailed through and returned nonsense. A node held up by nothing but
+        // `gmin` is the case that matters: its row is tiny throughout, and relative
+        // to itself its pivot is perfectly healthy, which is exactly what makes the
+        // floating node solvable rather than a failure.
+        for r in 0..n {
+            let largest = self.a[r * n..r * n + n].iter().fold(0.0f64, |acc, v| acc.max(v.abs()));
+            if largest == 0.0 {
+                // An empty row: nothing anywhere in the circuit refers to this
+                // unknown, so there is nothing to solve for it.
+                return Err(SolveError::Singular { row: r });
+            }
+            self.scale[r] = 1.0 / largest;
+        }
+
+        // Doolittle LU with scaled partial pivoting.
         for k in 0..n {
-            let (mut pivot_row, mut pivot_mag) = (k, self.a[k * n + k].abs());
-            for r in (k + 1)..n {
-                let mag = self.a[r * n + k].abs();
+            let (mut pivot_row, mut pivot_mag) = (k, 0.0);
+            for r in k..n {
+                let mag = self.scale[r] * self.a[r * n + k].abs();
                 if mag > pivot_mag {
                     pivot_row = r;
                     pivot_mag = mag;
                 }
             }
-            if pivot_mag < 1e-20 {
+            // Dimensionless, and so comparable against a plain number: a pivot
+            // worth less than this beside the row it came from carries no
+            // information a double can still represent.
+            if pivot_mag < 1e-14 {
                 return Err(SolveError::Singular { row: k });
             }
             if pivot_row != k {
@@ -110,6 +142,7 @@ impl LinearSystem {
                 }
                 self.b.swap(k, pivot_row);
                 self.perm.swap(k, pivot_row);
+                self.scale.swap(k, pivot_row);
             }
 
             let pivot = self.a[k * n + k];
@@ -185,6 +218,56 @@ mod tests {
         sys.add(Some(1), Some(1), 1.0);
         let mut x = Vec::new();
         assert!(matches!(sys.solve_into(&mut x), Err(SolveError::Singular { .. })));
+    }
+
+    #[test]
+    fn small_is_only_small_beside_something() {
+        // A scaled identity: condition number one, and about as solvable as a
+        // matrix gets. Judged against a fixed floor it was reported singular for
+        // no reason other than the units its circuit happened to be written in.
+        let mut sys = LinearSystem::new(2);
+        sys.add(Some(0), Some(0), 1e-21);
+        sys.add(Some(1), Some(1), 1e-21);
+        sys.add_rhs(Some(0), 1e-21);
+        sys.add_rhs(Some(1), 2e-21);
+
+        let mut x = Vec::new();
+        sys.solve_into(&mut x).expect("a scaled identity has an exact answer");
+        assert!((x[0] - 1.0).abs() < 1e-12 && (x[1] - 2.0).abs() < 1e-12, "got {x:?}");
+    }
+
+    #[test]
+    fn large_is_not_the_same_as_independent() {
+        // And the mirror image. Two rows that agree to within a part in 1e15 are
+        // the same equation as far as a double is concerned, but their entries are
+        // enormous — so a fixed floor waved them through and the answer came back
+        // as a pair of six-figure numbers with nothing behind them.
+        let mut sys = LinearSystem::new(2);
+        sys.add(Some(0), Some(0), 1e9);
+        sys.add(Some(0), Some(1), 1e9);
+        sys.add(Some(1), Some(0), 1e9);
+        sys.add(Some(1), Some(1), 1e9 + 1e-6);
+        sys.add_rhs(Some(0), 1.0);
+        sys.add_rhs(Some(1), 2.0);
+
+        let mut x = Vec::new();
+        assert!(matches!(sys.solve_into(&mut x), Err(SolveError::Singular { .. })), "got {x:?}");
+    }
+
+    #[test]
+    fn a_node_held_up_by_nothing_but_gmin_is_still_solvable() {
+        // The case the whole scheme has to keep working. One node carries a real
+        // circuit and the other is floating, held only by the picosiemens the
+        // solver puts on every node — twenty-one decades apart, and both meant.
+        let mut sys = LinearSystem::new(2);
+        sys.add(Some(0), Some(0), 1e9);
+        sys.add(Some(1), Some(1), 1e-12);
+        sys.add_rhs(Some(0), 1e9);
+
+        let mut x = Vec::new();
+        sys.solve_into(&mut x).expect("gmin exists precisely so this solves");
+        assert!((x[0] - 1.0).abs() < 1e-12, "got {x:?}");
+        assert_eq!(x[1], 0.0);
     }
 
     #[test]

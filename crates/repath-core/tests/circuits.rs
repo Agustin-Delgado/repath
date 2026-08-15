@@ -1886,6 +1886,47 @@ fn the_temperature_on_the_drawing_reaches_every_part() {
 }
 
 #[test]
+fn one_frequency_asked_for_is_one_frequency_swept() {
+    // Rounding a span of nothing up to a single step handed the same point back
+    // twice, and a plot then drew a segment between a point and itself.
+    let single = AcConfig::new(1000.0, 1000.0).frequencies();
+    assert_eq!(single, vec![1000.0]);
+    // And an ordinary span still walks it.
+    assert!(AcConfig::new(10.0, 1000.0).frequencies().len() > 2);
+}
+
+#[test]
+fn a_dc_sweep_does_not_abandon_the_curve_at_the_first_hard_point() {
+    // A diode swept from hard reverse to hard forward. The seed from the previous
+    // point is what usually carries a curve like this; where it does not, the
+    // aids that exist for exactly that have to still be reachable. They were not
+    // — only the first point of a sweep ever saw them — so one awkward step
+    // ended the whole curve.
+    let mut c = Circuit::new();
+    let a = c.node("a");
+    c.add(Box::new(VoltageSource::dc("V1", a, Circuit::GROUND, -10.0)));
+    let d = c.node("d");
+    c.add(Box::new(Resistor::new("R1", a, d, 100.0)));
+    c.add(Box::new(Diode::new("D1", d, Circuit::GROUND, DiodeModel::default())));
+
+    // Deliberately coarse, and straight through the knee: 2 V a step is far more
+    // than a junction moves between one working point and the next.
+    let values: Vec<f64> = (0..11).map(|k| -10.0 + k as f64 * 2.0).collect();
+    let swept = Simulator::default()
+        .dc_sweep(&mut c, &values, |circuit, v| {
+            circuit.set_source_waveform("V1", Waveform::Dc { value: v });
+        })
+        .expect("every point on the curve has an answer");
+
+    assert_eq!(swept.len(), values.len());
+    // Monotonic in the drive, which is what a diode's curve is.
+    let node = 0;
+    for pair in swept.windows(2) {
+        assert!(pair[1][node] >= pair[0][node] - 1e-9, "the curve went backwards");
+    }
+}
+
+#[test]
 fn a_resistor_drifts_by_its_temperature_coefficient() {
     // A part with none is one made of a material that does not exist. Two hundred
     // parts per million per degree is ordinary metal film; over eighty degrees

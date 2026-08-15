@@ -247,6 +247,10 @@ pub struct Inductor {
     branch: usize,
     i_prev: f64,
     v_prev: f64,
+    /// Mean voltage across the step just accepted — the dual of a capacitance's
+    /// mean current, and the quantity that alternates when this branch rings.
+    v_mean: f64,
+    ring: RingDetector,
     flux: Trace,
 }
 
@@ -261,6 +265,8 @@ impl Inductor {
             branch: 0,
             i_prev: 0.0,
             v_prev: 0.0,
+            v_mean: 0.0,
+            ring: RingDetector::default(),
             flux: Trace::default(),
         }
     }
@@ -332,7 +338,14 @@ impl Element for Inductor {
     }
 
     fn accept(&mut self, ctx: &AcceptCtx) {
-        self.i_prev = ctx.unknown(self.branch);
+        let i = ctx.unknown(self.branch);
+        if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
+            // What the branch actually had across it over the step, which cannot
+            // ring by construction — the mirror of the capacitor's mean current.
+            self.v_mean = self.l * (i - self.i_prev) / ctx.dt;
+            self.ring.push(self.v_mean);
+        }
+        self.i_prev = i;
         self.v_prev = ctx.voltage(self.p) - ctx.voltage(self.m);
         self.flux.push(ctx.time, self.l * self.i_prev);
     }
@@ -340,7 +353,16 @@ impl Element for Inductor {
     fn reset(&mut self) {
         self.i_prev = self.ic.unwrap_or(0.0);
         self.v_prev = 0.0;
+        self.v_mean = 0.0;
+        self.ring.reset();
         self.flux = Trace::default();
+    }
+
+    fn is_ringing(&self) -> bool {
+        // An inductance is where the trapezoidal rule rings most readily, and it
+        // was the one storage element with nothing watching for it: the capacitor
+        // has had this since the ringing was first chased down.
+        self.ring.ringing()
     }
 
     fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
