@@ -123,6 +123,14 @@ The loop never steps *over* a discontinuity. Before each step it takes the minim
 of the error budget, the shortest feature of any source waveform, the next waveform
 corner, the next digital event, and the end of any digital-to-analog ramp in flight.
 
+What it does not watch is a nonlinear device's *conduction*. Only stored charge is
+integrated, so only stored charge has a truncation error to estimate — which is true of
+every SPICE and is fine for a signal small beside a junction's 26 mV, where the default
+step already converges to five figures. Drive one hard and it does not: the harmonics that
+come back out of the exponential are shorter than anything the step controller can see, and
+the answer is under-resolved with nothing to say so. A large-signal run wants its step set
+by hand until that changes; [BACKLOG.md](BACKLOG.md) has the measurement.
+
 ### The frequency domain
 
 AC analysis is a *small-signal* analysis. The operating point is solved first,
