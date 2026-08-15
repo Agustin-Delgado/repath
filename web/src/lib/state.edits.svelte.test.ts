@@ -149,6 +149,35 @@ describe('refusing an edit', () => {
 		expect(find('U1').params.v_min).toBe(-15);
 	});
 
+	it('holds both polarities of a transistor to the same rules', () => {
+		// The p-channel and pnp entries were copied from their counterparts
+		// without the bounds, so a W/L of zero — a device that conducts nothing —
+		// was accepted on one of each pair and refused on the other. Nothing on
+		// the drawing says which one you picked up.
+		app.place('nmos', 700, 200, 0);
+		app.place('pmos', 900, 200, 0);
+		app.place('npn', 1100, 200, 0);
+		app.place('pnp', 1300, 200, 0);
+
+		for (const [name, key] of [
+			['M1', 'ratio'],
+			['M2', 'ratio'],
+			['M1', 'kp'],
+			['M2', 'kp'],
+			['Q1', 'bf'],
+			['Q2', 'bf'],
+			['Q1', 'is'],
+			['Q2', 'is']
+		] as const) {
+			expect(app.setParam(find(name).id, key, 0), `${name}.${key} at zero`).toMatch(
+				/cannot be zero/i
+			);
+			expect(app.setParam(find(name).id, key, -1), `${name}.${key} negative`).toMatch(
+				/cannot be below/i
+			);
+		}
+	});
+
 	it('holds a duty cycle inside its range', () => {
 		app.place('vsource', 700, 200, 0);
 		expect(app.setParam(find('V1').id, 'duty', 1.5)).toMatch(/cannot be above/i);
@@ -1162,5 +1191,45 @@ describe('clicking a part while it is running', () => {
 		expect(s1.params.start).toBe('open');
 
 		app.acquiring = null;
+	});
+});
+
+describe('replacing the whole drawing', () => {
+	/** A stand-in for a live run. Only whether it is closed matters here. */
+	function pretendRunning(): { closed: () => boolean } {
+		let closed = false;
+		app.acquiring = { close: () => (closed = true) } as never;
+		app.playing = true;
+		app.playbackTime = 1e-3;
+		return { closed: () => closed };
+	}
+
+	it('clearing stops the sweep, like every other way of replacing it', () => {
+		app.place('resistor', 200, 200, 0);
+		const run = pretendRunning();
+
+		app.clear();
+
+		// Clearing used to drop `result` and leave the sweep going: the engine's
+		// simulation was never freed, the transport still said it was playing, and
+		// the next frame put the samples back on an empty sheet.
+		expect(run.closed()).toBe(true);
+		expect(app.acquiring).toBeNull();
+		expect(app.capture).toBeNull();
+		expect(app.result).toBeNull();
+		expect(app.playing).toBe(false);
+		expect(app.playbackTime).toBe(0);
+	});
+
+	it('opening a file stops it too', () => {
+		app.place('resistor', 200, 200, 0);
+		const saved = app.toJSON();
+		const run = pretendRunning();
+
+		app.fromJSON(saved);
+
+		expect(run.closed()).toBe(true);
+		expect(app.acquiring).toBeNull();
+		expect(app.playing).toBe(false);
 	});
 });

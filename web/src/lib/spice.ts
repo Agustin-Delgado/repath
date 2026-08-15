@@ -164,6 +164,10 @@ function take(
 const DIODE: Record<string, string> = {
 	IS: 'is',
 	N: 'n',
+	// The bulk resistance. Modelled — it is what bends a rectifier's forward curve
+	// away from the exponential at an amp — so a card that names it has to be read
+	// rather than reported as something this simulator has no equivalent for.
+	RS: 'rs',
 	CJO: 'cj0',
 	CJ0: 'cj0',
 	VJ: 'vj',

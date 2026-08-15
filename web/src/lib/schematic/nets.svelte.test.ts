@@ -8,6 +8,7 @@ import {
 	netLabel,
 	openForPins,
 	pinKey,
+	pinPartition,
 	splitAtJunctions,
 	trimOverlaps
 } from './nets';
@@ -229,6 +230,29 @@ describe('mergeWireChains', () => {
 		expect(mergeWireChains(schematic)).toHaveLength(1);
 	});
 
+	it('folds a chain however long it is', () => {
+		// The guard used to be measured against a list that the loop itself was
+		// shortening, so it closed on itself around halfway: five pieces came out
+		// as two and eight as three. Nothing electrical changes, but every joint
+		// left behind is a fixed point any re-route has to honour, which is where
+		// the detours that look like router stupidity come from.
+		for (const pieces of [2, 3, 4, 5, 6, 8, 12]) {
+			const schematic: Schematic = {
+				instances: [],
+				wires: Array.from({ length: pieces }, (_, i) =>
+					wire({ x: i * 10, y: 0 }, { x: (i + 1) * 10, y: 0 })
+				)
+			};
+			const merged = mergeWireChains(schematic);
+			expect(merged, `${pieces} pieces end to end`).toHaveLength(1);
+			// And the shape is untouched: only the number of wires changes.
+			expect(merged[0].points).toEqual([
+				{ x: 0, y: 0 },
+				{ x: pieces * 10, y: 0 }
+			]);
+		}
+	});
+
 	it('is idempotent', () => {
 		const schematic: Schematic = {
 			instances: [],
@@ -240,6 +264,58 @@ describe('mergeWireChains', () => {
 		const once = mergeWireChains(schematic);
 		const twice = mergeWireChains({ ...schematic, wires: once });
 		expect(twice).toEqual(once);
+	});
+});
+
+describe('pinPartition', () => {
+	/** Two resistors side by side, each with a wire off its right-hand pin. */
+	const pair = (): Schematic => ({
+		instances: [part('resistor', 'R1', 100, 0), part('resistor', 'R2', 100, 100)],
+		wires: [wire({ x: 130, y: 0 }, { x: 200, y: 0 }), wire({ x: 130, y: 100 }, { x: 200, y: 100 })]
+	});
+
+	it('says two circuits are the same circuit when they are', () => {
+		// Same drawing, wires listed the other way round and one of them split in
+		// two. Nothing is joined differently, so the answer must not move.
+		const a = pair();
+		const b: Schematic = {
+			instances: a.instances,
+			wires: [
+				wire({ x: 130, y: 100 }, { x: 200, y: 100 }),
+				wire({ x: 130, y: 0 }, { x: 165, y: 0 }),
+				wire({ x: 165, y: 0 }, { x: 200, y: 0 })
+			]
+		};
+		expect(pinPartition(buildConnectivity(b))).toBe(pinPartition(buildConnectivity(a)));
+	});
+
+	it('notices a short that a count of nets reads as an improvement', () => {
+		const before = pair();
+		// One wire joining the two ends: the two nets become one.
+		const after: Schematic = {
+			instances: before.instances,
+			wires: [...before.wires, wire({ x: 200, y: 0 }, { x: 200, y: 100 })]
+		};
+
+		const nets = (s: Schematic) => buildConnectivity(s).nets.length;
+		// This is the whole point. The guard used to keep a tidy whenever the net
+		// count did not grow, so a tidy that shorted two nets together sailed
+		// through — the number went *down*, which reads as tidier.
+		expect(nets(after)).toBeLessThan(nets(before));
+		expect(pinPartition(buildConnectivity(after))).not.toBe(
+			pinPartition(buildConnectivity(before))
+		);
+	});
+
+	it('notices a disconnection too', () => {
+		const before: Schematic = {
+			instances: [part('resistor', 'R1', 100, 0), part('resistor', 'R2', 300, 0)],
+			wires: [wire({ x: 130, y: 0 }, { x: 270, y: 0 })]
+		};
+		const after: Schematic = { instances: before.instances, wires: [] };
+		expect(pinPartition(buildConnectivity(after))).not.toBe(
+			pinPartition(buildConnectivity(before))
+		);
 	});
 });
 

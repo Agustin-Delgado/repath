@@ -880,8 +880,8 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('gate', -30, 0), analog('drain', 10, 30), analog('source', 10, -30)],
 		params: [
 			{ key: 'vto', label: 'Threshold', unit: 'V', default: 2 },
-			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5 },
-			{ key: 'ratio', label: 'W/L', unit: '', default: 10 },
+			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5, min: 0, nonZero: true },
+			{ key: 'ratio', label: 'W/L', unit: '', default: 10, min: 0, nonZero: true },
 			{
 				key: 'lambda',
 				label: 'Channel-length modulation',
@@ -925,7 +925,7 @@ export const CATALOG: ComponentDef[] = [
 		prefix: 'Q',
 		pins: [analog('base', -30, 0), analog('collector', 10, 30), analog('emitter', 10, -30)],
 		params: [
-			{ key: 'bf', label: 'Forward gain β', unit: '', default: 200 },
+			{ key: 'bf', label: 'Forward gain β', unit: '', default: 200, min: 0, nonZero: true },
 			{
 				key: 'vaf',
 				label: 'Early voltage',
@@ -935,7 +935,14 @@ export const CATALOG: ComponentDef[] = [
 				description:
 					'Base-width modulation. Sets the output resistance to about VAF/Ic — zero here would make a stage into a high impedance amplify without limit.'
 			},
-			{ key: 'is', label: 'Saturation current', unit: 'A', default: 6.73e-15 },
+			{
+				key: 'is',
+				label: 'Saturation current',
+				unit: 'A',
+				default: 6.73e-15,
+				min: 0,
+				nonZero: true
+			},
 			...BASE_CHARGE,
 			...SPICE_CARD
 		]

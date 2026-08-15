@@ -53,6 +53,7 @@ import {
 	mergeWireChains,
 	netLabel,
 	openForPins,
+	pinPartition,
 	splitAtJunctions,
 	trimOverlaps
 } from './schematic/nets';
@@ -739,9 +740,15 @@ class AppState {
 		// So the claim is checked rather than trusted, and a tidy that would break
 		// the circuit is dropped instead — the drawing stays untidy, which is a far
 		// smaller problem than a wire that stopped conducting without saying so.
-		const before = buildConnectivity(this.schematic).nets.length;
-		const after = buildConnectivity({ ...this.schematic, wires }).nets.length;
-		this.schematic.wires = after > before ? original : wires;
+		//
+		// Checked as the grouping of the pins rather than as a count of nets. A
+		// count only ever caught the tidy coming apart; one that *joined* two nets
+		// made the number go down, which passed. A silent short is the same size of
+		// mistake as a silent break and reads the same way on the canvas — the
+		// drawing looks right and the answer is for a different circuit.
+		const before = pinPartition(buildConnectivity(this.schematic));
+		const after = pinPartition(buildConnectivity({ ...this.schematic, wires }));
+		this.schematic.wires = after === before ? wires : original;
 	}
 
 	/**
@@ -1340,7 +1347,12 @@ class AppState {
 		this.schematic = { instances: [], wires: [], subcircuits: this.schematic.subcircuits };
 		this.selection = [];
 		this.probes = [];
-		this.result = null;
+		// Like every other path that replaces the whole drawing. Clearing `result`
+		// alone left the sweep going: the engine's `Simulation` was never freed, the
+		// transport still said it was playing, and the next frame put the samples
+		// straight back on the screen — a live overlay of a circuit that no longer
+		// existed, on an empty sheet.
+		this.discardRun();
 	}
 
 	/**

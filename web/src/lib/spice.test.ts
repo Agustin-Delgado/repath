@@ -160,9 +160,15 @@ describe('what a card becomes', () => {
 		expect(model.cj0).toBeCloseTo(4e-12, 20);
 		expect(model.tt).toBeCloseTo(20e-9, 20);
 		expect(model.bv).toBe(100);
-		// Series resistance is not modelled yet and that is worth knowing; the
-		// test current for the breakdown is, so it is not reported as lost.
-		expect(ignored).toContain('RS');
+		// The bulk resistance is modelled, so it has to be read off the card and
+		// not reported as something that was dropped. Left out, a part pasted from
+		// a datasheet kept whichever `rs` the preset before it happened to carry,
+		// and the warning said the simulator had no equivalent for it — which is
+		// the one thing about it that was not true.
+		expect(model.rs).toBeCloseTo(0.568, 6);
+		expect(ignored).not.toContain('RS');
+		// The test current for the breakdown is consumed alongside `BV`, so it is
+		// not reported as lost either.
 		expect(ignored).not.toContain('IBV');
 	});
 

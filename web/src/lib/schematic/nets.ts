@@ -194,6 +194,32 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 }
 
 /**
+ * How the pins are grouped into nets, as one comparable string.
+ *
+ * For asking whether two versions of a drawing are the same circuit. Counting
+ * nets does not answer that: a tidy that splits one net in two and merges two
+ * others arrives at the same total, and a tidy that shorts two nets together
+ * arrives at a smaller one — which reads as an improvement.
+ *
+ * Pins rather than points, because pins are what the circuit is made of and they
+ * are exactly what tidying leaves alone. The points move: a junction gains one, a
+ * redundant corner loses one, and comparing those would report a difference on
+ * every successful tidy.
+ */
+export function pinPartition(connectivity: Connectivity): string {
+	const byNet = new Map<number, string[]>();
+	for (const [pin, net] of connectivity.netOfPin) {
+		const list = byNet.get(net);
+		if (list) list.push(pin);
+		else byNet.set(net, [pin]);
+	}
+	return [...byNet.values()]
+		.map((pins) => pins.sort().join(' '))
+		.sort()
+		.join(' | ');
+}
+
+/**
  * Join wires that meet end to end with nothing else at the joint.
  *
  * Two wires touching at a bare point are one conductor drawn in two pieces, and
@@ -220,8 +246,15 @@ export function mergeWireChains(schematic: Schematic): Wire[] {
 		points: w.points.map((p) => ({ x: p.x, y: p.y }))
 	}));
 
-	// Repeat until nothing more joins: a chain of four pieces takes three passes.
-	for (let guard = 0; guard < wires.length + 1; guard++) {
+	// Repeat until nothing more joins: a chain of N pieces takes N-1 passes.
+	//
+	// The bound is the count this started with. Measured against `wires.length` it
+	// closed on itself — each pass removes a wire, so after k joins the test read
+	// `k < N - k + 1` and gave up around halfway. A chain of five came out as two,
+	// six as two, eight as three, and every joint left behind is a fixed point that
+	// re-routing has to honour: the detours that read as the router being stupid.
+	const passes = wires.length;
+	for (let guard = 0; guard < passes; guard++) {
 		const ends = new Map<string, Array<{ index: number; atStart: boolean }>>();
 		wires.forEach((wire, index) => {
 			for (const atStart of [true, false]) {
