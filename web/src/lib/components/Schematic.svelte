@@ -399,7 +399,16 @@
 				// fed goes quiet at once, and whatever else is still carrying — a
 				// capacitor discharging into its load, say — keeps its dots, because
 				// those are measured afresh every frame.
-				if (closed.size !== conducting.size || [...closed].some((id) => !conducting.has(id))) {
+				// Two ways for the readings to be about a circuit that is not the one
+				// on screen. A contact moving is one: it is not the same circuit any
+				// more. The playhead jumping backwards is the other — Run restarting a
+				// sweep from zero, or the timeline dragged — and a reading is about the
+				// instant it was taken at, so it does not travel with the playhead.
+				// Reported as a switch drawn open with the dots still streaming past
+				// it: a fresh sweep at fifty microseconds, wearing what the last one
+				// was carrying when it was stopped.
+				const jumped = lastPlayback === null || app.playbackTime < lastPlayback;
+				if (jumped || closed.size !== conducting.size || [...closed].some((id) => !conducting.has(id))) {
 					forget(animation);
 					conducting = closed;
 				}
