@@ -942,7 +942,19 @@ impl Simulator {
             for adc in circuit.adcs_mut() {
                 let v = crate::element::node_index(adc.node).map_or(0.0, |i| x[i]);
                 if let Some((when, state)) = adc.sample(t, v) {
-                    pending.push((when.max(t), adc.driver(), adc.net, state));
+                    // At the instant the bridge worked out, not at the end of the
+                    // step. Rounding it up to `t` was the whole interpolation
+                    // undone: a crossing is always somewhere inside the step that
+                    // found it, so `max(t)` could only ever be `t`. On a coarse
+                    // step that put every edge on the analog grid — a ramp
+                    // crossing its threshold at 700 µs was recorded at 727 µs —
+                    // and the propagation delays of everything downstream were
+                    // measured from there.
+                    //
+                    // Nothing is scheduled in the past by it: the bridge never
+                    // reports an instant earlier than its own previous sample,
+                    // which is the last time the queue was settled.
+                    pending.push((when, adc.driver(), adc.net, state));
                 }
             }
         }
@@ -953,11 +965,11 @@ impl Simulator {
 
         // Let the event queue run out to the current instant.
         circuit.digital.settle(t);
-        let changed: Vec<(NetId, Logic)> = circuit
+        let changed: Vec<(NetId, Logic, f64)> = circuit
             .digital
             .changed_nets()
             .iter()
-            .map(|net| (*net, circuit.digital.state(*net)))
+            .map(|net| (*net, circuit.digital.state(*net), circuit.digital.changed_at(*net)))
             .collect();
 
         // Digital -> analog, and into the recorded waveforms.
@@ -966,17 +978,34 @@ impl Simulator {
         // rather than against the last entry in this result: a run advanced in
         // pieces hands back one result per piece, and a chunk that starts empty
         // would take the first sample of an unchanged net as a transition.
-        for (net, state) in &changed {
-            if let (Some(trace), Some(previous)) = (result.digital.get_mut(*net), last.get_mut(*net))
+        // Recorded at the instant the net actually took the value, not at the end
+        // of the analog step that happened to notice. A settle covers everything
+        // due up to `t`, so a gate delay of a nanosecond inside a microsecond step
+        // came back as having taken the whole microsecond, and every edge in the
+        // digital trace sat on the analog grid.
+        for (net, state, when) in &changed {
+            if let (Some(trace), Some(previous)) =
+                (result.digital.get_mut(*net), last.get_mut(*net))
                 && *previous != *state
             {
-                trace.push((t, *state));
+                trace.push((*when, *state));
                 *previous = *state;
             }
         }
+        // The bridges the other way are told `t`, and deliberately.
+        //
+        // A DAC answers a level with a ramp, and a ramp that began before the
+        // timepoint just accepted would be a change to a solve that is already
+        // finished — the analog side would step from a voltage it was solved at to
+        // one partway along an edge it never saw. Worse for a fast edge inside a
+        // slow step: the whole ramp would be in the past, so the output would jump,
+        // which is the one thing this bridge exists to never do.
+        //
+        // So the record is honest about when the logic moved, and the analog side
+        // starts moving at the earliest instant it can honour.
         if !changed.is_empty() {
             for dac in circuit.dacs_mut() {
-                if let Some((_, state)) = changed.iter().find(|(net, _)| *net == dac.net) {
+                if let Some((_, state, _)) = changed.iter().find(|(net, _, _)| *net == dac.net) {
                     dac.notify(*state, t);
                 }
             }

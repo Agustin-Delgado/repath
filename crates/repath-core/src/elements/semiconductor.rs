@@ -541,9 +541,7 @@ impl Diode {
         let e = safe_exp(vd / vt);
         let (mut id, mut gd) = (is * (e - 1.0), is * e / vt);
 
-        if let Some(bv) = self.model.bv
-            && vd < -bv
-        {
+        if let Some(bv) = self.model.bv {
             // Breakdown is a second exponential mirrored about -bv, anchored so
             // that the current through it is exactly `BREAKDOWN_KNEE` at -bv.
             //
@@ -552,6 +550,14 @@ impl Diode {
             // voltage, and the two are far apart: a part declared as 5.1 V then
             // regulated at 5.8 V once it was carrying a normal 13 mA. A datasheet
             // quotes the voltage at a test current, so that is what `bv` means.
+            //
+            // Evaluated everywhere rather than only past the knee. Switched on by
+            // a `vd < -bv` test it arrived already worth its full anchor current,
+            // so the I-V curve had a one-milliamp step in it at exactly -bv —
+            // a discontinuity in the current itself, not merely in its slope, which
+            // is the one thing Newton is entitled to assume it will not meet. Above
+            // the knee the term is `exp(-(bv + vd) / vt)`, which for a 5.1 V part
+            // is around 1e-49 at zero volts: nothing, but continuous nothing.
             let e = safe_exp(-(bv + vd) / vt);
             id -= BREAKDOWN_KNEE * e;
             gd += BREAKDOWN_KNEE * e / vt;
@@ -1356,8 +1362,19 @@ impl Bjt {
         let collector_conducted = ((i_f - i_r) - i_r / m.br) * sign;
         let base_conducted = (i_f / m.bf + i_r / m.br) * sign;
 
-        // The stored charge, which is already in the real frame.
-        let (i_be, i_bc) = (self.q_be.current(), self.q_bc.current());
+        // The stored charge, in the normalized frame like everything else here:
+        // the branches were handed `vbe` and `vbc` with the polarity already taken
+        // out of them, so what comes back out has to have it put back. The stamp
+        // does exactly that to the same two numbers.
+        //
+        // Read as being in the real frame instead — which is what the comment here
+        // used to claim — a pnp reported every capacitive current backwards. It
+        // does not show at all on an npn, where the sign is one, and on a pnp it
+        // shows only while something is moving, since the charge branches carry
+        // nothing once a junction has settled. So: fast edge, wrong direction, and
+        // the drawing animated the base current of a pnp flowing the wrong way
+        // through every transition.
+        let (i_be, i_bc) = (self.q_be.current() * sign, self.q_bc.current() * sign);
         let collector = collector_conducted - i_bc;
         let base = base_conducted + i_be + i_bc;
         (collector, base, -(collector + base))
@@ -1583,6 +1600,38 @@ mod tests {
         let (i_past, _) = d.evaluate(-6.0);
         assert!(i_below.abs() < 1e-6);
         assert!(i_past < -1e-4, "expected breakdown current, got {i_past}");
+    }
+
+    #[test]
+    fn a_zener_has_no_step_in_it_at_the_knee() {
+        // The knee is where the part is *specified*, so it is where a circuit
+        // using one spends its time. Switched on by a `vd < -bv` test, the
+        // breakdown term arrived worth its whole anchor current at once: a
+        // one-milliamp step across a nanovolt, in the current and not just in the
+        // slope. Newton is linearizing a function it is entitled to assume is
+        // continuous, and a DC sweep drew the step as though the part had one.
+        let bv = 5.1;
+        let d = Diode::new("D1", 1, 0, DiodeModel::zener(bv));
+
+        let (just_above, _) = d.evaluate(-bv + 1e-9);
+        let (just_below, _) = d.evaluate(-bv - 1e-9);
+        assert!(
+            (just_below - just_above).abs() < 1e-9,
+            "{:.3e} A of step across two nanovolts",
+            (just_below - just_above).abs()
+        );
+
+        // And the anchor still means what it says: `bv` is the voltage at the test
+        // current, the way a datasheet quotes it, not the foot of the curve.
+        let (at_knee, _) = d.evaluate(-bv);
+        assert!(
+            (at_knee.abs() - BREAKDOWN_KNEE).abs() / BREAKDOWN_KNEE < 1e-3,
+            "expected {BREAKDOWN_KNEE} A at -bv, got {at_knee}"
+        );
+        // Well above it the term has to be nothing at all, or an ordinary zener
+        // would leak on the forward side of its own curve.
+        let (leakage, _) = d.evaluate(0.0);
+        assert!(leakage.abs() < 1e-12, "breakdown reaching zero volts: {leakage}");
     }
 
     #[test]

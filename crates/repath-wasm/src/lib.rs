@@ -189,7 +189,11 @@ impl Simulation {
     /// The waveform is the JSON the netlist uses, so the caller can hand over a
     /// contact's whole bounce train anchored wherever it likes.
     #[wasm_bindgen(js_name = setSourceWaveform)]
-    pub fn set_source_waveform(&mut self, name: &str, waveform_json: &str) -> Result<bool, JsError> {
+    pub fn set_source_waveform(
+        &mut self,
+        name: &str,
+        waveform_json: &str,
+    ) -> Result<bool, JsError> {
         let waveform: Waveform = serde_json::from_str(waveform_json).map_err(to_js_error)?;
         Ok(self.circuit.set_source_waveform(name, waveform))
     }

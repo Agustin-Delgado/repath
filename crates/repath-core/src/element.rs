@@ -163,8 +163,7 @@ const RING_COOLDOWN: u8 = 32;
 impl RingDetector {
     /// Feed the mean current over the step just accepted.
     pub fn push(&mut self, current: f64) {
-        let flipped =
-            self.last != 0.0 && current != 0.0 && (current < 0.0) != (self.last < 0.0);
+        let flipped = self.last != 0.0 && current != 0.0 && (current < 0.0) != (self.last < 0.0);
         self.flips = if flipped { self.flips.saturating_add(1) } else { 0 };
 
         // Two in a row, and no shortcut based on the size of them: near a zero

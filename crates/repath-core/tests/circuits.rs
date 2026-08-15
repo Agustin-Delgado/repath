@@ -843,6 +843,52 @@ fn two_tri_states_take_turns_on_one_wire() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn a_digital_edge_lands_where_the_threshold_was_crossed() {
+    // A ramp whose crossing is exact arithmetic rather than a simulation result:
+    // 0 to 5 V over a millisecond meets a 3.5 V threshold at 700 µs, and no
+    // choice of timestep changes that. Stepped deliberately coarsely, so the
+    // crossing falls well inside a step and there is somewhere wrong to land.
+    //
+    // The bridge interpolates it, and the transient loop used to round that back
+    // up to the end of the step — which is every edge quantized to the analog
+    // grid, and every propagation delay downstream measured from the wrong
+    // instant.
+    let mut c = Circuit::new();
+    let n = c.node("in");
+    c.add(Box::new(VoltageSource::new(
+        "V1",
+        n,
+        Circuit::GROUND,
+        Waveform::Pwl { points: vec![(0.0, 0.0), (1e-3, 5.0)] },
+    )));
+    c.add(Box::new(Resistor::new("R1", n, Circuit::GROUND, 1e6)));
+    let net = c.net("d");
+    c.bridge_to_digital("A1", n, net, LogicFamily::cmos_5v());
+
+    let mut cfg = TransientConfig::new(1e-3);
+    cfg.max_step = 1e-4; // ten steps across the whole ramp
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+
+    let rise = result.digital[0]
+        .iter()
+        .find(|(_, state)| *state == Logic::High)
+        .map(|(t, _)| *t)
+        .expect("the ramp crosses v_ih, so there has to be a rising edge");
+
+    // Within a nanosecond of the arithmetic answer, on steps a hundred
+    // microseconds long.
+    assert!(
+        (rise - 700e-6).abs() < 1e-9,
+        "edge at {rise:.6e} s, threshold crossed at 7.000000e-4 s"
+    );
+    // And no sample sits there, so this cannot be passing by landing on one.
+    assert!(
+        !result.time.iter().any(|t| (t - 700e-6).abs() < 1e-9),
+        "the run happened to solve a timepoint at the crossing; the test proves nothing"
+    );
+}
+
+#[test]
 fn analog_input_drives_digital_logic_and_comes_back_out() {
     let family = LogicFamily::cmos_5v();
 
@@ -1829,12 +1875,10 @@ fn a_logic_source_holds_the_level_it_was_set_to() {
         ("low", "high", Logic::Low),
         ("high", "high", Logic::High),
     ] {
-        let netlist: Netlist = serde_json::from_str(&toggled_and(a, b))
-            .expect("the editor's netlist should parse");
+        let netlist: Netlist =
+            serde_json::from_str(&toggled_and(a, b)).expect("the editor's netlist should parse");
         let mut c = netlist.compile().expect("and should compile");
-        let result = Simulator::default()
-            .transient(&mut c, TransientConfig::new(1e-6))
-            .unwrap();
+        let result = Simulator::default().transient(&mut c, TransientConfig::new(1e-6)).unwrap();
 
         let dy = result.net_names.iter().position(|n| n == "dy").unwrap();
         // Sampled well past the gate delay, and again at the end: a source that
@@ -1921,7 +1965,9 @@ fn a_run_advanced_in_pieces_matches_the_same_run_solved_at_once() {
     let mut sim = Simulator::default();
     let (mut run, mut result) = sim.begin_transient(&mut piecewise, cfg).unwrap();
     for k in 1..=20 {
-        result.append(sim.advance_transient(&mut piecewise, &mut run, cfg.stop * k as f64 / 20.0).unwrap());
+        result.append(
+            sim.advance_transient(&mut piecewise, &mut run, cfg.stop * k as f64 / 20.0).unwrap(),
+        );
     }
 
     let index = batch.index_of("v(out)").unwrap();
@@ -2008,6 +2054,71 @@ fn a_logic_source_can_be_operated_while_the_run_is_going() {
     assert_eq!(result.digital[dy].iter().filter(|(_, s)| *s == Logic::High).count(), 1);
 }
 
+/// A transistor's reported base current agrees with the net it is drawn on,
+/// whichever way round the device is.
+///
+/// Adding to zero across the three terminals is not enough on its own: a figure
+/// with the wrong sign on every terminal still adds to zero. This checks against
+/// the circuit outside instead — everything leaving the base node has to balance
+/// — and does it on the edge, where the current is entirely the junction
+/// capacitances, since that is the part that carries the polarity.
+#[test]
+fn both_polarities_report_the_base_current_the_net_demands() {
+    /// (what the device says, what the net demands), midway through the edge.
+    fn measured(polarity: Polarity) -> (f64, f64) {
+        let sign = if polarity == Polarity::Npn { 1.0 } else { -1.0 };
+        let mut c = Circuit::new();
+        let supply = c.node("supply");
+        let col = c.node("col");
+        let base = c.node("base");
+
+        c.add(Box::new(VoltageSource::dc("V1", supply, Circuit::GROUND, 10.0 * sign)));
+        c.add(Box::new(Resistor::new("RC", col, Circuit::GROUND, 1000.0)));
+        c.add(Box::new(Resistor::new("RB", base, Circuit::GROUND, 1000.0)));
+        // Held off, so the junctions conduct nothing and the base terminal is
+        // carrying its capacitances and nothing else.
+        c.add(Box::new(VoltageSource::new(
+            "VB",
+            base,
+            Circuit::GROUND,
+            Waveform::Pulse {
+                v1: 0.0,
+                v2: -0.8 * sign,
+                delay: 1e-7,
+                rise: 1e-8,
+                fall: 1e-8,
+                width: 2e-7,
+                period: 0.0,
+            },
+        )));
+        let model = if polarity == Polarity::Npn { BjtModel::npn() } else { BjtModel::pnp() };
+        c.add(Box::new(Bjt::new("Q1", col, base, supply, model)));
+
+        let result = Simulator::default().transient(&mut c, TransientConfig::new(4e-7)).unwrap();
+        let k = result
+            .time
+            .iter()
+            .position(|t| *t > 1.02e-7 && *t < 1.08e-7)
+            .expect("a timepoint partway up the edge");
+
+        let reported = result.currents[k][result.element_index("Q1:b").unwrap()];
+        // KCL at the base node: what the source pushes in, less what the pull-down
+        // takes, is what went into the transistor.
+        let i_source = result.solution[k][result.index_of("i(VB)").unwrap()];
+        let v_base = result.solution[k][result.index_of("v(base)").unwrap()];
+        (reported, -i_source - v_base / 1000.0)
+    }
+
+    for polarity in [Polarity::Npn, Polarity::Pnp] {
+        let (reported, demanded) = measured(polarity);
+        assert!(demanded.abs() > 1e-6, "{polarity:?}: the edge should be carrying something");
+        assert!(
+            (reported - demanded).abs() / demanded.abs() < 0.01,
+            "{polarity:?}: reports {reported:.6e} A into the base, the net demands {demanded:.6e} A"
+        );
+    }
+}
+
 /// The currents reported at a MOSFET's terminals add up to nothing.
 ///
 /// Which is Kirchhoff, and the reason the drawing could not balance a net before
@@ -2037,8 +2148,7 @@ fn a_mosfet_reports_every_terminal_it_is_carrying() {
         },
     )));
     c.add(Box::new(Resistor::new("R1", vdd, drain, 1000.0)));
-    let mut model = MosfetModel::default();
-    model.channel = Channel::N;
+    let model = MosfetModel { channel: Channel::N, ..MosfetModel::default() };
     c.add(Box::new(Mosfet::new("M1", drain, gate, Circuit::GROUND, model)));
 
     let mut sim = Simulator::default();
@@ -2051,8 +2161,7 @@ fn a_mosfet_reports_every_terminal_it_is_carrying() {
 
     // Somewhere in the edge the gate is genuinely carrying something, or this
     // test would pass on a device that reports three zeroes.
-    let peak_gate =
-        result.currents.iter().map(|row| row[g].abs()).fold(0.0f64, f64::max);
+    let peak_gate = result.currents.iter().map(|row| row[g].abs()).fold(0.0f64, f64::max);
     assert!(peak_gate > 1e-4, "the gate never drew anything: peak {peak_gate:.3e} A");
 
     for (row, t) in result.currents.iter().zip(&result.time) {
@@ -2099,12 +2208,10 @@ fn a_gate_that_has_finished_charging_stops_swapping_direction() {
         },
     )));
     c.add(Box::new(Resistor::new("R1", vdd, drain, 1000.0)));
-    let mut model = MosfetModel::default();
-    model.channel = Channel::N;
+    let model = MosfetModel { channel: Channel::N, ..MosfetModel::default() };
     c.add(Box::new(Mosfet::new("M1", drain, gate, Circuit::GROUND, model)));
 
-    let result =
-        Simulator::default().transient(&mut c, TransientConfig::new(40e-6)).unwrap();
+    let result = Simulator::default().transient(&mut c, TransientConfig::new(40e-6)).unwrap();
     let g = result.element_index("M1:g").unwrap();
 
     // Counted only among currents big enough to be drawn at all: a reversal at

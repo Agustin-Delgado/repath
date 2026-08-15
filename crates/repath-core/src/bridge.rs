@@ -273,6 +273,11 @@ impl AdcBridge {
     /// Returns the digital event to schedule, if the node crossed a threshold.
     /// The event time is interpolated back to the estimated crossing instant so a
     /// coarse analog step does not smear the edge to the end of the step.
+    ///
+    /// The instant is never earlier than the previous sample, which is also the
+    /// last time the digital domain settled — so the caller can schedule it as it
+    /// stands. A negative delay would be the one way to break that, and there is
+    /// no such thing as a receiver that answers before it is asked.
     pub fn sample(&mut self, time: f64, voltage: f64) -> Option<(f64, Logic)> {
         let next = self.classify(voltage);
         let previous = self.state;
@@ -284,10 +289,11 @@ impl AdcBridge {
         }
         self.state = next;
 
+        let delay = self.delay.max(0.0);
         let threshold = match next {
             Logic::High => self.family.v_ih,
             Logic::Low => self.family.v_il,
-            _ => return Some((time + self.delay, next)),
+            _ => return Some((time + delay, next)),
         };
 
         let crossing = match prior {
@@ -297,7 +303,7 @@ impl AdcBridge {
             }
             _ => time,
         };
-        Some((crossing + self.delay, next))
+        Some((crossing + delay, next))
     }
 
     pub fn reset(&mut self) {

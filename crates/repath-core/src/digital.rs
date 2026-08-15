@@ -637,6 +637,14 @@ pub struct DigitalDomain {
     resolved: Vec<Logic>,
     /// Nets whose resolved value changed during the current instant.
     dirty: Vec<NetId>,
+    /// When each net last changed, which is the time of the event that did it and
+    /// not the instant somebody got round to asking.
+    ///
+    /// A settle covers everything due up to a time, so several instants can be
+    /// resolved in one call. Stamping the answer with the time of the call is what
+    /// puts every digital edge on the analog grid: a gate delay of a nanosecond
+    /// inside a microsecond step comes back as having taken a microsecond.
+    changed_at: Vec<f64>,
 }
 
 impl DigitalDomain {
@@ -649,6 +657,7 @@ impl DigitalDomain {
         self.nets.push(Net { name: name.into(), drivers: Vec::new(), resolved: Logic::HighZ });
         self.resolved.push(Logic::HighZ);
         self.fanout.push(Vec::new());
+        self.changed_at.push(0.0);
         id
     }
 
@@ -752,6 +761,15 @@ impl DigitalDomain {
         &self.dirty
     }
 
+    /// When a net last took the value it is holding.
+    ///
+    /// The time of the event that set it, which is what a waveform has to be drawn
+    /// against. It is not the same as the instant the caller settled to: one call
+    /// can run out several instants' worth of queue.
+    pub fn changed_at(&self, net: NetId) -> f64 {
+        self.changed_at.get(net).copied().unwrap_or(0.0)
+    }
+
     /// Apply every event due at or before `time`, then propagate until the
     /// domain is stable. Returns how many nets changed value; the nets themselves
     /// are available from [`Self::changed_nets`].
@@ -771,6 +789,7 @@ impl DigitalDomain {
                 if resolved != self.resolved[event.net] {
                     self.resolved[event.net] = resolved;
                     self.nets[event.net].resolved = resolved;
+                    self.changed_at[event.net] = event.time;
                     if !self.dirty.contains(&event.net) {
                         self.dirty.push(event.net);
                     }
@@ -839,6 +858,7 @@ impl DigitalDomain {
         for (i, n) in self.nets.iter_mut().enumerate() {
             n.resolved = Logic::HighZ;
             self.resolved[i] = Logic::HighZ;
+            self.changed_at[i] = 0.0;
         }
         for d in &mut self.devices {
             d.reset();
