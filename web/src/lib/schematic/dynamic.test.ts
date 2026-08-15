@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { advance, createAnimationState, isFlowing } from './animate';
+import { advance, createAnimationState, forget, isFlowing } from './animate';
 import { drawDynamic, tick, type DynamicView } from './dynamic';
 import type { FlowFrame } from './flow';
 
@@ -311,6 +311,54 @@ describe('a circuit that conducts in bursts', () => {
 		// And the travel is the charge that went past, not an invention: two
 		// bursts of 3e-4 A over a frame each, against a 1e-5 A reference.
 		expect(travel).toBeGreaterThan(20);
+	});
+
+	it('drops the held reading when the circuit under it changes', () => {
+		// The envelope is what keeps a burst on screen, and it is wrong across a
+		// contact. A switch bouncing open for a quarter of a millisecond left the
+		// branch it fed reading milliamps — beside its own symbol, drawn with the
+		// blade open. The engine had picoamps there: the reading was the needle
+		// coasting, not a current. `forget` is what the drawing calls when a blade
+		// moves, and this is the difference it makes.
+		const scale = 5e-3;
+		const conducting: FlowFrame = {
+			netVoltage: new Map(),
+			netUndriven: new Set(),
+			wireCurrent: new Map([['w#0', 4e-3]]),
+			instanceCurrent: new Map()
+		};
+		const opened: FlowFrame = {
+			netVoltage: new Map(),
+			netUndriven: new Set(),
+			// What an open contact really carries: leakage through a terohm.
+			wireCurrent: new Map([['w#0', 5e-12]]),
+			instanceCurrent: new Map()
+		};
+
+		const coasting = createAnimationState();
+		const cut = createAnimationState();
+		for (const state of [coasting, cut]) {
+			for (let k = 0; k < 10; k++) advance(state, conducting, scale, 1 / 60);
+		}
+		const held = cut.phase.get('w#0')!;
+		forget(cut);
+		// Nothing jumps: forgetting a reading is not moving a dot.
+		expect(cut.phase.get('w#0')).toBe(held);
+		// A tenth of a second of open contact — well inside the fall time.
+		for (let k = 0; k < 6; k++) {
+			advance(coasting, opened, scale, 1 / 60);
+			advance(cut, opened, scale, 1 / 60);
+		}
+
+		// Left alone it still claims most of the current it had.
+		expect(coasting.level.get('w#0') ?? 0).toBeGreaterThan(3e-3);
+		expect(isFlowing(coasting.level.get('w#0') ?? 0, scale)).toBe(true);
+		// Told the circuit changed, it reports what is there now.
+		expect(cut.level.get('w#0') ?? 0).toBeLessThan(1e-9);
+		expect(isFlowing(cut.level.get('w#0') ?? 0, scale)).toBe(false);
+		// And where the dots sit is untouched by any of it — they simply stop.
+		expect(cut.phase.get('w#0')).toBe(held);
+		expect(coasting.phase.get('w#0')).not.toBe(held);
 	});
 
 	it('leaves a wire that carries nothing alone', () => {

@@ -129,6 +129,21 @@ export function createAnimationState(): AnimationState {
 }
 
 /**
+ * Drop what is being remembered about magnitudes, keeping where the dots are.
+ *
+ * For when the circuit itself changes under the animation — a contact opening is
+ * the case that matters. The envelope exists to hold a reading up across frames
+ * where a burst happens to fall between samples, and holding it across a switch
+ * instead drew a branch that had just been disconnected as though it were still
+ * carrying what it carried a moment ago. The phases stay: dots are positions,
+ * and jumping them would be a glitch on a wire whose current never changed.
+ */
+export function forget(state: AnimationState): void {
+	state.level.clear();
+	state.pending.clear();
+}
+
+/**
  * Advance every phase by one frame.
  *
  * `dt` is real elapsed seconds, not simulated time: the dots are a readout of

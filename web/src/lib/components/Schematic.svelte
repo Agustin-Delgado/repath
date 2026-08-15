@@ -9,7 +9,7 @@
 	 */
 	import { untrack } from 'svelte';
 	import { CanvasEditor, type Painter } from '$lib/canvas';
-	import { createAnimationState } from '$lib/schematic/animate';
+	import { createAnimationState, forget } from '$lib/schematic/animate';
 	import { isActuatedAt, isClosedAt, isHighAt } from '$lib/schematic/contacts';
 	import {
 		drawGrid,
@@ -381,13 +381,25 @@
 					selection: selectionSet,
 					selectionColour: theme!.selection
 				};
+				// Asked before the dots are advanced, because a contact that has just
+				// moved changes what advancing them means.
+				const contactsMoved = trackSwitches(app.playbackTime);
+				// A closed contact opening is not the same circuit any more, and the
+				// readings carry a fall time so that a burst too short to see is still
+				// visible. Coasting that across the transition drew a switch with its
+				// blade open beside a label reading milliamps — the drawing arguing
+				// with itself. Dropped here so the next frame reads the circuit that
+				// exists now: the branch the contact fed goes quiet at once, and
+				// whatever else is still carrying — a capacitor discharging into its
+				// load, say — keeps its dots, because those are measured afresh.
+				if (contactsMoved) forget(animation);
 				// In seconds of wall clock, so a given current draws the dots along at
 				// the same speed however fast the run is being played.
 				tick(dynamicView, moved / Math.max(app.playbackRate, 1e-9));
 				active.invalidate('dynamic');
 				// The blades live on the layer underneath, which is repainted only on
 				// the frames where one of them actually moves.
-				if (trackSwitches(app.playbackTime)) active.invalidate('schematic');
+				if (contactsMoved) active.invalidate('schematic');
 				if (import.meta.env.DEV) {
 					const handle = (window as unknown as Record<string, Record<string, unknown>>).__repath;
 					if (handle) {
