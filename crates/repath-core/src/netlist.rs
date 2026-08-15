@@ -60,6 +60,16 @@ pub enum Component {
         a: String,
         b: String,
         resistance: f64,
+        /// First and second order temperature coefficients, per kelvin.
+        ///
+        /// Zero is a resistor made of nothing that exists, but zero is also what
+        /// a drawing means when nobody said otherwise — so it is the default here
+        /// and a deliberate choice in the editor, rather than a number invented
+        /// for parts whose tolerance already covers it.
+        #[serde(default)]
+        tc1: f64,
+        #[serde(default)]
+        tc2: f64,
     },
     Capacitor {
         name: String,
@@ -396,9 +406,9 @@ impl Netlist {
 
     fn add_component(&self, c: &mut Circuit, comp: &Component) -> Result<(), NetlistError> {
         match comp {
-            Component::Resistor { name, a, b, resistance } => {
+            Component::Resistor { name, a, b, resistance, tc1, tc2 } => {
                 let (a, b) = (self.node(c, a), self.node(c, b));
-                let mut r = Resistor::new(name, a, b, *resistance);
+                let mut r = Resistor::new(name, a, b, *resistance).with_tempco(*tc1, *tc2);
                 r.temp = self.temperature;
                 c.add(Box::new(r));
             }
@@ -443,7 +453,13 @@ impl Netlist {
             }
             Component::Mosfet { name, drain, gate, source, model } => {
                 let (d, g, s) = (self.node(c, drain), self.node(c, gate), self.node(c, source));
-                c.add(Box::new(Mosfet::new(name, d, g, s, *model)));
+                c.add(Box::new(Mosfet::new(
+                    name,
+                    d,
+                    g,
+                    s,
+                    MosfetModel { temp: self.temperature, ..*model },
+                )));
             }
             Component::Bjt { name, collector, base, emitter, model } => {
                 let (col, b, e) =
@@ -599,12 +615,16 @@ mod tests {
                     a: "in".into(),
                     b: "out".into(),
                     resistance: 1000.0,
+                    tc1: 0.0,
+                    tc2: 0.0,
                 },
                 Component::Resistor {
                     name: "R2".into(),
                     a: "out".into(),
                     b: "0".into(),
                     resistance: 3000.0,
+                    tc1: 0.0,
+                    tc2: 0.0,
                 },
             ],
             ..Default::default()

@@ -334,7 +334,11 @@ export function compileSchematic(
 					name,
 					a: analogOf(instance, 'a'),
 					b: analogOf(instance, 'b'),
-					resistance: drawn(instance, 'resistance', num(instance, 'resistance', 1000), seed)
+					resistance: drawn(instance, 'resistance', num(instance, 'resistance', 1000), seed),
+					// Quoted in parts per million per degree, the way a part is marked;
+					// the engine works in fractions per kelvin. Nothing could reach this
+					// before, so the temperature control did nothing to any resistor.
+					tc1: num(instance, 'tc1', 0) * 1e-6
 				});
 				break;
 			case 'capacitor':

@@ -14,6 +14,7 @@ use crate::element::{
     critical_voltage, limit_junction, node_index,
 };
 use crate::linalg::LinearSystem;
+use crate::lte::Trace;
 use serde::{Deserialize, Serialize};
 
 /// Boltzmann's constant over the elementary charge, in V/K.
@@ -193,7 +194,7 @@ fn depletion_capacitance(cj0: f64, vj: f64, grading: f64, v: f64) -> f64 {
 /// integration rule is the same for all of them, and the same as a plain
 /// capacitor's, so it lives here once: hand it this step's capacitance and get
 /// back a conductance and a history current to stamp.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct ChargeBranch {
     /// Voltage and capacitive current at the last accepted timepoint.
     v_prev: f64,
@@ -203,6 +204,15 @@ struct ChargeBranch {
     ring: RingDetector,
     /// Capacitance at the operating point, kept for AC analysis.
     c_op: f64,
+    /// Charge carried so far, and the history of it the step controller reads.
+    ///
+    /// Accumulated as `C·dv` rather than taken as `C·v`, because the capacitance
+    /// moves with the bias: the product is not the charge, and the curvature of
+    /// the product is not the curvature of the charge. It is also exactly the
+    /// integral of the current this branch reports, so the two cannot disagree
+    /// about how much went past.
+    q: f64,
+    charge: Trace,
 }
 
 impl ChargeBranch {
@@ -265,7 +275,15 @@ impl ChargeBranch {
         } else {
             self.i_mean = 0.0;
         }
+        self.q += c * (v - self.v_prev);
         self.v_prev = v;
+        self.charge.push(ctx.time, self.q);
+    }
+
+    /// Largest step this branch will take before its own truncation error is
+    /// worth more than the tolerance. `INFINITY` while it has nothing to say.
+    fn max_timestep(&self) -> f64 {
+        self.charge.suggested_step()
     }
 
     fn reset(&mut self) {
@@ -700,10 +718,15 @@ impl Element for Diode {
         // carrying goes to nothing between one timepoint and the next. Take that
         // one step short so the solver lands on the edge instead of integrating
         // across it and smearing the jump over a wide interval.
-        match self.blown_at {
+        let failing = match self.blown_at {
             Some(at) if ctx.time <= at => BURN_TIME * 1e-3,
             _ => f64::INFINITY,
-        }
+        };
+        // And the junction's own charge, which is what a reverse recovery is made
+        // of. Left out, the only thing bounding the step through one was the
+        // ceiling — so the sharpest feature a rectifier has was resolved at
+        // whatever resolution the run happened to be watched at.
+        failing.min(self.charge.max_timestep())
     }
 
     fn reset(&mut self) {
@@ -794,6 +817,12 @@ pub struct MosfetModel {
     pub cgd: f64,
     #[serde(default = "default_cds")]
     pub cds: f64,
+    /// Temperature this device is running at, in kelvin.
+    #[serde(default = "default_tnom")]
+    pub temp: f64,
+    /// Temperature the parameters above were measured at.
+    #[serde(default = "default_tnom")]
+    pub tnom: f64,
 }
 
 impl Default for MosfetModel {
@@ -812,6 +841,8 @@ impl Default for MosfetModel {
             cgs: default_cgs(),
             cgd: default_cgd(),
             cds: default_cds(),
+            temp: TNOM,
+            tnom: TNOM,
         }
     }
 }
@@ -827,7 +858,16 @@ impl MosfetModel {
 
     #[inline]
     fn beta(&self) -> f64 {
-        self.kp * (self.w / self.l.max(1e-12))
+        // Mobility falls as the lattice gets hotter and carriers scatter off it
+        // more, which is SPICE's `(T/Tnom)^-1.5`: the same gate drive carries less
+        // current in a hot part. It is why a MOSFET sharing a load with another
+        // one does not run away — the hotter of the two takes less of it.
+        //
+        // Half the story. A threshold also drifts, by a couple of millivolts per
+        // degree and in the opposite direction, and this model has no parameter
+        // for it; that is on the roadmap rather than invented here.
+        let ratio = (self.temp.max(1.0) / self.tnom.max(1.0)).max(1e-9);
+        self.kp * ratio.powf(-1.5) * (self.w / self.l.max(1e-12))
     }
 }
 
@@ -887,7 +927,17 @@ impl Mosfet {
         //
         // No charge of its own: `cds` is that charge, and a datasheet's `Coss` is
         // exactly this junction's capacitance plus `Crss`.
-        let junction = DiodeModel { cj0: 0.0, tt: 0.0, is: 1e-14, n: 1.0, ..DiodeModel::default() };
+        // At the same temperature as the rest of the part, since it is the same
+        // piece of silicon.
+        let junction = DiodeModel {
+            cj0: 0.0,
+            tt: 0.0,
+            is: 1e-14,
+            n: 1.0,
+            temp: model.temp,
+            tnom: model.tnom,
+            ..DiodeModel::default()
+        };
         let (anode, cathode) = match model.channel {
             Channel::N => (s, d),
             Channel::P => (d, s),
@@ -1120,6 +1170,19 @@ impl Element for Mosfet {
 
     fn is_ringing(&self) -> bool {
         self.q_gs.ringing() || self.q_gd.ringing() || self.q_ds.ringing()
+    }
+
+    /// The gate charge decides the step, which is the whole point of having it.
+    ///
+    /// A device that declared itself reactive and then never asked for a step left
+    /// the ceiling as the only thing bounding a gate edge — so how sharply a
+    /// MOSFET turned on depended on how wide a window somebody was watching.
+    fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.q_gs
+            .max_timestep()
+            .min(self.q_gd.max_timestep())
+            .min(self.q_ds.max_timestep())
+            .min(self.body.max_timestep(ctx))
     }
 
     fn terminal_names(&self) -> &'static [&'static str] {
@@ -1606,6 +1669,13 @@ impl Element for Bjt {
 
     fn is_ringing(&self) -> bool {
         self.q_be.ringing() || self.q_bc.ringing()
+    }
+
+    /// The junction charge decides the step. `tf` is what sets a transistor's
+    /// transition frequency, and a step long beside it integrates straight across
+    /// the part of a switching edge the device is characterised by.
+    fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
+        self.q_be.max_timestep().min(self.q_bc.max_timestep())
     }
 
     fn terminal_names(&self) -> &'static [&'static str] {

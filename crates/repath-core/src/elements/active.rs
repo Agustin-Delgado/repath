@@ -11,6 +11,7 @@ use crate::element::{
     AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, StampCtx, StampReport, node_index,
 };
 use crate::linalg::LinearSystem;
+use crate::lte::Trace;
 use serde::{Deserialize, Serialize};
 
 /// Everything about an op-amp that the first page of a datasheet tells you.
@@ -125,6 +126,8 @@ pub struct OpAmp {
     /// Gain-node voltage and capacitor current at the last accepted timepoint.
     v_prev: f64,
     i_prev: f64,
+    /// Charge on the compensation capacitor, for the step controller.
+    charge: Trace,
     /// First extra unknown: the gain node. Second: the output branch current.
     first: usize,
 }
@@ -141,6 +144,7 @@ impl OpAmp {
             op_g: 0.0,
             v_prev: 0.0,
             i_prev: 0.0,
+            charge: Trace::default(),
             first: 0,
         }
     }
@@ -315,6 +319,17 @@ impl Element for OpAmp {
             self.i_prev = geq * v - ieq;
         }
         self.v_prev = v;
+        self.charge.push(ctx.time, CC * v);
+    }
+
+    /// The compensation capacitor decides the step, the way any other charge does.
+    ///
+    /// It is the part's only state, so without this an op-amp declared itself
+    /// reactive and then had no opinion about how finely it was stepped: the whole
+    /// of a slew — the one part of the response the datasheet number is about — was
+    /// resolved at whatever the ceiling happened to be.
+    fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
+        self.charge.suggested_step()
     }
 
     fn reset(&mut self) {
@@ -322,6 +337,7 @@ impl Element for OpAmp {
         self.op_g = 0.0;
         self.v_prev = 0.0;
         self.i_prev = 0.0;
+        self.charge = Trace::default();
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {

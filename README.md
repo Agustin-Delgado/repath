@@ -110,14 +110,14 @@ Without it a single overshooting iterate produces `exp(500)` and the solve dies.
 
 ### Timestep control
 
-Capacitors and inductors record their charge or flux at each accepted timepoint. The
-third divided difference of that history estimates the local truncation error, and
-the solver takes the tightest step any element asks for. (A transistor's junction
-capacitances and an op-amp's compensation do not yet ask for one; they are bounded
-by the step ceiling instead, which is on the [Roadmap](#roadmap).) Below a noise floor derived
-from floating-point precision the estimate is ignored — a straight line's third
-divided difference is rounding error amplified by `1/h³`, and steering by it would
-collapse the timestep for no reason.
+Every charge in the circuit records itself at each accepted timepoint — a capacitor's,
+an inductor's flux, a transistor's junction and gate capacitances, an op-amp's
+compensation. The third divided difference of that history estimates the local
+truncation error, and the solver takes the tightest step any of them asks for. That
+is what makes the answer a property of the circuit rather than of the window it is
+being watched through. Below a noise floor derived from floating-point precision the
+estimate is ignored — a straight line's third divided difference is rounding error
+amplified by `1/h³`, and steering by it would collapse the timestep for no reason.
 
 The loop never steps *over* a discontinuity. Before each step it takes the minimum
 of the error budget, the shortest feature of any source waveform, the next waveform
@@ -348,9 +348,6 @@ much they would change what repath is good for:
 
 - **Sparse matrix solver.** The dense LU is fine to a few hundred nodes and then it
   is not.
-- **A timestep every charge asks for.** Plain capacitors and inductors steer the
-  step by their own truncation error; a transistor's junction capacitances and an
-  op-amp's compensation do not yet, so they are bounded by the step ceiling.
 - **Drawn subcircuits.** One pasted from a file is a part today; drawing a block
   once and nesting it is not.
 - **Dirty-rectangle repaint.** Layer-level invalidation plus viewport culling
@@ -362,6 +359,9 @@ much they would change what repath is good for:
   junction and gate capacitances and a diode's series resistance are all in, which
   is what gives a stage a top end and a rectifier a recovery.
 - **More logic**: counters, registers, decoders, memory.
+- **A MOSFET threshold that drifts.** Mobility already falls with temperature;
+  the threshold moves the other way by a couple of millivolts per degree, and this
+  model has no parameter for it.
 
 ## Testing
 

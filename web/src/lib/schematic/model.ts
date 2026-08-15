@@ -521,7 +521,21 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('a', -30, 0), analog('b', 30, 0)],
 		params: [
 			{ key: 'resistance', label: 'Resistance', unit: 'Ω', default: 1000, min: 0, nonZero: true },
-			tolerance(1)
+			tolerance(1),
+			{
+				key: 'tc1',
+				label: 'Temperature coefficient',
+				unit: 'ppm/°C',
+				// Zero rather than a plausible film figure. The engine has modelled this
+				// all along and nothing could reach it, so the temperature control did
+				// nothing to any resistor at all; a number invented here to fix that
+				// would quietly move the answer of every drawing already saved.
+				default: 0,
+				plain: true,
+				step: 10,
+				description:
+					'How far the value drifts per degree. A carbon film part is a few hundred ppm and a wirewound one more; the reason a precision divider is built from a matched pair is that theirs cancel.'
+			}
 		]
 	},
 	{

@@ -1827,6 +1827,64 @@ fn a_diode_drops_two_millivolts_less_for_every_degree_warmer() {
     assert!((1.7..3.0).contains(&ratio), "ten degrees multiplied the leakage by {ratio:.2}");
 }
 
+/// The temperature on a drawing reaches every part that has an opinion about it.
+///
+/// Written against the netlist rather than against the devices, because that is
+/// where it went missing: the models were all there and the wiring was not. A
+/// MOSFET had no temperature at all, and a resistor had the coefficients but no
+/// way for anybody to set them — so the control on screen moved a diode and a
+/// transistor and quietly did nothing to the other half of the drawing.
+#[test]
+fn the_temperature_on_the_drawing_reaches_every_part() {
+    fn currents(celsius: f64) -> (f64, f64) {
+        let json = format!(
+            r#"{{"temperature": {},
+                "components": [
+                  {{"type":"voltage_source","name":"V1","plus":"vcc","minus":"gnd",
+                    "waveform":{{"type":"dc","value":10}}}},
+                  {{"type":"resistor","name":"RSENSE","a":"vcc","b":"rload","resistance":1000,
+                    "tc1":0.002}},
+                  {{"type":"resistor","name":"RB","a":"rload","b":"gnd","resistance":1000}},
+                  {{"type":"resistor","name":"RD","a":"vcc","b":"drain","resistance":10000}},
+                  {{"type":"resistor","name":"RG","a":"vcc","b":"gate","resistance":1000}},
+                  {{"type":"resistor","name":"RGL","a":"gate","b":"gnd","resistance":400}},
+                  {{"type":"mosfet","name":"M1","drain":"drain","gate":"gate","source":"gnd",
+                    "model":{{"channel":"n","vto":2,"kp":2e-5,"lambda":0.02,"w":100,"l":1}}}}
+                ]}}"#,
+            celsius + 273.15
+        );
+        let netlist: Netlist = serde_json::from_str(&json).unwrap();
+        let mut c = netlist.compile().unwrap();
+        let op = Simulator::default().operating_point(&mut c).unwrap();
+        let at = |name: &str| op.solution[op.unknown_names.iter().position(|n| n == name).unwrap()];
+        let mut currents = Vec::new();
+        c.collect_currents(&op.solution, &mut currents);
+        let names = c.element_names();
+        (
+            // Through the divider, which moves only if the sense resistor drifted.
+            at("v(vcc)") - at("v(rload)"),
+            currents[names.iter().position(|n| n == "M1").unwrap()],
+        )
+    }
+
+    let (r_cold, m_cold) = currents(-40.0);
+    let (r_hot, m_hot) = currents(125.0);
+
+    // 2000 ppm/K over 165 K is about a third of the value, so the divider's
+    // midpoint has to move by percent, not by rounding.
+    assert!(
+        (r_hot - r_cold).abs() / r_cold > 0.05,
+        "a resistor with a temperature coefficient did not drift: {r_cold:.6} V vs {r_hot:.6} V"
+    );
+    // Mobility falls with temperature, so the hot device carries less at the same
+    // gate drive. That is the direction, and it is the whole reason two MOSFETs
+    // can share a load without one of them running away with it.
+    assert!(
+        m_hot.abs() < m_cold.abs() * 0.9,
+        "the MOSFET carried {m_cold:.6e} A cold and {m_hot:.6e} A hot"
+    );
+}
+
 #[test]
 fn a_resistor_drifts_by_its_temperature_coefficient() {
     // A part with none is one made of a material that does not exist. Two hundred
@@ -2052,6 +2110,69 @@ fn a_logic_source_can_be_operated_while_the_run_is_going() {
     assert_eq!(level_at(800e-9), Logic::High, "after it");
     // One edge, recorded once — not one per chunk.
     assert_eq!(result.digital[dy].iter().filter(|(_, s)| *s == Logic::High).count(), 1);
+}
+
+/// How sharply a MOSFET turns on does not depend on how wide a window somebody
+/// happened to be watching through.
+///
+/// The step ceiling is derived from the length of the run, so a device that
+/// declared itself reactive and then never asked for a timestep was resolved at
+/// whatever resolution the *view* implied. Widen the window and the same circuit
+/// gives a different answer, with nothing on screen to say why.
+#[test]
+fn a_gate_charging_is_resolved_however_wide_the_window() {
+    /// Drain voltage 5 µs after the gate starts charging through 100 kΩ.
+    fn drain_at(stop: f64, ceiling: Option<f64>) -> (f64, usize) {
+        let mut c = Circuit::new();
+        let vcc = c.node("vcc");
+        let drain = c.node("drain");
+        let gate = c.node("gate");
+        let drive = c.node("drive");
+        c.add(Box::new(VoltageSource::dc("V1", vcc, Circuit::GROUND, 10.0)));
+        c.add(Box::new(Resistor::new("RD", vcc, drain, 10_000.0)));
+        // A real source impedance, so what takes the time is the gate charge and
+        // not the driver — which is the whole point of modelling the charge.
+        c.add(Box::new(Resistor::new("RG", gate, drive, 100_000.0)));
+        c.add(Box::new(VoltageSource::new(
+            "VG",
+            drive,
+            Circuit::GROUND,
+            Waveform::Pulse {
+                v1: 0.0,
+                v2: 5.0,
+                delay: 1e-6,
+                rise: 1e-9,
+                fall: 1e-9,
+                width: 1.0,
+                period: 0.0,
+            },
+        )));
+        let model = MosfetModel { vto: 2.0, kp: 2e-5, w: 100e-6, l: 10e-6, ..MosfetModel::nmos() };
+        c.add(Box::new(Mosfet::new("M1", drain, gate, Circuit::GROUND, model)));
+
+        let mut cfg = TransientConfig::new(stop);
+        if let Some(step) = ceiling {
+            cfg.max_step = step;
+            cfg.initial_step = step / 5.0;
+        }
+        let r = Simulator::default().transient(&mut c, cfg).unwrap();
+        (value_at(&r, r.index_of("v(drain)").unwrap(), 6e-6), r.stats.accepted_steps)
+    }
+
+    // Stepped far finer than anything asks for: the answer the others approximate.
+    let (reference, _) = drain_at(2e-5, Some(1e-9));
+
+    // And through a window five hundred times wider than the feature, where the
+    // ceiling alone would take a five-microsecond step across a transition that
+    // takes about that long. Charging the gate has to be what shortens it.
+    for stop in [1e-3, 1e-2] {
+        let (v, steps) = drain_at(stop, None);
+        assert!(
+            (v - reference).abs() < 0.05,
+            "through a {stop:.0e} s window the drain reads {v:.6} V against {reference:.6} V \
+             solved properly, in {steps} steps"
+        );
+    }
 }
 
 /// A transistor reports the current the solver actually gave it.
