@@ -583,10 +583,12 @@ describe('a MOSFET being switched', () => {
 		}
 		expect(context.currentScale).toBeLessThan(biggest);
 
-		// And the steady current through the device is still drawn as flowing.
-		const steady = sampleFlow(context, run, run.time.length - 1);
-		const through = Math.abs(steady.instanceCurrent.get(schematic.instances[2].id) ?? 0);
-		expect(through).toBeGreaterThan(0);
+		// And the steady current through the conducting device is still drawn as
+		// flowing — sampled with the gate up, since a transistor that is off is
+		// carrying nothing and *should* be drawn as still.
+		const on = sampleFlow(context, run, sampleIndexAt(run.time, 25e-6));
+		const through = Math.abs(on.instanceCurrent.get(schematic.instances[2].id) ?? 0);
+		expect(through).toBeGreaterThan(1e-6);
 		expect(isFlowing(through, context.currentScale)).toBe(true);
 	});
 });

@@ -325,6 +325,16 @@ pub struct Simulator {
 /// Smallest step the transient loop will attempt, relative to the run length.
 const MIN_STEP_FRACTION: f64 = 1e-11;
 
+/// Damped steps taken after landing on a corner.
+///
+/// Two is enough to stop the step itself from ringing, and not enough to cover
+/// the tail: the response decays over the following few steps while the step
+/// size doubles each time, and the trapezoidal rule starts alternating again the
+/// moment it is handed back a step much longer than what is decaying. Eight
+/// covers the tail of an ordinary edge. It costs first-order accuracy on the
+/// part of a transient where the answer is already tiny.
+const CORNER_DAMPING: usize = 8;
+
 impl Default for Simulator {
     fn default() -> Self {
         Self::new(SolverConfig::default())
@@ -708,9 +718,11 @@ impl Simulator {
             cfg,
             t: 0.0,
             dt: cfg.initial_step.min(cfg.max_step).max(min_step),
-            // The trapezoidal rule rings if it is started from a step; a couple of
-            // backward-Euler steps damp the transient out first.
-            euler_steps: 2,
+            // The trapezoidal rule rings if it is started from a step, and the
+            // start of a run is the largest step there is: every source arrives
+            // at its t = 0 value out of nothing. Damped for as long as any other
+            // corner.
+            euler_steps: CORNER_DAMPING,
             min_step,
             stats,
             last_logic,
@@ -765,17 +777,22 @@ impl Simulator {
                 .min(self.element_step_limit(circuit, t))
                 .min(self.dac_step_limit(circuit, t));
 
+            // Whether this step ends exactly on a corner — the edge of a pulse,
+            // a point in a piecewise-linear table, a digital output changing.
+            let mut on_corner = false;
             if let Some(bp) = self.next_breakpoint(circuit, t)
                 && bp > t
                 && bp < t + step
             {
                 step = bp - t;
+                on_corner = true;
             }
             if let Some(event) = circuit.digital.next_event_time()
                 && event > t
                 && event < t + step
             {
                 step = event - t;
+                on_corner = true;
             }
             step = step.max(min_step);
 
@@ -820,6 +837,30 @@ impl Simulator {
             self.x_accepted.copy_from_slice(&self.x);
             stats.accepted_steps += 1;
             euler_steps = euler_steps.saturating_sub(1);
+
+            // Anything alternating step by step is the integrator, not the
+            // circuit. One damped step kills the mode; backward Euler has no
+            // ringing in it at all.
+            if circuit.elements().iter().any(|e| e.is_ringing()) {
+                euler_steps = euler_steps.max(1);
+            }
+
+            // Having just landed on a corner, take the next couple of steps with
+            // backward Euler.
+            //
+            // The trapezoidal rule is second-order accurate and, on a step, rings:
+            // the companion current alternates sign every timestep and decays by
+            // about a third each time, which is not a property of the circuit but
+            // of the integrator. It is invisible on a voltage — the ripple is tiny
+            // beside the level — and glaring on a capacitive current, which is
+            // *made* of the difference between consecutive points. A gate that had
+            // finished charging went on showing microamps swapping direction every
+            // step, and the drawing animated it: dots jittering back and forth
+            // along a wire carrying nothing. Two damped steps kill it, which is
+            // what every SPICE does at a breakpoint and this did only at t = 0.
+            if on_corner && attempt >= step {
+                euler_steps = euler_steps.max(CORNER_DAMPING);
+            }
 
             self.record(&mut result, circuit, t);
             self.exchange_with_digital(circuit, t, &mut result, &mut stats, &mut run.last_logic);

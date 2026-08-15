@@ -7,7 +7,8 @@
 
 use crate::complex::{C64, ComplexSystem};
 use crate::element::{
-    AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, StampCtx, StampReport, node_index,
+    AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, RingDetector, StampCtx, StampReport,
+    node_index,
 };
 use crate::elements::semiconductor::TNOM;
 use crate::linalg::LinearSystem;
@@ -98,6 +99,9 @@ pub struct Capacitor {
     pub ic: Option<f64>,
     v_prev: f64,
     i_prev: f64,
+    /// Mean current over the step just accepted — what the branch carried.
+    i_mean: f64,
+    ring: RingDetector,
     charge: Trace,
 }
 
@@ -111,6 +115,8 @@ impl Capacitor {
             ic: None,
             v_prev: 0.0,
             i_prev: 0.0,
+            i_mean: 0.0,
+            ring: RingDetector::default(),
             charge: Trace::default(),
         }
     }
@@ -188,6 +194,12 @@ impl Element for Capacitor {
                 Integration::Trapezoidal => geq * self.v_prev + self.i_prev,
             };
             self.i_prev = geq * v - ieq;
+            // What actually crossed the capacitance over the step, which is the
+            // honest thing to report and cannot ring by construction. The
+            // companion value above is the same number the stamp uses, and with a
+            // settled voltage the trapezoidal form of it is simply `-i_prev`.
+            self.i_mean = self.c * (v - self.v_prev) / ctx.dt;
+            self.ring.push(self.i_mean);
         }
         self.v_prev = v;
         self.charge.push(ctx.time, self.c * v);
@@ -196,7 +208,13 @@ impl Element for Capacitor {
     fn reset(&mut self) {
         self.v_prev = self.ic.unwrap_or(0.0);
         self.i_prev = 0.0;
+        self.i_mean = 0.0;
+        self.ring.reset();
         self.charge = Trace::default();
+    }
+
+    fn is_ringing(&self) -> bool {
+        self.ring.ringing()
     }
 
     fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
@@ -213,7 +231,7 @@ impl Element for Capacitor {
     }
 
     fn current(&self, _x: &[f64]) -> Option<f64> {
-        Some(self.i_prev)
+        Some(self.i_mean)
     }
 }
 

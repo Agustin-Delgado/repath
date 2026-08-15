@@ -10,8 +10,8 @@
 
 use crate::complex::{C64, ComplexSystem};
 use crate::element::{
-    AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, StampCtx, StampReport, critical_voltage,
-    limit_junction, node_index,
+    AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, RingDetector, StampCtx, StampReport,
+    critical_voltage, limit_junction, node_index,
 };
 use crate::linalg::LinearSystem;
 use serde::{Deserialize, Serialize};
@@ -198,6 +198,9 @@ struct ChargeBranch {
     /// Voltage and capacitive current at the last accepted timepoint.
     v_prev: f64,
     i_prev: f64,
+    /// Mean current over the step just accepted — what the branch *carried*.
+    i_mean: f64,
+    ring: RingDetector,
     /// Capacitance at the operating point, kept for AC analysis.
     c_op: f64,
 }
@@ -229,13 +232,27 @@ impl ChargeBranch {
         }
     }
 
-    /// What this branch was carrying at the last accepted timepoint.
+    /// What this branch carried over the step just taken.
     ///
-    /// A capacitance's current cannot be read off the solution the way a
-    /// resistor's can — it is a rate of change, and the rate is what the
-    /// companion model worked out on the way to that timepoint.
+    /// The mean, `C·Δv/Δt`, and not the companion model's endpoint value — which
+    /// is the same number the stamp uses and is useless to look at. With the
+    /// voltage settled, the trapezoidal rule gives `i = −i_prev`: an oscillation
+    /// that alternates every timestep and never damps, because nothing is
+    /// exciting it. It is a property of the integrator, not of the circuit, and
+    /// it is invisible on a voltage and unmissable on a current — a gate that had
+    /// finished charging showed microamps swapping direction every step, and the
+    /// drawing animated that as dots jittering back and forth along a wire
+    /// carrying nothing.
+    ///
+    /// The mean over the step is what actually crossed the capacitance, cannot
+    /// ring by construction, and is what a meter with any averaging at all would
+    /// read.
     fn current(&self) -> f64 {
-        self.i_prev
+        self.i_mean
+    }
+
+    fn ringing(&self) -> bool {
+        self.ring.ringing()
     }
 
     /// Roll the branch forward past a converged timepoint.
@@ -243,6 +260,10 @@ impl ChargeBranch {
         if ctx.mode == Mode::Transient && ctx.dt > 0.0 {
             let (g, ieq) = self.terms(c, ctx.integration, ctx.dt);
             self.i_prev = g * v - ieq;
+            self.i_mean = c * (v - self.v_prev) / ctx.dt;
+            self.ring.push(self.i_mean);
+        } else {
+            self.i_mean = 0.0;
         }
         self.v_prev = v;
     }
@@ -1091,6 +1112,10 @@ impl Element for Mosfet {
         Some(drain)
     }
 
+    fn is_ringing(&self) -> bool {
+        self.q_gs.ringing() || self.q_gd.ringing() || self.q_ds.ringing()
+    }
+
     fn terminal_names(&self) -> &'static [&'static str] {
         &["g", "s"]
     }
@@ -1520,6 +1545,10 @@ impl Element for Bjt {
     fn current(&self, x: &[f64]) -> Option<f64> {
         let (collector, _, _) = self.terminals(x);
         Some(collector)
+    }
+
+    fn is_ringing(&self) -> bool {
+        self.q_be.ringing() || self.q_bc.ringing()
     }
 
     fn terminal_names(&self) -> &'static [&'static str] {

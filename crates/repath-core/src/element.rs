@@ -129,6 +129,66 @@ impl StampReport {
     pub const LIMITED: Self = Self { limited: true };
 }
 
+/// Watches a branch current for the one thing the trapezoidal rule does wrong.
+///
+/// On a node whose time constant is far shorter than the step being taken, the
+/// trapezoidal rule does not settle: it alternates about the answer, one step
+/// positive, the next negative, and the amplitude decays only as the step size
+/// grows. Nothing is exciting it — it is the method — and it is why every
+/// serious simulator either offers Gear or, like this one, watches for the
+/// signature and damps it.
+///
+/// The signature is a sign change on two consecutive steps. A real signal that
+/// crosses zero does so once and then carries on; a current that reverses on
+/// every step has a period of two steps, which is the highest frequency the grid
+/// can represent and never something the circuit is doing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RingDetector {
+    last: f64,
+    flips: u8,
+    cooldown: u8,
+}
+
+/// How many steps stay damped once a branch has been caught ringing.
+///
+/// Long, on purpose. One damped step kills the oscillation, and the next
+/// trapezoidal step starts it again — the rule is neutrally stable on that node,
+/// so every step's own truncation error keeps it alive, and alternating every
+/// third step looks no better than alternating every step. Staying damped until
+/// something happens is the honest trade: backward Euler is a worse rule for a
+/// signal that is moving and a perfectly good one for a node that has settled,
+/// which is exactly where this fires.
+const RING_COOLDOWN: u8 = 32;
+
+impl RingDetector {
+    /// Feed the mean current over the step just accepted.
+    pub fn push(&mut self, current: f64) {
+        let flipped =
+            self.last != 0.0 && current != 0.0 && (current < 0.0) != (self.last < 0.0);
+        self.flips = if flipped { self.flips.saturating_add(1) } else { 0 };
+
+        // Two in a row, and no shortcut based on the size of them: near a zero
+        // crossing any smooth signal can hand back a small sample and then a
+        // smaller one, and an LC tank crosses zero twice a cycle. Damping that is
+        // how backward Euler ends up eating the energy out of an oscillator that
+        // should run forever, which is what the shortcut did.
+        if self.flips >= 2 {
+            self.cooldown = RING_COOLDOWN;
+        } else {
+            self.cooldown = self.cooldown.saturating_sub(1);
+        }
+        self.last = current;
+    }
+
+    pub fn ringing(&self) -> bool {
+        self.cooldown > 0
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Lets a `Box<dyn Element>` be downcast back to its concrete type, which is how
 /// the editor changes a resistor's value without rebuilding the whole circuit.
 ///
@@ -221,6 +281,13 @@ pub trait Element: std::fmt::Debug + Send + AsAny {
     fn next_breakpoint(&self, t: f64) -> Option<f64> {
         let _ = t;
         None
+    }
+
+    /// Whether this element's own current is alternating step by step — the
+    /// trapezoidal rule ringing rather than the circuit doing anything. The
+    /// transient loop answers it by taking a damped step.
+    fn is_ringing(&self) -> bool {
+        false
     }
 
     /// Terminals this element reports a current for besides the first one.

@@ -2064,3 +2064,67 @@ fn a_mosfet_reports_every_terminal_it_is_carrying() {
         );
     }
 }
+
+/// A settled capacitance stops carrying current, instead of reversing forever.
+///
+/// The reported symptom was dots on a wire going back and forth erratically
+/// rather than flowing. They were: the trapezoidal rule, on a node whose time
+/// constant is a thousandth of the step being taken, does not settle — it
+/// alternates about the answer, one step each way, and the amplitude falls only
+/// as the step grows. It is invisible on a voltage and unmissable on a current,
+/// which is made of the difference between consecutive points.
+///
+/// Two things answer it: the reported current is the mean over the step, which
+/// cannot ring by construction, and a branch caught alternating gets the next
+/// step taken with backward Euler, which has no ringing in it.
+#[test]
+fn a_gate_that_has_finished_charging_stops_swapping_direction() {
+    let mut c = Circuit::new();
+    let vdd = c.node("vdd");
+    let gate = c.node("gate");
+    let drain = c.node("drain");
+    c.add(Box::new(VoltageSource::dc("VDD", vdd, Circuit::GROUND, 5.0)));
+    c.add(Box::new(VoltageSource::new(
+        "V1",
+        gate,
+        Circuit::GROUND,
+        Waveform::Pulse {
+            v1: 0.0,
+            v2: 5.0,
+            delay: 10e-6,
+            rise: 1e-8,
+            fall: 1e-8,
+            width: 50e-6,
+            period: 100e-6,
+        },
+    )));
+    c.add(Box::new(Resistor::new("R1", vdd, drain, 1000.0)));
+    let mut model = MosfetModel::default();
+    model.channel = Channel::N;
+    c.add(Box::new(Mosfet::new("M1", drain, gate, Circuit::GROUND, model)));
+
+    let result =
+        Simulator::default().transient(&mut c, TransientConfig::new(40e-6)).unwrap();
+    let g = result.element_index("M1:g").unwrap();
+
+    // Counted only among currents big enough to be drawn at all: a reversal at
+    // picoamps is below the threshold where anything moves on screen.
+    let visible = 1e-9;
+    let mut reversals = 0;
+    let mut previous = 0.0f64;
+    for (row, t) in result.currents.iter().zip(&result.time) {
+        let i = row[g];
+        if *t > 10.05e-6
+            && i.abs() > visible
+            && previous.abs() > visible
+            && i.signum() != previous.signum()
+        {
+            reversals += 1;
+        }
+        previous = i;
+    }
+    // The edge itself reverses the current once, and the tail of a real decay
+    // may cross zero once or twice on its way down. Sixty reversals is an
+    // integrator talking to itself.
+    assert!(reversals <= 8, "the gate current reversed {reversals} times after one edge");
+}
