@@ -328,7 +328,6 @@
 			// clock now, and this loop only draws what it has reached. Zero while the
 			// sweep is stopped and untouched.
 			const moved = lastPlayback === null ? 0 : app.playbackTime - lastPlayback;
-			lastPlayback = app.playbackTime;
 
 			// The live overlay belongs to the transient result. Leaving it running
 			// during a frequency sweep would show the state of a run the user is no
@@ -340,12 +339,18 @@
 			const run = app.result;
 			if (context && run && app.analysis === 'transient' && app.live) {
 				const index = sampleIndexAt(run.time, app.playbackTime);
+				// Where the last frame left off, so this one can be told what went
+				// past in between rather than what happens to be true at its end.
+				const since =
+					lastPlayback === null || lastPlayback > app.playbackTime
+						? index
+						: sampleIndexAt(run.time, lastPlayback);
 				// Scaled to what is on screen, not to the whole of memory: the window
 				// is what somebody is looking at, and a spike that scrolled off it an
 				// hour ago should not still be deciding how fast the dots move.
 				const first = sampleIndexAt(run.time, app.playbackTime - app.stopTime);
 				rescale(context, run, first, index);
-				const frame = sampleFlow(context, run, index);
+				const frame = sampleFlow(context, run, index, since);
 				dynamicView = {
 					schematic: app.schematic,
 					frame,
@@ -391,6 +396,7 @@
 			// Nothing live to read a contact position off: back to resting.
 			if (!app.live && trackSwitches(null)) active.invalidate('schematic');
 
+			lastPlayback = app.playbackTime;
 			frame = requestAnimationFrame(step);
 		};
 

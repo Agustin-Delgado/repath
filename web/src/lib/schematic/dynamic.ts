@@ -120,7 +120,11 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 					painter,
 					segment.a,
 					segment.b,
-					current,
+					// The envelope, so a wire that carries its charge in bursts keeps
+					// its dots between them instead of blinking once per burst. The
+					// instant's own current stands in until the envelope exists, which
+					// is the first frame of a run.
+					view.animation.level.get(id) ?? Math.abs(current),
 					context.currentScale,
 					view.animation.phase.get(id) ?? 0,
 					'#ffe9a8'
@@ -150,7 +154,7 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 				painter,
 				from as Vec2,
 				to as Vec2,
-				current,
+				view.animation.level.get(`i:${instance.id}`) ?? Math.abs(current),
 				context.currentScale,
 				view.animation.phase.get(`i:${instance.id}`) ?? 0,
 				'#ffe9a8'
@@ -274,6 +278,13 @@ function drawReadings(
 	for (const instance of view.schematic.instances) {
 		const current = view.frame.instanceCurrent.get(instance.id);
 		if (current === undefined || !inside(instance.x, instance.y)) continue;
+		// The same figure the dots are moving on: a needle with a fall time, not
+		// the instant. A part that conducts in bursts spends most of its frames
+		// carrying nothing, and a label that reported each of those would sit at
+		// zero and flick to a milliamp — while the dots beside it, which follow
+		// the charge, kept moving. Two readouts of the same thing disagreeing is
+		// worse than either being coarse.
+		const reading = view.animation.level.get(`i:${instance.id}`) ?? Math.abs(current);
 		// Stacked under the name and the value rather than put somewhere of its own.
 		// Those two already sit on the side the leads leave clear, and that is the
 		// only side with room: dropping the reading anywhere else lands it on a wire
@@ -283,7 +294,7 @@ function drawReadings(
 		const sideways = leadAxis(def, instance.rotation) === 'x';
 		const clear = (sideways ? reach.y : reach.x) + LABEL_GAP;
 		painter.text(
-			formatWithUnit(Math.abs(current), 'A', FIGURES),
+			formatWithUnit(reading, 'A', FIGURES),
 			sideways
 				? { x: instance.x, y: instance.y + clear + LINE }
 				: { x: instance.x + clear, y: instance.y + 8 + LINE },

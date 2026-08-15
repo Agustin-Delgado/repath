@@ -82,13 +82,50 @@ const MOTION_FLOOR = 0.002;
  */
 const CURRENT_FLOOR = 1e-9;
 
+/**
+ * How long a burst goes on being drawn after it has passed, in seconds.
+ *
+ * A switching circuit conducts in bursts far shorter than a frame — a CMOS gate
+ * charges in twenty nanoseconds and then does nothing for fifty microseconds —
+ * and a wire drawn only on the frames that catch one blinks rather than flows.
+ * This is the fall time of a needle: it says "something goes past here" for a
+ * moment after it did, which is what an instrument does and what makes a pulse
+ * train legible at all.
+ */
+const LEVEL_FALL = 0.4;
+
+/**
+ * Over how long a burst's travel is handed out, in seconds.
+ *
+ * The charge that crosses a gate arrives inside a single frame. Moving the dots
+ * by the whole of it at once is a jump — the eye reads it as a glitch, not as a
+ * flow — so it is paid out over about a sixth of a second instead. Every unit of
+ * travel is still charge that went past; only its timing inside that window is
+ * smoothed, which is unavoidable when the event itself is a thousand times
+ * shorter than a frame.
+ */
+const SPREAD = 0.16;
+
 export interface AnimationState {
 	/** Accumulated travel per wire or device, in schematic units. */
 	phase: Map<string, number>;
+	/**
+	 * Travel owed but not yet paid out.
+	 *
+	 * A burst's whole charge arrives in one frame, and moving the dots by all of
+	 * it at once is a teleport rather than a motion. It is paid out over the
+	 * following frames instead, a spacing at a time — every unit of travel still
+	 * corresponds to charge that really went past, only its timing inside a
+	 * fraction of a second is smoothed, which is unavoidable when a twenty
+	 * nanosecond event has to be shown in a sixteen millisecond frame.
+	 */
+	pending: Map<string, number>;
+	/** Decaying envelope of the magnitude, for deciding what to draw. */
+	level: Map<string, number>;
 }
 
 export function createAnimationState(): AnimationState {
-	return { phase: new Map() };
+	return { phase: new Map(), pending: new Map(), level: new Map() };
 }
 
 /**
@@ -104,16 +141,38 @@ export function advance(
 	scale: number,
 	dt: number
 ): void {
+	const fade = Math.exp(-dt / LEVEL_FALL);
 	const step = (key: string, current: number) => {
-		const normalised = current / scale;
+		// The envelope first: it decays whether or not anything is flowing, and it
+		// is what the drawing asks about.
+		const held = (state.level.get(key) ?? 0) * fade;
+		const level = Math.max(Math.abs(current), held);
+		state.level.set(key, level);
+
 		// The same rule the drawing uses, so a dot never advances on a leg that is
 		// not being painted — otherwise a switch closed after a long open stretch
 		// would show its dots already halfway along.
-		if (!isFlowing(current, scale)) return;
-		const next = (state.phase.get(key) ?? 0) + normalised * REFERENCE_SPEED * dt;
+		if (!isFlowing(level, scale)) {
+			state.pending.delete(key);
+			return;
+		}
+
+		const owed = (state.pending.get(key) ?? 0) + (current / scale) * REFERENCE_SPEED * dt;
+		// Paid out over a fraction of a second rather than all at once, and never
+		// more than a spacing in a single frame. A steady current fills and drains
+		// this at the same rate and comes out unchanged apart from a tenth of a
+		// second of lag; a burst comes out as a glide, which is the same travel
+		// spread over enough frames for an eye to follow it.
+		const drain = 1 - Math.exp(-dt / SPREAD);
+		let release = Math.max(-DOT_SPACING, Math.min(DOT_SPACING, owed * drain));
+		// Crumbs left in the bucket would keep a wire that has stopped carrying
+		// anything twitching forever.
+		if (Math.abs(owed - release) < 0.005) release = owed;
+		state.pending.set(key, owed - release);
+
 		// Wrap rather than grow without bound: after a few minutes of playback the
 		// accumulated value would start losing precision where it matters.
-		state.phase.set(key, next % DOT_SPACING);
+		state.phase.set(key, ((state.phase.get(key) ?? 0) + release) % DOT_SPACING);
 	};
 
 	for (const [id, current] of frame.wireCurrent) step(id, current);
@@ -146,16 +205,23 @@ export function isFlowing(current: number, scale: number): boolean {
 	return Math.abs(current) >= CURRENT_FLOOR && Math.abs(current / scale) >= MOTION_FLOOR;
 }
 
-/** Draw the moving dots for one segment. */
+/**
+ * Draw the moving dots for one segment.
+ *
+ * `level` is the envelope rather than the instant's current: what decides
+ * whether a wire shows dots is whether charge has gone past it recently, not
+ * whether it happens to be going past in the frame being drawn.
+ */
 export function drawFlow(
 	painter: Painter,
 	a: Vec2,
 	b: Vec2,
-	current: number,
+	level: number,
 	scale: number,
 	phase: number,
 	colour: string
 ): void {
+	const current = level;
 	if (!isFlowing(current, scale)) return;
 	// Bigger dots for bigger currents, but only mildly: the position and speed
 	// carry the quantity, the size is just emphasis.

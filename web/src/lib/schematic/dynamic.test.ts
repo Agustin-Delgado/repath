@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { createAnimationState } from './animate';
+import { advance, createAnimationState, isFlowing } from './animate';
 import { drawDynamic, tick, type DynamicView } from './dynamic';
 import type { FlowFrame } from './flow';
 
@@ -259,5 +259,70 @@ describe('which way the dots travel', () => {
 		for (const run of [onTheWire, throughThePart]) {
 			for (let i = 1; i < run.length; i++) expect(run[i].y).toBeGreaterThan(run[i - 1].y);
 		}
+	});
+});
+
+describe('a circuit that conducts in bursts', () => {
+	/**
+	 * The reported symptom: dots that blink rather than flow.
+	 *
+	 * A CMOS gate charges in twenty nanoseconds and then does nothing for fifty
+	 * microseconds, while a frame covers a couple of microseconds. Drawn from the
+	 * instant at the end of each frame, the wire showed nothing at all on almost
+	 * every frame and one bright flash on the rest. The envelope is what keeps it
+	 * on screen between bursts, and the pending travel is what turns the burst's
+	 * charge into a glide instead of a jump.
+	 */
+	it('keeps its dots on screen between the bursts', () => {
+		const state = createAnimationState();
+		const scale = 1e-5;
+		const frames: FlowFrame[] = [];
+		// One burst, then thirty frames of nothing, twice over.
+		for (let round = 0; round < 2; round++) {
+			for (let k = 0; k < 30; k++) {
+				frames.push({
+					netVoltage: new Map(),
+					netUndriven: new Set(),
+					wireCurrent: new Map([['w#0', k === 0 ? 3e-4 : 0]]),
+					instanceCurrent: new Map()
+				});
+			}
+		}
+
+		let drawn = 0;
+		let moving = 0;
+		let travel = 0;
+		let previous = 0;
+		for (const frame of frames) {
+			advance(state, frame, scale, 1 / 60);
+			const level = state.level.get('w#0') ?? 0;
+			if (isFlowing(level, scale)) drawn++;
+			const phase = state.phase.get('w#0') ?? 0;
+			let step = phase - previous;
+			if (Math.abs(step) > 11) step -= Math.sign(step) * 22;
+			if (Math.abs(step) > 0.05) moving++;
+			travel += Math.abs(step);
+			previous = phase;
+		}
+
+		// Two bursts in sixty frames used to light two of them.
+		expect(drawn).toBeGreaterThan(50);
+		expect(moving).toBeGreaterThan(40);
+		// And the travel is the charge that went past, not an invention: two
+		// bursts of 3e-4 A over a frame each, against a 1e-5 A reference.
+		expect(travel).toBeGreaterThan(20);
+	});
+
+	it('leaves a wire that carries nothing alone', () => {
+		const state = createAnimationState();
+		const quiet: FlowFrame = {
+			netVoltage: new Map(),
+			netUndriven: new Set(),
+			wireCurrent: new Map([['w#0', 0]]),
+			instanceCurrent: new Map()
+		};
+		for (let k = 0; k < 60; k++) advance(state, quiet, 1e-5, 1 / 60);
+		expect(isFlowing(state.level.get('w#0') ?? 0, 1e-5)).toBe(false);
+		expect(state.phase.get('w#0') ?? 0).toBe(0);
 	});
 });

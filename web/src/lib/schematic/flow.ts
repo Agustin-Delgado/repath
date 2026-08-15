@@ -291,24 +291,42 @@ export function rescale(context: FlowContext, run: TransientRun, from: number, t
 	}
 	context.voltageRange = high - low < 1e-9 ? { lo: -1, hi: 1 } : { lo: low, hi: high };
 
-	// Current: a high percentile of what is on screen, sampled rather than read
-	// in full — the answer is a scale for an animation, and a hundred rows say
-	// the same thing as ten thousand at a fraction of the frame budget.
+	// Current: one figure per part — the mean of its magnitude over the window —
+	// and then a high percentile across the parts.
+	//
+	// Averaged, not sampled at its peak, and that distinction is the whole
+	// difference between a drawing that flows and one that flashes. A switching
+	// circuit spends a thousandth of its time conducting: scaled to the peak of
+	// the burst, everything the circuit does for the rest of the time normalises
+	// to a thousandth of full speed, which is a stationary dot. Scaled to what
+	// the part carries on average, a wire moves at a rate that means something —
+	// how much charge is really going past — and the burst is a lurch on top.
+	// Weighted by time, not by sample. The step controller crowds its samples
+	// into the microsecond where something happens and takes one long step across
+	// the fifty microseconds where nothing does, so counting samples equally
+	// reports the burst as though the circuit were doing it all the time — which
+	// put the reference three hundred times above what the wire really carries,
+	// and left every dot on the drawing standing still.
 	const stride = Math.max(1, Math.floor((hi - lo + 1) / SCALE_ROWS));
-	const magnitudes: number[] = [];
+	const averages: number[] = [];
 	for (const series of run.currents) {
-		for (let k = lo; k <= hi; k += stride) {
+		let charge = 0;
+		let elapsed = 0;
+		for (let k = lo; k + stride <= hi; k += stride) {
 			const magnitude = Math.abs(series[k]);
-			if (magnitude > 0 && Number.isFinite(magnitude)) magnitudes.push(magnitude);
+			if (!Number.isFinite(magnitude)) continue;
+			const width = run.time[k + stride] - run.time[k];
+			charge += magnitude * width;
+			elapsed += width;
 		}
+		if (elapsed > 0 && charge > 0) averages.push(charge / elapsed);
 	}
-	if (magnitudes.length === 0) {
+	if (averages.length === 0) {
 		context.currentScale = 1;
 		return;
 	}
-	magnitudes.sort((a, b) => a - b);
-	const percentile = magnitudes[Math.floor((magnitudes.length - 1) * SCALE_PERCENTILE)];
-	context.currentScale = percentile > 0 ? percentile : magnitudes[magnitudes.length - 1];
+	averages.sort((a, b) => a - b);
+	context.currentScale = averages[Math.floor((averages.length - 1) * SCALE_PERCENTILE)];
 }
 
 /**
@@ -389,13 +407,13 @@ function planNet(
 }
 
 /** Rows sampled when working out the current scale. */
-const SCALE_ROWS = 128;
+const SCALE_ROWS = 512;
 
 /**
- * Where in the spread of currents the animation's full speed sits.
+ * Where among the parts the animation's full speed sits.
  *
- * Not the top. A tenth of the samples being drawn faster than full speed is a
- * far smaller lie than nine tenths of them being drawn as no flow at all.
+ * Not the busiest one. A tenth of the circuit being drawn faster than full speed
+ * is a far smaller lie than nine tenths of it being drawn as carrying nothing.
  */
 const SCALE_PERCENTILE = 0.9;
 
@@ -413,14 +431,48 @@ export function sampleIndexAt(times: ArrayLike<number>, time: number): number {
 }
 
 /**
- * Evaluate one timepoint. Cheap enough to call every frame.
+ * Evaluate what to draw for one frame.
  *
- * The run is passed in rather than read off the context: with a live capture the
- * samples are still arriving, and the context was built when the run started.
+ * `since` is where the previous frame left off. Currents come back as the *mean*
+ * over that interval rather than as the sample at its end, and that is the whole
+ * difference between a flow and a flicker.
+ *
+ * A frame covers a stretch of simulated time — a couple of microseconds at an
+ * ordinary timebase — and a switching circuit does its conducting in bursts far
+ * shorter than that. Reading one instant per frame, the drawing missed almost
+ * every burst and caught the occasional one whole: over a hundred and fifty
+ * frames of a CMOS inverter, two of them showed any current at all and the rest
+ * showed a dead circuit. The mean cannot miss anything: it is the charge that
+ * moved, divided by the time it took, so a burst always contributes exactly
+ * what it carried and the dots advance by the charge that went past them.
+ *
+ * Voltages stay instantaneous. A voltage is a level, not a flow, and averaging
+ * it would only blur an edge that the scope beside it draws sharp.
  */
-export function sampleFlow(context: FlowContext, run: TransientRun, index: number): FlowFrame {
-	const at = Math.min(Math.max(index, 0), Math.max(run.time.length - 1, 0));
-	const currentOf = (element: number) => run.currents[element]?.[at] ?? 0;
+export function sampleFlow(
+	context: FlowContext,
+	run: TransientRun,
+	index: number,
+	since = index
+): FlowFrame {
+	const last = Math.max(run.time.length - 1, 0);
+	const at = Math.min(Math.max(index, 0), last);
+	const from = Math.min(Math.max(since, 0), at);
+	const span = (run.time[at] ?? 0) - (run.time[from] ?? 0);
+
+	const currentOf = (element: number) => {
+		const series = run.currents[element];
+		if (!series) return 0;
+		if (from >= at || span <= 0) return series[at] ?? 0;
+		// Trapezoidal, on the solver's own grid: the samples are not evenly
+		// spaced, and the gap around a burst is exactly where the step control
+		// puts its shortest steps.
+		let charge = 0;
+		for (let k = from; k < at; k++) {
+			charge += 0.5 * ((series[k] ?? 0) + (series[k + 1] ?? 0)) * (run.time[k + 1] - run.time[k]);
+		}
+		return charge / span;
+	};
 
 	const netVoltage = new Map<number, number>();
 	for (const [net, signal] of context.netSignal) {
