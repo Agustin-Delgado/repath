@@ -479,6 +479,16 @@ export function sampleIndexAt(times: ArrayLike<number>, time: number): number {
  *
  * Voltages stay instantaneous. A voltage is a level, not a flow, and averaging
  * it would only blur an edge that the scope beside it draws sharp.
+ *
+ * What the mean must never be taken across is a change to the circuit itself.
+ * Averaging over one of those mixes two different circuits into a reading that
+ * belongs to neither: flip an input of the half adder and the frame the playhead
+ * crosses the transition on came back with a share of the old current in one
+ * branch and a share of the new one in another — both lamps at half brightness,
+ * a state the engine never solved. On a live run that frame is held for about a
+ * second, because the playhead advances in steps far longer than a frame, so it
+ * reads as the drawing being wrong rather than as a blur. The caller passes
+ * `since === index` over such a frame, and gets the instant.
  */
 export function sampleFlow(
 	context: FlowContext,
@@ -488,7 +498,7 @@ export function sampleFlow(
 ): FlowFrame {
 	const last = Math.max(run.time.length - 1, 0);
 	const at = Math.min(Math.max(index, 0), last);
-	const from = Math.min(Math.max(since, 0), at);
+	const from = latestChangeAt(run, Math.min(Math.max(since, 0), at), at);
 	const span = (run.time[at] ?? 0) - (run.time[from] ?? 0);
 
 	const currentOf = (element: number) => {
@@ -547,6 +557,47 @@ export function sampleFlow(
 	}
 
 	return { netVoltage, netUndriven, wireCurrent, instanceCurrent };
+}
+
+/**
+ * Where the circuit now on screen began, within a frame's span.
+ *
+ * The mean over a whole span is what keeps a burst shorter than a frame visible,
+ * but taken across a change of state it mixes two different circuits into a
+ * reading that belongs to neither. Flip an input of the half adder and the frame
+ * the playhead crosses the transition on came back with a share of the old
+ * current in one branch and a share of the new one in another — both lamps at
+ * half brightness, a state the engine never solved, held for about a second
+ * because a live run advances the playhead in steps far longer than a frame.
+ *
+ * The last digital transition inside the span is that boundary, so the mean is
+ * taken from there rather than from where the previous frame ended. It is not a
+ * threshold on the current itself, which would have to guess: a burst and a
+ * change of level look alike in a single number, and only the event says which
+ * it was. The switching burst of a CMOS inverter still counts in full, because
+ * it happens *after* its transition, not before it.
+ *
+ * Detecting the operation instead is not enough, and that was the first attempt:
+ * a gate takes its propagation delay to answer, so the electrical change lands
+ * frames after the toggle the playhead has already crossed.
+ */
+function latestChangeAt(run: TransientRun, from: number, at: number): number {
+	if (from >= at) return from;
+	const lower = run.time[from] ?? 0;
+	const upper = run.time[at] ?? 0;
+	let latest = lower;
+	for (const transitions of run.digital) {
+		if (!transitions) continue;
+		for (let k = transitions.length - 1; k >= 0; k--) {
+			const time = transitions[k].time;
+			if (time <= latest) break;
+			if (time <= upper) {
+				latest = time;
+				break;
+			}
+		}
+	}
+	return latest > lower ? Math.min(sampleIndexAt(run.time, latest), at) : from;
 }
 
 /** The state a digital net had settled on at an instant. */

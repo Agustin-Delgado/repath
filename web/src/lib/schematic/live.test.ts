@@ -19,6 +19,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import init, { Simulation } from '../wasm/repath.js';
 import { LiveRun } from '$lib/engine';
 import { Capture } from '$lib/capture';
+import { EXAMPLES } from '../examples';
 import { compileSchematic } from './netlist';
 import { isFlowing } from './animate';
 import { prepareFlow, sampleFlow, sampleIndexAt, type FlowFrame } from './flow';
@@ -505,6 +506,104 @@ describe('a logic toggle', () => {
 		expect(stateAt(2e-4)).toBe('low');
 		expect(stateAt(8e-4)).toBe('high');
 		expect(transitions.some((t) => t.time > 3e-4 && t.time < 5e-4)).toBe(true);
+	});
+
+	it('never mixes the circuit before a change with the one after it', () => {
+		// Reported from the half adder: flip an input while it is running, wait, and
+		// for about a second both lamps sit at half brightness. A frame spans a
+		// stretch of simulated time and its currents are the mean over it, so a frame
+		// straddling the transition carried a share of the old circuit and a share of
+		// the new one — 4.9 mA through one lamp and 3.0 mA through the other, adding
+		// up to exactly one lit lamp, in a circuit that only ever solved for one or
+		// the other. On a live run the playhead advances in steps far longer than a
+		// frame, so that reading is held until it moves again.
+		const schematic = EXAMPLES.find((e) => e.id === 'half-adder')!.build();
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
+
+		const live = new LiveRun(compiled.netlist, 1e-8);
+		const capture = new Capture(
+			live.unknownNames,
+			live.elementNames,
+			live.netNames,
+			live.nodeCount
+		);
+		capture.add(live.first);
+		// Operated partway through a frame rather than on its edge, which is where
+		// the mean has both circuits to mix.
+		capture.add(live.advance(1.12e-6));
+		expect(live.setLogic('A', 'low', live.time)).toBe(true);
+		capture.add(live.advance(3e-6));
+		live.free();
+
+		const run = capture.run();
+		const context = prepareFlow(
+			schematic,
+			compiled.connectivity,
+			compiled.names,
+			run,
+			undefined,
+			compiled.portFlow
+		);
+		const byName = new Map(schematic.instances.map((i) => [i.name, i]));
+		const sum = byName.get('D1')!.id;
+		const carry = byName.get('D2')!.id;
+
+		// Stepped the way the live overlay steps: a quarter of a microsecond of
+		// simulated time per frame, each frame told where the previous one ended.
+		const STEP = 2.5e-7;
+		const mixed: string[] = [];
+		let lit = 0;
+		for (let t = STEP; t <= 4e-6; t += STEP) {
+			const frame = sampleFlow(
+				context,
+				run,
+				sampleIndexAt(run.time, t),
+				sampleIndexAt(run.time, t - STEP)
+			);
+			const a = Math.abs(frame.instanceCurrent.get(sum) ?? 0);
+			const b = Math.abs(frame.instanceCurrent.get(carry) ?? 0);
+			if (a > 1e-3 || b > 1e-3) lit++;
+			// A half adder answers 1+1 with a carry and 1+0 with a sum. Never both.
+			if (a > 1e-3 && b > 1e-3) mixed.push(`${t.toExponential(2)}: ${a} / ${b}`);
+		}
+		expect(mixed).toEqual([]);
+		// And it is not quiet throughout, which would satisfy the same assertion.
+		expect(lit).toBeGreaterThan(10);
+	});
+
+	it('still catches a burst shorter than the frame that spans it', () => {
+		// The mean over the span is not decoration, and this is what it is for: a
+		// CMOS inverter conducts only while it switches, so reading one instant per
+		// frame drew a dead circuit on almost every frame and the whole burst on the
+		// occasional one. Sampling from the last change of state rather than from
+		// where the previous frame ended keeps that, because the burst happens after
+		// its transition, not before it.
+		const schematic = EXAMPLES.find((e) => e.id === 'cmos-inverter')!.build();
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
+		const { run } = simulate(schematic, 4e-6);
+		const context = prepareFlow(
+			schematic,
+			compiled.connectivity,
+			compiled.names,
+			run,
+			undefined,
+			compiled.portFlow
+		);
+
+		const STEP = 1e-7;
+		const peak = (frame: FlowFrame) =>
+			Math.max(...[...frame.instanceCurrent.values()].map((v) => Math.abs(v)));
+		let spanned = 0;
+		let instants = 0;
+		for (let t = STEP; t <= 4e-6; t += STEP) {
+			const index = sampleIndexAt(run.time, t);
+			const from = sampleIndexAt(run.time, t - STEP);
+			if (peak(sampleFlow(context, run, index, from)) > 1e-6) spanned++;
+			if (peak(sampleFlow(context, run, index)) > 1e-6) instants++;
+		}
+		expect(spanned).toBeGreaterThan(instants);
 	});
 
 	it('keeps the samples it had, so the past is not re-solved', () => {

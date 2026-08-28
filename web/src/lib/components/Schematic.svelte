@@ -146,15 +146,33 @@
 	}
 
 	/**
-	 * Which contacts were conducting on the previous frame.
+	 * What every operable part was doing at an instant, as one comparable value.
 	 *
-	 * Kept so a change can be noticed, because a contact opening or closing is the
-	 * one thing that makes the current readings' fall time a lie: it is not the
-	 * same circuit any more. The blade positions are the wrong signal for this —
-	 * they deliberately leave the bounce out, and the bounce is exactly when it
-	 * matters.
+	 * Switches and logic toggles both, because both of them change the circuit:
+	 * only the first one breaks a path, but flipping an input rewrites every level
+	 * downstream of it, and the readings are just as wrong about the result. Only
+	 * contacts were counted here at first, and a toggled input went unnoticed —
+	 * which is how a half adder came to sit with both of its lamps half lit.
+	 *
+	 * The electrical truth, not the drawn one: `isClosedAt` includes the bounce
+	 * that `isActuatedAt` deliberately leaves out, and the bounce is exactly when
+	 * this matters.
 	 */
-	let conducting = new Set<string>();
+	function operatedAt(time: number): string {
+		const parts: string[] = [];
+		for (const instance of app.schematic.instances) {
+			const flips = app.operationsOf(instance.id);
+			if (instance.kind === 'switch') {
+				parts.push(`${instance.id}:${isClosedAt(instance, time, flips) ? 1 : 0}`);
+			} else if (instance.kind === 'toggle') {
+				parts.push(`${instance.id}:${isHighAt(instance, time, flips) ? 1 : 0}`);
+			}
+		}
+		return parts.join(',');
+	}
+
+	/** What `operatedAt` said on the previous frame, so a change can be noticed. */
+	let operated: string | null = null;
 
 	function view(): SchematicView {
 		return {
@@ -357,10 +375,22 @@
 			const run = app.result;
 			if (context && run && app.analysis === 'transient' && app.live) {
 				const index = sampleIndexAt(run.time, app.playbackTime);
+				// Two ways for a reading to be about a circuit that is not the one on
+				// screen. Something operable moving is one: past that instant it is not
+				// the same circuit any more. The playhead jumping backwards is the other
+				// — Run restarting a sweep from zero, or the timeline dragged — and a
+				// reading belongs to the instant it was taken at, so it does not travel
+				// with the playhead.
+				const nowOperated = operatedAt(app.playbackTime);
+				const jumped = lastPlayback === null || app.playbackTime < lastPlayback;
+				const changed = jumped || (operated !== null && nowOperated !== operated);
+				operated = nowOperated;
 				// Where the last frame left off, so this one can be told what went
-				// past in between rather than what happens to be true at its end.
+				// past in between rather than what happens to be true at its end —
+				// except across a change, where the mean would belong to neither of the
+				// two circuits it spans.
 				const since =
-					lastPlayback === null || lastPlayback > app.playbackTime
+					changed || lastPlayback === null || lastPlayback > app.playbackTime
 						? index
 						: sampleIndexAt(run.time, lastPlayback);
 				// Scaled to what is on screen, not to the whole of memory: the window
@@ -390,28 +420,15 @@
 					selection: selectionSet,
 					selectionColour: theme!.selection
 				};
-				// A contact opening is not the same circuit any more, and the readings
-				// carry a fall time so that a burst too short to see is still visible.
-				// Coasting that across the transition drew milliamps through a contact
-				// the engine had at five picoamps, all the way through a quarter of a
-				// millisecond of bounce. Dropped here, before the dots are advanced, so
-				// the frame reads the circuit that exists now: the branch the contact
-				// fed goes quiet at once, and whatever else is still carrying — a
-				// capacitor discharging into its load, say — keeps its dots, because
-				// those are measured afresh every frame.
-				// Two ways for the readings to be about a circuit that is not the one
-				// on screen. A contact moving is one: it is not the same circuit any
-				// more. The playhead jumping backwards is the other — Run restarting a
-				// sweep from zero, or the timeline dragged — and a reading is about the
-				// instant it was taken at, so it does not travel with the playhead.
-				// Reported as a switch drawn open with the dots still streaming past
-				// it: a fresh sweep at fifty microseconds, wearing what the last one
-				// was carrying when it was stopped.
-				const jumped = lastPlayback === null || app.playbackTime < lastPlayback;
-				if (jumped || closed.size !== conducting.size || [...closed].some((id) => !conducting.has(id))) {
-					forget(animation);
-					conducting = closed;
-				}
+				// The readings carry a fall time so that a burst too short to see is
+				// still visible, and coasting that across a change drew milliamps
+				// through a contact the engine had at five picoamps, all the way
+				// through a quarter of a millisecond of bounce. Dropped here, before
+				// the dots are advanced, so the frame reads the circuit that exists
+				// now: the branch that stopped goes quiet at once, and whatever else is
+				// still carrying — a capacitor discharging into its load, say — keeps
+				// its dots, because those are measured afresh every frame.
+				if (changed) forget(animation);
 				// In seconds of wall clock, so a given current draws the dots along at
 				// the same speed however fast the run is being played.
 				tick(dynamicView, moved / Math.max(app.playbackRate, 1e-9));
@@ -424,6 +441,7 @@
 					if (handle) {
 						handle.flow = context;
 						handle.frame = dynamicView.frame;
+						handle.animation = animation;
 					}
 				}
 			} else if (dynamicView) {
@@ -434,9 +452,11 @@
 			// Nothing live to read a contact position off: back to resting.
 			if (!app.live) {
 				if (trackSwitches(null)) active.invalidate('schematic');
-				// And nothing conducting to remember either, so the next run does not
-				// open by comparing itself against the end of the last one.
-				conducting = new Set();
+				// And nothing operated to remember either, so the next run does not open
+				// by comparing itself against the end of the last one — nor, after a
+				// different circuit is loaded, against a drawing that is gone.
+				operated = null;
+				forget(animation);
 			}
 
 			lastPlayback = app.playbackTime;
