@@ -403,37 +403,98 @@ export const EXAMPLES: Example[] = [
 	},
 
 	{
-		id: 'full-adder',
-		name: 'Full adder',
+		id: 'half-adder',
+		name: 'Half adder',
 		description:
-			'The circuit inside every processor, three gates wide. Sum is the parity of the three inputs, so it is one XOR with three inputs rather than two in a row; the carry is the majority of them. Three clocks count through all eight combinations.',
-		stopTime: 8e-6,
+			'Two bits in, two bits out: the XOR is the sum and the AND is the carry. Half, because it has no way to accept a carry from the column to its right — that is the one thing the full adder adds. Both switches start high, so the sum is zero and the carry is one. Click either to flip it.',
+		stopTime: 20e-6,
 		build: () =>
 			build(
 				[
-					// A, B and Cin, each half the rate of the one above: between them they
-					// count through every combination in one 4 µs cycle.
-					{ kind: 'clock', name: 'CLK1', x: 100, y: 100, params: { frequency: 1e6, duty: 0.5 } },
-					{ kind: 'clock', name: 'CLK2', x: 100, y: 180, params: { frequency: 5e5, duty: 0.5 } },
-					{ kind: 'clock', name: 'CLK3', x: 100, y: 260, params: { frequency: 2.5e5, duty: 0.5 } },
+					// Logic toggles, not switches. A switch is a contact: it joins a net to
+					// something or leaves it joined to nothing, and nothing is not a logic
+					// level, so feeding a gate from one needs a resistor holding the input
+					// down while the contact is open. These drive the net in both positions.
+					{ kind: 'toggle', name: 'A', x: 100, y: 140, params: { state: 'high' } },
+					{ kind: 'toggle', name: 'B', x: 100, y: 300, params: { state: 'high' } },
+					{ kind: 'xor', name: 'SUM', x: 330, y: 150 },
+					{ kind: 'and', name: 'CARRY', x: 330, y: 250 },
+					// Each answer ends on a lamp. A gate output has to drive something —
+					// a wire trailing off into space is not a load, and the compiler says so
+					// — and a lit LED is the reading, without going to the scope for it.
+					{ kind: 'resistor', name: 'R1', x: 470, y: 150, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D1', x: 570, y: 150, params: { colour: 'red' } },
+					{ kind: 'resistor', name: 'R2', x: 470, y: 250, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D2', x: 570, y: 250, params: { colour: 'green' } },
+					{ kind: 'ground', name: 'GND1', x: 640, y: 320 }
+				],
+				[
+					// A down its own rail, tapped at both gates.
+					[130, 140, 170, 140],
+					[170, 140, 170, 240],
+					[170, 140, 300, 140],
+					[170, 240, 300, 240],
+					// B likewise, one rail further right. Where the two cross, nothing
+					// happens: wires only join where one of them has a corner on the other.
+					[130, 300, 200, 300],
+					[200, 160, 200, 300],
+					[200, 160, 300, 160],
+					[200, 260, 300, 260],
+					// Sum, then carry, each through its own resistor and lamp.
+					[360, 150, 440, 150],
+					[500, 150, 540, 150],
+					[600, 150, 640, 150],
+					[360, 250, 440, 250],
+					[500, 250, 540, 250],
+					[600, 250, 640, 250],
+					// One return rail down to the single ground symbol.
+					[640, 150, 640, 310]
+				]
+			)
+	},
+
+	{
+		id: 'full-adder',
+		name: 'Full adder',
+		description:
+			'The circuit inside every processor, three gates wide. Sum is the parity of the three inputs, so it is one XOR with three inputs rather than two in a row; the carry is the majority of them. All three switches arrive high — one and one and one is three, which is a one and a carry — and both lamps are lit. Click any of them to work through the other seven combinations.',
+		stopTime: 20e-6,
+		build: () =>
+			build(
+				[
+					// A, B and the carry in, each one set by hand. Logic toggles rather than
+					// switches: a switch is a contact, and an open contact leaves a gate input
+					// on nothing at all, which is not a logic level and needs a resistor to
+					// hold it. These drive the net in both positions.
+					{ kind: 'toggle', name: 'A', x: 100, y: 100, params: { state: 'high' } },
+					{ kind: 'toggle', name: 'B', x: 100, y: 180, params: { state: 'high' } },
+					{ kind: 'toggle', name: 'CIN', x: 100, y: 260, params: { state: 'high' } },
 					// Sum. Parity of three, which is one decision and one delay.
 					{ kind: 'xor', name: 'U1', x: 330, y: 120, params: { inputs: 3 } },
 					// Carry out: any two of the three.
 					{ kind: 'and', name: 'U2', x: 330, y: 220 },
 					{ kind: 'and', name: 'U3', x: 330, y: 290 },
 					{ kind: 'and', name: 'U4', x: 330, y: 360 },
-					{ kind: 'or', name: 'U5', x: 470, y: 290, params: { inputs: 3 } }
+					{ kind: 'or', name: 'U5', x: 470, y: 290, params: { inputs: 3 } },
+					// Sum and carry each end on a lamp. A gate output has to drive something:
+					// a wire trailing off into space is not a load, and the compiler says so.
+					{ kind: 'resistor', name: 'R1', x: 560, y: 120, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D1', x: 660, y: 120, params: { colour: 'red' } },
+					{ kind: 'resistor', name: 'R2', x: 560, y: 290, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D2', x: 660, y: 290, params: { colour: 'green' } },
+					{ kind: 'ground', name: 'GND1', x: 730, y: 360 }
 				],
 				[
 					// Three vertical rails down the left, tapped where each gate needs
-					// them. Crossing one costs nothing: two wires only join where one of
-					// them has a corner on the other.
+					// them, and each one stopping at its last tap. Crossing one costs
+					// nothing: two wires only join where one of them has a corner on the
+					// other.
 					[130, 100, 170, 100],
-					[170, 100, 170, 420],
+					[170, 100, 170, 350],
 					[130, 180, 190, 180],
-					[190, 120, 190, 420],
+					[190, 120, 190, 280],
 					[130, 260, 210, 260],
-					[210, 140, 210, 420],
+					[210, 140, 210, 370],
 					// A
 					[170, 100, 300, 100],
 					[170, 210, 300, 210],
@@ -454,11 +515,139 @@ export const EXAMPLES: Example[] = [
 					[360, 360, 410, 360],
 					[410, 310, 410, 360],
 					[410, 310, 440, 310],
-					// Sum and carry, brought out somewhere easy to look at.
-					[360, 120, 440, 120],
-					[500, 290, 560, 290]
+					// Sum and carry, each through its own resistor and lamp.
+					[360, 120, 530, 120],
+					[590, 120, 630, 120],
+					[690, 120, 730, 120],
+					[500, 290, 530, 290],
+					[590, 290, 630, 290],
+					[690, 290, 730, 290],
+					// One return rail down to the single ground symbol.
+					[730, 120, 730, 350]
 				]
 			)
+	},
+
+	{
+		id: 'adder-4bit',
+		name: '4-bit adder',
+		description:
+			'Four columns of an addition, each handing its carry down to the next. The first column has nothing carried into it, so it is a half adder; the other three are full adders written as propagate and generate. A and B start at 7 and 3, which makes the carry ripple through three stages before it dies — flip any switch on the left and watch where it stops.',
+		stopTime: 20e-6,
+		build: () => {
+			// Bit 0 on top, so the carry runs downwards and every stage looks the same.
+			const a = ['high', 'high', 'high', 'low'];
+			const b = ['high', 'high', 'low', 'low'];
+			/** Vertical distance between one bit and the next. */
+			const PITCH = 190;
+
+			const parts: Placed[] = [];
+			const wires: Array<[number, number, number, number]> = [];
+
+			/**
+			 * One bit of the answer, on a lamp.
+			 *
+			 * A gate output has to drive something. A wire trailing off into space is
+			 * not a load — the compiler says so, and rightly — and five lit or unlit
+			 * lamps are the answer read straight off the drawing.
+			 */
+			const lamp = (bit: number, from: number, y: number) => {
+				parts.push(
+					{ kind: 'resistor', name: `R${bit}`, x: 730, y, params: { resistance: 330 } },
+					{
+						kind: 'led',
+						name: `D${bit}`,
+						x: 830,
+						y,
+						// The carry out is the fifth bit and a different kind of answer, so it
+						// gets a different colour.
+						params: { colour: bit === 4 ? 'green' : 'red' }
+					}
+				);
+				wires.push([from, y, 700, y], [760, y, 800, y], [860, y, 900, y]);
+			};
+
+			for (let k = 0; k < 4; k++) {
+				const y = 120 + k * PITCH;
+				parts.push(
+					{ kind: 'toggle', name: `A${k}`, x: 100, y: y - 10, params: { state: a[k] } },
+					{ kind: 'toggle', name: `B${k}`, x: 100, y: y + 90, params: { state: b[k] } },
+					// Propagate and generate: what this column knows on its own, before
+					// anything arrives from the one above it.
+					{ kind: 'xor', name: `P${k}`, x: 300, y },
+					{ kind: 'and', name: `G${k}`, x: 300, y: y + 70 }
+				);
+				wires.push(
+					// A down its own rail, tapped at both gates.
+					[130, y - 10, 170, y - 10],
+					[170, y - 10, 170, y + 60],
+					[170, y - 10, 270, y - 10],
+					[170, y + 60, 270, y + 60],
+					// B likewise, one rail further right.
+					[130, y + 90, 200, y + 90],
+					[200, y + 10, 200, y + 90],
+					[200, y + 10, 270, y + 10],
+					[200, y + 80, 270, y + 80]
+				);
+
+				if (k === 0) {
+					// Nothing carries into the first column, so P0 is already the sum and G0
+					// is already the carry. That is a half adder, and this is the only column
+					// where one is enough.
+					lamp(0, 330, y);
+					wires.push([330, y + 70, 395, y + 70], [395, y + 70, 395, y + PITCH - 10]);
+					continue;
+				}
+
+				parts.push(
+					{ kind: 'xor', name: `S${k}`, x: 450, y: y - 20 },
+					{ kind: 'and', name: `PC${k}`, x: 450, y: y + 40 },
+					{ kind: 'or', name: `CO${k}`, x: 600, y: y + 50 }
+				);
+				wires.push(
+					// P reaches over the carry rail to the sum and under it to the AND, so
+					// the two rails run side by side without ever crossing.
+					[330, y, 370, y],
+					[370, y - 30, 370, y + 50],
+					[370, y - 30, 420, y - 30],
+					[370, y + 50, 420, y + 50],
+					// The carry that arrived from the bit above.
+					[395, y - 10, 395, y + 30],
+					[395, y - 10, 420, y - 10],
+					[395, y + 30, 420, y + 30],
+					// Carry out: either this column generated one, or it propagated the one
+					// it was given.
+					[480, y + 40, 570, y + 40],
+					[330, y + 70, 540, y + 70],
+					[540, y + 60, 540, y + 70],
+					[540, y + 60, 570, y + 60]
+				);
+				// Every sum bit ends on the same column, so the answer reads down the
+				// right-hand edge in the order it is written.
+				lamp(k, 480, y - 20);
+
+				if (k < 3) {
+					// Down the right and back to the next bit's carry rail.
+					wires.push(
+						[630, y + 50, 660, y + 50],
+						[660, y + 50, 660, y + 130],
+						[395, y + 130, 660, y + 130],
+						[395, y + 130, 395, y + PITCH - 10]
+					);
+				} else {
+					// The carry out of the last column is the fifth bit of the answer,
+					// dropped clear of the sum above it so the two readings do not overlap.
+					wires.push([630, y + 50, 660, y + 50], [660, y + 50, 660, y + 120]);
+					lamp(4, 660, y + 120);
+				}
+			}
+
+			// One return rail for all five lamps, and one ground symbol on it.
+			parts.push({ kind: 'ground', name: 'GND1', x: 900, y: 860 });
+			wires.push([900, 120, 900, 850]);
+
+			return build(parts, wires);
+		}
 	},
 
 	{

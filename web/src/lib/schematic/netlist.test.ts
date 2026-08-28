@@ -428,6 +428,59 @@ describe('logic gates', () => {
 	});
 });
 
+describe('the adders that ship with the app', () => {
+	/** Every device in one example, by name. */
+	const devices = (id: string) => {
+		const result = compileSchematic(EXAMPLES.find((e) => e.id === id)!.build());
+		expect(result.errors).toEqual([]);
+		// A gate output nothing is wired to is a warning, and both drawings bring
+		// every answer out to a lead rather than leaving it on the pin.
+		expect(result.warnings).toEqual([]);
+		const netlist = result.netlist as { devices: Array<Record<string, unknown>> };
+		return new Map(netlist.devices.map((d) => [d.name as string, d]));
+	};
+
+	it('gives the half adder one XOR and one AND over the same two bits', () => {
+		const by = devices('half-adder');
+		const a = by.get('A')!.output as string;
+		const b = by.get('B')!.output as string;
+		// The two rails cross on the way to the gates. If a crossing joined them the
+		// sum would sit at zero forever and the drawing would look right.
+		expect(a).not.toBe(b);
+		expect(by.get('SUM')!.kind).toBe('xor');
+		expect(by.get('CARRY')!.kind).toBe('and');
+		for (const name of ['SUM', 'CARRY'])
+			expect(new Set(by.get(name)!.inputs as string[])).toEqual(new Set([a, b]));
+	});
+
+	it('threads the carry from each column of the 4-bit adder into the next', () => {
+		// Eight input rails and a carry woven back through them, so almost every tap
+		// crosses something it must not join. Joining one would not break the
+		// simulation: it would quietly answer a different sum.
+		const by = devices('adder-4bit');
+		const out = (name: string) => by.get(name)!.output as string;
+		const ins = (name: string) => new Set(by.get(name)!.inputs as string[]);
+
+		expect(new Set([0, 1, 2, 3].flatMap((k) => [out(`A${k}`), out(`B${k}`)])).size).toBe(8);
+
+		for (let k = 0; k < 4; k++) {
+			const pair = new Set([out(`A${k}`), out(`B${k}`)]);
+			expect(ins(`P${k}`)).toEqual(pair);
+			expect(ins(`G${k}`)).toEqual(pair);
+		}
+
+		// Nothing is carried into the first column, so its generate is already the
+		// carry — which is the whole difference between a half adder and a full one.
+		let carry = out('G0');
+		for (let k = 1; k < 4; k++) {
+			expect(ins(`S${k}`)).toEqual(new Set([out(`P${k}`), carry]));
+			expect(ins(`PC${k}`)).toEqual(new Set([out(`P${k}`), carry]));
+			expect(ins(`CO${k}`)).toEqual(new Set([out(`G${k}`), out(`PC${k}`)]));
+			carry = out(`CO${k}`);
+		}
+	});
+});
+
 describe('the full adder that ships with the app', () => {
 	/** Every device in the example, by name. */
 	const devices = () => {
@@ -446,7 +499,7 @@ describe('the full adder that ships with the app', () => {
 		const out = (name: string) => by.get(name)!.output as string;
 		const ins = (name: string) => new Set(by.get(name)!.inputs as string[]);
 
-		const [a, b, c] = ['CLK1', 'CLK2', 'CLK3'].map(out);
+		const [a, b, c] = ['A', 'B', 'CIN'].map(out);
 		// Sum is the parity of all three, in one gate.
 		expect(by.get('U1')!.kind).toBe('xor');
 		expect(ins('U1')).toEqual(new Set([a, b, c]));
@@ -466,7 +519,7 @@ describe('the full adder that ships with the app', () => {
 		// If a crossing joined, the three inputs would be one net and the adder
 		// would still simulate — it would just always answer zero.
 		const by = devices();
-		const rails = new Set(['CLK1', 'CLK2', 'CLK3'].map((n) => by.get(n)!.output as string));
+		const rails = new Set(['A', 'B', 'CIN'].map((n) => by.get(n)!.output as string));
 		expect(rails.size).toBe(3);
 	});
 });
@@ -941,7 +994,7 @@ describe('a pulse source', () => {
 	});
 });
 
-describe('the clock divider that ships with the app', () => {
+describe('every example that ships with the app', () => {
 	/** Where each pin of each part sits, as grid points. */
 	function pinPoints(schematic: Schematic): Set<string> {
 		const points = new Set<string>();
@@ -959,22 +1012,30 @@ describe('the clock divider that ships with the app', () => {
 		Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) < 1e-9;
 
 	it('ends every wire on a pin or another wire', () => {
-		// It used to carry a stub off Q that ran to no part and no other wire —
-		// there only because picking what to plot skipped nets with no wire on them,
-		// so without it Q never reached the scope. On a drawing with four parts that
-		// read as an unfinished circuit. Fixed where it belonged, in the picking.
-		const schematic = EXAMPLES.find((e) => e.id === 'divider')!.build();
-		const pins = pinPoints(schematic);
-		for (const wire of schematic.wires) {
-			for (const end of [wire.points[0], wire.points[wire.points.length - 1]]) {
-				const met =
-					pins.has(pointKey(end.x, end.y)) ||
-					schematic.wires.some(
-						(other) =>
-							other.id !== wire.id && wireSegments(other).some((s) => onSegment(end, s.a, s.b))
-					);
-				expect(met, `wire ending at ${end.x},${end.y}`).toBe(true);
+		// A wire running to no part and no other wire reads as an unfinished
+		// drawing, and it is: nothing is connected to the far end of it. The divider
+		// carried one off Q because picking what to plot skipped nets with no wire
+		// on them, and the adders carried leads off their outputs because a gate
+		// output with nothing on it warns. Both had a real fix — one in the picking,
+		// one by giving the output a lamp to drive — and in neither case was it the
+		// stub.
+		const loose: string[] = [];
+		for (const example of EXAMPLES) {
+			const schematic = example.build();
+			const pins = pinPoints(schematic);
+			for (const wire of schematic.wires) {
+				for (const end of [wire.points[0], wire.points[wire.points.length - 1]]) {
+					const met =
+						pins.has(pointKey(end.x, end.y)) ||
+						schematic.wires.some(
+							(other) =>
+								other.id !== wire.id && wireSegments(other).some((s) => onSegment(end, s.a, s.b))
+						);
+					if (!met) loose.push(`${example.id} at ${end.x},${end.y}`);
+				}
 			}
 		}
+		expect(loose).toEqual([]);
 	});
+
 });
