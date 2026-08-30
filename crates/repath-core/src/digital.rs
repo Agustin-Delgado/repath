@@ -852,9 +852,7 @@ impl DigitalDomain {
 
     pub fn reset(&mut self) {
         self.queue.clear();
-        for v in &mut self.driver_values {
-            *v = Logic::HighZ;
-        }
+        self.driver_values.fill(Logic::HighZ);
         for (i, n) in self.nets.iter_mut().enumerate() {
             n.resolved = Logic::HighZ;
             self.resolved[i] = Logic::HighZ;
