@@ -508,6 +508,62 @@ describe('a logic toggle', () => {
 		expect(transitions.some((t) => t.time > 3e-4 && t.time < 5e-4)).toBe(true);
 	});
 
+	it('clocks the D flip-flop example on the edge and not before it', () => {
+		// The level is sitting on d from the first instant, and the flip-flop is
+		// supposed to ignore it until the clock says so. Its own answer starts low,
+		// deliberately — an unknown there could never resolve, because a toggle
+		// flip-flop feeds qn back into d and the inverse of unknown is unknown.
+		const schematic = EXAMPLES.find((e) => e.id === 'flip-flop')!.build();
+		const { compiled, run } = simulate(schematic, 20e-6);
+		const ff = schematic.instances.find((i) => i.name === 'FF1')!;
+		const series = (pin: string) => {
+			const net = compiled.connectivity.netOfPin.get(`${ff.id}:${pin}`)!;
+			const label = compiled.names.get(net)!.digital!;
+			return run.digital[run.netNames.indexOf(label)] ?? [];
+		};
+		const level = (pin: string, time: number) =>
+			series(pin)
+				.filter((event) => event.time <= time)
+				.at(-1)?.state;
+
+		// The clock is 1 MHz starting low, so its first rising edge is at half a
+		// microsecond. Before it, low; after it, whatever d was holding.
+		expect(level('q', 4e-7)).toBe('low');
+		expect(level('q', 6e-7)).toBe('high');
+		// And the two outputs are opposites at every instant, which is what the two
+		// lamps are there to show.
+		for (const t of [4e-7, 6e-7, 5e-6, 19e-6]) {
+			expect(level('qn', t)).toBe(level('q', t) === 'high' ? 'low' : 'high');
+		}
+	});
+
+	it('counts the ripple counter example from 0 to 15 and wraps', () => {
+		// Four stages, each clocked by the one above rather than by the clock, so
+		// this is as much a test of the chain as of the count: take qn to the next
+		// stage and it counts up, take q and it counts down.
+		const schematic = EXAMPLES.find((e) => e.id === 'ripple-counter')!.build();
+		const { compiled, run } = simulate(schematic, 40e-6);
+		const level = (name: string, time: number) => {
+			const part = schematic.instances.find((i) => i.name === name)!;
+			const net = compiled.connectivity.netOfPin.get(`${part.id}:q`)!;
+			const label = compiled.names.get(net)!.digital!;
+			const events = run.digital[run.netNames.indexOf(label)] ?? [];
+			return events.filter((event) => event.time <= time).at(-1)?.state === 'high' ? 1 : 0;
+		};
+
+		// Read midway through each clock period, well clear of the ripple: the count
+		// is briefly wrong while it travels up the chain, which is the whole point of
+		// the name and not something to assert against.
+		const counted: number[] = [];
+		for (let n = 0; n < 17; n++) {
+			const t = n * 1e-6 + 6e-7;
+			counted.push(
+				level('FF0', t) + 2 * level('FF1', t) + 4 * level('FF2', t) + 8 * level('FF3', t)
+			);
+		}
+		expect(counted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1]);
+	});
+
 	it('never mixes the circuit before a change with the one after it', () => {
 		// Reported from the half adder: flip an input while it is running, wait, and
 		// for about a second both lamps sit at half brightness. A frame spans a
