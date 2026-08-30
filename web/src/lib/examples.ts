@@ -333,6 +333,47 @@ export const EXAMPLES: Example[] = [
 			)
 	},
 	{
+		id: 'flip-flop',
+		name: 'D flip-flop',
+		description:
+			'A latch that only listens on the edge of a clock. Flip the input while it is running and nothing happens until the next rising edge, which is the point of it: everything on the board changes at the same instant instead of whenever its own gates finish. The two lamps are Q and its opposite.',
+		stopTime: 20e-6,
+		build: () =>
+			build(
+				[
+					{ kind: 'toggle', name: 'IN', x: 100, y: 120, params: { state: 'high' } },
+					{ kind: 'clock', name: 'CLK1', x: 100, y: 220, params: { frequency: 1e6, duty: 0.5 } },
+					{ kind: 'dff', name: 'FF1', x: 330, y: 200 },
+					{ kind: 'resistor', name: 'R1', x: 470, y: 120, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D1', x: 570, y: 120, params: { colour: 'green' } },
+					{ kind: 'resistor', name: 'R2', x: 470, y: 280, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D2', x: 570, y: 280, params: { colour: 'red' } },
+					{ kind: 'ground', name: 'GND1', x: 640, y: 350 }
+				],
+				[
+					// The level waiting at d, and the clock that decides when it is taken.
+					[130, 120, 180, 120],
+					[180, 120, 180, 180],
+					[180, 180, 300, 180],
+					[130, 220, 300, 220],
+					// q up and qn down, far enough apart that their readings do not sit on
+					// each other.
+					[360, 180, 420, 180],
+					[420, 120, 420, 180],
+					[420, 120, 440, 120],
+					[500, 120, 540, 120],
+					[600, 120, 640, 120],
+					[360, 220, 420, 220],
+					[420, 220, 420, 280],
+					[420, 280, 440, 280],
+					[500, 280, 540, 280],
+					[600, 280, 640, 280],
+					[640, 120, 640, 340]
+				]
+			)
+	},
+
+	{
 		id: 'divider',
 		name: 'Clock divider',
 		description:
@@ -355,6 +396,63 @@ export const EXAMPLES: Example[] = [
 					[240, 180, 270, 180]
 				]
 			)
+	},
+
+	{
+		id: 'ripple-counter',
+		name: '4-bit ripple counter',
+		description:
+			'Four toggle flip-flops in a row, each clocked by the one above it, counting 0 to 15 in binary on the lamps. Ripple, because nothing here shares a clock: each stage waits for the one before it to fall, so the count arrives at the top a few gate delays after it arrives at the bottom and the number is briefly wrong on the way past.',
+		stopTime: 40e-6,
+		build: () => {
+			// Bit 0 on top, halving the clock; each one below halves again.
+			const PITCH = 190;
+			const parts: Placed[] = [
+				{ kind: 'clock', name: 'CLK1', x: 100, y: 160, params: { frequency: 1e6, duty: 0.5 } },
+				{ kind: 'ground', name: 'GND1', x: 900, y: 760 }
+			];
+			const wires: Array<[number, number, number, number]> = [
+				// The clock, into the first stage only.
+				[130, 160, 270, 160],
+				// One return rail for all four lamps.
+				[900, 120, 900, 750]
+			];
+
+			for (let k = 0; k < 4; k++) {
+				const y = 140 + k * PITCH;
+				parts.push(
+					{ kind: 'dff', name: `FF${k}`, x: 300, y },
+					{ kind: 'resistor', name: `R${k}`, x: 730, y: y - 20, params: { resistance: 330 } },
+					{ kind: 'led', name: `D${k}`, x: 830, y: y - 20, params: { colour: 'red' } }
+				);
+				wires.push(
+					// qn back around to d, which is what makes a D flip-flop toggle: it is
+					// told to become whatever it is not.
+					[330, y + 20, 380, y + 20],
+					[380, y + 20, 380, y + 80],
+					[250, y + 80, 380, y + 80],
+					[250, y - 20, 250, y + 80],
+					[250, y - 20, 270, y - 20],
+					// q out to its lamp, clear of the rail carrying qn back.
+					[330, y - 20, 700, y - 20],
+					[760, y - 20, 800, y - 20],
+					[860, y - 20, 900, y - 20]
+				);
+				if (k < 3) {
+					// And qn on down to clock the next stage. Taken from qn rather than q
+					// so the stage above ticks as this one falls, which is what counts up
+					// rather than down.
+					wires.push(
+						[380, y + 80, 380, y + 130],
+						[210, y + 130, 380, y + 130],
+						[210, y + 130, 210, y + PITCH + 20],
+						[210, y + PITCH + 20, 270, y + PITCH + 20]
+					);
+				}
+			}
+
+			return build(parts, wires);
+		}
 	},
 
 	{
