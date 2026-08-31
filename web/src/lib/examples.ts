@@ -7,6 +7,7 @@
 
 import type { Schematic } from './schematic/model';
 import { defaultParams } from './schematic/model';
+import { SEGMENTS } from './schematic/led';
 
 export interface Example {
 	id: string;
@@ -332,6 +333,57 @@ export const EXAMPLES: Example[] = [
 				]
 			)
 	},
+	{
+		id: 'seven-segment',
+		name: 'Seven-segment digit',
+		description:
+			'Eight LEDs in the shape of a number, a switch each, and a resistor per segment because they are still LEDs. It arrives showing 4 — b, c, f and g — and every other digit is a matter of which switches are down. The common pin goes to ground, which is what common-cathode means: a segment lights when its own switch drives it high. One resistor on the common pin instead of eight would have been cheaper and wrong: the digit would dim as more bars came on.',
+		stopTime: 20e-6,
+		build: () => {
+			// b, c, f and g lit is a 4.
+			const lit = new Set(['b', 'c', 'f', 'g']);
+			/** Where the digit sits; its eight pins are 20 apart down the left of it. */
+			const DIGIT_X = 900;
+			const DIGIT_Y = 190;
+
+			const parts: Placed[] = [
+				{ kind: 'display7', name: 'DS1', x: DIGIT_X, y: DIGIT_Y, params: { colour: 'red' } },
+				{ kind: 'ground', name: 'GND1', x: DIGIT_X, y: 340 }
+			];
+			const wires: Array<[number, number, number, number]> = [
+				[DIGIT_X, DIGIT_Y + 92, DIGIT_X, 330]
+			];
+
+			for (const [i, segment] of SEGMENTS.entries()) {
+				// The switches need room the digit's own pins do not, so each run steps
+				// across in its own column on the way in. Crossing the others costs
+				// nothing; landing on one would be another matter.
+				const y = 100 + i * 60;
+				const pin = DIGIT_Y + (i - 3.5) * 20;
+				const column = 620 + i * 10;
+				parts.push(
+					{
+						kind: 'toggle',
+						name: segment.toUpperCase(),
+						x: 120,
+						y,
+						params: { state: lit.has(segment) ? 'high' : 'low' }
+					},
+					// One per segment, and not shared.
+					{ kind: 'resistor', name: `R${i + 1}`, x: 380, y, params: { resistance: 330 } }
+				);
+				wires.push(
+					[150, y, 350, y],
+					[410, y, column, y],
+					[column, y, column, pin],
+					[column, pin, DIGIT_X - 50, pin]
+				);
+			}
+
+			return build(parts, wires);
+		}
+	},
+
 	{
 		id: 'd-latch',
 		name: 'D latch, level-triggered',

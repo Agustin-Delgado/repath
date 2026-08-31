@@ -51,6 +51,18 @@ const RS = 0.568;
 
 const REFERENCE = RATED;
 
+/**
+ * The eight LEDs in a seven-segment digit, in the order every datasheet lists.
+ *
+ * `a` is the top bar and the rest go clockwise from it, `g` is the middle and
+ * `dp` is the point. The order is what the pin names, the drawing and the
+ * netlist all agree on, so it lives here rather than being written out three
+ * times.
+ */
+export const SEGMENTS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'] as const;
+
+export type Segment = (typeof SEGMENTS)[number];
+
 export const LED_COLOURS: readonly LedColour[] = [
 	{ value: 'red', label: 'Red', vf: 1.9, rgb: [255, 78, 62] },
 	{ value: 'amber', label: 'Amber', vf: 2.05, rgb: [255, 168, 48] },
@@ -68,6 +80,26 @@ const VT = 8.617333262e-5 * TEMP;
 const BY_VALUE = new Map(LED_COLOURS.map((c) => [c.value, c] as const));
 
 /** The named colour, falling back to red rather than throwing on an old file. */
+/**
+ * Where each bar of the digit sits, in the symbol's own coordinates.
+ *
+ * Drawn as thick strokes rather than the tapered hexagons a real display has:
+ * at the size a schematic symbol is read, the taper is a couple of pixels and
+ * the shape is unmistakable without it. The point is a dot, and it is off to
+ * the right of the digit where a real one is.
+ */
+export const SEGMENT_SHAPES: Readonly<Record<Segment, readonly [number, number, number, number]>> = {
+	a: [-6, -35, 26, -35],
+	b: [30, -31, 30, -4],
+	c: [30, 4, 30, 31],
+	d: [-6, 35, 26, 35],
+	e: [-10, 4, -10, 31],
+	f: [-10, -31, -10, -4],
+	g: [-6, 0, 26, 0],
+	// The decimal point, as a zero-length stroke: a round cap makes it a dot.
+	dp: [38, 35, 38, 35]
+};
+
 export function ledColour(value: unknown): LedColour {
 	return BY_VALUE.get(String(value ?? '')) ?? LED_COLOURS[0];
 }

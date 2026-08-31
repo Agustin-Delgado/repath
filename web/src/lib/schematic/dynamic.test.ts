@@ -34,7 +34,8 @@ function view(overrides: Partial<DynamicView> = {}): DynamicView {
 		netVoltage: new Map(),
 		netUndriven: new Set(),
 		wireCurrent: new Map([[WIRE, 1]]),
-		instanceCurrent: new Map()
+		instanceCurrent: new Map(),
+		segmentCurrent: new Map()
 	};
 	return {
 		schematic: { instances: [], wires: [] },
@@ -148,7 +149,8 @@ describe('drawDynamic', () => {
 				netVoltage: new Map(),
 				netUndriven: new Set(),
 				wireCurrent: new Map(),
-				instanceCurrent: new Map([['d1', 0.02]])
+				instanceCurrent: new Map([['d1', 0.02]]),
+				segmentCurrent: new Map()
 			},
 			...overrides
 		});
@@ -243,7 +245,8 @@ describe('which way the dots travel', () => {
 					netVoltage: new Map(),
 					netUndriven: new Set(),
 					wireCurrent: new Map([['w#0', 0.5]]),
-					instanceCurrent: new Map([['r1', 0.5]])
+					instanceCurrent: new Map([['r1', 0.5]]),
+					segmentCurrent: new Map()
 				}
 			})
 		);
@@ -284,7 +287,8 @@ describe('a circuit that conducts in bursts', () => {
 					netVoltage: new Map(),
 					netUndriven: new Set(),
 					wireCurrent: new Map([['w#0', k === 0 ? 3e-4 : 0]]),
-					instanceCurrent: new Map()
+					instanceCurrent: new Map(),
+					segmentCurrent: new Map()
 				});
 			}
 		}
@@ -325,14 +329,16 @@ describe('a circuit that conducts in bursts', () => {
 			netVoltage: new Map(),
 			netUndriven: new Set(),
 			wireCurrent: new Map([['w#0', 4e-3]]),
-			instanceCurrent: new Map()
+			instanceCurrent: new Map(),
+			segmentCurrent: new Map()
 		};
 		const opened: FlowFrame = {
 			netVoltage: new Map(),
 			netUndriven: new Set(),
 			// What an open contact really carries: leakage through a terohm.
 			wireCurrent: new Map([['w#0', 5e-12]]),
-			instanceCurrent: new Map()
+			instanceCurrent: new Map(),
+			segmentCurrent: new Map()
 		};
 
 		const coasting = createAnimationState();
@@ -367,7 +373,8 @@ describe('a circuit that conducts in bursts', () => {
 			netVoltage: new Map(),
 			netUndriven: new Set(),
 			wireCurrent: new Map([['w#0', 0]]),
-			instanceCurrent: new Map()
+			instanceCurrent: new Map(),
+			segmentCurrent: new Map()
 		};
 		for (let k = 0; k < 60; k++) advance(state, quiet, 1e-5, 1 / 60);
 		expect(isFlowing(state.level.get('w#0') ?? 0, 1e-5)).toBe(false);
