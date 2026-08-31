@@ -100,9 +100,18 @@ jobs:
           path: site
 
       - name: Lay out the prebuilt deployment
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           mkdir -p .vercel/output/static
           cp -r site/. .vercel/output/static/
+          # Writing the link by hand rather than running `vercel link`. Creating
+          # `.vercel/output` creates `.vercel`, and the CLI reads an unlinked
+          # `.vercel` as a project it cannot resolve — "Could not retrieve
+          # Project Settings" — whatever the environment says. This is the same
+          # file `vercel link` would leave behind.
+          printf '{"projectId":"%s","orgId":"%s"}'             "$VERCEL_PROJECT_ID" "$VERCEL_ORG_ID" > .vercel/project.json
           # Everything that is not a file on disk is the app's own route, which
           # is what adapter-static's fallback page is for.
           cat > .vercel/output/config.json <<'JSON'
