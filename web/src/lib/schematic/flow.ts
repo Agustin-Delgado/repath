@@ -21,6 +21,7 @@
 import type { DigitalTransition, LogicState, TransientRun } from '$lib/engine';
 import { definitionOf, pointKey, wireSegments, type Point, type Schematic } from './model';
 import { DEFAULT_FAMILY, logicFamily, type LogicFamily } from './logic';
+import { SEGMENTS } from './led';
 import type { Connectivity } from './nets';
 import type { NetNames } from './netlist';
 import type { PortInjection } from '../spice';
@@ -63,7 +64,17 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 	pmos: [['drain', -1], ['source', -1, ':s'], ['gate', -1, ':g']],
 	npn: [['collector', -1], ['emitter', -1, ':e'], ['base', -1, ':b']],
 	pnp: [['collector', -1], ['emitter', -1, ':e'], ['base', -1, ':b']],
-	opamp: [['out', -1]]
+	opamp: [['out', -1]],
+	// Eight diodes in one package: every segment drains its own net, and all eight
+	// of them come back through the common pin, which is why it appears once per
+	// segment rather than once.
+	display7: SEGMENTS.flatMap((segment, index) => {
+		const element = index === 0 ? undefined : `:${segment}`;
+		return [
+			[segment, -1, element],
+			['common', 1, element]
+		] as Array<[pin: string, sign: number, series?: string]>;
+	})
 };
 
 /** One leg of one wire, as the flow graph sees it. */
@@ -121,6 +132,13 @@ export interface FlowContext {
 	netLogic: Map<number, number>;
 	/** What a one and a zero are worth on this drawing, in volts. */
 	logicLevels: { low: number; high: number };
+	/**
+	 * `<instance id>:<segment>` -> element index, for the parts that are more than
+	 * one device. A seven-segment digit is eight diodes and the drawing has to ask
+	 * about each one separately: the whole point of the package is that some bars
+	 * are lit and others are not.
+	 */
+	segmentElement: Map<string, number>;
 	/** Instance id -> element index in the run. */
 	instanceElement: Map<string, number>;
 	/** Instance id -> the two pins its current flows between. */
@@ -161,6 +179,8 @@ export interface FlowFrame {
 	wireCurrent: Map<string, number>;
 	/** Instance id -> amps through its main conduction path. */
 	instanceCurrent: Map<string, number>;
+	/** `<instance id>:<segment>` -> amps, for the parts that are several devices. */
+	segmentCurrent: Map<string, number>;
 }
 
 /** Plan the accumulation for every net. Call once per run, not per frame. */
@@ -179,8 +199,17 @@ export function prepareFlow(
 	const elementByName = new Map(run.elementNames.map((name, index) => [name, index] as const));
 
 	const instanceElement = new Map<string, number>();
+	const segmentElement = new Map<string, number>();
 	const instanceFlow = new Map<string, { from: string; to: string }>();
 	for (const instance of schematic.instances) {
+		if (instance.kind === 'display7') {
+			// The first segment carries the plain instance name, the way a MOSFET's
+			// drain does, so it is looked up under both.
+			for (const [i, segment] of SEGMENTS.entries()) {
+				const at = elementByName.get(i === 0 ? instance.name : `${instance.name}:${segment}`);
+				if (at !== undefined) segmentElement.set(`${instance.id}:${segment}`, at);
+			}
+		}
 		const index = elementByName.get(instance.name);
 		if (index === undefined) continue;
 		instanceElement.set(instance.id, index);
@@ -285,6 +314,7 @@ export function prepareFlow(
 		netLogic,
 		logicLevels: levels,
 		instanceElement,
+		segmentElement,
 		instanceFlow,
 		// A circuit with no analog side at all would otherwise scale its colours to
 		// a range of ±1 V and paint every logic high the same saturated end of it.
@@ -540,6 +570,11 @@ export function sampleFlow(
 		instanceCurrent.set(id, currentOf(element));
 	}
 
+	const segmentCurrent = new Map<string, number>();
+	for (const [key, element] of context.segmentElement) {
+		segmentCurrent.set(key, currentOf(element));
+	}
+
 	const wireCurrent = new Map<string, number>();
 	for (const plan of context.plans) {
 		// Running total flowing up from each point toward the root.
@@ -556,7 +591,7 @@ export function sampleFlow(
 		}
 	}
 
-	return { netVoltage, netUndriven, wireCurrent, instanceCurrent };
+	return { netVoltage, netUndriven, wireCurrent, instanceCurrent, segmentCurrent };
 }
 
 /**

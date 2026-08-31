@@ -10,7 +10,7 @@
  */
 
 import { contactControl, restingContact } from './contacts';
-import { ledDiodeModel, ledRating } from './led';
+import { ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
 import {
@@ -481,6 +481,29 @@ export function compileSchematic(
 					)
 				});
 				break;
+			// Eight diodes sharing one terminal, which is what the package is. Each
+			// one is named for its segment so the drawing can ask how brightly to
+			// light that bar; the first keeps the plain instance name, the way a
+			// MOSFET's drain does.
+			case 'display7': {
+				const model = ledDiodeModel(
+					instance.params.colour,
+					ledRating(instance)
+				) as Record<string, unknown>;
+				const common = analogOf(instance, 'common');
+				const anodeCommon = instance.params.polarity === 'anode';
+				for (const [index, segment] of SEGMENTS.entries()) {
+					const pin = analogOf(instance, segment);
+					components.push({
+						type: 'diode',
+						name: index === 0 ? name : `${name}:${segment}`,
+						anode: anodeCommon ? common : pin,
+						cathode: anodeCommon ? pin : common,
+						model
+					});
+				}
+				break;
+			}
 			case 'nmos':
 			case 'pmos':
 				components.push({

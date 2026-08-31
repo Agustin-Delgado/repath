@@ -428,6 +428,59 @@ describe('logic gates', () => {
 	});
 });
 
+describe('a seven-segment digit', () => {
+	/** The eight diodes the package compiles to, by the segment each one lights. */
+	const diodes = (polarity: string) => {
+		const digit = at('display7', 'DS1', 300, 200);
+		digit.params = { ...digit.params, polarity };
+		// A ground, because every analog drawing needs a reference and the compiler
+		// says so; the wiring of the segments is beside the point here.
+		const ground = at('ground', 'GND1', 300, 340);
+		const result = compileSchematic(drawing([digit, ground], [[300, 292, 300, 330]]));
+		expect(result.errors).toEqual([]);
+		const netlist = result.netlist as { components: Array<Record<string, unknown>> };
+		const found = netlist.components.filter((c) => c.type === 'diode');
+		return new Map(
+			found.map((d) => [String(d.name).split(':')[1] ?? 'a', d] as const)
+		);
+	};
+
+	it('is eight diodes with one end tied together', () => {
+		// The package is not a new kind of device — it is LEDs in the shape of a
+		// number — so nothing about it reaches the engine that a diode does not.
+		const by = diodes('cathode');
+		expect([...by.keys()].sort()).toEqual(['a', 'b', 'c', 'd', 'dp', 'e', 'f', 'g']);
+		// Common cathode: every segment has its own anode and they share the return.
+		const commons = new Set([...by.values()].map((d) => d.cathode));
+		const anodes = new Set([...by.values()].map((d) => d.anode));
+		expect(commons.size).toBe(1);
+		expect(anodes.size).toBe(8);
+	});
+
+	it('turns round when the common pin is the anode', () => {
+		// The other half of the datasheet, and the reason it is a parameter: wiring
+		// one as the other lights nothing at all.
+		const by = diodes('anode');
+		expect(new Set([...by.values()].map((d) => d.anode)).size).toBe(1);
+		expect(new Set([...by.values()].map((d) => d.cathode)).size).toBe(8);
+	});
+
+	it('lights the four bars that make a 4, and no others', () => {
+		// The example is the shape of the answer: b, c, f and g. A digit is only
+		// worth anything if the drawing can be read as a number, so the assertion is
+		// on which bars carry current rather than on how much.
+		const example = EXAMPLES.find((e) => e.id === 'seven-segment')!.build();
+		const result = compileSchematic(example);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toEqual([]);
+		const on = example.instances
+			.filter((i) => i.kind === 'toggle' && i.params.state === 'high')
+			.map((i) => i.name.toLowerCase())
+			.sort();
+		expect(on).toEqual(['b', 'c', 'f', 'g']);
+	});
+});
+
 describe('the adders that ship with the app', () => {
 	/** Every device in one example, by name. */
 	const devices = (id: string) => {

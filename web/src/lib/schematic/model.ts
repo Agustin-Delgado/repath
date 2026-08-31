@@ -7,7 +7,7 @@
  * gate and it just works, with no explicit converter to place.
  */
 
-import { LED_COLOURS, RATED } from './led';
+import { LED_COLOURS, RATED, SEGMENTS } from './led';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -871,6 +871,61 @@ export const CATALOG: ComponentDef[] = [
 			// the other about what destroys the part, and neither is something a
 			// `.model` line has an opinion on.
 			...SPICE_CARD
+		]
+	},
+	{
+		/**
+		 * Seven LEDs in the shape of a digit, and an eighth for the point.
+		 *
+		 * Electrically there is nothing new here: it is eight diodes with one of
+		 * their ends tied together, which is exactly what the part is. Drawing it as
+		 * eight separate LEDs would simulate the same and read as nothing at all —
+		 * the point of the package is that the shape means a number.
+		 *
+		 * Which end is tied is the first thing a datasheet tells you, and it decides
+		 * how the thing is driven: a common-cathode digit lights on a high and is
+		 * driven from ordinary logic outputs, a common-anode one lights on a low and
+		 * wants the common pin on the supply. Wiring one as the other lights nothing,
+		 * which is a mistake worth being able to make here.
+		 */
+		kind: 'display7',
+		box: { x: -50, y: -92, w: 100, h: 184 },
+		label: '7-segment',
+		group: 'semiconductor',
+		prefix: 'DS',
+		pins: [
+			...SEGMENTS.map((seg, i) => analog(seg, -50, (i - 3.5) * 20)),
+			analog('common', 0, 92)
+		],
+		params: [
+			{
+				key: 'polarity',
+				label: 'Common pin',
+				unit: '',
+				default: 'cathode',
+				choices: [
+					{ value: 'cathode', label: 'Cathode (lights on a high)' },
+					{ value: 'anode', label: 'Anode (lights on a low)' }
+				],
+				description:
+					'Which end of the eight LEDs is tied together. Drive a common-cathode digit from logic outputs with its common pin at ground; a common-anode one hangs its common pin on the supply and lights on a low.'
+			},
+			{
+				key: 'colour',
+				label: 'Colour',
+				unit: '',
+				default: LED_COLOURS[0].value,
+				choices: LED_COLOURS.map(({ value, label }) => ({ value, label }))
+			},
+			{
+				key: 'imax',
+				label: 'Rated current',
+				unit: 'A',
+				default: RATED,
+				min: 0,
+				nonZero: true,
+				description: 'Per segment, and every segment is its own LED: a digit showing 8 draws eight times this.'
+			}
 		]
 	},
 	{

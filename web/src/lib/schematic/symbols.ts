@@ -12,6 +12,7 @@
  */
 
 import { definitionOf, gateInputCount, gatePins, gateReach, SUBCIRCUIT_PREFIX } from './model';
+import { SEGMENTS, SEGMENT_SHAPES } from './led';
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
@@ -134,6 +135,23 @@ const STATIC: Record<string, SymbolGeometry> = {
 			// Drawn clear of the body so the glow has somewhere to sit.
 			path('M-2 -12 L6 -20 M1 -20 H6 V-15'),
 			path('M5 -12 L13 -20 M8 -20 H13 V-15')
+		],
+		labels: []
+	},
+
+	display7: {
+		shapes: [
+			// The package, then the eight bars unlit. What lights them is drawn on the
+			// live layer over the top of these, so an unpowered drawing still shows a
+			// digit rather than an empty box.
+			{ kind: 'rect', x: -44, y: -80, w: 88, h: 160 },
+			...SEGMENTS.map((segment) => {
+				const [x1, y1, x2, y2] = SEGMENT_SHAPES[segment];
+				return path(`M${x1} ${y1} L${x2} ${y2}`);
+			}),
+			// Leads out to the eight segment pins and the common one.
+			...SEGMENTS.map((_, i) => path(`M-50 ${(i - 3.5) * 20} H-44`)),
+			path('M0 80 V92')
 		],
 		labels: []
 	},

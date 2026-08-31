@@ -16,7 +16,14 @@ import { rectExpand, type Painter, type Rect, type Vec2 } from '$lib/canvas';
 import { advance, drawFlow, voltageColour, type AnimationState } from './animate';
 import { drawnReach, LABEL_GAP, leadAxis, symbolPaths } from './draw';
 import type { FlowContext, FlowFrame } from './flow';
-import { brightness, ledColour, ledRating, type Burnout } from './led';
+import {
+	brightness,
+	ledColour,
+	ledRating,
+	SEGMENTS,
+	SEGMENT_SHAPES,
+	type Burnout
+} from './led';
 import { formatWithUnit } from '$lib/units';
 import {
 	definitionFor,
@@ -169,9 +176,9 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 	// burnt LED looking burnt, or the drawing contradicts both the panel and the
 	// scope trace that steps at the moment it failed.
 	for (const instance of schematic.instances) {
-		if (instance.kind !== 'led') continue;
 		if (!inside(instance.x, instance.y)) continue;
-		drawLed(painter, view, instance);
+		if (instance.kind === 'led') drawLed(painter, view, instance);
+		else if (instance.kind === 'display7') drawDigit(painter, view, instance);
 	}
 }
 
@@ -326,6 +333,43 @@ const BURST_SPAN = 0.05;
 /** What is left of a part that has burnt, and the cracks through it. */
 const CHAR = '#2b2521';
 const CRACK = '#7a6250';
+
+/**
+ * The lit bars of a seven-segment digit.
+ *
+ * Each one is its own diode with its own current, so this is the same lighting
+ * as a single LED done eight times over — but drawn as a stroke along the bar
+ * rather than as a halo around a point, because what makes a digit readable is
+ * the shape and not the glow. The unlit bars are already on the layer below, so
+ * a segment carrying nothing simply is not painted here and shows through dark.
+ */
+function drawDigit(painter: Painter, view: DynamicView, instance: Instance): void {
+	if (!view.showLight) return;
+	const rated = ledRating(instance);
+	const { rgb } = ledColour(instance.params.colour);
+	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		for (const segment of SEGMENTS) {
+			const current = view.frame.segmentCurrent.get(`${instance.id}:${segment}`) ?? 0;
+			const lit = brightness(current, rated);
+			// Same floor as a single LED: below this it is leakage, and painting it
+			// would leave every bar faintly on and the digit unreadable.
+			if (lit < 0.05) continue;
+			const [x1, y1, x2, y2] = SEGMENT_SHAPES[segment];
+			const from = { x: x1, y: y1 };
+			const to = { x: x2, y: y2 };
+			// A soft pass under a hard one: the spill says how hard it is driven and
+			// the bar itself stays the same width, so a dim digit is still a digit.
+			painter.polyline([from, to], { color: ink, width: 9, alpha: 0.18 + 0.22 * lit });
+			painter.polyline([from, to], {
+				color: whiteHot(rgb, Math.max(lit - 0.7, 0) * 0.6),
+				width: 4.5,
+				alpha: Math.min(0.5 + lit * 0.5, 1)
+			});
+		}
+	});
+}
 
 function drawLed(painter: Painter, view: DynamicView, instance: Instance): void {
 	const at = { x: instance.x, y: instance.y };
