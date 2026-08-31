@@ -564,6 +564,91 @@ describe('a logic toggle', () => {
 		expect(counted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1]);
 	});
 
+	it('lets the level-triggered latch through while it is enabled, and not after', () => {
+		// The whole of the difference between a latch and a flip-flop, in one run:
+		// while enable is high the output is D, and the instant enable goes low the
+		// output stops being D and starts being what D was.
+		const schematic = EXAMPLES.find((e) => e.id === 'd-latch')!.build();
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
+
+		const live = new LiveRun(compiled.netlist, 1e-8);
+		const capture = new Capture(
+			live.unknownNames,
+			live.elementNames,
+			live.netNames,
+			live.nodeCount
+		);
+		// `advance` takes the time to run to, not a step to take.
+		capture.add(live.first);
+		capture.add(live.advance(1e-6));
+		// Caught with enable still high, so it follows.
+		expect(live.setLogic('D', 'low', live.time)).toBe(true);
+		capture.add(live.advance(2e-6));
+		// Shut, then D moves under it: this is the part that must not get through.
+		expect(live.setLogic('EN', 'low', live.time)).toBe(true);
+		capture.add(live.advance(3e-6));
+		expect(live.setLogic('D', 'high', live.time)).toBe(true);
+		capture.add(live.advance(4e-6));
+		live.free();
+
+		const run = capture.run();
+		const level = (name: string, time: number) => {
+			const part = schematic.instances.find((i) => i.name === name)!;
+			const net = compiled.connectivity.netOfPin.get(`${part.id}:y`)!;
+			const label = compiled.names.get(net)!.digital!;
+			const events = run.digital[run.netNames.indexOf(label)] ?? [];
+			return events.filter((event) => event.time <= time).at(-1)?.state;
+		};
+
+		expect(level('Q', 0.5e-6)).toBe('high');
+		expect(level('Q', 1.5e-6)).toBe('low');
+		// Enable is down and D has gone back up. The output must not have.
+		expect(level('Q', 3.5e-6)).toBe('low');
+		// And the pair is a pair at every instant, never both the same.
+		for (const t of [0.5e-6, 1.5e-6, 3.5e-6]) {
+			expect(level('QN', t)).toBe(level('Q', t) === 'high' ? 'low' : 'high');
+		}
+	});
+
+	it('makes the edge-triggered pair wait for the edge', () => {
+		// Two latches on opposite halves of the clock. The reason it is worth
+		// drawing rather than reaching for the flip-flop part is that the edge is
+		// not a feature of anything here: it falls out of the two never being
+		// transparent at the same time.
+		const schematic = EXAMPLES.find((e) => e.id === 'master-slave')!.build();
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
+		const { run } = simulate(schematic, 20e-6);
+
+		const level = (name: string, time: number) => {
+			const part = schematic.instances.find((i) => i.name === name)!;
+			const net = compiled.connectivity.netOfPin.get(`${part.id}:y`)!;
+			const label = compiled.names.get(net)!.digital!;
+			const events = run.digital[run.netNames.indexOf(label)] ?? [];
+			return events.filter((event) => event.time <= time).at(-1)?.state;
+		};
+
+		// D is high throughout and the clock is 1 MHz starting low, so the first
+		// rising edge is at half a microsecond and the answer arrives a few gate
+		// delays later.
+		expect(level('SQ', 4e-7)).not.toBe('high');
+		expect(level('SQ', 6e-7)).toBe('high');
+		expect(level('SN', 6e-7)).toBe('low');
+
+		// The master is the half that is allowed to be transparent, and only while
+		// the clock is low. Between the edge and the next one, the output holds.
+		const events = (name: string) => {
+			const part = schematic.instances.find((i) => i.name === name)!;
+			const net = compiled.connectivity.netOfPin.get(`${part.id}:y`)!;
+			const label = compiled.names.get(net)!.digital!;
+			return run.digital[run.netNames.indexOf(label)] ?? [];
+		};
+		// Settled by the first edge and never moving again: with D held high there
+		// is nothing for later edges to change.
+		expect(events('SQ').filter((event) => event.time > 1e-6)).toEqual([]);
+	});
+
 	it('never mixes the circuit before a change with the one after it', () => {
 		// Reported from the half adder: flip an input while it is running, wait, and
 		// for about a second both lamps sit at half brightness. A frame spans a
