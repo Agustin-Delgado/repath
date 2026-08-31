@@ -333,6 +333,194 @@ export const EXAMPLES: Example[] = [
 			)
 	},
 	{
+		id: 'd-latch',
+		name: 'D latch, level-triggered',
+		description:
+			'Four NAND gates and no flip-flop part in sight, because a flip-flop is not a part — it is a pair of gates each holding the other up. While Enable is high the output follows D straight through, which is what level-triggered means. Drop Enable and it keeps whatever D was at that moment, however much D moves afterwards, and that keeping is the whole of the memory. Compare it with the edge-triggered one, which is two of these back to back.',
+		stopTime: 20e-6,
+		build: () =>
+			build(
+				[
+					{ kind: 'toggle', name: 'D', x: 100, y: 120, params: { state: 'high' } },
+					{ kind: 'toggle', name: 'EN', x: 100, y: 400, params: { state: 'high' } },
+					// The input pair. With Enable low both of these sit high, which is the
+					// combination the cross-coupled pair reads as "hold whatever you have".
+					{ kind: 'nand', name: 'U1', x: 350, y: 170 },
+					{ kind: 'nand', name: 'U2', x: 350, y: 310 },
+					// And the pair that remembers.
+					{ kind: 'nand', name: 'Q', x: 600, y: 150 },
+					{ kind: 'nand', name: 'QN', x: 600, y: 330 },
+					// The lamps hang off buffers rather than off the loop itself. A gate
+					// output feeding a lamp is 8 mA out of something built to drive other
+					// gates, and here it is worse than untidy: an LED on a net that is also
+					// an input of the loop leaves the pair unable to settle at all.
+					{ kind: 'buffer', name: 'B1', x: 760, y: 150 },
+					{ kind: 'buffer', name: 'B2', x: 760, y: 330 },
+					{ kind: 'resistor', name: 'R1', x: 900, y: 150, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D1', x: 1000, y: 150, params: { colour: 'green' } },
+					{ kind: 'resistor', name: 'R2', x: 900, y: 330, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D2', x: 1000, y: 330, params: { colour: 'red' } },
+					{ kind: 'ground', name: 'GND1', x: 1070, y: 400 }
+				],
+				[
+					// D reaches the first gate only.
+					[130, 120, 200, 120],
+					[200, 120, 200, 160],
+					[200, 160, 320, 160],
+					// Enable reaches both, which is what makes it the gate on the whole
+					// thing rather than an input like any other.
+					[130, 400, 230, 400],
+					[230, 180, 230, 400],
+					[230, 180, 320, 180],
+					[230, 320, 320, 320],
+					[380, 170, 420, 170],
+					[420, 170, 420, 300],
+					[420, 300, 320, 300],
+					[420, 140, 570, 140],
+					[420, 140, 420, 170],
+					[380, 310, 450, 310],
+					[450, 310, 450, 320],
+					[450, 320, 570, 320],
+					// The cross-coupling: each output is an input of the other, and that is
+					// the entire mechanism.
+					[630, 150, 680, 150],
+					[680, 150, 680, 220],
+					[500, 220, 680, 220],
+					[500, 220, 500, 340],
+					[500, 340, 570, 340],
+					[630, 330, 710, 330],
+					[710, 260, 710, 330],
+					[540, 260, 710, 260],
+					[540, 160, 540, 260],
+					[540, 160, 570, 160],
+					// Out through the buffers to the lamps.
+					[680, 150, 730, 150],
+					[790, 150, 870, 150],
+					[930, 150, 970, 150],
+					[1030, 150, 1070, 150],
+					[710, 330, 730, 330],
+					[790, 330, 870, 330],
+					[930, 330, 970, 330],
+					[1030, 330, 1070, 330],
+					[1070, 150, 1070, 390]
+				]
+			)
+	},
+
+	{
+		id: 'master-slave',
+		name: 'D flip-flop, edge-triggered',
+		description:
+			'Two of the level-triggered latches back to back on opposite halves of the clock, which is where the edge comes from. While the clock is low the first one follows D and the second holds; when the clock rises the first stops listening and the second copies what it caught. The two are never transparent at the same time, so a change on D can never run straight through to the output — and that, rather than any part called a flip-flop, is what edge-triggered means.',
+		stopTime: 20e-6,
+		build: () => {
+			// Both latches sit at the same height, so the cascade is one straight wire
+			// and the two enable rails stay clear of everything else.
+			const Y = 120;
+			const MASTER = 360;
+			const SLAVE = 1060;
+			/** Where each latch takes its enable from, to the left of its own gates. */
+			const MASTER_EN = 320;
+			const SLAVE_EN = 1020;
+
+			const parts: Placed[] = [
+				{ kind: 'toggle', name: 'D', x: 100, y: 120, params: { state: 'high' } },
+				{ kind: 'clock', name: 'CLK1', x: 100, y: 640, params: { frequency: 1e6, duty: 0.5 } },
+				// The master listens while the clock is low and the slave while it is
+				// high. One inverter is the entire difference between this and two
+				// latches wired in series, which would just be transparent twice over.
+				{ kind: 'not', name: 'INV', x: 260, y: 640 },
+				{ kind: 'buffer', name: 'B1', x: 1740, y: Y + 30 },
+				{ kind: 'buffer', name: 'B2', x: 1740, y: Y + 210 },
+				{ kind: 'resistor', name: 'R1', x: 1880, y: Y + 30, params: { resistance: 330 } },
+				{ kind: 'led', name: 'D1', x: 1980, y: Y + 30, params: { colour: 'green' } },
+				{ kind: 'resistor', name: 'R2', x: 1880, y: Y + 210, params: { resistance: 330 } },
+				{ kind: 'led', name: 'D2', x: 1980, y: Y + 210, params: { colour: 'red' } },
+				{ kind: 'ground', name: 'GND1', x: 2050, y: Y + 300 }
+			];
+			const wires: Array<[number, number, number, number]> = [];
+
+			/**
+			 * One four-NAND latch, the same drawing as the level-triggered example.
+			 *
+			 * Returns the points its d input is reached at and its two outputs leave
+			 * from, because the second latch is wired to the first.
+			 */
+			const latch = (tag: string, x: number, enable: number) => {
+				parts.push(
+					{ kind: 'nand', name: `${tag}1`, x: x + 250, y: Y + 50 },
+					{ kind: 'nand', name: `${tag}2`, x: x + 250, y: Y + 190 },
+					{ kind: 'nand', name: `${tag}Q`, x: x + 500, y: Y + 30 },
+					{ kind: 'nand', name: `${tag}N`, x: x + 500, y: Y + 210 }
+				);
+				wires.push(
+					// Enable to both input gates, which is what makes it the gate on the
+					// whole latch rather than an input like any other.
+					[enable, Y + 60, x + 220, Y + 60],
+					[enable, Y + 200, x + 220, Y + 200],
+					// The first gate feeds the second as well as the pair, so an enable of
+					// low leaves both of them high and the pair holds what it has.
+					[x + 280, Y + 50, x + 320, Y + 50],
+					[x + 320, Y + 50, x + 320, Y + 180],
+					[x + 220, Y + 180, x + 320, Y + 180],
+					[x + 320, Y + 20, x + 320, Y + 50],
+					[x + 320, Y + 20, x + 470, Y + 20],
+					[x + 280, Y + 190, x + 350, Y + 190],
+					[x + 350, Y + 190, x + 350, Y + 200],
+					[x + 350, Y + 200, x + 470, Y + 200],
+					// Cross-coupled, which is the part that remembers.
+					[x + 530, Y + 30, x + 580, Y + 30],
+					[x + 580, Y + 30, x + 580, Y + 100],
+					[x + 400, Y + 100, x + 580, Y + 100],
+					[x + 400, Y + 100, x + 400, Y + 220],
+					[x + 400, Y + 220, x + 470, Y + 220],
+					[x + 530, Y + 210, x + 610, Y + 210],
+					[x + 610, Y + 140, x + 610, Y + 210],
+					[x + 440, Y + 140, x + 610, Y + 140],
+					[x + 440, Y + 40, x + 440, Y + 140],
+					[x + 440, Y + 40, x + 470, Y + 40]
+				);
+				return { d: x + 220, q: x + 580, qn: x + 610 };
+			};
+
+			const master = latch('M', MASTER, MASTER_EN);
+			const slave = latch('S', SLAVE, SLAVE_EN);
+
+			wires.push(
+				// D into the master, above the enable rail rather than across it.
+				[130, 120, 200, 120],
+				[200, 120, 200, Y + 40],
+				[200, Y + 40, master.d, Y + 40],
+				// The clock into the inverter, and on to the slave's rail the long way
+				// round, under everything.
+				[130, 640, 230, 640],
+				[180, 640, 180, 940],
+				[180, 940, SLAVE_EN, 940],
+				[SLAVE_EN, Y + 60, SLAVE_EN, 940],
+				// The inverted clock up to the master's rail.
+				[290, 640, MASTER_EN, 640],
+				[MASTER_EN, Y + 60, MASTER_EN, 640],
+				// The cascade: the master's q is the slave's d, on one straight line.
+				[master.q, Y + 30, 980, Y + 30],
+				[980, Y + 30, 980, Y + 40],
+				[980, Y + 40, slave.d, Y + 40],
+				// And the slave's outputs are the flip-flop's, out through the buffers.
+				[slave.q, Y + 30, 1710, Y + 30],
+				[slave.qn, Y + 210, 1710, Y + 210],
+				[1770, Y + 30, 1850, Y + 30],
+				[1910, Y + 30, 1950, Y + 30],
+				[2010, Y + 30, 2050, Y + 30],
+				[1770, Y + 210, 1850, Y + 210],
+				[1910, Y + 210, 1950, Y + 210],
+				[2010, Y + 210, 2050, Y + 210],
+				[2050, Y + 30, 2050, Y + 290]
+			);
+
+			return build(parts, wires);
+		}
+	},
+
+	{
 		id: 'flip-flop',
 		name: 'D flip-flop',
 		description:
