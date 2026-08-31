@@ -144,14 +144,14 @@ const STATIC: Record<string, SymbolGeometry> = {
 			// The package, then the eight bars unlit. What lights them is drawn on the
 			// live layer over the top of these, so an unpowered drawing still shows a
 			// digit rather than an empty box.
-			{ kind: 'rect', x: -44, y: -80, w: 88, h: 160 },
+			{ kind: 'rect', x: -40, y: -46, w: 80, h: 92 },
 			...SEGMENTS.map((segment) => {
 				const [x1, y1, x2, y2] = SEGMENT_SHAPES[segment];
 				return path(`M${x1} ${y1} L${x2} ${y2}`);
 			}),
 			// Leads out to the eight segment pins and the common one.
-			...SEGMENTS.map((_, i) => path(`M-50 ${(i - 3.5) * 20} H-44`)),
-			path('M0 80 V92')
+			...SEGMENTS.map((_, i) => path(`M-50 ${(i - 3.5) * 10} H-40`)),
+			path('M0 46 V62')
 		],
 		labels: []
 	},

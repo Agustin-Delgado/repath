@@ -351,7 +351,7 @@ export const EXAMPLES: Example[] = [
 				{ kind: 'ground', name: 'GND1', x: DIGIT_X, y: 340 }
 			];
 			const wires: Array<[number, number, number, number]> = [
-				[DIGIT_X, DIGIT_Y + 92, DIGIT_X, 330]
+				[DIGIT_X, DIGIT_Y + 62, DIGIT_X, 330]
 			];
 
 			for (const [i, segment] of SEGMENTS.entries()) {
@@ -359,7 +359,7 @@ export const EXAMPLES: Example[] = [
 				// across in its own column on the way in. Crossing the others costs
 				// nothing; landing on one would be another matter.
 				const y = 100 + i * 60;
-				const pin = DIGIT_Y + (i - 3.5) * 20;
+				const pin = DIGIT_Y + (i - 3.5) * 10;
 				const column = 620 + i * 10;
 				parts.push(
 					{

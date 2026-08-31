@@ -89,15 +89,17 @@ const BY_VALUE = new Map(LED_COLOURS.map((c) => [c.value, c] as const));
  * the right of the digit where a real one is.
  */
 export const SEGMENT_SHAPES: Readonly<Record<Segment, readonly [number, number, number, number]>> = {
-	a: [-6, -35, 26, -35],
-	b: [30, -31, 30, -4],
-	c: [30, 4, 30, 31],
-	d: [-6, 35, 26, 35],
-	e: [-10, 4, -10, 31],
-	f: [-10, -31, -10, -4],
-	g: [-6, 0, 26, 0],
-	// The decimal point, as a zero-length stroke: a round cap makes it a dot.
-	dp: [38, 35, 38, 35]
+	a: [-18, -35, 10, -35],
+	b: [14, -31, 14, -4],
+	c: [14, 4, 14, 31],
+	d: [-18, 35, 10, 35],
+	e: [-22, 4, -22, 31],
+	f: [-22, -31, -22, -4],
+	g: [-18, 0, 10, 0],
+	// The decimal point, as a zero-length stroke: a round cap makes it a dot. Off
+	// to the right of the digit, which is why the digit itself sits left of centre
+	// rather than in the middle of the package.
+	dp: [26, 35, 26, 35]
 };
 
 export function ledColour(value: unknown): LedColour {
