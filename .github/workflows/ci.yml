@@ -118,6 +118,33 @@ jobs:
           {"version":3,"routes":[{"handle":"filesystem"},{"src":"/.*","dest":"/index.html"}]}
           JSON
 
+      # Vercel's own answer to a token that cannot reach the project is "Could
+      # not retrieve Project Settings. To link your Project, remove the
+      # `.vercel` directory and deploy again", which sends you after the link
+      # rather than after the token. Ask the API first, where the answer is
+      # plain, and say what to do about it.
+      - name: Check the token can reach the project
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "VERCEL_TOKEN is not set. Create one at https://vercel.com/account/tokens" >&2
+            echo "as the account that owns the project, then: gh secret set VERCEL_TOKEN" >&2
+            exit 1
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}'             -H "Authorization: Bearer $VERCEL_TOKEN"             "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID")
+          if [ "$code" != "200" ]; then
+            echo "the token cannot see this project (HTTP $code)." >&2
+            echo "A 403 means it belongs to a different Vercel account: the CLI's own" >&2
+            echo "token in auth.json is not the one that owns this project, and is not" >&2
+            echo "an API token either. Create one at https://vercel.com/account/tokens" >&2
+            echo "signed in as the owner of team $VERCEL_ORG_ID." >&2
+            exit 1
+          fi
+          echo "token reaches the project"
+
       - name: Deploy to production
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
