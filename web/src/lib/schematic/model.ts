@@ -889,13 +889,16 @@ export const CATALOG: ComponentDef[] = [
 		 * which is a mistake worth being able to make here.
 		 */
 		kind: 'display7',
-		box: { x: -50, y: -92, w: 100, h: 184 },
+		box: { x: -46, y: -62, w: 92, h: 124 },
 		label: '7-segment',
 		group: 'semiconductor',
 		prefix: 'DS',
 		pins: [
-			...SEGMENTS.map((seg, i) => analog(seg, -50, (i - 3.5) * 20)),
-			analog('common', 0, 92)
+			// Ten apart, which is the grid: eight pins twenty apart made the package
+			// twice the height of the digit inside it, and a symbol that is mostly
+			// empty box reads as a mistake.
+			...SEGMENTS.map((seg, i) => analog(seg, -50, (i - 3.5) * 10)),
+			analog('common', 0, 62)
 		],
 		params: [
 			{
