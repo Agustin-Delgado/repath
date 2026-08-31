@@ -10,6 +10,12 @@ env:
   # Pinned rather than floating: a toolchain that moves under you turns an
   # unrelated pull request red, and this is the version the README asks for.
   WASM_PACK_VERSION: v0.15.0
+  # Same reasoning, and the case that proved it. This tracked `stable` until
+  # 1.98 shipped `clippy::manual_slice_fill`, and a loop nobody had touched
+  # since it was written became an error under `-D warnings`. Two days of red
+  # on `main` with no commit responsible for it. Raise this deliberately, and
+  # take whatever the new release has to say in its own pull request.
+  RUST_VERSION: 1.98.0
 
 jobs:
   engine:
@@ -19,6 +25,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
@@ -32,6 +39,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
