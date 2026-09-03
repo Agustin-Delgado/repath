@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { app } from '$lib/state.svelte';
-	import { CATALOG, SUBCIRCUIT_PREFIX, type Group } from '$lib/schematic/model';
+	import { CATALOG, SUBCIRCUIT_PREFIX, chipDefinition, type Group } from '$lib/schematic/model';
+	import { CHIPS } from '$lib/schematic/chips';
 	import Symbol from './Symbol.svelte';
 
 	const GROUPS: Array<{ id: Group; label: string }> = [
@@ -8,8 +9,13 @@
 		{ id: 'sources', label: 'Sources' },
 		{ id: 'semiconductor', label: 'Semiconductors' },
 		{ id: 'analog', label: 'Analog' },
-		{ id: 'logic', label: 'Logic' }
+		{ id: 'logic', label: 'Logic' },
+		{ id: 'ic', label: 'Chips' }
 	];
+
+	// The chips are generated from a table rather than written into the catalogue,
+	// so the palette has to ask for them alongside it.
+	const PARTS = [...CATALOG, ...CHIPS.map(chipDefinition)];
 
 	function select(kind: string) {
 		app.tool =
@@ -79,7 +85,7 @@
 		<section>
 			<h3>{group.label}</h3>
 			<div class="grid">
-				{#each CATALOG.filter((c) => c.group === group.id) as def (def.kind)}
+				{#each PARTS.filter((c) => c.group === group.id) as def (def.kind)}
 					<button
 						class="part"
 						class:active={app.tool.mode === 'place' && app.tool.kind === def.kind}

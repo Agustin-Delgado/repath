@@ -11,6 +11,7 @@
 
 import { contactControl, restingContact } from './contacts';
 import { ledDiodeModel, ledRating, SEGMENTS } from './led';
+import { chipOf } from './model';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
 import {
@@ -313,6 +314,48 @@ export function compileSchematic(
 
 	for (const instance of schematic.instances) {
 		const name = instance.name;
+
+		// A chip is the gates inside it, wired to its legs. Nothing new reaches the
+		// engine: a 7400 is four `gate` devices that happen to share a package, and
+		// the package is what the drawing gets to show. Ahead of the switch because
+		// the kind is a chip id rather than one of a fixed set.
+		//
+		// A pin name a block uses that the package does not have is internal, and
+		// gets a net of its own per instance — two 7476s on one drawing must not
+		// share the inside of their flip-flops.
+		const chip = chipOf(instance.kind);
+		if (chip) {
+			const legs = new Set(chip.layout);
+			const net = (pin: string) =>
+				legs.has(pin) ? digitalOf(instance, pin) : `${instance.id}_in_${pin}`;
+			for (const [index, block] of chip.blocks.entries()) {
+				const blockName = index === 0 ? name : `${name}:${index + 1}`;
+				if (block.kind === 'dff') {
+					devices.push({
+						type: 'd_flip_flop',
+						name: blockName,
+						clock: net(block.clock!),
+						data: net(block.data!),
+						reset: block.reset ? net(block.reset) : null,
+						preset: block.preset ? net(block.preset) : null,
+						q: net(block.q!),
+						q_not: net(block.qn!),
+						delay: 1e-9
+					});
+				} else {
+					devices.push({
+						type: 'gate',
+						name: blockName,
+						kind: block.kind,
+						inputs: (block.inputs ?? []).map(net),
+						output: net(block.output!),
+						delay: 1e-9
+					});
+				}
+			}
+			continue;
+		}
+
 		switch (instance.kind) {
 			case 'ground':
 			// A probe is a name attached to a point. It carries no current and

@@ -8,6 +8,7 @@
  */
 
 import { LED_COLOURS, RATED, SEGMENTS } from './led';
+import { CHIPS, chipById, isPower, isUnused, type ChipDef } from './chips';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -80,7 +81,7 @@ export function validateParam(param: ParamDef, value: number | string): string |
 	return null;
 }
 
-export type Group = 'passive' | 'sources' | 'semiconductor' | 'analog' | 'logic';
+export type Group = 'passive' | 'sources' | 'semiconductor' | 'analog' | 'logic' | 'ic';
 
 export interface ComponentDef {
 	kind: string;
@@ -1213,7 +1214,95 @@ export const CATALOG: ComponentDef[] = [
  */
 export const OPERABLE = new Set(['switch', 'toggle']);
 
-const BY_KIND = new Map(CATALOG.map((d) => [d.kind, d]));
+// ---------------------------------------------------------------------------
+// Integrated circuits
+// ---------------------------------------------------------------------------
+
+/** How a placed chip is named: `ic:7400`. */
+export const CHIP_PREFIX = 'ic:';
+
+/** Legs are a tenth of an inch apart on the real thing and 20 units here. */
+const CHIP_PITCH = 20;
+/** Half the width of the body. Wide enough for a pin name inside each edge. */
+const CHIP_HALF_WIDTH = 60;
+
+/**
+ * Where every leg of a DIP sits, in package order.
+ *
+ * Pin 1 is top left and they run down that side, across the bottom and back up
+ * the right — which is why the right-hand column is indexed from the end. That
+ * is not decoration: it is how somebody counts legs with the notch facing up,
+ * and getting it wrong makes the drawing lie about a part they are holding.
+ */
+export function chipPinLayout(count: number): Array<{ x: number; y: number; index: number }> {
+	const perSide = count / 2;
+	const y = (row: number) => (row - (perSide - 1) / 2) * CHIP_PITCH;
+	return Array.from({ length: count }, (_, i) =>
+		i < perSide
+			? { x: -CHIP_HALF_WIDTH, y: y(i), index: i }
+			: { x: CHIP_HALF_WIDTH, y: y(count - 1 - i), index: i }
+	);
+}
+
+/** Half the body height, with room above and below the outermost legs. */
+export function chipReach(count: number): number {
+	return ((count / 2 - 1) * CHIP_PITCH) / 2 + 18;
+}
+
+/**
+ * A placeable part generated from a row of the chip table.
+ *
+ * Direction is read off what is inside rather than declared twice: a pin a block
+ * drives is an output, everything else a block touches is an input. Supply pins
+ * are analog, because that is what they connect to — a rail and a ground symbol.
+ *
+ * Unconnected legs are deliberately *not* pins. They exist on the package and
+ * the symbol draws their numbers, but a pin the die does not reach would collect
+ * a "not connected" warning on every drawing forever.
+ */
+export function chipDefinition(chip: ChipDef): ComponentDef {
+	const driven = new Set<string>();
+	const touched = new Set<string>();
+	for (const block of chip.blocks) {
+		for (const pin of block.inputs ?? []) touched.add(pin);
+		for (const pin of [block.clock, block.data, block.reset, block.preset]) {
+			if (pin) touched.add(pin);
+		}
+		for (const pin of [block.output, block.q, block.qn]) {
+			if (pin) driven.add(pin);
+		}
+	}
+
+	const places = chipPinLayout(chip.layout.length);
+	const pins: PinDef[] = [];
+	for (const [i, name] of chip.layout.entries()) {
+		if (isUnused(name)) continue;
+		const { x, y } = places[i];
+		if (isPower(name)) pins.push(analog(name, x, y));
+		else if (driven.has(name)) pins.push(digitalOut(name, x, y));
+		else if (touched.has(name)) pins.push(digitalIn(name, x, y));
+	}
+
+	const half = chipReach(chip.layout.length);
+	return {
+		kind: CHIP_PREFIX + chip.id,
+		label: chip.id,
+		group: 'ic',
+		prefix: 'U',
+		box: { x: -CHIP_HALF_WIDTH, y: -half, w: CHIP_HALF_WIDTH * 2, h: half * 2 },
+		pins,
+		params: []
+	};
+}
+
+/** The chip a kind names, if it names one. */
+export function chipOf(kind: string): ChipDef | undefined {
+	return kind.startsWith(CHIP_PREFIX) ? chipById(kind.slice(CHIP_PREFIX.length)) : undefined;
+}
+
+const BY_KIND = new Map(
+	[...CATALOG, ...CHIPS.map(chipDefinition)].map((d) => [d.kind, d])
+);
 
 export function definitionOf(kind: string): ComponentDef {
 	const def = BY_KIND.get(kind);
