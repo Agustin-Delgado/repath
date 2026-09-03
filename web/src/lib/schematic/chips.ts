@@ -83,6 +83,41 @@ const QUAD_2: readonly string[] = [
 	'VCC'
 ];
 
+/**
+ * The 4000 family's own quad pinout, which is not the 74xx one.
+ *
+ * Both gates of a pair sit next to their output here, and the supply pins are
+ * the other way round: VSS at 7 and VDD at 14 are the same corners as GND and
+ * VCC, but everything in between moved.
+ */
+const CMOS_QUAD: readonly string[] = [
+	'1Y',
+	'1A',
+	'1B',
+	'2Y',
+	'2A',
+	'2B',
+	'VSS',
+	'3A',
+	'3B',
+	'3Y',
+	'4A',
+	'4B',
+	'4Y',
+	'VDD'
+];
+
+function cmosTriple3(kind: ChipBlock['kind']) {
+	return {
+		layout: ['1Y', '2Y', '2A', '2B', '2C', '3A', 'VSS', '3B', '3C', '3Y', '1A', '1B', '1C', 'VDD'],
+		blocks: [1, 2, 3].map((n) => ({
+			kind,
+			inputs: [`${n}A`, `${n}B`, `${n}C`],
+			output: `${n}Y`
+		}))
+	};
+}
+
 function quad2(kind: ChipBlock['kind'], layout: readonly string[] = QUAD_2) {
 	return {
 		layout,
@@ -152,7 +187,50 @@ export const CHIPS: readonly ChipDef[] = [
 		...quad2('xnor'),
 		caveat:
 			'The real part has open-drain outputs and wants a pull-up on each one; here they drive like any other gate.'
-	}
+	},
+
+	// The 4000 family. Same gates, different legs — and the legs are the reason
+	// both families are here rather than one standing in for the other. A 4011 is
+	// four NANDs like a 7400 and its pinout is nothing like it: swap the chip
+	// without redrawing and every wire lands on the wrong pin.
+	{ id: '4001', description: 'Quad 2-input NOR (CMOS)', ...quad2('nor', CMOS_QUAD) },
+	{
+		id: '4002',
+		description: 'Dual 4-input NOR (CMOS)',
+		layout: ['NC1', '1A', '1B', '1C', '1D', '1Y', 'VSS', '2Y', '2A', '2B', '2C', '2D', 'NC2', 'VDD'],
+		blocks: [1, 2].map((n) => ({
+			kind: 'nor' as const,
+			inputs: [`${n}A`, `${n}B`, `${n}C`, `${n}D`],
+			output: `${n}Y`
+		}))
+	},
+	{ id: '4011', description: 'Quad 2-input NAND (CMOS)', ...quad2('nand', CMOS_QUAD) },
+	{
+		id: '4012',
+		description: 'Dual 4-input NAND (CMOS)',
+		layout: ['NC1', '1A', '1B', '1C', '1D', '1Y', 'VSS', '2Y', '2A', '2B', '2C', '2D', 'NC2', 'VDD'],
+		blocks: [1, 2].map((n) => ({
+			kind: 'nand' as const,
+			inputs: [`${n}A`, `${n}B`, `${n}C`, `${n}D`],
+			output: `${n}Y`
+		}))
+	},
+	{ id: '4023', description: 'Triple 3-input NAND (CMOS)', ...cmosTriple3('nand') },
+	{ id: '4025', description: 'Triple 3-input NOR (CMOS)', ...cmosTriple3('nor') },
+	{
+		id: '4069',
+		description: 'Hex inverter (CMOS)',
+		layout: ['1A', '1Y', '2A', '2Y', '3A', '3Y', 'VSS', '4Y', '4A', '5Y', '5A', '6Y', '6A', 'VDD'],
+		blocks: [1, 2, 3, 4, 5, 6].map((n) => ({
+			kind: 'not' as const,
+			inputs: [`${n}A`],
+			output: `${n}Y`
+		}))
+	},
+	{ id: '4070', description: 'Quad 2-input XOR (CMOS)', ...quad2('xor', CMOS_QUAD) },
+	{ id: '4071', description: 'Quad 2-input OR (CMOS)', ...quad2('or', CMOS_QUAD) },
+	{ id: '4077', description: 'Quad 2-input XNOR (CMOS)', ...quad2('xnor', CMOS_QUAD) },
+	{ id: '4081', description: 'Quad 2-input AND (CMOS)', ...quad2('and', CMOS_QUAD) }
 ];
 
 const BY_ID = new Map(CHIPS.map((chip) => [chip.id, chip]));
@@ -161,8 +239,15 @@ export function chipById(id: string): ChipDef | undefined {
 	return BY_ID.get(id);
 }
 
+/**
+ * A supply pin, whichever family's name it goes by.
+ *
+ * The 4000 series calls them VDD and VSS and it is not a synonym worth
+ * flattening: somebody reading the drawing against a datasheet should see the
+ * name their datasheet uses.
+ */
 export function isPower(pin: string): boolean {
-	return pin === 'VCC' || pin === 'GND';
+	return pin === 'VCC' || pin === 'GND' || pin === 'VDD' || pin === 'VSS';
 }
 
 /**
