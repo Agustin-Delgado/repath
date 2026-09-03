@@ -418,6 +418,123 @@ describe('the gates inside a package', () => {
 		expect(evaluate('4511', { ...one, LT: 'low', BI: 'low' }, 'a')).toBe('high');
 	});
 
+	it('drives the 7447 the opposite way round from the 4511', () => {
+		// Same seven equations, opposite polarity: this one pulls a segment down to
+		// light it, because it is meant for a common-anode digit. Wire it to a
+		// common-cathode one and it shows the photographic negative of the number,
+		// so the polarity is the thing worth pinning.
+		const five = { A: 'high', B: 'low', C: 'high', D: 'low' } as const;
+		const quiet = { LT: 'high', BI: 'high', RBI: 'high' } as const;
+		// A 5 is a c d f g. On this part those read low and the other two read high.
+		for (const seg of 'acdfg') {
+			expect(evaluate('7447', { ...five, ...quiet }, seg), `lit ${seg}`).toBe('low');
+		}
+		for (const seg of 'be') {
+			expect(evaluate('7447', { ...five, ...quiet }, seg), `dark ${seg}`).toBe('high');
+		}
+		// And the 4511 says the same digit the other way round.
+		const cmos = { ...five, LE: 'low', BI: 'high', LT: 'high' } as const;
+		expect(evaluate('4511', cmos, 'a')).toBe('high');
+		expect(evaluate('4511', cmos, 'b')).toBe('low');
+	});
+
+	it('blanks a leading zero on the 7447 but never the lamp test', () => {
+		const zero = { A: 'low', B: 'low', C: 'low', D: 'low', LT: 'high', BI: 'high' } as const;
+		// Ripple blanking off: a zero is a zero.
+		expect(evaluate('7447', { ...zero, RBI: 'high' }, 'a')).toBe('low');
+		// On: this digit shows nothing, which is how 007 becomes 7.
+		expect(evaluate('7447', { ...zero, RBI: 'low' }, 'a')).toBe('high');
+		// Except under lamp test, which has to light what blanking would hide or it
+		// is not a test.
+		expect(evaluate('7447', { ...zero, RBI: 'low', LT: 'low' }, 'a')).toBe('low');
+	});
+
+	it('picks each of the eight inputs of a 74151 in turn', () => {
+		// Every address is walked with only its own input high, so a mux wired to
+		// the wrong data line — or to two of them — fails on the address that names
+		// it rather than on all of them at once.
+		for (let address = 0; address < 8; address++) {
+			const inputs: Record<string, 'high' | 'low'> = {
+				A: address & 1 ? 'high' : 'low',
+				B: address & 2 ? 'high' : 'low',
+				C: address & 4 ? 'high' : 'low',
+				G: 'low'
+			};
+			for (let line = 0; line < 8; line++) inputs[`D${line}`] = line === address ? 'high' : 'low';
+			expect(evaluate('74151', inputs, 'Y'), `address ${address}`).toBe('high');
+			// W is Y inverted, and it is on the package because half the circuits
+			// that use one of these want the complement.
+			expect(evaluate('74151', inputs, 'W'), `address ${address} W`).toBe('low');
+			// Now the same address with that one input low: nothing else may leak in.
+			const inverted = { ...inputs, [`D${address}`]: 'low' as const };
+			for (let line = 0; line < 8; line++) {
+				if (line !== address) inverted[`D${line}`] = 'high';
+			}
+			expect(evaluate('74151', inverted, 'Y'), `address ${address} isolated`).toBe('low');
+		}
+	});
+
+	it('counts 0 to 15 on the 74161 and carries at the top', () => {
+		// A counter is the one part where a still picture proves nothing: it has to
+		// be clocked. So this places the chip with a real clock on it, runs, and
+		// reads the four outputs at the middle of every count.
+		const chip = chipById('74161')!;
+		const def = chipDefinition(chip);
+		const part = at(CHIP_PREFIX + '74161', 'U1', 600, 400);
+		const ground = at('ground', 'GND1', 1100, 800);
+		const instances: Instance[] = [part, ground];
+		const wires: Array<[number, number, number, number]> = [];
+
+		const drive = (pin: string, state: 'high' | 'low') => {
+			const place = def.pins.find((p) => p.name === pin)!;
+			const source = at('toggle', pin, 600 + place.x - 120, 400 + place.y);
+			source.params = { state };
+			instances.push(source);
+			wires.push([600 + place.x - 90, 400 + place.y, 600 + place.x, 400 + place.y]);
+		};
+		// Counting, never loading, never cleared, and the load inputs held low so a
+		// stray load would be obvious rather than invisible.
+		for (const pin of ['ENP', 'ENT', 'CLR', 'LOAD']) drive(pin, 'high');
+		for (const pin of ['A', 'B', 'C', 'D']) drive(pin, 'low');
+
+		const clkPlace = def.pins.find((p) => p.name === 'CLK')!;
+		const clock = at('clock', 'CLK1', 600 + clkPlace.x - 120, 400 + clkPlace.y);
+		clock.params = { frequency: 1e6, duty: 0.5 };
+		instances.push(clock);
+		wires.push([600 + clkPlace.x - 90, 400 + clkPlace.y, 600 + clkPlace.x, 400 + clkPlace.y]);
+
+		const compiled = compileSchematic(drawing(instances, wires));
+		expect(compiled.errors).toEqual([]);
+		const sim = new Simulation(JSON.stringify(compiled.netlist));
+		const meta = JSON.parse(sim.runTransient(20e-6, 5e-8));
+		sim.free();
+
+		const series = (pin: string) => {
+			const net = compiled.connectivity.netOfPin.get(`${part.id}:${pin}`)!;
+			const label = compiled.names.get(net)!.digital!;
+			return meta.digital[meta.net_names.indexOf(label)] ?? [];
+		};
+		const bit = (events: Array<{ time: number; state: string }>, t: number) =>
+			events.filter((e) => e.time <= t).at(-1)?.state === 'high' ? 1 : 0;
+		const q = ['QA', 'QB', 'QC', 'QD'].map(series);
+		const rco = series('RCO');
+
+		// The clock rises at 0.5 us and every microsecond after, so read at 0.9,
+		// 1.9 and so on: well clear of the edge either side.
+		const counted: number[] = [];
+		for (let n = 0; n < 17; n++) {
+			const t = n * 1e-6 + 0.9e-6;
+			counted.push(q.reduce((sum, events, i) => sum + bit(events, t) * (1 << i), 0));
+		}
+		expect(counted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1]);
+
+		// And the carry is up only while the count is fifteen — one count wide,
+		// which is what the next counter in the chain is waiting for.
+		expect(bit(rco, 14 * 1e-6 + 0.9e-6)).toBe(1);
+		expect(bit(rco, 13 * 1e-6 + 0.9e-6)).toBe(0);
+		expect(bit(rco, 15 * 1e-6 + 0.9e-6)).toBe(0);
+	});
+
 	it('keeps two of the same chip out of each other', () => {
 		// Two 7400s, one gate driven on each, opposite inputs. If the emission
 		// shared a net name between instances they would fight and both read
