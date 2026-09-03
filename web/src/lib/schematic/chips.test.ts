@@ -273,6 +273,29 @@ describe('the gates inside a package', () => {
 		}
 	});
 
+	it('shows a 5 on the shipped BCD example, end to end', () => {
+		// Switches, decoder, resistors, digit — the whole chain in one run. The
+		// assertion is on which bars carry current, because that is the only place
+		// a wrong equation, a crossed wire or a mis-numbered leg all show up the
+		// same way: as a number that is not the one on the switches.
+		const example = EXAMPLES.find((e) => e.id === 'bcd-display')!.build();
+		const compiled = compileSchematic(example);
+		expect(compiled.errors).toEqual([]);
+		const sim = new Simulation(JSON.stringify(compiled.netlist));
+		const meta = JSON.parse(sim.runTransient(2e-6, 5e-8));
+		const lit = meta.element_names
+			.map((name: string, k: number) => {
+				const series = sim.current(k);
+				return [name, series[series.length - 1]] as const;
+			})
+			.filter(([name, amps]: readonly [string, number]) => name.startsWith('DS1') && amps > 1e-3)
+			.map(([name]: readonly [string, number]) => name.split(':')[1] ?? 'a')
+			.sort();
+		sim.free();
+		// a, c, d, f and g, and no b or e: that is a 5.
+		expect(lit).toEqual(['a', 'c', 'd', 'f', 'g']);
+	});
+
 	it('leaves no input of the shipped CD4027 example floating', () => {
 		// The example uses one half of the chip, and every input of the other half
 		// is tied down rather than left in the air. That is not tidiness: a CMOS
@@ -287,6 +310,112 @@ describe('the gates inside a package', () => {
 			'U1.2QN is not connected to anything.',
 			'U1.2Q is not connected to anything.'
 		]);
+	});
+
+	it('puts exactly one line of the 74138 low, and the right one', () => {
+		// A decoder that lit two lines, or the wrong line, would still compile and
+		// still look like a decoder. So every address is walked, and the assertion
+		// is on all eight outputs at once rather than on the one being aimed at.
+		for (let address = 0; address < 8; address++) {
+			const inputs: Record<string, 'high' | 'low'> = {
+				A: address & 1 ? 'high' : 'low',
+				B: address & 2 ? 'high' : 'low',
+				C: address & 4 ? 'high' : 'low',
+				G1: 'high',
+				G2A: 'low',
+				G2B: 'low'
+			};
+			for (let line = 0; line < 8; line++) {
+				expect(evaluate('74138', inputs, `Y${line}`), `address ${address} line ${line}`).toBe(
+					line === address ? 'low' : 'high'
+				);
+			}
+		}
+	});
+
+	it('turns the whole 74138 off from any one of its three enables', () => {
+		// The enables are why this part stacks, and they are the half of it a
+		// composition is most likely to get backwards: G1 is active high and the
+		// two G2s are active low.
+		const on = { A: 'low', B: 'low', C: 'low', G1: 'high', G2A: 'low', G2B: 'low' } as const;
+		expect(evaluate('74138', on, 'Y0')).toBe('low');
+		expect(evaluate('74138', { ...on, G1: 'low' }, 'Y0')).toBe('high');
+		expect(evaluate('74138', { ...on, G2A: 'high' }, 'Y0')).toBe('high');
+		expect(evaluate('74138', { ...on, G2B: 'high' }, 'Y0')).toBe('high');
+	});
+
+	it('switches all four channels of the 74157 on one pin', () => {
+		// Every channel is driven with A and B opposite, so a channel wired to the
+		// wrong select — or to another channel's data — shows up immediately.
+		for (const n of [1, 2, 3, 4]) {
+			const data = { [`${n}A`]: 'high', [`${n}B`]: 'low', G: 'low' } as Record<
+				string,
+				'high' | 'low'
+			>;
+			expect(evaluate('74157', { ...data, S: 'low' }, `${n}Y`), `channel ${n} A`).toBe('high');
+			expect(evaluate('74157', { ...data, S: 'high' }, `${n}Y`), `channel ${n} B`).toBe('low');
+			// And the strobe blanks it whichever side is selected.
+			expect(evaluate('74157', { ...data, S: 'low', G: 'high' }, `${n}Y`), `channel ${n} off`).toBe(
+				'low'
+			);
+		}
+	});
+
+	it('lights the right bars of a 4511 for all ten digits', () => {
+		// Seven equations, ten codes, seventy answers — and a decoder that gets one
+		// of them wrong shows a 6 with the top bar missing and nothing else looks
+		// amiss. So all seventy are checked rather than a couple of digits.
+		const DIGITS: Record<number, string> = {
+			0: 'abcdef',
+			1: 'bc',
+			2: 'abdeg',
+			3: 'abcdg',
+			4: 'bcfg',
+			5: 'acdfg',
+			6: 'acdefg',
+			7: 'abc',
+			8: 'abcdefg',
+			9: 'abcdfg'
+		};
+		for (const [value, lit] of Object.entries(DIGITS)) {
+			const n = Number(value);
+			const inputs: Record<string, 'high' | 'low'> = {
+				A: n & 1 ? 'high' : 'low',
+				B: n & 2 ? 'high' : 'low',
+				C: n & 4 ? 'high' : 'low',
+				D: n & 8 ? 'high' : 'low',
+				// Latches open, no blanking, no lamp test.
+				LE: 'low',
+				BI: 'high',
+				LT: 'high'
+			};
+			for (const seg of 'abcdefg') {
+				expect(evaluate('4511', inputs, seg), `digit ${n} segment ${seg}`).toBe(
+					lit.includes(seg) ? 'high' : 'low'
+				);
+			}
+		}
+	});
+
+	it('blanks and lamp-tests the 4511 from pins that are active low', () => {
+		const one: Record<string, 'high' | 'low'> = {
+			A: 'high',
+			B: 'low',
+			C: 'low',
+			D: 'low',
+			LE: 'low',
+			BI: 'high',
+			LT: 'high'
+		};
+		// Showing a 1: b and c on, a off.
+		expect(evaluate('4511', one, 'a')).toBe('low');
+		expect(evaluate('4511', one, 'b')).toBe('high');
+		// Blanking pulls every bar down, data or no data.
+		expect(evaluate('4511', { ...one, BI: 'low' }, 'b')).toBe('low');
+		// Lamp test lights every bar, including the ones this digit does not use,
+		// and it wins over blanking — which is how the dead segment gets found.
+		expect(evaluate('4511', { ...one, LT: 'low' }, 'a')).toBe('high');
+		expect(evaluate('4511', { ...one, LT: 'low', BI: 'low' }, 'a')).toBe('high');
 	});
 
 	it('keeps two of the same chip out of each other', () => {

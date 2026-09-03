@@ -334,6 +334,100 @@ export const EXAMPLES: Example[] = [
 			)
 	},
 	{
+		id: 'bcd-display',
+		name: 'BCD to a digit',
+		description:
+			'Four switches, a 4511 and a seven-segment digit: the chain every counter ends in. The switches spell a number in binary, the decoder turns four bits into seven bars, and the display is the bars. It arrives showing 5. The resistors are not optional even though the 4511 is called a driver — it drives, it does not limit — and the three control pins are held at the levels that mean "no latch, no blanking, no lamp test", because on a real board they cannot be left in the air.',
+		stopTime: 20e-6,
+		build: () => {
+			/** Where the decoder sits; its sixteen legs are 20 apart down each side. */
+			const DEC_X = 500;
+			const DEC_Y = 300;
+			/** And the digit, whose eight are 10 apart. */
+			const DIGIT_X = 1100;
+			const DIGIT_Y = 300;
+
+			// Pin 16 is VDD and the seven segment outputs run down from pin 15.
+			const OUT_Y: Record<string, number> = {
+				f: DEC_Y - 50,
+				g: DEC_Y - 30,
+				a: DEC_Y - 10,
+				b: DEC_Y + 10,
+				c: DEC_Y + 30,
+				d: DEC_Y + 50,
+				e: DEC_Y + 70
+			};
+			// The digit takes them in alphabetical order, which is not the order they
+			// leave the decoder in — so each run steps across in a column of its own.
+			const SEGMENTS = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+			const inY = (seg: string) => DIGIT_Y + (SEGMENTS.indexOf(seg) - 3.5) * 10;
+
+			const parts: Placed[] = [
+				{ kind: 'ic:4511', name: 'U1', x: DEC_X, y: DEC_Y },
+				{ kind: 'display7', name: 'DS1', x: DIGIT_X, y: DIGIT_Y, params: { colour: 'red' } },
+				{ kind: 'supply', name: 'PWR1', x: 300, y: 150, params: { voltage: 5 } },
+				{ kind: 'supply', name: 'PWR2', x: 700, y: 220, params: { voltage: 5 } },
+				{ kind: 'ground', name: 'GND1', x: 400, y: 440 },
+				{ kind: 'ground', name: 'GND2', x: DIGIT_X, y: 420 }
+			];
+			const wires: Array<[number, number, number, number]> = [
+				// Lamp test and blanking are active low, so both sit high: nothing to
+				// test and nothing to blank.
+				[300, 160, 300, 290],
+				[300, 270, 440, 270],
+				[300, 290, 440, 290],
+				// Latch enable is active high, and held down the latches stay open.
+				[340, 310, 440, 310],
+				[340, 310, 340, 430],
+				[340, 430, 400, 430],
+				// VSS, on the same ground.
+				[400, 370, 440, 370],
+				[400, 370, 400, 430],
+				// VDD, above the segment outputs.
+				[560, 230, 700, 230],
+				// The digit's common pin is its cathode: this one lights on a high.
+				[DIGIT_X, DIGIT_Y + 62, DIGIT_X, 410]
+			];
+
+			// The four data bits. 0101 is a 5, which uses six of the seven bars and
+			// leaves one off — a digit where a wrong equation would show.
+			const BITS: Array<[string, number, 'high' | 'low']> = [
+				['B', DEC_Y - 70, 'low'],
+				['C', DEC_Y - 50, 'high'],
+				['D', DEC_Y + 30, 'low'],
+				['A', DEC_Y + 50, 'high']
+			];
+			for (const [pin, y, state] of BITS) {
+				parts.push({ kind: 'toggle', name: pin, x: 150, y, params: { state } });
+				wires.push([180, y, 440, y]);
+			}
+
+			// One resistor per segment, then across to the digit. The decoder drives
+			// the bars; nothing in it limits what they draw.
+			for (const [i, seg] of SEGMENTS.entries()) {
+				const from = OUT_Y[seg];
+				const to = inY(seg);
+				const column = 880 + i * 15;
+				parts.push({
+					kind: 'resistor',
+					name: `R${i + 1}`,
+					x: 800,
+					y: from,
+					params: { resistance: 330 }
+				});
+				wires.push(
+					[560, from, 770, from],
+					[830, from, column, from],
+					[column, from, column, to],
+					[column, to, DIGIT_X - 50, to]
+				);
+			}
+
+			return build(parts, wires);
+		}
+	},
+
+	{
 		id: 'cd4027',
 		name: 'CD4027 divider',
 		description:

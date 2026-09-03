@@ -187,6 +187,76 @@ function jk(n: number, async: { preset: string; reset: string }): ChipBlock[] {
 	];
 }
 
+/**
+ * A D latch that is transparent while `enable` is high, out of four NANDs.
+ *
+ * The engine has an edge-triggered flip-flop and no latch, and a latch is not a
+ * flip-flop with the clock held: it follows its input the whole time it is open.
+ * Four cross-coupled NANDs are what the silicon does anyway.
+ */
+function latch(tag: string, data: string, enable: string, q: string): ChipBlock[] {
+	return [
+		{ kind: 'nand', inputs: [data, enable], output: `${tag}n1` },
+		{ kind: 'nand', inputs: [`${tag}n1`, enable], output: `${tag}n2` },
+		{ kind: 'nand', inputs: [`${tag}n1`, `${tag}qn`], output: q },
+		{ kind: 'nand', inputs: [`${tag}n2`, q], output: `${tag}qn` }
+	];
+}
+
+/**
+ * The seven equations that turn four bits into a digit.
+ *
+ * Minimised over the ten codes that are digits, with the other six treated as
+ * don't-cares — which is why a real 4511 blanks on 10 through 15 rather than
+ * showing something: the equations were never asked about those.
+ *
+ * `bit` names the four data inputs from least significant, and every product is
+ * spelled out rather than shared, because a shared term is a net the reader has
+ * to hold in their head while checking the one they care about.
+ */
+function bcd7seg(a: string, bIn: string, c: string, d: string): ChipBlock[] {
+	const an = 'seg_an';
+	const bn = 'seg_bn';
+	const cn = 'seg_cn';
+	return [
+		{ kind: 'not', inputs: [a], output: an },
+		{ kind: 'not', inputs: [bIn], output: bn },
+		{ kind: 'not', inputs: [c], output: cn },
+
+		// a = D + B + C·A + C'·A'
+		{ kind: 'and', inputs: [c, a], output: 'p_ca' },
+		{ kind: 'and', inputs: [cn, an], output: 'p_cnan' },
+		{ kind: 'or', inputs: [d, bIn, 'p_ca', 'p_cnan'], output: 'sa' },
+
+		// b = C' + B·A + B'·A'
+		{ kind: 'and', inputs: [bIn, a], output: 'p_ba' },
+		{ kind: 'and', inputs: [bn, an], output: 'p_bnan' },
+		{ kind: 'or', inputs: [cn, 'p_ba', 'p_bnan'], output: 'sb' },
+
+		// c = C + B' + A
+		{ kind: 'or', inputs: [c, bn, a], output: 'sc' },
+
+		// d = D + B·A' + C'·A' + C'·B + C·B'·A, which is one term more than an OR
+		// takes, so it arrives in two.
+		{ kind: 'and', inputs: [bIn, an], output: 'p_ban' },
+		{ kind: 'and', inputs: [cn, bIn], output: 'p_cnb' },
+		{ kind: 'and', inputs: [c, bn, a], output: 'p_cbna' },
+		{ kind: 'or', inputs: [d, 'p_ban', 'p_cnan', 'p_cnb'], output: 'sd_part' },
+		{ kind: 'or', inputs: ['sd_part', 'p_cbna'], output: 'sd' },
+
+		// e = B·A' + C'·A'
+		{ kind: 'or', inputs: ['p_ban', 'p_cnan'], output: 'se' },
+
+		// f = D + C·B' + C·A' + B'·A'
+		{ kind: 'and', inputs: [c, bn], output: 'p_cbn' },
+		{ kind: 'and', inputs: [c, an], output: 'p_can' },
+		{ kind: 'or', inputs: [d, 'p_cbn', 'p_can', 'p_bnan'], output: 'sf' },
+
+		// g = D + C·B' + C'·B + B·A'
+		{ kind: 'or', inputs: [d, 'p_cbn', 'p_cnb', 'p_ban'], output: 'sg' }
+	];
+}
+
 export const CHIPS: readonly ChipDef[] = [
 	{ id: '7400', description: 'Quad 2-input NAND', ...quad2('nand') },
 	{
@@ -319,6 +389,94 @@ export const CHIPS: readonly ChipDef[] = [
 		]),
 		caveat:
 			'The real part is master-slave and takes its inputs while the clock is high; this one is edge-triggered.'
+	},
+	{
+		id: '74138',
+		description: '3-to-8 line decoder',
+		// Eight outputs, one of them low at a time, chosen by three address pins —
+		// and three enables, because this part exists to be stacked: one 74138 can
+		// drive the enables of the next and address sixty-four lines.
+		layout: [
+			'A', 'B', 'C', 'G2A', 'G2B', 'G1', 'Y7', 'GND',
+			'Y6', 'Y5', 'Y4', 'Y3', 'Y2', 'Y1', 'Y0', 'VCC'
+		],
+		blocks: [
+			{ kind: 'not', inputs: ['A'], output: 'an' },
+			{ kind: 'not', inputs: ['B'], output: 'bn' },
+			{ kind: 'not', inputs: ['C'], output: 'cn' },
+			// Both G2 pins are active low and G1 is active high: the chip is on when
+			// G1 is up and neither G2 is.
+			{ kind: 'not', inputs: ['G2A'], output: 'g2an' },
+			{ kind: 'not', inputs: ['G2B'], output: 'g2bn' },
+			{ kind: 'and', inputs: ['G1', 'g2an', 'g2bn'], output: 'en' },
+			// One NAND per line, taking the enable and the three address bits in the
+			// polarity that line answers to. NAND rather than AND because the outputs
+			// are active low, which is what lets several of these share a bus.
+			...[0, 1, 2, 3, 4, 5, 6, 7].map((n) => ({
+				kind: 'nand' as const,
+				inputs: [
+					'en',
+					n & 1 ? 'A' : 'an',
+					n & 2 ? 'B' : 'bn',
+					n & 4 ? 'C' : 'cn'
+				],
+				output: `Y${n}`
+			}))
+		]
+	},
+	{
+		id: '4511',
+		description: 'BCD to 7-segment latch/decoder/driver (CMOS)',
+		// Outputs go high for a lit segment, which is a common-cathode digit — the
+		// polarity the seven-segment part defaults to, so the two go together.
+		layout: [
+			'B', 'C', 'LT', 'BI', 'LE', 'D', 'A', 'VSS',
+			'e', 'd', 'c', 'b', 'a', 'g', 'f', 'VDD'
+		],
+		blocks: [
+			// Latch enable is active high and holds; the latches are open while it is
+			// low. A pin that did nothing would be worse than no pin, so they are
+			// really here — four of them, four NANDs each.
+			{ kind: 'not', inputs: ['LE'], output: 'open' },
+			...latch('la', 'A', 'open', 'qa'),
+			...latch('lb', 'B', 'open', 'qb'),
+			...latch('lc', 'C', 'open', 'qc'),
+			...latch('ld', 'D', 'open', 'qd'),
+			...bcd7seg('qa', 'qb', 'qc', 'qd'),
+			// Lamp test wins over blanking, and both are active low: hold LT down and
+			// every segment lights whatever the data says, which is how somebody finds
+			// the dead one.
+			{ kind: 'not', inputs: ['LT'], output: 'lamp' },
+			...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((seg) => ({
+				kind: 'and' as const,
+				inputs: ['BI', `s${seg}`],
+				output: `k${seg}`
+			})),
+			...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((seg) => ({
+				kind: 'or' as const,
+				inputs: ['lamp', `k${seg}`],
+				output: seg
+			}))
+		]
+	},
+	{
+		id: '74157',
+		description: 'Quad 2-to-1 multiplexer',
+		// Four switches worked by one pin: low picks the A side of every channel,
+		// high picks B. The strobe blanks all four at once.
+		layout: [
+			'S', '1A', '1B', '1Y', '2A', '2B', '2Y', 'GND',
+			'3Y', '3B', '3A', '4Y', '4B', '4A', 'G', 'VCC'
+		],
+		blocks: [
+			{ kind: 'not', inputs: ['S'], output: 'sn' },
+			{ kind: 'not', inputs: ['G'], output: 'gn' },
+			...[1, 2, 3, 4].flatMap((n) => [
+				{ kind: 'and' as const, inputs: ['gn', 'sn', `${n}A`], output: `${n}pa` },
+				{ kind: 'and' as const, inputs: ['gn', 'S', `${n}B`], output: `${n}pb` },
+				{ kind: 'or' as const, inputs: [`${n}pa`, `${n}pb`], output: `${n}Y` }
+			])
+		]
 	},
 	{
 		id: '4027',
