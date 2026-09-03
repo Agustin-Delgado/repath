@@ -334,6 +334,66 @@ export const EXAMPLES: Example[] = [
 			)
 	},
 	{
+		id: 'cd4027',
+		name: 'CD4027 divider',
+		description:
+			'Half a CD4027 wired the way its datasheet says to make a divide-by-two: J and K both high, set and reset held down, and the output changes on every rising edge and on no other. The chip is the part rather than the gates inside it, so it has two legs it cannot do without — leave VDD or VSS unwired and the drawing tells you — and a whole second flip-flop nobody is using, whose inputs are tied to ground rather than left in the air. That is not tidiness: a CMOS input floating between the rails turns the stage into an amplifier and it draws current and oscillates. The buffer before the lamp is not decoration either, since Q feeds back into the flip-flop and a lamp hung straight on it stops the pair settling.',
+		stopTime: 20e-6,
+		build: () =>
+			build(
+				[
+					{ kind: 'clock', name: 'CLK1', x: 300, y: 270, params: { frequency: 1e6, duty: 0.5 } },
+					// J and K tied high is the toggle: the identity behind a JK reduces to
+					// D = Q-bar, and a flip-flop told to become what it is not divides.
+					{ kind: 'supply', name: 'PWR1', x: 400, y: 180, params: { voltage: 5 } },
+					{ kind: 'ic:4027', name: 'U1', x: 600, y: 300 },
+					{ kind: 'supply', name: 'PWR2', x: 760, y: 220, params: { voltage: 5 } },
+					{ kind: 'ground', name: 'GND1', x: 470, y: 470 },
+					// Q is an input of the flip-flop as well as its output, and a lamp on a
+					// net inside a loop leaves the pair unable to settle. The buffer is what
+					// a board would have anyway.
+					{ kind: 'buffer', name: 'B1', x: 690, y: 120 },
+					{ kind: 'resistor', name: 'R1', x: 890, y: 120, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D1', x: 990, y: 120, params: { colour: 'green' } },
+					{ kind: 'ground', name: 'GND2', x: 1060, y: 180 },
+					{ kind: 'ground', name: 'GND3', x: 720, y: 510 }
+				],
+				[
+					// The clock, into pin 3.
+					[330, 270, 540, 270],
+					// The supply rail down to J and K.
+					[400, 190, 400, 330],
+					[400, 310, 540, 310],
+					[400, 330, 540, 330],
+					// Set and reset held down, and VSS on the same ground.
+					[470, 290, 540, 290],
+					[470, 350, 540, 350],
+					[470, 370, 540, 370],
+					[470, 290, 470, 460],
+					// VDD, on pin 16.
+					[660, 230, 760, 230],
+					// Q up and over to the lamp, through a buffer.
+					[510, 230, 540, 230],
+					[510, 120, 510, 230],
+					[510, 120, 660, 120],
+					[720, 120, 860, 120],
+					[920, 120, 960, 120],
+					[1020, 120, 1060, 120],
+					[1060, 120, 1060, 170],
+					// The half of the chip nobody is using: every input of it held down.
+					// An unused CMOS input left floating sits between the rails, which
+					// turns the stage into an amplifier that draws current and oscillates.
+					[660, 290, 720, 290],
+					[660, 310, 720, 310],
+					[660, 330, 720, 330],
+					[660, 350, 720, 350],
+					[660, 370, 720, 370],
+					[720, 290, 720, 500]
+				]
+			)
+	},
+
+	{
 		id: 'seven-segment',
 		name: 'Seven-segment digit',
 		description:
