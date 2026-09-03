@@ -591,6 +591,49 @@ export const CHIPS: readonly ChipDef[] = [
 			'Clear is asynchronous here, as on the 74161 proper. The 74163 is the same part with a synchronous one.'
 	},
 	{
+		id: '7490',
+		description: 'Decade counter, divide-by-two and divide-by-five',
+		// The supply is not on the corners of this one: VCC is pin 5 and GND is pin
+		// 10. Wiring it like every other 14-pin part puts five volts across two
+		// outputs, which is the kind of thing a drawing should be able to show.
+		//
+		// The two halves are separate on purpose. Tie QA to CKB and it counts to
+		// ten in binary; tie QD to CKA and drive CKB instead and it counts to ten
+		// with a symmetrical output, which is what you want for a clock divider.
+		layout: [
+			'CKB', 'R01', 'R02', 'NC1', 'VCC', 'R91', 'R92',
+			'QC', 'QB', 'GND', 'QD', 'QA', 'NC2', 'CKA'
+		],
+		blocks: [
+			// Set-to-nine wins over reset-to-zero, and each needs both of its pins.
+			{ kind: 'and', inputs: ['R91', 'R92'], output: 'nine' },
+			{ kind: 'nand', inputs: ['R01', 'R02'], output: 'zeron' },
+			{ kind: 'nor', inputs: ['zeron', 'nine'], output: 'zero' },
+			{ kind: 'or', inputs: ['zero', 'nine'], output: 'clearbc' },
+
+			// This part counts on the falling edge of its clocks, which the engine's
+			// flip-flop does not — so each clock pin arrives through an inverter. It
+			// is not a detail anyone can ignore: tie QA to CKB for a decade and a
+			// rising-edge chain advances the second half one count early, so 1 reads
+			// as 3 and the whole sequence comes out interleaved.
+			{ kind: 'not', inputs: ['CKA'], output: 'cka_fall' },
+			{ kind: 'not', inputs: ['CKB'], output: 'ckb_fall' },
+
+			// The divide-by-two: one flip-flop on its own clock.
+			{ kind: 'dff', clock: 'cka_fall', data: 'qan', reset: 'zero', preset: 'nine', q: 'QA', qn: 'qan' },
+
+			// The divide-by-five, which is not a binary counter with a reset: B is
+			// held off while D is up, so four is followed by zero rather than five.
+			{ kind: 'and', inputs: ['qdn', 'qbn'], output: 'db' },
+			{ kind: 'dff', clock: 'ckb_fall', data: 'db', reset: 'clearbc', q: 'QB', qn: 'qbn' },
+			// C is clocked by B falling, which is B-bar rising.
+			{ kind: 'dff', clock: 'qbn', data: 'qcn', reset: 'clearbc', q: 'QC', qn: 'qcn' },
+			// And D comes up on the count after B and C are both high.
+			{ kind: 'and', inputs: ['QB', 'QC', 'qdn'], output: 'dd' },
+			{ kind: 'dff', clock: 'ckb_fall', data: 'dd', reset: 'zero', preset: 'nine', q: 'QD', qn: 'qdn' }
+		]
+	},
+	{
 		id: '74157',
 		description: 'Quad 2-to-1 multiplexer',
 		// Four switches worked by one pin: low picks the A side of every channel,
