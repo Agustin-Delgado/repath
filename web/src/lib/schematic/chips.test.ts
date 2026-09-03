@@ -535,6 +535,97 @@ describe('the gates inside a package', () => {
 		expect(bit(rco, 15 * 1e-6 + 0.9e-6)).toBe(0);
 	});
 
+	it('counts to ten on a 7490 with its two halves tied together', () => {
+		// The part is a divide-by-two and a divide-by-five that share nothing but
+		// the package, so counting to ten means wiring QA to CKB on the drawing —
+		// which is what somebody does with a real one, and what this test does too.
+		const chip = chipById('7490')!;
+		const def = chipDefinition(chip);
+		const part = at(CHIP_PREFIX + '7490', 'U1', 600, 400);
+		const ground = at('ground', 'GND1', 1100, 800);
+		const instances: Instance[] = [part, ground];
+		const wires: Array<[number, number, number, number]> = [];
+		const place = (pin: string) => {
+			const found = def.pins.find((p) => p.name === pin)!;
+			return { x: 600 + found.x, y: 400 + found.y };
+		};
+		const drive = (pin: string, state: 'high' | 'low') => {
+			const { x, y } = place(pin);
+			const side = x < 600 ? -1 : 1;
+			const source = at('toggle', pin, x + 120 * side, y);
+			source.params = { state };
+			instances.push(source);
+			wires.push([x + 90 * side, y, x, y]);
+		};
+		// Neither reset asserted: both pins of each pair have to be up to act.
+		for (const pin of ['R01', 'R02', 'R91', 'R92']) drive(pin, 'low');
+
+		// CKA is pin 14, so it is on the right-hand side, and a clock put there
+		// faces further right — the wire has to start at its output, not in front
+		// of it.
+		const clkA = place('CKA');
+		const clock = at('clock', 'CLK1', clkA.x + 200, clkA.y);
+		clock.params = { frequency: 1e6, duty: 0.5 };
+		instances.push(clock);
+		wires.push([clkA.x + 230, clkA.y, clkA.x, clkA.y]);
+
+		// QA into CKB: the two halves in series is what makes it a decade.
+		const qa = place('QA');
+		const ckb = place('CKB');
+		wires.push(
+			[qa.x, qa.y, qa.x + 60, qa.y],
+			[qa.x + 60, qa.y, qa.x + 60, 760],
+			[ckb.x - 60, 760, qa.x + 60, 760],
+			[ckb.x - 60, ckb.y, ckb.x - 60, 760],
+			[ckb.x - 60, ckb.y, ckb.x, ckb.y]
+		);
+
+		const compiled = compileSchematic(drawing(instances, wires));
+		expect(compiled.errors).toEqual([]);
+		const sim = new Simulation(JSON.stringify(compiled.netlist));
+		const meta = JSON.parse(sim.runTransient(24e-6, 5e-8));
+		sim.free();
+
+		const series = (pin: string) => {
+			const net = compiled.connectivity.netOfPin.get(`${part.id}:${pin}`)!;
+			const label = compiled.names.get(net)!.digital!;
+			return meta.digital[meta.net_names.indexOf(label)] ?? [];
+		};
+		const bit = (events: Array<{ time: number; state: string }>, t: number) =>
+			events.filter((e) => e.time <= t).at(-1)?.state === 'high' ? 1 : 0;
+		const q = ['QA', 'QB', 'QC', 'QD'].map(series);
+
+		// The clock starts low and this part counts on the falling edge, so the
+		// first one is at 1 us and each count owns the microsecond after it. Read
+		// halfway through, clear of both edges.
+		const counted: number[] = [];
+		for (let n = 0; n < 12; n++) {
+			const t = n * 1e-6 + 1.5e-6;
+			counted.push(q.reduce((sum, events, i) => sum + bit(events, t) * (1 << i), 0));
+		}
+		// Ten states and then round: nine is 1001, and what comes after it is zero
+		// rather than ten. A divide-by-five built as a binary counter with a reset
+		// would pass through five on the way, and this is where that shows.
+		expect(counted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2]);
+	});
+
+	it('sets a 7490 to nine and clears it to zero, from pins that come in pairs', () => {
+		// Both pins of a pair have to be up, which is the point of them: one stray
+		// signal cannot reset the counter. And nine wins over zero.
+		const evaluateStatic = (inputs: Record<string, 'high' | 'low'>, pin: string) =>
+			evaluate('7490', inputs, pin);
+		const idle = { R01: 'low', R02: 'low', R91: 'low', R92: 'low' } as const;
+		// Reset to zero needs both R0 pins.
+		expect(evaluateStatic({ ...idle, R01: 'high', R02: 'high' }, 'QA')).toBe('low');
+		expect(evaluateStatic({ ...idle, R01: 'high', R02: 'high' }, 'QD')).toBe('low');
+		// Nine is 1001, and it wins even with both reset pins also up.
+		const nine = { R91: 'high', R92: 'high', R01: 'high', R02: 'high' } as const;
+		expect(evaluateStatic(nine, 'QA')).toBe('high');
+		expect(evaluateStatic(nine, 'QB')).toBe('low');
+		expect(evaluateStatic(nine, 'QC')).toBe('low');
+		expect(evaluateStatic(nine, 'QD')).toBe('high');
+	});
+
 	it('keeps two of the same chip out of each other', () => {
 		// Two 7400s, one gate driven on each, opposite inputs. If the emission
 		// shared a net name between instances they would fight and both read
