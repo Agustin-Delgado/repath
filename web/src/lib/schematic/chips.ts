@@ -257,6 +257,39 @@ function bcd7seg(a: string, bIn: string, c: string, d: string): ChipBlock[] {
 	];
 }
 
+/**
+ * One stage of a synchronous binary counter with parallel load.
+ *
+ * Synchronous means every flip-flop is on the same clock and the decision is in
+ * front of it rather than in the clock line — which is the whole reason to reach
+ * for one of these over a ripple counter: all four bits change together, so
+ * there is no instant where the count reads as a number it never passed through.
+ *
+ * `toggle` is the term that says this bit's turn has come: for the lowest bit
+ * that is just "counting", and for each one above it every bit below has to be
+ * high as well.
+ */
+function counterBit(bit: string, load: string, loadn: string, toggle: string): ChipBlock[] {
+	const q = `Q${bit}`;
+	return [
+		{ kind: 'not', inputs: [q], output: `${bit}qn` },
+		{ kind: 'not', inputs: [toggle], output: `${bit}hold` },
+		// Loading beats counting, which is what makes it a load rather than a hint.
+		{ kind: 'and', inputs: [load, bit], output: `${bit}from_pin` },
+		{ kind: 'and', inputs: [loadn, toggle, `${bit}qn`], output: `${bit}flip` },
+		{ kind: 'and', inputs: [loadn, `${bit}hold`, q], output: `${bit}stay` },
+		{ kind: 'or', inputs: [`${bit}from_pin`, `${bit}flip`, `${bit}stay`], output: `${bit}d` },
+		{
+			kind: 'dff',
+			clock: 'CLK',
+			data: `${bit}d`,
+			reset: 'clear',
+			q,
+			qn: `${bit}qn_out`
+		}
+	];
+}
+
 export const CHIPS: readonly ChipDef[] = [
 	{ id: '7400', description: 'Quad 2-input NAND', ...quad2('nand') },
 	{
@@ -458,6 +491,104 @@ export const CHIPS: readonly ChipDef[] = [
 				output: seg
 			}))
 		]
+	},
+	{
+		id: '7447',
+		description: 'BCD to 7-segment decoder/driver, open collector',
+		// The 4511's opposite number: outputs pull *down* for a lit segment, which
+		// is a common-anode digit. Same seven equations, inverted on the way out.
+		layout: [
+			'B', 'C', 'LT', 'BI', 'RBI', 'D', 'A', 'GND',
+			'e', 'd', 'c', 'b', 'a', 'g', 'f', 'VCC'
+		],
+		blocks: [
+			...bcd7seg('A', 'B', 'C', 'D'),
+			{ kind: 'not', inputs: ['LT'], output: 'lamp' },
+			// Ripple blanking: hold RBI down and a zero is shown as nothing at all.
+			// That is how 007 is displayed as 7 — each leading digit blanks itself and
+			// tells the next one along to do the same.
+			{ kind: 'not', inputs: ['RBI'], output: 'rbin' },
+			{ kind: 'nor', inputs: ['A', 'B', 'C', 'D'], output: 'zero' },
+			{ kind: 'and', inputs: ['rbin', 'zero'], output: 'ripple' },
+			{ kind: 'not', inputs: ['ripple'], output: 'show' },
+			...['a', 'b', 'c', 'd', 'e', 'f', 'g'].flatMap((seg) => [
+				// Lamp test wins over both kinds of blanking, which is what makes it a
+				// test: it has to light a segment the data would have left dark.
+				{ kind: 'and' as const, inputs: ['BI', 'show', `s${seg}`], output: `k${seg}` },
+				{ kind: 'or' as const, inputs: ['lamp', `k${seg}`], output: `on_${seg}` },
+				// Low means lit on this part, so the last thing every segment meets is
+				// an inverter. Wire one of these to a common-cathode digit and it shows
+				// the photographic negative of the number.
+				{ kind: 'not' as const, inputs: [`on_${seg}`], output: seg }
+			])
+		],
+		caveat:
+			'Pin 4 is blanking in only. On the real part it is also the ripple-blanking output that drives the next decoder, which needs an open-collector pin, and those are not modelled — so is the rest of the outputs pulling down rather than driving both ways.'
+	},
+	{
+		id: '74151',
+		description: '8-to-1 multiplexer',
+		// Three address pins pick one of eight inputs. Y is the choice and W is its
+		// complement, which is on the package because half the circuits that use one
+		// of these want the inverse and an inverter is a whole other chip.
+		layout: [
+			'D3', 'D2', 'D1', 'D0', 'Y', 'W', 'G', 'GND',
+			'C', 'B', 'A', 'D7', 'D6', 'D5', 'D4', 'VCC'
+		],
+		blocks: [
+			{ kind: 'not', inputs: ['A'], output: 'an' },
+			{ kind: 'not', inputs: ['B'], output: 'bn' },
+			{ kind: 'not', inputs: ['C'], output: 'cn' },
+			{ kind: 'not', inputs: ['G'], output: 'gn' },
+			// One AND per input, open only for the address that names it.
+			...[0, 1, 2, 3, 4, 5, 6, 7].map((n) => ({
+				kind: 'and' as const,
+				inputs: [
+					`D${n}`,
+					n & 1 ? 'A' : 'an',
+					n & 2 ? 'B' : 'bn',
+					n & 4 ? 'C' : 'cn'
+				],
+				output: `m${n}`
+			})),
+			// Eight terms is more than an OR takes, so they arrive in two halves.
+			{ kind: 'or', inputs: ['m0', 'm1', 'm2', 'm3'], output: 'lo' },
+			{ kind: 'or', inputs: ['m4', 'm5', 'm6', 'm7'], output: 'hi' },
+			{ kind: 'or', inputs: ['lo', 'hi'], output: 'picked' },
+			// The strobe is active low and blanks the output whatever is selected.
+			{ kind: 'and', inputs: ['gn', 'picked'], output: 'Y' },
+			{ kind: 'not', inputs: ['Y'], output: 'W' }
+		]
+	},
+	{
+		id: '74161',
+		description: '4-bit synchronous binary counter with parallel load',
+		layout: [
+			'CLR', 'CLK', 'A', 'B', 'C', 'D', 'ENP', 'GND',
+			'LOAD', 'ENT', 'QD', 'QC', 'QB', 'QA', 'RCO', 'VCC'
+		],
+		blocks: [
+			// Clear and load are active low; both enables are active high and both
+			// have to be up for it to count, which is what lets one of these gate the
+			// next along in a chain.
+			{ kind: 'not', inputs: ['CLR'], output: 'clear' },
+			{ kind: 'not', inputs: ['LOAD'], output: 'load' },
+			{ kind: 'and', inputs: ['ENP', 'ENT', 'LOAD'], output: 'count' },
+			// Each bit flips when every bit below it is high.
+			{ kind: 'and', inputs: ['count', 'QA'], output: 'tb' },
+			{ kind: 'and', inputs: ['count', 'QA', 'QB'], output: 'tc' },
+			{ kind: 'and', inputs: ['count', 'QA', 'QB', 'QC'], output: 'td' },
+			...counterBit('A', 'load', 'LOAD', 'count'),
+			...counterBit('B', 'load', 'LOAD', 'tb'),
+			...counterBit('C', 'load', 'LOAD', 'tc'),
+			...counterBit('D', 'load', 'LOAD', 'td'),
+			// Ripple carry out: fifteen, and enabled. Five terms is one more than an
+			// AND takes, so it arrives in two.
+			{ kind: 'and', inputs: ['QA', 'QB', 'QC', 'QD'], output: 'fifteen' },
+			{ kind: 'and', inputs: ['fifteen', 'ENT'], output: 'RCO' }
+		],
+		caveat:
+			'Clear is asynchronous here, as on the 74161 proper. The 74163 is the same part with a synchronous one.'
 	},
 	{
 		id: '74157',
