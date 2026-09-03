@@ -52,10 +52,10 @@ describe('every chip in the table', () => {
 		for (const chip of CHIPS) {
 			// A DIP has an even number of legs and they come in two equal rows.
 			expect(chip.layout.length % 2, chip.id).toBe(0);
-			// Both supply pins, exactly once each.
-			for (const rail of ['VCC', 'GND']) {
-				expect(chip.layout.filter((p) => p === rail).length, `${chip.id} ${rail}`).toBe(1);
-			}
+			// Two supply pins, whichever names this family gives them: the 74xx says
+			// VCC and GND, the 4000 says VDD and VSS, and both are on the drawing the
+			// way the datasheet prints them.
+			expect(chip.layout.filter(isPower).length, `${chip.id} supply`).toBe(2);
 			// No leg named twice, or the drawing cannot say which one a wire means.
 			expect(new Set(chip.layout).size, chip.id).toBe(chip.layout.length);
 
@@ -99,8 +99,12 @@ describe('every chip in the table', () => {
 			// The supply pins are pins like any other, so leaving them unwired is
 			// reported the way any loose pin is. That is the whole reason they are
 			// on the symbol: a chip nobody powered is a mistake worth making.
-			expect(result.warnings.some((w) => w.includes('U1.VCC')), `${chip.id} VCC`).toBe(true);
-			expect(result.warnings.some((w) => w.includes('U1.GND')), `${chip.id} GND`).toBe(true);
+			for (const rail of chip.layout.filter(isPower)) {
+				expect(
+					result.warnings.some((w) => w.includes(`U1.${rail}`)),
+					`${chip.id} ${rail}`
+				).toBe(true);
+			}
 		}
 	});
 });
@@ -176,6 +180,20 @@ describe('the gates inside a package', () => {
 		expect(evaluate('7420', { '1A': 'high', '1B': 'high', '1C': 'high', '1D': 'low' }, '1Y')).toBe(
 			'high'
 		);
+	});
+
+	it('gives the 4011 its own legs, not the 7400 ones', () => {
+		// Both are four 2-input NANDs, and that is exactly why both are here: swap
+		// one for the other without redrawing and every wire lands on a pin that
+		// does something else. If the two rows ever converged this would catch it.
+		const ttl = chipById('7400')!;
+		const cmos = chipById('4011')!;
+		expect(cmos.layout).not.toEqual(ttl.layout);
+		expect(ttl.layout[0]).toBe('1A');
+		expect(cmos.layout[0]).toBe('1Y');
+		// Same silicon underneath, all the same.
+		expect(evaluate('4011', { '1A': 'high', '1B': 'high' }, '1Y')).toBe('low');
+		expect(evaluate('4011', { '1A': 'high', '1B': 'low' }, '1Y')).toBe('high');
 	});
 
 	it('keeps two of the same chip out of each other', () => {
