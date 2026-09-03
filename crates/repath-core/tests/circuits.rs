@@ -3,7 +3,7 @@
 //! is supposed to do. These are the tests that would catch a sign error in a
 //! stamp, which the unit tests cannot.
 
-use repath_core::digital::Logic;
+use repath_core::digital::{AsyncInputs, Logic};
 use repath_core::elements::semiconductor::TNOM;
 use repath_core::netlist::{Component, Netlist};
 use repath_core::prelude::*;
@@ -591,7 +591,7 @@ fn flip_flop_divides_the_clock_by_two() {
     let qn = c.net("qn");
     c.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
     // Feeding qn back into d makes it toggle on every rising edge.
-    c.add_device(Box::new(DFlipFlop::new("FF", clk, qn, None, q, qn, 1e-9)));
+    c.add_device(Box::new(DFlipFlop::new("FF", clk, qn, AsyncInputs::default(), q, qn, 1e-9)));
 
     let mut cfg = TransientConfig::new(10e-6);
     cfg.max_step = 100e-9;

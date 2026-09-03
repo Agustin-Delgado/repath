@@ -10,7 +10,9 @@ use std::collections::HashSet;
 
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
-use crate::digital::{Clock, DFlipFlop, Gate, GateKind, Logic, LogicSource, TriStateBuffer};
+use crate::digital::{
+    AsyncInputs, Clock, DFlipFlop, Gate, GateKind, Logic, LogicSource, TriStateBuffer,
+};
 use crate::element::NodeId;
 use crate::elements::semiconductor::TNOM;
 use crate::elements::{
@@ -264,6 +266,8 @@ pub enum Device {
         data: String,
         #[serde(default)]
         reset: Option<String>,
+        #[serde(default)]
+        preset: Option<String>,
         q: String,
         q_not: String,
         #[serde(default = "default_gate_delay")]
@@ -555,12 +559,21 @@ impl Netlist {
                 let out = c.net(output);
                 c.add_device(Box::new(Clock::new(name, out, *frequency, *duty)));
             }
-            Device::DFlipFlop { name, clock, data, reset, q, q_not, delay } => {
+            Device::DFlipFlop { name, clock, data, reset, preset, q, q_not, delay } => {
                 let clk = c.net(clock);
                 let d = c.net(data);
                 let rst = reset.as_ref().map(|n| c.net(n));
+                let pre = preset.as_ref().map(|n| c.net(n));
                 let (q, qn) = (c.net(q), c.net(q_not));
-                c.add_device(Box::new(DFlipFlop::new(name, clk, d, rst, q, qn, *delay)));
+                c.add_device(Box::new(DFlipFlop::new(
+                    name,
+                    clk,
+                    d,
+                    AsyncInputs { reset: rst, preset: pre },
+                    q,
+                    qn,
+                    *delay,
+                )));
             }
             Device::TriState { name, input, enable, output, delay } => {
                 let (i, e, o) = (c.net(input), c.net(enable), c.net(output));
