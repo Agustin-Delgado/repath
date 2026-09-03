@@ -158,6 +158,35 @@ function hexInverter() {
 	};
 }
 
+/**
+ * A JK flip-flop, built out of a D one.
+ *
+ * There is no JK primitive and there does not need to be: `D = J·Q̄ + K̄·Q` is a
+ * JK, and the identity is worth having in the drawing rather than in the engine
+ * because it is the thing being taught. Hold both inputs high and it reduces to
+ * `D = Q̄`, which is the toggle every divide-by-two is built on.
+ *
+ * The four gates and the flip-flop talk over nets that never reach a leg, so
+ * they are named against the flip-flop's number and get one net per instance.
+ */
+function jk(n: number, async: { preset: string; reset: string }): ChipBlock[] {
+	return [
+		{ kind: 'not', inputs: [`${n}K`], output: `${n}kn` },
+		{ kind: 'and', inputs: [`${n}J`, `${n}QN`], output: `${n}set_t` },
+		{ kind: 'and', inputs: [`${n}kn`, `${n}Q`], output: `${n}hold_t` },
+		{ kind: 'or', inputs: [`${n}set_t`, `${n}hold_t`], output: `${n}d` },
+		{
+			kind: 'dff',
+			clock: `${n}CLK`,
+			data: `${n}d`,
+			reset: async.reset,
+			preset: async.preset,
+			q: `${n}Q`,
+			qn: `${n}QN`
+		}
+	];
+}
+
 export const CHIPS: readonly ChipDef[] = [
 	{ id: '7400', description: 'Quad 2-input NAND', ...quad2('nand') },
 	{
@@ -230,7 +259,76 @@ export const CHIPS: readonly ChipDef[] = [
 	{ id: '4070', description: 'Quad 2-input XOR (CMOS)', ...quad2('xor', CMOS_QUAD) },
 	{ id: '4071', description: 'Quad 2-input OR (CMOS)', ...quad2('or', CMOS_QUAD) },
 	{ id: '4077', description: 'Quad 2-input XNOR (CMOS)', ...quad2('xnor', CMOS_QUAD) },
-	{ id: '4081', description: 'Quad 2-input AND (CMOS)', ...quad2('and', CMOS_QUAD) }
+	{ id: '4081', description: 'Quad 2-input AND (CMOS)', ...quad2('and', CMOS_QUAD) },
+
+	// Flip-flops. The D parts map straight onto the engine's; the JK ones are
+	// built out of one, which is what `jk` below is for.
+	{
+		id: '7474',
+		description: 'Dual D flip-flop with preset and clear',
+		// Preset and clear are active low on this part, so each one arrives through
+		// an inverter: the engine's asynchronous inputs act on a high, and the leg
+		// on the drawing has to behave the way the bar over its name says.
+		layout: [
+			'1CLR', '1D', '1CLK', '1PRE', '1Q', '1QN', 'GND',
+			'2QN', '2Q', '2PRE', '2CLK', '2D', '2CLR', 'VCC'
+		],
+		blocks: [1, 2].flatMap((n) => [
+			{ kind: 'not' as const, inputs: [`${n}CLR`], output: `${n}clr_i` },
+			{ kind: 'not' as const, inputs: [`${n}PRE`], output: `${n}pre_i` },
+			{
+				kind: 'dff' as const,
+				clock: `${n}CLK`,
+				data: `${n}D`,
+				reset: `${n}clr_i`,
+				preset: `${n}pre_i`,
+				q: `${n}Q`,
+				qn: `${n}QN`
+			}
+		])
+	},
+	{
+		id: '4013',
+		description: 'Dual D flip-flop with set and reset (CMOS)',
+		// Active high on this one, so they go straight in.
+		layout: [
+			'1Q', '1QN', '1CLK', '1RST', '1D', '1SET', 'VSS',
+			'2SET', '2D', '2RST', '2CLK', '2QN', '2Q', 'VDD'
+		],
+		blocks: [1, 2].map((n) => ({
+			kind: 'dff' as const,
+			clock: `${n}CLK`,
+			data: `${n}D`,
+			reset: `${n}RST`,
+			preset: `${n}SET`,
+			q: `${n}Q`,
+			qn: `${n}QN`
+		}))
+	},
+	{
+		id: '7476',
+		description: 'Dual JK flip-flop with preset and clear',
+		layout: [
+			'1CLK', '1PRE', '1CLR', '1J', 'VCC', '2CLK', '2PRE', '2CLR',
+			'2J', '2QN', '2Q', '2K', 'GND', '1QN', '1Q', '1K'
+		],
+		blocks: [1, 2].flatMap((n) => [
+			{ kind: 'not' as const, inputs: [`${n}PRE`], output: `${n}pre_i` },
+			{ kind: 'not' as const, inputs: [`${n}CLR`], output: `${n}clr_i` },
+			...jk(n, { preset: `${n}pre_i`, reset: `${n}clr_i` })
+		]),
+		caveat:
+			'The real part is master-slave and takes its inputs while the clock is high; this one is edge-triggered.'
+	},
+	{
+		id: '4027',
+		description: 'Dual JK flip-flop with set and reset (CMOS)',
+		layout: [
+			'1Q', '1QN', '1CLK', '1RST', '1K', '1J', '1SET', 'VSS',
+			'2SET', '2J', '2K', '2RST', '2CLK', '2QN', '2Q', 'VDD'
+		],
+		blocks: [1, 2].flatMap((n) => jk(n, { preset: `${n}SET`, reset: `${n}RST` }))
+	}
 ];
 
 const BY_ID = new Map(CHIPS.map((chip) => [chip.id, chip]));

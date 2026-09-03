@@ -15,6 +15,7 @@ import init, { Simulation } from '../wasm/repath.js';
 import { CHIPS, chipById, isPower, isUnused, signalPins } from './chips';
 import { chipDefinition, CHIP_PREFIX, defaultParams, type Instance, type Schematic } from './model';
 import { compileSchematic } from './netlist';
+import { EXAMPLES } from '../examples';
 
 beforeAll(async () => {
 	await init({
@@ -194,6 +195,98 @@ describe('the gates inside a package', () => {
 		// Same silicon underneath, all the same.
 		expect(evaluate('4011', { '1A': 'high', '1B': 'high' }, '1Y')).toBe('low');
 		expect(evaluate('4011', { '1A': 'high', '1B': 'low' }, '1Y')).toBe('high');
+	});
+
+	it('makes the 4027 a JK, which is only true if it toggles', () => {
+		// The JK is composed rather than primitive — `D = J·Q̄ + K̄·Q` — so this is
+		// the assertion that says the composition is right. Hold both inputs high
+		// and the identity reduces to `D = Q̄`: the output has to change on every
+		// rising edge and on no other, which is a divide-by-two.
+		const chip = chipById('4027')!;
+		const part = at(CHIP_PREFIX + '4027', 'U1', 600, 300);
+		const ground = at('ground', 'GND1', 1000, 700);
+		const def = chipDefinition(chip);
+		const instances: Instance[] = [part, ground];
+		const wires: Array<[number, number, number, number]> = [];
+
+		// J and K high, set and reset low, and a clock on the clock pin.
+		for (const [pin, state] of [
+			['1J', 'high'],
+			['1K', 'high'],
+			['1SET', 'low'],
+			['1RST', 'low']
+		] as const) {
+			const place = def.pins.find((p) => p.name === pin)!;
+			const source = at('toggle', pin, 600 + place.x - 120, 300 + place.y);
+			source.params = { state };
+			instances.push(source);
+			wires.push([600 + place.x - 90, 300 + place.y, 600 + place.x, 300 + place.y]);
+		}
+		const clkPin = def.pins.find((p) => p.name === '1CLK')!;
+		const clock = at('clock', 'CLK1', 600 + clkPin.x - 120, 300 + clkPin.y);
+		clock.params = { frequency: 1e6, duty: 0.5 };
+		instances.push(clock);
+		wires.push([600 + clkPin.x - 90, 300 + clkPin.y, 600 + clkPin.x, 300 + clkPin.y]);
+
+		const compiled = compileSchematic(drawing(instances, wires));
+		expect(compiled.errors).toEqual([]);
+		const sim = new Simulation(JSON.stringify(compiled.netlist));
+		const meta = JSON.parse(sim.runTransient(10e-6, 5e-8));
+		sim.free();
+
+		const read = (pin: string) => {
+			const net = compiled.connectivity.netOfPin.get(`${part.id}:${pin}`)!;
+			const label = compiled.names.get(net)!.digital!;
+			return meta.digital[meta.net_names.indexOf(label)] ?? [];
+		};
+		const q = read('1Q');
+		const clk = read('1CLK');
+		const edges = clk.filter((e: { state: string }) => e.state === 'high').length;
+
+		// Half as many changes on the output as there are rising edges on the
+		// clock, give or take the one it powers up with: that is the division.
+		const changes = q.filter((e: { state: string }) => e.state !== 'unknown').length;
+		expect(edges).toBeGreaterThan(6);
+		expect(changes).toBeGreaterThan(4);
+		const level = (t: number) =>
+			q.filter((e: { time: number }) => e.time <= t).at(-1)?.state;
+		// One clock period apart, the output is back where it started; half a
+		// period apart it is not. That is what dividing by two means.
+		expect(level(2.6e-6)).toBe(level(4.6e-6));
+		expect(level(2.6e-6)).not.toBe(level(3.6e-6));
+	});
+
+	it('drives the 7474 preset and clear from the legs that are active low', () => {
+		// Both pins have a bar over them on the part, so each arrives through an
+		// inverter. Wiring them straight through would leave a chip that sits
+		// preset and cleared at once the moment somebody grounds them, which is
+		// what a datasheet tells you not to do.
+		const chip = chipById('7474')!;
+		const inverters = chip.blocks.filter((block) => block.kind === 'not');
+		expect(inverters).toHaveLength(4);
+		const flops = chip.blocks.filter((block) => block.kind === 'dff');
+		expect(flops).toHaveLength(2);
+		for (const flop of flops) {
+			// Neither asynchronous input is the leg itself.
+			expect(chip.layout).not.toContain(flop.reset);
+			expect(chip.layout).not.toContain(flop.preset);
+		}
+	});
+
+	it('leaves no input of the shipped CD4027 example floating', () => {
+		// The example uses one half of the chip, and every input of the other half
+		// is tied down rather than left in the air. That is not tidiness: a CMOS
+		// input floating between the rails turns the stage into an amplifier that
+		// draws current and oscillates. Outputs are allowed to go nowhere.
+		const example = EXAMPLES.find((e) => e.id === 'cd4027')!.build();
+		const result = compileSchematic(example);
+		expect(result.errors).toEqual([]);
+		const loose = result.warnings.filter((w) => w.includes('not connected'));
+		expect(loose).toEqual([
+			'U1.1QN is not connected to anything.',
+			'U1.2QN is not connected to anything.',
+			'U1.2Q is not connected to anything.'
+		]);
 	});
 
 	it('keeps two of the same chip out of each other', () => {
