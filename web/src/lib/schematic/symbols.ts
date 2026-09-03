@@ -13,6 +13,8 @@
 
 import { definitionOf, gateInputCount, gatePins, gateReach, SUBCIRCUIT_PREFIX } from './model';
 import { SEGMENTS, SEGMENT_SHAPES } from './led';
+import { chipOf, chipPinLayout, chipReach } from './model';
+import { isUnused, type ChipDef } from './chips';
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
@@ -393,6 +395,56 @@ function voltageSource(waveform: string): SymbolGeometry {
 const variantCache = new Map<string, SymbolGeometry>();
 
 /** Geometry for a component, memoized per variant. */
+/**
+ * A chip, drawn as the package rather than as what is inside it.
+ *
+ * The body, the notch that says which end pin 1 is at, the leg numbers outside
+ * and the pin names inside. The numbers are the reason this is worth drawing at
+ * all: without them the symbol is a box with names on it, and the whole point of
+ * putting a 7400 on a drawing rather than four NANDs is being able to count legs
+ * against the part in your hand.
+ */
+function dip(chip: ChipDef): SymbolGeometry {
+	const count = chip.layout.length;
+	const half = chipReach(count);
+	const places = chipPinLayout(count);
+	const shapes: Shape[] = [
+		{ kind: 'rect', x: -46, y: -half, w: 92, h: half * 2 },
+		// The notch, at the pin 1 end.
+		path(`M-7 ${-half} A 7 7 0 0 0 7 ${-half}`)
+	];
+	const labels: SymbolLabel[] = [];
+
+	for (const [i, name] of chip.layout.entries()) {
+		const { x, y } = places[i];
+		const inward = x < 0 ? 1 : -1;
+		// An unconnected leg still gets its stub and its number: the numbering is
+		// the thing that has to be right, and skipping one shifts everything after.
+		shapes.push(path(`M${x} ${y} H${x + 14 * inward}`));
+		labels.push({
+			// The number sits above its own leg, outside the body, the way it is
+			// printed beside the socket rather than on the part.
+			x: x + 8 * inward,
+			y: y - 5,
+			text: String(i + 1),
+			size: 7,
+			anchor: 'middle'
+		});
+		if (!isUnused(name)) {
+			labels.push({
+				x: x + 24 * inward,
+				y: y + 3,
+				text: name,
+				size: 9,
+				anchor: x < 0 ? 'start' : 'end'
+			});
+		}
+	}
+
+	labels.push({ x: 0, y: half - 8, text: chip.id, size: 11, anchor: 'middle' });
+	return { shapes, labels };
+}
+
 export function symbolGeometry(
 	kind: string,
 	params: Record<string, unknown> = {}
@@ -412,6 +464,7 @@ export function symbolGeometry(
 		geometry = gate(kind, gateInputCount(params as Record<string, number | string>));
 	}
 	else if (kind.startsWith(SUBCIRCUIT_PREFIX)) geometry = block(kind);
+	else if (chipOf(kind)) geometry = dip(chipOf(kind)!);
 	else geometry = STATIC[kind] ?? EMPTY;
 
 	variantCache.set(variant, geometry);
