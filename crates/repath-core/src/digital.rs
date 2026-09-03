@@ -452,6 +452,7 @@ pub struct DFlipFlop {
     pub d: NetId,
     /// Active-high asynchronous reset. `None` if unused.
     pub reset: Option<NetId>,
+    pub preset: Option<NetId>,
     pub q: NetId,
     pub qn: NetId,
     /// Clock-to-output delay.
@@ -462,23 +463,37 @@ pub struct DFlipFlop {
     outputs: Vec<NetId>,
 }
 
+/// The inputs that act whatever the clock is doing.
+///
+/// Together rather than as two more arguments, because they are one idea: the
+/// pair of pins a datasheet groups under "asynchronous inputs", and the pair a
+/// caller with neither of them leaves at `default()`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AsyncInputs {
+    pub reset: Option<NetId>,
+    pub preset: Option<NetId>,
+}
+
 impl DFlipFlop {
     pub fn new(
         name: impl Into<String>,
         clk: NetId,
         d: NetId,
-        reset: Option<NetId>,
+        async_inputs: AsyncInputs,
         q: NetId,
         qn: NetId,
         delay: f64,
     ) -> Self {
+        let AsyncInputs { reset, preset } = async_inputs;
         let mut inputs = vec![clk, d];
         inputs.extend(reset);
+        inputs.extend(preset);
         Self {
             name: name.into(),
             clk,
             d,
             reset,
+            preset,
             q,
             qn,
             delay: delay.max(0.0),
@@ -526,6 +541,21 @@ impl DigitalDevice for DFlipFlop {
             self.prev_clk = ctx.read(self.clk);
             if self.stored != Logic::Low {
                 self.stored = Logic::Low;
+                self.publish(ctx);
+            }
+            return;
+        }
+        // Checked after reset, so holding both puts the output low. A datasheet
+        // calls that combination invalid and means it: on real silicon both
+        // outputs go high at once and they are supposed to be opposites. Picking
+        // an order is not a claim that the hardware does this — it is refusing to
+        // leave a part of the model undefined.
+        if let Some(pre) = self.preset
+            && ctx.read(pre) == Logic::High
+        {
+            self.prev_clk = ctx.read(self.clk);
+            if self.stored != Logic::High {
+                self.stored = Logic::High;
                 self.publish(ctx);
             }
             return;
@@ -955,7 +985,15 @@ mod tests {
         let data = d.add_net("d");
         let q = d.add_net("q");
         let qn = d.add_net("qn");
-        d.add_device(Box::new(DFlipFlop::new("FF1", clk, data, None, q, qn, 1e-9)));
+        d.add_device(Box::new(DFlipFlop::new(
+            "FF1",
+            clk,
+            data,
+            AsyncInputs::default(),
+            q,
+            qn,
+            1e-9,
+        )));
 
         let clk_drv = d.add_external_driver(clk);
         let d_drv = d.add_external_driver(data);
@@ -975,6 +1013,66 @@ mod tests {
         d.settle(12e-9);
         assert_eq!(d.state(q), Logic::High);
         assert_eq!(d.state(qn), Logic::Low);
+    }
+
+    #[test]
+    fn preset_and_reset_act_without_a_clock() {
+        // Both are asynchronous, which is the whole point of them: a 7474 clears
+        // whatever the clock is doing, and a power-on reset has to work before
+        // there is a clock at all.
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        let data = d.add_net("d");
+        let rst = d.add_net("rst");
+        let pre = d.add_net("pre");
+        let q = d.add_net("q");
+        let qn = d.add_net("qn");
+        d.add_device(Box::new(DFlipFlop::new(
+            "FF1",
+            clk,
+            data,
+            AsyncInputs { reset: Some(rst), preset: Some(pre) },
+            q,
+            qn,
+            1e-9,
+        )));
+
+        let clk_drv = d.add_external_driver(clk);
+        let d_drv = d.add_external_driver(data);
+        let rst_drv = d.add_external_driver(rst);
+        let pre_drv = d.add_external_driver(pre);
+        d.initialize();
+
+        d.schedule(0.0, clk_drv, clk, Logic::Low);
+        d.schedule(0.0, d_drv, data, Logic::Low);
+        d.schedule(0.0, rst_drv, rst, Logic::Low);
+        d.schedule(0.0, pre_drv, pre, Logic::Low);
+        d.settle(0.0);
+        // Past the publish delay: the initial output is scheduled like any other.
+        d.settle(2e-9);
+        assert_eq!(d.state(q), Logic::Low);
+
+        // Preset takes it high with the clock sitting still and d holding low.
+        d.schedule(10e-9, pre_drv, pre, Logic::High);
+        d.settle(10e-9);
+        d.settle(12e-9);
+        assert_eq!(d.state(q), Logic::High);
+        assert_eq!(d.state(qn), Logic::Low);
+
+        // It holds after the preset goes away, because a flip-flop is a thing
+        // that holds — this is not the input being followed.
+        d.schedule(20e-9, pre_drv, pre, Logic::Low);
+        d.settle(20e-9);
+        d.settle(22e-9);
+        assert_eq!(d.state(q), Logic::High);
+
+        // And reset wins when both are held, which is the order the comment in
+        // `evaluate` picks deliberately.
+        d.schedule(30e-9, pre_drv, pre, Logic::High);
+        d.schedule(30e-9, rst_drv, rst, Logic::High);
+        d.settle(30e-9);
+        d.settle(32e-9);
+        assert_eq!(d.state(q), Logic::Low);
     }
 
     #[test]
