@@ -16,13 +16,22 @@
 	let { kind, params = {} }: Props = $props();
 
 	const geometry = $derived(symbolGeometry(kind, params));
+
+	/**
+	 * An icon here is 46x34 pixels for a symbol drawn 80 units wide, so everything
+	 * lands at about four tenths of its size. A chip's leg numbers and pin names
+	 * come out three pixels tall at that scale: nothing to read, and a thousand
+	 * text runs to rasterize on every scrolled frame once the palette holds a few
+	 * dozen chips. They are drawn on the schematic, where they are legible.
+	 */
+	const labels = $derived(geometry.labels.filter((label) => !label.fine));
 </script>
 
 {#each geometry.shapes as shape, i (i)}
 	<path d={shapeToPathData(shape)} class:filled={shape.fill} />
 {/each}
 
-{#each geometry.labels as label, i (i)}
+{#each labels as label, i (i)}
 	<text
 		x={label.x}
 		y={label.y}

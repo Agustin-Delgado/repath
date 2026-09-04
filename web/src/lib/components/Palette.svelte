@@ -2,6 +2,7 @@
 	import { app } from '$lib/state.svelte';
 	import { CATALOG, SUBCIRCUIT_PREFIX, chipDefinition, type Group } from '$lib/schematic/model';
 	import { CHIPS } from '$lib/schematic/chips';
+	import { symbolExtent } from '$lib/schematic/symbols';
 	import Symbol from './Symbol.svelte';
 
 	const GROUPS: Array<{ id: Group; label: string }> = [
@@ -86,13 +87,23 @@
 			<h3>{group.label}</h3>
 			<div class="grid">
 				{#each PARTS.filter((c) => c.group === group.id) as def (def.kind)}
+					{@const reach = symbolExtent(def.kind)}
 					<button
 						class="part"
 						class:active={app.tool.mode === 'place' && app.tool.kind === def.kind}
 						onclick={() => select(def.kind)}
 						title={def.label}
 					>
-						<svg viewBox="-40 -40 80 80" aria-hidden="true">
+						<!--
+							The frame follows the symbol rather than the other way round: a chip
+							is taller than it is wide, and the wide slot the rest of the catalogue
+							uses cut its body off at both edges.
+						-->
+						<svg
+							viewBox="{-reach.x} {-reach.y} {reach.x * 2} {reach.y * 2}"
+							class:tall={reach.y > reach.x}
+							aria-hidden="true"
+						>
 							<Symbol kind={def.kind} />
 						</svg>
 						<span>{def.label}</span>
@@ -227,6 +238,14 @@
 	}
 
 	.part {
+		/*
+			The catalogue is long enough that most of it is off screen, and a chip
+			icon is fifty-odd elements. This lets the browser skip laying out and
+			painting the ones nobody can see; `auto` on the intrinsic size means it
+			remembers the real height once measured, so the scrollbar does not jump.
+		*/
+		content-visibility: auto;
+		contain-intrinsic-size: auto 56px;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
@@ -259,5 +278,11 @@
 	.part svg {
 		width: 46px;
 		height: 34px;
+	}
+
+	/* A DIP standing on end: the same area, turned. */
+	.part svg.tall {
+		width: 34px;
+		height: 50px;
 	}
 </style>
