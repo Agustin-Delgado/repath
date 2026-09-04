@@ -28,11 +28,23 @@ export interface SymbolLabel {
 	anchor?: 'start' | 'middle' | 'end';
 	/** Schematic units. */
 	size?: number;
+	/**
+	 * Print fine enough that it only exists at full size — a chip's leg numbers,
+	 * say. The palette draws its icons into 46x34 pixels, where these come out
+	 * around three pixels tall: unreadable, and paid for on every scrolled frame.
+	 */
+	fine?: boolean;
 }
 
 export interface SymbolGeometry {
 	shapes: Shape[];
 	labels: SymbolLabel[];
+	/**
+	 * How far the drawing reaches from the origin, when that is not the 40 units
+	 * every hand-drawn symbol was built to fit in. A DIP-16 is 120 by 176, so an
+	 * icon frame that assumes 40 cuts its body off at both edges.
+	 */
+	extent?: { x: number; y: number };
 }
 
 const path = (d: string, fill = false): Shape => ({ kind: 'path', d, fill });
@@ -42,6 +54,9 @@ const GATES = new Set(['and', 'nand', 'or', 'nor', 'xor', 'xnor']);
 
 /** Lead length on a generated block, matching what the catalog places its pins at. */
 const LEAD = 16;
+
+/** What a symbol reaches from the origin unless it says otherwise. */
+const DEFAULT_EXTENT = 40;
 
 /** Which variant of a symbol a set of parameters selects. Used as a cache key. */
 export function symbolVariant(kind: string, params: Record<string, unknown> = {}): string {
@@ -428,7 +443,8 @@ function dip(chip: ChipDef): SymbolGeometry {
 			y: y - 5,
 			text: String(i + 1),
 			size: 7,
-			anchor: 'middle'
+			anchor: 'middle',
+			fine: true
 		});
 		if (!isUnused(name)) {
 			labels.push({
@@ -436,13 +452,16 @@ function dip(chip: ChipDef): SymbolGeometry {
 				y: y + 3,
 				text: name,
 				size: 9,
-				anchor: x < 0 ? 'start' : 'end'
+				anchor: x < 0 ? 'start' : 'end',
+				fine: true
 			});
 		}
 	}
 
-	labels.push({ x: 0, y: half - 8, text: chip.id, size: 11, anchor: 'middle' });
-	return { shapes, labels };
+	// The part number is fine print too, but only because the palette writes it
+	// under the icon anyway. On the drawing it is the one label that has to stay.
+	labels.push({ x: 0, y: half - 8, text: chip.id, size: 11, anchor: 'middle', fine: true });
+	return { shapes, labels, extent: { x: Math.abs(places[0].x), y: half } };
 }
 
 export function symbolGeometry(
@@ -469,6 +488,14 @@ export function symbolGeometry(
 
 	variantCache.set(variant, geometry);
 	return geometry;
+}
+
+/** The half-extent of a symbol, for callers that have to frame it. */
+export function symbolExtent(
+	kind: string,
+	params: Record<string, unknown> = {}
+): { x: number; y: number } {
+	return symbolGeometry(kind, params).extent ?? { x: DEFAULT_EXTENT, y: DEFAULT_EXTENT };
 }
 
 /**

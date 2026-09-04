@@ -15,6 +15,7 @@ import init, { Simulation } from '../wasm/repath.js';
 import { CHIPS, chipById, isPower, isUnused, signalPins } from './chips';
 import { chipDefinition, CHIP_PREFIX, defaultParams, type Instance, type Schematic } from './model';
 import { compileSchematic } from './netlist';
+import { symbolExtent, symbolGeometry } from './symbols';
 import { EXAMPLES } from '../examples';
 
 beforeAll(async () => {
@@ -106,6 +107,39 @@ describe('every chip in the table', () => {
 					`${chip.id} ${rail}`
 				).toBe(true);
 			}
+		}
+	});
+});
+
+describe('the symbol of a package', () => {
+	it('reaches no further than the extent it declares', () => {
+		// The palette frames an icon from this, and every hand-drawn symbol in the
+		// catalogue fits in forty units. A DIP-16 stands 176 tall and 120 wide, so
+		// a frame that assumes forty cuts the body off at both edges — which is
+		// what it did, invisibly, until the pin names stopped being drawn over it.
+		for (const chip of CHIPS) {
+			const kind = CHIP_PREFIX + chip.id;
+			const reach = symbolExtent(kind);
+			for (const pin of chipDefinition(chip).pins) {
+				expect(Math.abs(pin.x), `${chip.id} ${pin.name} x`).toBeLessThanOrEqual(reach.x);
+				expect(Math.abs(pin.y), `${chip.id} ${pin.name} y`).toBeLessThanOrEqual(reach.y);
+			}
+		}
+	});
+
+	it('keeps its lettering off the palette icon', () => {
+		// An icon is 34 by 50 pixels for a symbol 120 units wide: everything lands
+		// at about a quarter size, so a leg number comes out under two pixels tall.
+		// Thirty-odd chips at thirty labels each was a thousand text runs to
+		// rasterize on every scrolled frame, none of them readable. They belong on
+		// the drawing, where they are the reason to place a 7400 over four NANDs.
+		for (const chip of CHIPS) {
+			const labels = symbolGeometry(CHIP_PREFIX + chip.id).labels;
+			expect(labels.length, chip.id).toBeGreaterThan(chip.layout.length);
+			expect(
+				labels.filter((label) => !label.fine).map((label) => label.text),
+				chip.id
+			).toEqual([]);
 		}
 	});
 });
