@@ -8,7 +8,7 @@
  */
 
 import { LED_COLOURS, RATED, SEGMENTS } from './led';
-import { CHIPS, chipById, isPower, isUnused, type ChipDef } from './chips';
+import { CHIPS, chipById, chipName, isPower, isUnused, type ChipDef } from './chips';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -99,6 +99,14 @@ export interface ComponentDef {
 	 * above it, where there is nothing drawn at all.
 	 */
 	box: { x: number; y: number; w: number; h: number };
+	/**
+	 * The solid part of the symbol, leads excluded, for parts whose leads are
+	 * long enough to matter. A click in the strip of leads goes to whatever else
+	 * is there — the wire tying two neighbouring legs together runs along that
+	 * strip, and with the whole box selectable the package took every click on
+	 * it. Absent, the box is the body.
+	 */
+	body?: { x: number; y: number; w: number; h: number };
 }
 
 export interface Instance {
@@ -456,6 +464,12 @@ export function gatePins(count = 2): PinDef[] {
 function gateBox(count: number): { x: number; y: number; w: number; h: number } {
 	const half = gateReach(count);
 	return { x: -30, y: -half, w: 60, h: half * 2 };
+}
+
+/** The gate's outline, without the leads on either side of it. */
+function gateBody(count: number): { x: number; y: number; w: number; h: number } {
+	const half = gateReach(count);
+	return { x: -20, y: -half, w: 40, h: half * 2 };
 }
 
 const SOURCE_PARAMS: ParamDef[] = [
@@ -1091,6 +1105,7 @@ export const CATALOG: ComponentDef[] = [
 		(kind): ComponentDef => ({
 			kind,
 			box: gateBox(2),
+			body: gateBody(2),
 			label: kind.toUpperCase(),
 			group: 'logic',
 			prefix: 'U',
@@ -1224,7 +1239,9 @@ export const CHIP_PREFIX = 'ic:';
 /** Legs are a tenth of an inch apart on the real thing and 20 units here. */
 const CHIP_PITCH = 20;
 /** Half the width of the body. Wide enough for a pin name inside each edge. */
-const CHIP_HALF_WIDTH = 60;
+export const CHIP_BODY_HALF_WIDTH = 46;
+/** Half the reach with the legs on, which is where the pins sit. */
+const CHIP_HALF_WIDTH = CHIP_BODY_HALF_WIDTH + 14;
 
 /**
  * Where every leg of a DIP sits, in package order.
@@ -1286,10 +1303,11 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 	const half = chipReach(chip.layout.length);
 	return {
 		kind: CHIP_PREFIX + chip.id,
-		label: chip.id,
+		label: chipName(chip),
 		group: 'ic',
 		prefix: 'U',
 		box: { x: -CHIP_HALF_WIDTH, y: -half, w: CHIP_HALF_WIDTH * 2, h: half * 2 },
+		body: { x: -CHIP_BODY_HALF_WIDTH, y: -half, w: CHIP_BODY_HALF_WIDTH * 2, h: half * 2 },
 		pins,
 		params: []
 	};
@@ -1329,7 +1347,7 @@ export function definitionFor(instance: Instance): ComponentDef {
 	const key = `${instance.kind}:${count}`;
 	let shaped = gateShapes.get(key);
 	if (!shaped) {
-		shaped = { ...base, pins: gatePins(count), box: gateBox(count) };
+		shaped = { ...base, pins: gatePins(count), box: gateBox(count), body: gateBody(count) };
 		gateShapes.set(key, shaped);
 	}
 	return shaped;
@@ -1382,6 +1400,7 @@ export function subcircuitDefinition(sub: SubcircuitDef): ComponentDef {
 		group: 'analog',
 		prefix: 'X',
 		box: { x: -x, y: -half, w: x * 2, h: half * 2 },
+		body: { x: -SUB_HALF_WIDTH, y: -half, w: SUB_HALF_WIDTH * 2, h: half * 2 },
 		pins: [
 			...left.map((port, i) => analog(port, -x, portY(i, left.length))),
 			...right.map((port, i) => analog(port, x, portY(i, right.length)))

@@ -12,9 +12,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import init, { Simulation } from '../wasm/repath.js';
-import { CHIPS, chipById, isPower, isUnused, signalPins } from './chips';
+import { CHIPS, chipById, chipName, isPower, isUnused, signalPins } from './chips';
 import { chipDefinition, CHIP_PREFIX, defaultParams, type Instance, type Schematic } from './model';
 import { compileSchematic } from './netlist';
+import { buildSceneItems } from './scene';
+import { Scene } from '$lib/canvas';
 import { symbolExtent, symbolGeometry } from './symbols';
 import { EXAMPLES } from '../examples';
 
@@ -220,15 +222,66 @@ describe('the gates inside a package', () => {
 	it('gives the 4011 its own legs, not the 7400 ones', () => {
 		// Both are four 2-input NANDs, and that is exactly why both are here: swap
 		// one for the other without redrawing and every wire lands on a pin that
-		// does something else. If the two rows ever converged this would catch it.
+		// does something else. Pin 4 is the tell: the second gate's output on the
+		// 4011, its first input on the 7400.
 		const ttl = chipById('7400')!;
 		const cmos = chipById('4011')!;
 		expect(cmos.layout).not.toEqual(ttl.layout);
-		expect(ttl.layout[0]).toBe('1A');
-		expect(cmos.layout[0]).toBe('1Y');
+		expect(ttl.layout[3]).toBe('2A');
+		expect(cmos.layout[3]).toBe('2Y');
 		// Same silicon underneath, all the same.
 		expect(evaluate('4011', { '1A': 'high', '1B': 'high' }, '1Y')).toBe('low');
 		expect(evaluate('4011', { '1A': 'high', '1B': 'low' }, '1Y')).toBe('high');
+	});
+
+	it('puts each leg where the datasheet does', () => {
+		// Read off the manufacturers' sheets, one fact per row, for the legs that
+		// were once wrong here or are easy to get wrong: the table was written from
+		// memory and five of its pinouts were not the part's. A chip whose legs are
+		// numbered wrongly is worse than no chip, since the drawing is what somebody
+		// counts against the part in their hand.
+		const facts: Array<[string, number, string]> = [
+			// CD4027B: flip-flop 2 starts at pin 1, flip-flop 1 ends at pin 15.
+			['4027', 1, '2Q'],
+			['4027', 3, '2CLK'],
+			['4027', 13, '1CLK'],
+			['4027', 15, '1Q'],
+			// CD4013B is the other way round.
+			['4013', 1, '1Q'],
+			['4013', 13, '2Q'],
+			// CD4011B: outputs paired in the middle, 3 with 4 and 10 with 11.
+			['4011', 3, '1Y'],
+			['4011', 4, '2Y'],
+			['4011', 10, '3Y'],
+			['4011', 11, '4Y'],
+			// SN74266 lays its quad out the 4000 way, not the 7400 way.
+			['74266', 4, '2Y'],
+			['74266', 11, '4Y'],
+			// CD4002B: the output leads, at pin 1, and 6 and 8 go nowhere.
+			['4002', 1, '1Y'],
+			['4002', 13, '2Y'],
+			['4002', 6, 'NC1'],
+			['4002', 8, 'NC2'],
+			// CD4023B: gate 1 is 1, 2 and 8 into 9.
+			['4023', 8, '1C'],
+			['4023', 9, '1Y'],
+			['4023', 6, '2Y'],
+			// SN7476: the supply on 5 and 13, not the corners.
+			['7476', 5, 'VCC'],
+			['7476', 13, 'GND'],
+			// SN7490: 5 and 10.
+			['7490', 5, 'VCC'],
+			['7490', 10, 'GND']
+		];
+		for (const [id, pin, name] of facts) {
+			expect(chipById(id)!.layout[pin - 1], `${id} pin ${pin}`).toBe(name);
+		}
+	});
+
+	it('is placed by its number and labelled by its name', () => {
+		expect(chipName(chipById('4027')!)).toBe('CD4027');
+		expect(chipName(chipById('7400')!)).toBe('SN7400');
+		expect(chipDefinition(chipById('74161')!).label).toBe('SN74161');
 	});
 
 	it('makes the 4027 a JK, which is only true if it toggles', () => {
@@ -339,11 +392,33 @@ describe('the gates inside a package', () => {
 		const result = compileSchematic(example);
 		expect(result.errors).toEqual([]);
 		const loose = result.warnings.filter((w) => w.includes('not connected'));
+		// The half in use is the one down the left of the package, which on a
+		// 4027 is flip-flop 2.
 		expect(loose).toEqual([
-			'U1.1QN is not connected to anything.',
 			'U1.2QN is not connected to anything.',
-			'U1.2Q is not connected to anything.'
+			'U1.1QN is not connected to anything.',
+			'U1.1Q is not connected to anything.'
 		]);
+	});
+
+	it('lets a wire between two neighbouring legs be picked', () => {
+		// K and J tied together, the way a JK is made to toggle: a wire that runs
+		// straight down the row of legs from pin 5 to pin 6. The package sits in
+		// front of wires, and while its whole outline counted as a hit — legs
+		// included — every click on that wire selected the chip instead. There
+		// was no way to move or delete it.
+		const part = at(CHIP_PREFIX + '4027', 'U1', 600, 300);
+		const def = chipDefinition(chipById('4027')!);
+		const k = def.pins.find((p) => p.name === '2K')!;
+		const j = def.pins.find((p) => p.name === '2J')!;
+		const schematic = drawing([part], [[600 + k.x, 300 + k.y, 600 + j.x, 300 + j.y]]);
+		const scene = new Scene();
+		for (const item of buildSceneItems(schematic)) scene.add(item);
+
+		const onWire = { x: 600 + k.x, y: 300 + (k.y + j.y) / 2 };
+		expect(scene.top(onWire, 7)?.kind).toBe('wire');
+		// The body is still the chip's.
+		expect(scene.top({ x: 600, y: 300 }, 7)?.kind).toBe('instance');
 	});
 
 	it('puts exactly one line of the 74138 low, and the right one', () => {
