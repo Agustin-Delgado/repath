@@ -406,6 +406,7 @@
 					context,
 					animation,
 					netOfPoint: app.compiled.connectivity.netOfPoint,
+					junctions,
 					showVoltage: app.showVoltage,
 					showCurrent: app.showCurrent,
 					showLight: app.showLight,

@@ -45,6 +45,7 @@ function view(overrides: Partial<DynamicView> = {}): DynamicView {
 		context: { currentScale: 1 } as DynamicView['context'],
 		animation: createAnimationState(),
 		netOfPoint: new Map(),
+		junctions: [],
 		floating: new Set<number>(),
 		showVoltage: false,
 		showCurrent: true,
@@ -165,6 +166,50 @@ describe('drawDynamic', () => {
 		const { painter, calls } = recorder();
 		drawDynamic(painter, withLed({ showLight: false }), REGION);
 		expect(calls).not.toContain('glow');
+	});
+
+	it('paints a junction over the live wires that meet at it', () => {
+		// The voltage pass paints every wire opaquely on this layer, which sits
+		// over the static one where the junction dots live: a junction on a live
+		// net vanished under its own wires the moment a run started. So it is
+		// painted again here, after the wires, in the net's colour.
+		const calls: Array<{ name: string; args: unknown[] }> = [];
+		const record = (name: string) => (...args: unknown[]) => {
+			calls.push({ name, args });
+		};
+		const painter = {
+			polyline: record('polyline'),
+			dot: record('dot')
+		} as unknown as Parameters<typeof drawDynamic>[0];
+		const tee = view({
+			schematic: {
+				instances: [],
+				wires: [
+					{ id: 'w1', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+					{ id: 'w2', points: [{ x: 50, y: 0 }, { x: 50, y: 60 }] }
+				]
+			},
+			junctions: [{ x: 50, y: 0 }],
+			netOfPoint: new Map([['0,0', 1], ['50,0', 1]]),
+			context: { currentScale: 1, voltageRange: { lo: 0, hi: 5 } } as DynamicView['context'],
+			frame: {
+				netVoltage: new Map([[1, 5]]),
+				netUndriven: new Set(),
+				wireCurrent: new Map(),
+				instanceCurrent: new Map(),
+				segmentCurrent: new Map()
+			},
+			showCurrent: false,
+			showVoltage: true
+		});
+		drawDynamic(painter, tee, REGION);
+		const order = calls.map((c) => c.name);
+		expect(order.filter((n) => n === 'polyline')).toHaveLength(2);
+		expect(order.lastIndexOf('dot')).toBeGreaterThan(order.lastIndexOf('polyline'));
+		// Same ink as the wires it sits on.
+		const wireColour = (calls.find((c) => c.name === 'polyline')!.args[1] as { color: string }).color;
+		const dotColour = (calls.find((c) => c.name === 'dot')!.args[2] as { color: string }).color;
+		expect(dotColour).toBe(wireColour);
 	});
 
 	it('still draws the wreckage of a burnt one with the light layer off', () => {
