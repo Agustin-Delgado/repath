@@ -62,9 +62,17 @@ export function instanceBounds(instance: Instance): Rect {
 	return rectFromBounds(instance.x + minX, instance.y + minY, instance.x + maxX, instance.y + maxY);
 }
 
-/** Is `point` (world space) inside this component's own, unrotated box? */
+/**
+ * Is `point` (world space) on this component's own, unrotated body?
+ *
+ * The body, not the box: a part with legs is not clickable along them. A wire
+ * that ties two neighbouring legs of a chip together runs exactly along that
+ * strip, and while the whole box answered here the package took every click
+ * meant for the wire — it sits in front, so there was no way to pick it.
+ */
 export function hitInstance(instance: Instance, point: Vec2, tolerance: number): boolean {
-	const { box } = definitionFor(instance);
+	const def = definitionFor(instance);
+	const box = def.body ?? def.box;
 	// Undo the placement, so the test is against the axis-aligned local box.
 	const local = rotatePoint(point.x - instance.x, point.y - instance.y, INVERSE[instance.rotation]);
 	return (

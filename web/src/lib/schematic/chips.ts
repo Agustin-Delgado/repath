@@ -86,14 +86,15 @@ const QUAD_2: readonly string[] = [
 /**
  * The 4000 family's own quad pinout, which is not the 74xx one.
  *
- * Both gates of a pair sit next to their output here, and the supply pins are
- * the other way round: VSS at 7 and VDD at 14 are the same corners as GND and
- * VCC, but everything in between moved.
+ * The two outputs of each side sit together in the middle of it — 3 and 4, 10
+ * and 11 — with the inputs out towards the corners. On a 7400 each output
+ * follows its own inputs instead. The supply is on the same corners as VCC and
+ * GND, and everything in between moved.
  */
 const CMOS_QUAD: readonly string[] = [
-	'1Y',
 	'1A',
 	'1B',
+	'1Y',
 	'2Y',
 	'2A',
 	'2B',
@@ -101,15 +102,17 @@ const CMOS_QUAD: readonly string[] = [
 	'3A',
 	'3B',
 	'3Y',
+	'4Y',
 	'4A',
 	'4B',
-	'4Y',
 	'VDD'
 ];
 
 function cmosTriple3(kind: ChipBlock['kind']) {
+	// Gate 1 is spread across the package: 1, 2 and 8 into 9. The other two are
+	// contiguous, which is what makes the first one easy to miswire.
 	return {
-		layout: ['1Y', '2Y', '2A', '2B', '2C', '3A', 'VSS', '3B', '3C', '3Y', '1A', '1B', '1C', 'VDD'],
+		layout: ['1A', '1B', '2A', '2B', '2C', '2Y', 'VSS', '1C', '1Y', '3Y', '3A', '3B', '3C', 'VDD'],
 		blocks: [1, 2, 3].map((n) => ({
 			kind,
 			inputs: [`${n}A`, `${n}B`, `${n}C`],
@@ -316,7 +319,9 @@ export const CHIPS: readonly ChipDef[] = [
 	{
 		id: '74266',
 		description: 'Quad 2-input XNOR',
-		...quad2('xnor'),
+		// Not the 7400 legs: this one has its outputs paired in the middle, 3 with
+		// 4 and 10 with 11, the way the 4000 family lays a quad out.
+		...quad2('xnor', ['1A', '1B', '1Y', '2Y', '2A', '2B', 'GND', '3A', '3B', '3Y', '4Y', '4A', '4B', 'VCC']),
 		caveat:
 			'The real part has open-drain outputs and wants a pull-up on each one; here they drive like any other gate.'
 	},
@@ -329,7 +334,7 @@ export const CHIPS: readonly ChipDef[] = [
 	{
 		id: '4002',
 		description: 'Dual 4-input NOR (CMOS)',
-		layout: ['NC1', '1A', '1B', '1C', '1D', '1Y', 'VSS', '2Y', '2A', '2B', '2C', '2D', 'NC2', 'VDD'],
+		layout: ['1Y', '1A', '1B', '1C', '1D', 'NC1', 'VSS', 'NC2', '2A', '2B', '2C', '2D', '2Y', 'VDD'],
 		blocks: [1, 2].map((n) => ({
 			kind: 'nor' as const,
 			inputs: [`${n}A`, `${n}B`, `${n}C`, `${n}D`],
@@ -340,7 +345,7 @@ export const CHIPS: readonly ChipDef[] = [
 	{
 		id: '4012',
 		description: 'Dual 4-input NAND (CMOS)',
-		layout: ['NC1', '1A', '1B', '1C', '1D', '1Y', 'VSS', '2Y', '2A', '2B', '2C', '2D', 'NC2', 'VDD'],
+		layout: ['1Y', '1A', '1B', '1C', '1D', 'NC1', 'VSS', 'NC2', '2A', '2B', '2C', '2D', '2Y', 'VDD'],
 		blocks: [1, 2].map((n) => ({
 			kind: 'nand' as const,
 			inputs: [`${n}A`, `${n}B`, `${n}C`, `${n}D`],
@@ -655,9 +660,12 @@ export const CHIPS: readonly ChipDef[] = [
 	{
 		id: '4027',
 		description: 'Dual JK flip-flop with set and reset (CMOS)',
+		// Flip-flop 2 is the one at pin 1, and 1 is up the right-hand side — the
+		// opposite of the 4013, whose first flip-flop starts at pin 1. Same
+		// datasheet family, and no rule that says which half comes first.
 		layout: [
-			'1Q', '1QN', '1CLK', '1RST', '1K', '1J', '1SET', 'VSS',
-			'2SET', '2J', '2K', '2RST', '2CLK', '2QN', '2Q', 'VDD'
+			'2Q', '2QN', '2CLK', '2RST', '2K', '2J', '2SET', 'VSS',
+			'1SET', '1J', '1K', '1RST', '1CLK', '1QN', '1Q', 'VDD'
 		],
 		blocks: [1, 2].flatMap((n) => jk(n, { preset: `${n}SET`, reset: `${n}RST` }))
 	}
@@ -667,6 +675,18 @@ const BY_ID = new Map(CHIPS.map((chip) => [chip.id, chip]));
 
 export function chipById(id: string): ChipDef | undefined {
 	return BY_ID.get(id);
+}
+
+/**
+ * What is printed on the lid: `CD4027`, `SN7400`.
+ *
+ * The table keys the parts by the bare number because that is how they are
+ * spoken of, but on a drawing `4027` reads as a value, not a part. The prefix is
+ * the family's — RCA's CD for the 4000 series, TI's SN for the 74 — and the
+ * family is what the first digit already says.
+ */
+export function chipName(chip: ChipDef): string {
+	return (chip.id.startsWith('4') ? 'CD' : 'SN') + chip.id;
 }
 
 /**

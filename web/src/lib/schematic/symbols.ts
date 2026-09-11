@@ -13,8 +13,8 @@
 
 import { definitionOf, gateInputCount, gatePins, gateReach, SUBCIRCUIT_PREFIX } from './model';
 import { SEGMENTS, SEGMENT_SHAPES } from './led';
-import { chipOf, chipPinLayout, chipReach } from './model';
-import { isUnused, type ChipDef } from './chips';
+import { CHIP_BODY_HALF_WIDTH, chipOf, chipPinLayout, chipReach } from './model';
+import { chipName, isUnused, type ChipDef } from './chips';
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
@@ -423,8 +423,9 @@ function dip(chip: ChipDef): SymbolGeometry {
 	const count = chip.layout.length;
 	const half = chipReach(count);
 	const places = chipPinLayout(count);
+	const body = CHIP_BODY_HALF_WIDTH;
 	const shapes: Shape[] = [
-		{ kind: 'rect', x: -46, y: -half, w: 92, h: half * 2 },
+		{ kind: 'rect', x: -body, y: -half, w: body * 2, h: half * 2 },
 		// The notch, at the pin 1 end.
 		path(`M-7 ${-half} A 7 7 0 0 0 7 ${-half}`)
 	];
@@ -435,7 +436,7 @@ function dip(chip: ChipDef): SymbolGeometry {
 		const inward = x < 0 ? 1 : -1;
 		// An unconnected leg still gets its stub and its number: the numbering is
 		// the thing that has to be right, and skipping one shifts everything after.
-		shapes.push(path(`M${x} ${y} H${x + 14 * inward}`));
+		shapes.push(path(`M${x} ${y} H${-body * inward}`));
 		labels.push({
 			// The number sits above its own leg, outside the body, the way it is
 			// printed beside the socket rather than on the part.
@@ -460,7 +461,7 @@ function dip(chip: ChipDef): SymbolGeometry {
 
 	// The part number is fine print too, but only because the palette writes it
 	// under the icon anyway. On the drawing it is the one label that has to stay.
-	labels.push({ x: 0, y: half - 8, text: chip.id, size: 11, anchor: 'middle', fine: true });
+	labels.push({ x: 0, y: half - 8, text: chipName(chip), size: 11, anchor: 'middle', fine: true });
 	return { shapes, labels, extent: { x: Math.abs(places[0].x), y: half } };
 }
 

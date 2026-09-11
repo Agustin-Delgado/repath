@@ -361,7 +361,10 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			(net !== undefined && net === view.hoverNet && theme.accent) ||
 			(net !== undefined && view.probeColours.get(net)) ||
 			theme.wire;
-		painter.dot(dot, 3, { color: colour });
+		// Bigger than a pin marker on purpose: a junction is a fact about the
+		// circuit — three wires are one net here — and at the size of a pin it
+		// read as a stray pixel where wires happened to cross.
+		painter.dot(dot, 4.5, { color: colour });
 	}
 
 	const showPins = scale > 0.45;
