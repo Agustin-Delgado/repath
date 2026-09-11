@@ -339,11 +339,11 @@ function valueLabel(instance: Instance): string | null {
 }
 
 /**
- * Screen pixels. Bigger than a pin marker on purpose: a junction is a fact
- * about the circuit — three wires are one net here — and at the size of a pin
- * it read as a stray pixel where wires happened to cross.
+ * Screen pixels — the same as a pin marker. It was made half as big again for
+ * a while, because it kept disappearing; the cause was the live layer painting
+ * over it, not the size.
  */
-export const JUNCTION_RADIUS = 4.5;
+export const JUNCTION_RADIUS = 3;
 
 export function drawSchematic(painter: Painter, view: SchematicView, visible: Rect): void {
 	const { theme } = view;
