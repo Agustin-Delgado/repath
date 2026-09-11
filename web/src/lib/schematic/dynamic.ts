@@ -14,7 +14,7 @@
 
 import { rectExpand, type Painter, type Rect, type Vec2 } from '$lib/canvas';
 import { advance, drawFlow, voltageColour, type AnimationState } from './animate';
-import { drawnReach, LABEL_GAP, leadAxis, symbolPaths } from './draw';
+import { drawnReach, JUNCTION_RADIUS, LABEL_GAP, leadAxis, symbolPaths } from './draw';
 import type { FlowContext, FlowFrame } from './flow';
 import {
 	brightness,
@@ -43,6 +43,8 @@ export interface DynamicView {
 	context: FlowContext;
 	animation: AnimationState;
 	netOfPoint: ReadonlyMap<string, number>;
+	/** Where three or more wires meet, drawn again here in the net's colour. */
+	junctions: readonly Vec2[];
 	showVoltage: boolean;
 	showCurrent: boolean;
 	showLight: boolean;
@@ -113,6 +115,18 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 				color: chosen ? view.selectionColour : voltageColour(volts, context.voltageRange),
 				width: chosen ? 2.4 : 2
 			});
+		}
+
+		// The wires just painted sit over the static layer, junction dots included,
+		// so a junction on a live net vanished under its own wires the moment a
+		// run started. Painted again on top, in the colour of the net it marks.
+		for (const dot of view.junctions) {
+			if (!inside(dot.x, dot.y)) continue;
+			const net = view.netOfPoint.get(pointKey(dot.x, dot.y));
+			if (net === undefined || view.floating.has(net)) continue;
+			const volts = frame.netVoltage.get(net);
+			if (volts === undefined) continue;
+			painter.dot(dot, JUNCTION_RADIUS, { color: voltageColour(volts, context.voltageRange) });
 		}
 	}
 

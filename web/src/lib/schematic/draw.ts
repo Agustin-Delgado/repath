@@ -338,6 +338,13 @@ function valueLabel(instance: Instance): string | null {
 	}
 }
 
+/**
+ * Screen pixels. Bigger than a pin marker on purpose: a junction is a fact
+ * about the circuit — three wires are one net here — and at the size of a pin
+ * it read as a stray pixel where wires happened to cross.
+ */
+export const JUNCTION_RADIUS = 4.5;
+
 export function drawSchematic(painter: Painter, view: SchematicView, visible: Rect): void {
 	const { theme } = view;
 	const scale = painter.viewport.scale;
@@ -361,10 +368,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			(net !== undefined && net === view.hoverNet && theme.accent) ||
 			(net !== undefined && view.probeColours.get(net)) ||
 			theme.wire;
-		// Bigger than a pin marker on purpose: a junction is a fact about the
-		// circuit — three wires are one net here — and at the size of a pin it
-		// read as a stray pixel where wires happened to cross.
-		painter.dot(dot, 4.5, { color: colour });
+		painter.dot(dot, JUNCTION_RADIUS, { color: colour });
 	}
 
 	const showPins = scale > 0.45;
