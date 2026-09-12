@@ -137,8 +137,8 @@ describe('a recorded session', () => {
 	});
 
 	it('ignores blank lines and remarks', () => {
-		const steps = parseTrace('# what I did\n\nexample rc-lowpass\n\n# then\nrun\n');
-		expect(steps.map((s) => s.op)).toEqual(['example', 'run']);
+		const steps = parseTrace('# what I did\n\nexample rc-lowpass\n\n# then\nrun\nreset\n');
+		expect(steps.map((s) => s.op)).toEqual(['example', 'run', 'reset']);
 	});
 });
 

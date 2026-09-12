@@ -74,7 +74,8 @@ export type Step =
 	| { op: 'sample'; seed: number }
 	| { op: 'sweep'; count: number }
 	| { op: 'analysis'; mode: string }
-	| { op: 'run' };
+	| { op: 'run' }
+	| { op: 'reset' };
 
 /**
  * How many steps are kept.
@@ -178,6 +179,8 @@ function format(step: Step): string {
 			return `analysis ${step.mode}`;
 		case 'run':
 			return 'run';
+		case 'reset':
+			return 'reset';
 	}
 }
 
@@ -272,6 +275,7 @@ function read(op: string, rest: string[]): Step {
 		case 'analysis':
 			return { op, mode: rest[0] };
 		case 'run':
+		case 'reset':
 			return { op };
 		default:
 			throw new Error(`no such operation "${op}"`);

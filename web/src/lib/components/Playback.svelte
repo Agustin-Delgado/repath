@@ -53,6 +53,23 @@
 		Single
 	</button>
 
+	<!--
+		The way out that Stop is not. Stop freezes the sweep to be looked at; this
+		puts the run away altogether — clock at zero, scope empty, switches back
+		where they are drawn — which until it existed meant editing something and
+		running again to get a clean sheet.
+	-->
+	<button
+		onclick={() => app.reset()}
+		disabled={!started}
+		title="Throw the run away and go back to the drawing at rest"
+	>
+		<svg viewBox="0 0 12 12" aria-hidden="true">
+			<path d="M2.5 2.5v7M9.5 2l-6 4 6 4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+		</svg>
+		Reset
+	</button>
+
 	<span class="clock" class:running={app.playing}>
 		{formatValue(app.playbackTime, 3)}s
 	</span>
@@ -154,9 +171,12 @@
 		padding: 0.25rem 0.45rem;
 	}
 
-	.play svg {
+	button svg {
 		width: 12px;
 		height: 12px;
+	}
+
+	.play svg {
 		fill: currentColor;
 	}
 

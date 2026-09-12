@@ -489,6 +489,22 @@ class AppState {
 		this.acquiring?.stop();
 	}
 
+	/**
+	 * Throw the run away and go back to the drawing at rest.
+	 *
+	 * Stop keeps the trace on screen to be measured; this is the other thing a
+	 * person wants after a run, which is to have it gone. Time goes back to zero,
+	 * the scope empties, every switch shows the position it is drawn in, and
+	 * nothing simulates again until Run is pressed — the same state the app opens
+	 * in, and the one an edit no longer restarts from on its own.
+	 */
+	reset(): void {
+		if (!this.acquiring && !this.result && !this.live) return;
+		this.trace.record({ op: 'reset' });
+		this.discardRun();
+		this.live = false;
+	}
+
 	togglePlay(): void {
 		if (this.playing) {
 			this.stop();
@@ -1756,6 +1772,9 @@ class AppState {
 				case 'run':
 					// Left to the caller: a replay is about the drawing, and awaiting the
 					// engine here would make every step of it asynchronous.
+					break;
+				case 'reset':
+					this.reset();
 					break;
 				case 'analysis':
 					this.setAnalysis(step.mode === 'frequency' ? 'frequency' : 'transient');
