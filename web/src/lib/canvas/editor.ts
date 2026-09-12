@@ -27,12 +27,20 @@ export interface EditorOptions {
 	overlayLayer?: string;
 	/** Pick radius in screen pixels. */
 	hitTolerance?: number;
+	/** The same, for a finger, which cannot land on a pixel. */
+	touchTolerance?: number;
 	gridSize?: number;
 	onViewportChange?: (viewport: Viewport) => void;
 }
 
 /** Screen pixels of movement before a click becomes a drag. */
 const DRAG_THRESHOLD = 3;
+
+/**
+ * How far past the pick radius a press may be from a pin and still be
+ * "on something" for a finger. Matches the reach the tools give a pin.
+ */
+const TOUCH_REACH = 1.4;
 
 export class CanvasEditor {
 	readonly viewport = new Viewport();
@@ -41,6 +49,7 @@ export class CanvasEditor {
 	readonly surface: LayeredSurface;
 
 	hitTolerance: number;
+	touchTolerance: number;
 	gridSize: number;
 
 	private container: HTMLElement;
@@ -69,12 +78,29 @@ export class CanvasEditor {
 		lastScreen: Vec2;
 		dragging: boolean;
 		panning: boolean;
+		/**
+		 * A finger on empty space, not yet handed to the tool.
+		 *
+		 * With a mouse, pressing on nothing starts a marquee; with a finger it is
+		 * far more often the start of a pan, and there is no middle button to say
+		 * so. So the press is held back until it either moves — a pan — or lifts
+		 * where it landed, at which point the tool gets the tap it was owed.
+		 */
+		deferred: PointerEvent | null;
 	} | null = null;
+
+	/** Fingers on the canvas, by pointer id, in CSS pixels. */
+	private touches = new Map<number, Vec2>();
+	/** Two fingers down: the gesture is a pinch, whatever the tool wanted. */
+	private pinch: { a: number; b: number } | null = null;
+	/** Whether the last press was a finger, so tolerances can grow to fit one. */
+	private touching = false;
 
 	constructor(container: HTMLElement, options: EditorOptions) {
 		this.container = container;
 		this.options = options;
 		this.hitTolerance = options.hitTolerance ?? 7;
+		this.touchTolerance = options.touchTolerance ?? 14;
 		this.gridSize = options.gridSize ?? 10;
 
 		this.surface = new LayeredSurface(container, options.layers);
@@ -120,7 +146,7 @@ export class CanvasEditor {
 			snap: this.snap,
 			size: this.surface.size,
 			unit: this.viewport.pixel,
-			tolerance: this.hitTolerance * this.viewport.pixel,
+			tolerance: this.pickRadius * this.viewport.pixel,
 			gridSize: this.gridSize,
 			invalidate: (...layers: string[]) => this.invalidate(...layers),
 			setCursor: (cursor) => this.setCursor(cursor)
@@ -129,6 +155,11 @@ export class CanvasEditor {
 
 	setCursor(cursor: string | null): void {
 		this.container.style.cursor = cursor ?? 'default';
+	}
+
+	/** Pick radius in screen pixels for whatever is doing the pointing. */
+	private get pickRadius(): number {
+		return this.touching ? this.touchTolerance : this.hitTolerance;
 	}
 
 	// -- rendering ----------------------------------------------------------
@@ -234,9 +265,36 @@ export class CanvasEditor {
 		};
 	}
 
+	/** Whether a press here lands on nothing a tool would want to hold. */
+	private nothingUnder(world: Vec2): boolean {
+		const tolerance = this.pickRadius * this.viewport.pixel;
+		if (this.scene.top(world, tolerance)) return false;
+		return this.snap.nearestPoint(world, tolerance * TOUCH_REACH) === null;
+	}
+
 	private onPointerDown = (event: PointerEvent) => {
 		const screen = this.localPoint(event);
 		const world = this.viewport.toWorld(screen);
+		this.touching = event.pointerType === 'touch';
+
+		if (this.touching) {
+			this.touches.set(event.pointerId, screen);
+			this.capture(event.pointerId, true);
+			if (this.touches.size === 2) {
+				// A second finger makes it a pinch. Whatever the first one had begun
+				// is called off rather than finished, since no release is coming for
+				// it that means anything.
+				if (this.gesture && !this.gesture.panning && !this.gesture.deferred) {
+					this.activeTool?.cancel?.(this.context);
+				}
+				this.gesture = null;
+				const [a, b] = [...this.touches.keys()];
+				this.pinch = { a, b };
+				event.preventDefault();
+				return;
+			}
+			if (this.touches.size > 2 || this.pinch) return;
+		}
 
 		// A double-click, counted from the presses rather than read off the event:
 		// a `pointerdown` reports a click count of zero, and only the mouse events
@@ -251,13 +309,15 @@ export class CanvasEditor {
 
 		// Middle button or Alt always pans, whatever the tool is doing.
 		const panning = event.button === 1 || (event.button === 0 && event.altKey);
+		const deferred = this.touching && !panning && this.nothingUnder(world);
 		this.gesture = {
 			pointerId: event.pointerId,
 			origin: world,
 			last: world,
 			lastScreen: screen,
 			dragging: false,
-			panning
+			panning,
+			deferred: deferred ? event : null
 		};
 		this.capture(event.pointerId, true);
 
@@ -266,13 +326,38 @@ export class CanvasEditor {
 			event.preventDefault();
 			return;
 		}
+		if (deferred) return;
 		this.activeTool?.pointerDown?.(this.toPointer(event, screen), this.context);
 	};
 
 	private onPointerMove = (event: PointerEvent) => {
 		const screen = this.localPoint(event);
 		this.pointerWorld = this.viewport.toWorld(screen);
+		this.touching = event.pointerType === 'touch';
 		const gesture = this.gesture;
+
+		if (this.pinch) {
+			const previous = this.touches.get(event.pointerId);
+			const { a, b } = this.pinch;
+			if (previous && (event.pointerId === a || event.pointerId === b)) {
+				this.touches.set(event.pointerId, screen);
+				const other = this.touches.get(event.pointerId === a ? b : a);
+				if (other) {
+					this.viewport.pinch([previous, other], [screen, other]);
+					this.afterViewportChange();
+				}
+			}
+			return;
+		}
+		if (this.touching) this.touches.set(event.pointerId, screen);
+
+		if (gesture?.deferred) {
+			const moved = Math.hypot(screen.x - gesture.lastScreen.x, screen.y - gesture.lastScreen.y);
+			if (moved <= DRAG_THRESHOLD) return;
+			// It went somewhere: a finger dragging empty space is moving the page.
+			gesture.deferred = null;
+			gesture.panning = true;
+		}
 
 		if (gesture?.panning) {
 			this.viewport.panBy(screen.x - gesture.lastScreen.x, screen.y - gesture.lastScreen.y);
@@ -298,12 +383,29 @@ export class CanvasEditor {
 	private onPointerUp = (event: PointerEvent) => {
 		const screen = this.localPoint(event);
 		const gesture = this.gesture;
-		const pointer = this.toPointer(event, screen);
-
 		this.capture(event.pointerId, false);
+		this.touches.delete(event.pointerId);
+
+		if (this.pinch) {
+			// The pinch ends when either finger lifts. The one still down is not
+			// handed to the tool as a fresh press: it did not land where it is now.
+			if (this.touches.size < 2) this.pinch = null;
+			return;
+		}
+		// A finger left over from a pinch, or a third one, has no gesture.
+		if (!gesture) return;
+
+		if (gesture.deferred) {
+			// Lifted where it landed: a tap, which the tool now gets as the press
+			// and release it would have seen from a mouse.
+			const down = gesture.deferred;
+			gesture.deferred = null;
+			this.activeTool?.pointerDown?.(this.toPointer(down, gesture.lastScreen), this.context);
+		}
+		const pointer = this.toPointer(event, screen);
 		this.gesture = null;
 
-		if (gesture?.panning) {
+		if (gesture.panning) {
 			this.setCursor(this.activeTool?.cursor ?? null);
 			return;
 		}

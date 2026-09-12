@@ -72,6 +72,13 @@ export interface Tool {
 	pointerMove?(pointer: EditorPointer, ctx: ToolContext): void;
 	pointerUp?(pointer: EditorPointer, ctx: ToolContext): void;
 	pointerLeave?(ctx: ToolContext): void;
+	/**
+	 * Abandon whatever gesture is in flight, as if the press never happened.
+	 *
+	 * Called when the editor takes the pointer away from the tool — a second
+	 * finger landing turns a drag into a pinch — so no pointer-up is coming.
+	 */
+	cancel?(ctx: ToolContext): void;
 
 	/** Return true to mark the key as handled. */
 	keyDown?(event: KeyboardEvent, ctx: ToolContext): boolean | void;
