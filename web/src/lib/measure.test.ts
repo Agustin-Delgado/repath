@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { measure } from './measure';
+import { measure, measureLogic } from './measure';
 
 /** `count` samples of `f` over `[0, span]`, evenly spaced. */
 function sampled(f: (t: number) => number, span: number, count: number) {
@@ -102,5 +102,46 @@ describe('measuring something that is not doing anything', () => {
 
 	it('has nothing to say about a run of one point', () => {
 		expect(measure(Float64Array.from([0]), Float64Array.from([1]))).toBeNull();
+	});
+});
+
+describe('measuring a logic lane', () => {
+	const edge = (time: number, state: 'high' | 'low' | 'unknown' | 'highz') => ({ time, state });
+
+	it('reads a square wave from its edges', () => {
+		// 1 kHz, 30% high, three and a bit cycles: rising at 0, 1, 2, 3 ms.
+		const events = [0, 1e-3, 2e-3, 3e-3].flatMap((t) => [edge(t, 'high'), edge(t + 0.3e-3, 'low')]);
+		const m = measureLogic(events, 'low')!;
+		expect(m.frequency).toBeCloseTo(1000, 6);
+		expect(m.period).toBeCloseTo(1e-3, 9);
+		expect(m.duty).toBeCloseTo(0.3, 6);
+		expect(m.cycles).toBe(3);
+	});
+
+	it('needs two rising edges, and one cycle is enough', () => {
+		expect(measureLogic([edge(1e-3, 'high'), edge(2e-3, 'low')], 'low')).toBeNull();
+		// A lane that opened high: the first rising edge is the one at 3 ms.
+		const m = measureLogic([edge(1e-3, 'low'), edge(3e-3, 'high'), edge(4e-3, 'low'), edge(5e-3, 'high')], 'high')!;
+		expect(m.cycles).toBe(1);
+		expect(m.period).toBeCloseTo(2e-3, 9);
+		expect(m.duty).toBeCloseTo(0.5, 6);
+	});
+
+	it('does not count the unfinished cycle at the end towards the duty', () => {
+		// Two whole cycles at 50%, then a rising edge and a long high the memory
+		// cut off: still 50%, not something pulled towards one.
+		const events = [
+			edge(0, 'high'), edge(0.5e-3, 'low'),
+			edge(1e-3, 'high'), edge(1.5e-3, 'low'),
+			edge(2e-3, 'high'), edge(9e-3, 'low')
+		];
+		expect(measureLogic(events, 'low')!.duty).toBeCloseTo(0.5, 6);
+	});
+
+	it('treats undriven time as not high', () => {
+		const events = [edge(0, 'high'), edge(0.5e-3, 'highz'), edge(1e-3, 'high'), edge(1.5e-3, 'low'), edge(2e-3, 'high')];
+		const m = measureLogic(events, 'low')!;
+		expect(m.cycles).toBe(2);
+		expect(m.duty).toBeCloseTo(0.5, 6);
 	});
 });

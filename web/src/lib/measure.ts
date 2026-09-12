@@ -11,6 +11,8 @@
  * parts of a waveform the same as the interesting ones.
  */
 
+import type { DigitalTransition, LogicState } from './engine';
+
 export interface Measurements {
 	min: number;
 	max: number;
@@ -21,6 +23,8 @@ export interface Measurements {
 	rms: number;
 	/** Cycles per second, or null if it does not cross its own midpoint twice. */
 	frequency: number | null;
+	/** Seconds per cycle: the same fact, the way a cursor measures it. */
+	period: number | null;
 	/** Fraction of a period spent above the midpoint, or null without a period. */
 	duty: number | null;
 	/** 10% to 90% of the first rising edge, or null if there is not one. */
@@ -103,9 +107,68 @@ export function measure(time: Float64Array, samples: Float64Array): Measurements
 		mean,
 		rms,
 		frequency,
+		period: frequency ? period : null,
 		duty,
 		...edge(time, samples, min, max)
 	};
+}
+
+/** What a logic lane can be asked: how often it goes round, and how much of that it spends high. */
+export interface LogicMeasurements {
+	frequency: number;
+	period: number;
+	/** Fraction of a cycle spent high, over the whole cycles measured. */
+	duty: number;
+	/** Whole cycles the answer is averaged over. */
+	cycles: number;
+}
+
+/**
+ * Frequency and duty of a logic lane, from its transitions.
+ *
+ * A lane is a list of edges rather than samples, so this is the analog
+ * measurement with the hard part already done: a cycle is one rising edge to
+ * the next, and the answer is averaged over every whole cycle in memory — a
+ * ripple counter's slowest stage may have only one, and one is enough.
+ *
+ * Null with fewer than two rising edges, which is a lane that has not gone
+ * round even once. Anything but a clean high or low — unknown, high-Z — is
+ * treated as not high, so a lane that spent its time undriven does not report a
+ * duty for a signal it never carried.
+ */
+export function measureLogic(
+	events: readonly DigitalTransition[],
+	opening: LogicState
+): LogicMeasurements | null {
+	const rising: number[] = [];
+	// Time spent high, and the part of it that belongs to the cycle begun by the
+	// latest rising edge. The period is measured from the first rising edge to
+	// the last, so the duty is taken over that same stretch: the high time after
+	// the last rising edge is the start of a cycle that has not finished, and
+	// counting it would depend on where the memory happened to stop.
+	let high = 0;
+	let sinceLastRise = 0;
+	let level = opening;
+	let since = 0;
+	for (const event of events) {
+		if (event.state === level) continue;
+		if (event.state === 'high' && level !== 'high') {
+			rising.push(event.time);
+			sinceLastRise = 0;
+		} else if (level === 'high' && rising.length > 0) {
+			high += event.time - since;
+			sinceLastRise += event.time - since;
+		}
+		level = event.state;
+		since = event.time;
+	}
+	const cycles = rising.length - 1;
+	if (cycles < 1) return null;
+	const measured = rising[rising.length - 1] - rising[0];
+	const period = measured / cycles;
+	if (!(period > 0)) return null;
+	const duty = Math.min((high - sinceLastRise) / measured, 1);
+	return { frequency: 1 / period, period, duty, cycles };
 }
 
 /** Rise time and overshoot of the first rising edge, if there is one. */
