@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { measure } from '$lib/measure';
+	import { measure, measureLogic } from '$lib/measure';
 	import { netLabel } from '$lib/schematic/nets';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
@@ -226,6 +226,17 @@
 		if (!run || !measuring) return [];
 		return traces
 			.map((t) => ({ label: t.label, colour: t.colour, m: measure(run.time, t.samples) }))
+			.filter((row) => row.m !== null);
+	});
+
+	/**
+	 * The same for the logic lanes, which had no way to be asked how fast they
+	 * were going — the one question anybody has about a counter's outputs.
+	 */
+	const logicMeasurements = $derived.by(() => {
+		if (!app.result || !measuring) return [];
+		return digitalTraces
+			.map((t) => ({ label: t.label, colour: t.colour, m: measureLogic(t.events, t.opening) }))
 			.filter((row) => row.m !== null);
 	});
 
@@ -579,9 +590,14 @@
 		const here = indexAt(run.time, at);
 		const there = marker === null ? null : indexAt(run.time, marker);
 		const family = logicFamily(app.logicFamily);
+		const delta = there === null ? null : run.time[here] - run.time[there];
 		return {
 			time: run.time[here],
-			delta: there === null ? null : run.time[here] - run.time[there],
+			delta,
+			// A cursor pair on two edges is one period, and the frequency is what
+			// the person was after; dividing it out by hand is the step that gets
+			// skipped.
+			rate: delta !== null && Math.abs(delta) > 1e-15 ? 1 / Math.abs(delta) : null,
 			values: traces.map((t) => ({
 				label: t.label,
 				colour: t.colour,
@@ -710,6 +726,9 @@
 					t = {formatValue(readout.time, 4)}s
 					{#if readout.delta !== null}
 						<span class="delta">Δt = {formatValue(readout.delta, 4)}s</span>
+						{#if readout.rate !== null}
+							<span class="delta">1/Δt = {formatValue(readout.rate, 4)}Hz</span>
+						{/if}
 					{/if}
 				</span>
 				{#each readout.values as entry (entry.label)}
@@ -738,7 +757,7 @@
 				class="scale"
 				class:on={measuring}
 				onclick={() => (measuring = !measuring)}
-				title="Read off frequency, duty, RMS, rise time and overshoot"
+				title="Read off frequency, period, duty, RMS, rise time and overshoot — logic lanes too"
 			>
 				measure
 			</button>
@@ -836,7 +855,7 @@
 			</footer>
 		{/if}
 
-		{#if measurements.length > 0}
+		{#if measurements.length > 0 || logicMeasurements.length > 0}
 			<!--
 				Each of these is something you could get from two cursors and some
 				arithmetic. Doing it by hand is slow, and being slow is the reason
@@ -854,9 +873,11 @@
 							<dd>{formatValue(m.mean, 3)}V</dd>
 							<dt>rms</dt>
 							<dd>{formatValue(m.rms, 3)}V</dd>
-							{#if m.frequency !== null}
+							{#if m.frequency !== null && m.period !== null}
 								<dt>freq</dt>
 								<dd>{formatValue(m.frequency, 3)}Hz</dd>
+								<dt>period</dt>
+								<dd>{formatValue(m.period, 3)}s</dd>
 								<dt>duty</dt>
 								<dd>{Math.round((m.duty ?? 0) * 100)}%</dd>
 							{/if}
@@ -868,6 +889,22 @@
 								<dt>over</dt>
 								<dd>{Math.round(m.overshoot * 100)}%</dd>
 							{/if}
+						</dl>
+					</div>
+				{/each}
+				{#each logicMeasurements as row (row.label)}
+					{@const m = row.m!}
+					<div class="measure">
+						<span class="who" style:color={row.colour}>{row.label}</span>
+						<dl>
+							<dt>freq</dt>
+							<dd>{formatValue(m.frequency, 3)}Hz</dd>
+							<dt>period</dt>
+							<dd>{formatValue(m.period, 3)}s</dd>
+							<dt>duty</dt>
+							<dd>{Math.round(m.duty * 100)}%</dd>
+							<dt>cycles</dt>
+							<dd title="Whole cycles the numbers are averaged over">{m.cycles}</dd>
 						</dl>
 					</div>
 				{/each}
