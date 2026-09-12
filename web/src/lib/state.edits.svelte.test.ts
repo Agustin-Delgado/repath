@@ -1248,6 +1248,32 @@ describe('replacing the whole drawing', () => {
 		expect(app.probes).toEqual([]);
 	});
 
+	it('resetting puts the run away without touching the drawing', () => {
+		app.place('resistor', 200, 200, 0);
+		const run = pretendRunning();
+		app.result = { time: [0, 1e-3] } as never;
+		app.live = true;
+
+		app.reset();
+
+		// The same state the app opens in: nothing acquired, nothing to show, and
+		// nothing restarting on the next edit until Run is pressed again.
+		expect(run.closed()).toBe(true);
+		expect(app.acquiring).toBeNull();
+		expect(app.result).toBeNull();
+		expect(app.playing).toBe(false);
+		expect(app.playbackTime).toBe(0);
+		expect(app.live).toBe(false);
+		expect(app.schematic.instances).toHaveLength(1);
+		expect(app.trace.steps.at(-1)?.op).toBe('reset');
+	});
+
+	it('resetting a sheet that was never run is not a step', () => {
+		const before = app.trace.steps.length;
+		app.reset();
+		expect(app.trace.steps.length).toBe(before);
+	});
+
 	it('opening a file stops it too', () => {
 		app.place('resistor', 200, 200, 0);
 		const saved = app.toJSON();
