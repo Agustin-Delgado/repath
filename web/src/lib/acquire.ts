@@ -34,6 +34,24 @@ export interface AcquisitionHost {
  */
 const MAX_FRAME = 0.05;
 
+/**
+ * Wall-clock milliseconds a frame may spend inside the engine.
+ *
+ * Half of a sixty-hertz frame, leaving the other half for drawing what came
+ * out. The engine is handed a step budget sized to fit this from how fast its
+ * steps have been going, and stops short of the frame's target when it runs
+ * out — so a clock turned up to a hundred megahertz slows the sweep down rather
+ * than freezing the page, which is what it did when a frame ran to its target
+ * however long that took.
+ */
+const ENGINE_MS = 8;
+
+/** Steps allowed before anything has been measured. */
+const OPENING_BUDGET = 2_000;
+
+/** The budget never goes below this: a frame that could not take a step would never learn its speed. */
+const LEAST_BUDGET = 200;
+
 export class Acquisition {
 	readonly capture: Capture;
 	private run: LiveRun;
@@ -56,6 +74,16 @@ export class Acquisition {
 	 * pretending the timebase is being honoured.
 	 */
 	keeping = 1;
+
+	/**
+	 * Solver steps per wall-clock millisecond, as recently measured.
+	 *
+	 * What the next frame's budget is sized from. Eased like `keeping`, so one
+	 * frame that happened to share the machine with something else does not
+	 * halve the next.
+	 */
+	private stepsPerMs: number | null = null;
+	private stepsSoFar = 0;
 
 	constructor(
 		netlist: unknown,
@@ -127,8 +155,24 @@ export class Acquisition {
 		const until = this.limit === null ? target : Math.min(target, this.limit);
 
 		const from = this.run.time;
+		const budget =
+			this.stepsPerMs === null ? OPENING_BUDGET : Math.max(LEAST_BUDGET, this.stepsPerMs * ENGINE_MS);
+		this.run.setFrameBudget(budget);
+		const began = performance.now();
 		try {
-			this.capture.add(this.run.advance(until));
+			const chunk = this.run.advance(until);
+			this.capture.add(chunk);
+			// Steps are counted from the start of the run; the frame's share is the
+			// difference. Timed around the whole call, since the samples coming back
+			// across the boundary are part of what the frame paid for.
+			const steps = chunk.stats.accepted_steps - this.stepsSoFar;
+			this.stepsSoFar = chunk.stats.accepted_steps;
+			const spent = performance.now() - began;
+			if (steps > 0 && spent > 0.5) {
+				const measured = steps / spent;
+				this.stepsPerMs =
+					this.stepsPerMs === null ? measured : this.stepsPerMs * 0.7 + measured * 0.3;
+			}
 		} catch (cause) {
 			this.stop();
 			this.host.onError(

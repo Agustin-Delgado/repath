@@ -243,12 +243,30 @@ pub struct Running {
     last_logic: Vec<Logic>,
     /// How many destroyed parts the caller has already been told about.
     reported_failures: usize,
+    /// Most steps one call to [`Simulator::advance_transient`] may take before
+    /// handing back what it has, short of `until`.
+    budget: usize,
 }
 
 impl Running {
     /// How far the run has got, in seconds.
     pub fn time(&self) -> f64 {
         self.t
+    }
+
+    /// Cap the work of each call to [`Simulator::advance_transient`].
+    ///
+    /// A live run is advanced a frame at a time, and a frame that asks for more
+    /// than the engine can solve in its share of the wall clock stalls the whole
+    /// page — a clock turned up to a hundred megahertz went from smooth to
+    /// several seconds a frame, with nothing in between. Past the budget the call
+    /// returns with the run short of `until`, and the caller sees how far it got
+    /// from [`Running::time`]: the sweep slows down instead of the screen.
+    ///
+    /// Distinct from `max_steps`, which is the safety valve for a run that will
+    /// never finish and is an error when it trips; this is ordinary pacing.
+    pub fn set_budget(&mut self, steps: usize) {
+        self.budget = steps.max(1);
     }
 
     pub fn stats(&self) -> &Stats {
@@ -740,6 +758,7 @@ impl Simulator {
             stats,
             last_logic,
             reported_failures: 0,
+            budget: usize::MAX,
         };
         Ok((run, result))
     }
@@ -779,6 +798,11 @@ impl Simulator {
             if stats.accepted_steps - started_at >= cfg.max_steps {
                 restore(run, t, dt, euler_steps, stats);
                 return Err(SimError::StepLimit { time: t });
+            }
+            // Out of budget for this call: what was solved goes back as it is,
+            // and the next call carries on from here.
+            if stats.accepted_steps - started_at >= run.budget {
+                break;
             }
 
             let integration =

@@ -2466,3 +2466,70 @@ fn a_gate_that_has_finished_charging_stops_swapping_direction() {
     // integrator talking to itself.
     assert!(reversals <= 8, "the gate current reversed {reversals} times after one edge");
 }
+
+/// A frame's budget stops a call short of `until`, and the next one carries on.
+///
+/// The screen is drawn between calls. A call that runs to `until` however many
+/// steps that takes is a frozen screen for the duration, and a clock turned up
+/// far enough makes the duration seconds. With a budget the call hands back what
+/// it has and the sweep visibly slows, which is what is actually happening.
+#[test]
+fn a_budget_hands_the_run_back_short_and_nothing_is_lost() {
+    let build = || {
+        let mut c = Circuit::new();
+        let out = c.node("out");
+        c.add(Box::new(VoltageSource::new(
+            "V1",
+            out,
+            Circuit::GROUND,
+            Waveform::Pulse {
+                v1: 0.0,
+                v2: 5.0,
+                delay: 0.0,
+                rise: 1e-9,
+                fall: 1e-9,
+                width: 5e-6,
+                period: 10e-6,
+            },
+        )));
+        c.add(Box::new(Resistor::new("R1", out, Circuit::GROUND, 1000.0)));
+        c
+    };
+    let cfg = TransientConfig::new(1e-3);
+
+    // The whole millisecond in one call, as the reference.
+    let mut whole = build();
+    let mut sim = Simulator::default();
+    let (mut run, mut reference) = sim.begin_transient(&mut whole, cfg).unwrap();
+    reference.append(sim.advance_transient(&mut whole, &mut run, 1e-3).unwrap());
+    assert!((run.time() - 1e-3).abs() < 1e-9);
+
+    // The same run, rationed to fifty steps a call.
+    let mut rationed = build();
+    let mut sim = Simulator::default();
+    let (mut run, mut result) = sim.begin_transient(&mut rationed, cfg).unwrap();
+    run.set_budget(50);
+    let first = sim.advance_transient(&mut rationed, &mut run, 1e-3).unwrap();
+    assert!(run.time() < 1e-3, "fifty steps covered the whole millisecond");
+    assert!(first.time.len() <= 51, "the call took more steps than it was given");
+    result.append(first);
+
+    let mut calls = 1;
+    while run.time() < 1e-3 - 1e-12 {
+        result.append(sim.advance_transient(&mut rationed, &mut run, 1e-3).unwrap());
+        calls += 1;
+        assert!(calls < 10_000, "the budgeted run never reached the end");
+    }
+    assert!(calls > 1);
+
+    // Same timepoints, same numbers: rationing changed when the answers arrived,
+    // not what they were.
+    assert_eq!(result.time.len(), reference.time.len());
+    let index = result.index_of("v(out)").unwrap();
+    for (t, r) in result.time.iter().zip(&reference.time) {
+        assert!((t - r).abs() < 1e-15, "the rationed run took a different path: {t} vs {r}");
+    }
+    for (a, b) in result.solution.iter().zip(&reference.solution) {
+        assert!((a[index] - b[index]).abs() < 1e-9);
+    }
+}

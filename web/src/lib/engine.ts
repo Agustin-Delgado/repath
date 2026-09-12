@@ -248,6 +248,17 @@ export class LiveRun {
 		return this.simulation.setLogic(name, state, at);
 	}
 
+	/**
+	 * Most solver steps one `advance` may take before handing back what it has.
+	 *
+	 * Past it the run stops short of `until`, and `time` says where. The pacing
+	 * of a live run against the wall clock lives on this one number.
+	 */
+	setFrameBudget(steps: number): void {
+		if (this.freed) return;
+		this.simulation.setFrameBudget(Math.max(1, Math.round(steps)));
+	}
+
 	free(): void {
 		if (this.freed) return;
 		this.simulation.free();

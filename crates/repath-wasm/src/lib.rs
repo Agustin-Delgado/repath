@@ -178,6 +178,21 @@ impl Simulation {
         serde_json::to_string(&meta).map_err(to_js_error)
     }
 
+    /// Most solver steps one `advance` may take before returning early.
+    ///
+    /// The frame's share of the machine, in steps rather than milliseconds:
+    /// the caller measures how fast steps are going and sizes this to fit.
+    #[wasm_bindgen(js_name = setFrameBudget)]
+    pub fn set_frame_budget(&mut self, steps: u32) -> bool {
+        match self.running.as_mut() {
+            Some(run) => {
+                run.set_budget(steps as usize);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// How far the live run has got, in seconds.
     #[wasm_bindgen(js_name = liveTime)]
     pub fn live_time(&self) -> f64 {

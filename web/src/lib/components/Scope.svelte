@@ -122,8 +122,25 @@
 		return { earliest: time[0], now: time[time.length - 1] };
 	});
 
-	const span = $derived.by(() => {
+	/**
+	 * How much of the chosen window the memory can actually fill.
+	 *
+	 * The memory is a fixed number of samples, and a fast circuit spends them
+	 * quickly: a clock at a hundred megahertz fills it in a couple of hundred
+	 * microseconds. Drawn across a five-millisecond window that came out as a
+	 * flat line with a smear at the right-hand end, which reads as the simulator
+	 * having broken. Once samples have been let go, the window is only as wide as
+	 * what is still held.
+	 */
+	const coverage = $derived.by(() => {
 		const width = Math.max(app.stopTime, 1e-12);
+		if (held.earliest <= 0) return width;
+		return Math.min(width, Math.max(held.now - held.earliest, 1e-12));
+	});
+	const narrowed = $derived(app.result !== null && coverage < Math.max(app.stopTime, 1e-12) * 0.999);
+
+	const span = $derived.by(() => {
+		const width = coverage;
 		if (!app.result) return { from: 0, to: width };
 		// A running sweep follows itself. Whatever the window was dragged to while
 		// it was stopped is kept for when it stops again, but it cannot hold the
@@ -681,6 +698,12 @@
 			<p class="empty">Tick a net on the right to plot it.</p>
 		{/if}
 
+		{#if narrowed}
+			<p class="memory" title="The memory is a fixed number of samples, and this circuit uses them quickly. A shorter stop time is a window it can fill.">
+				memory holds {formatValue(coverage, 3)}s of the {formatValue(app.stopTime, 3)}s window
+			</p>
+		{/if}
+
 		{#if readout && readout.values.length + readout.logic.length > 0}
 			<div class="readout">
 				<span class="time">
@@ -1015,6 +1038,21 @@
 		color: var(--label-dim);
 		font-size: 0.85rem;
 		pointer-events: none;
+	}
+
+	/* Bottom left, out of the way of the readout and the traces' opening levels. */
+	.memory {
+		position: absolute;
+		left: 12px;
+		bottom: 6px;
+		margin: 0;
+		font-family: var(--font-mono);
+		font-size: 0.68rem;
+		color: var(--label-dim);
+		pointer-events: auto;
+		background: color-mix(in srgb, var(--panel-bg) 85%, transparent);
+		padding: 0.15rem 0.4rem;
+		border-radius: 4px;
 	}
 
 	.readout {

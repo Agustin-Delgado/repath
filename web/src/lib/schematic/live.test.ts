@@ -952,3 +952,36 @@ R2 out 0 1k
 		expect(feeding).toBeCloseTo(2.5e-3, 4);
 	});
 });
+
+describe('a frame with a budget', () => {
+	it('hands the run back short, and the next frame carries on from there', () => {
+		// A clock turned up far enough asks a single frame for more steps than the
+		// engine can take in its share of the wall clock, and a frame that ran to
+		// its target regardless froze the page for as long as that took. Budgeted,
+		// the call stops short, `time` says where, and nothing is lost: the frames
+		// after it pick up from that instant.
+		const clock = at('clock', 'CLK1', 120, 220);
+		clock.params = { frequency: 1e6, duty: 0.5 };
+		const schematic = drawing([clock], [[150, 220, 260, 220]]);
+		const compiled = compileSchematic(schematic);
+		expect(compiled.errors).toEqual([]);
+
+		const live = new LiveRun(compiled.netlist, 5e-8);
+		live.setFrameBudget(20);
+		const first = live.advance(1e-4);
+		expect(live.time).toBeLessThan(1e-4);
+		expect(first.time.length).toBeLessThanOrEqual(21);
+
+		let frames = 1;
+		let last = live.time;
+		while (live.time < 1e-4 - 1e-15 && frames < 10_000) {
+			live.advance(1e-4);
+			expect(live.time).toBeGreaterThan(last);
+			last = live.time;
+			frames++;
+		}
+		expect(frames).toBeGreaterThan(1);
+		expect(live.time).toBeCloseTo(1e-4, 12);
+		live.free();
+	});
+});
