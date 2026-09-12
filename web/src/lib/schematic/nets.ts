@@ -137,6 +137,57 @@ export function allSegments(schematic: Schematic): Array<WireSegment & { wire: W
 	return schematic.wires.flatMap((wire) => wireSegments(wire).map((s) => ({ ...s, wire })));
 }
 
+/**
+ * The points that sit strictly inside a segment, found by the line it runs along.
+ *
+ * Asking every segment about every point is a few hundred thousand checks on a
+ * drawing of a couple of hundred wires, and each check reads six coordinates
+ * through the store's proxy — which is where the time went: a hundred-odd
+ * milliseconds per pass, several passes per frame, and a full-drawing drag that
+ * crawled. Everything here is read once, into plain numbers, and a segment then
+ * only meets the points that share its row or column.
+ */
+export class LineIndex<T extends Point> {
+	private byX = new Map<number, T[]>();
+	private byY = new Map<number, T[]>();
+
+	constructor(points: Iterable<T>) {
+		for (const point of points) {
+			const x = point.x;
+			const y = point.y;
+			const column = this.byX.get(x);
+			if (column) column.push(point);
+			else this.byX.set(x, [point]);
+			const row = this.byY.get(y);
+			if (row) row.push(point);
+			else this.byY.set(y, [point]);
+		}
+	}
+
+	/** Points strictly between `a` and `b`, not on either end. Axis-aligned only. */
+	inside(a: Point, b: Point): T[] {
+		const ax = a.x;
+		const ay = a.y;
+		const bx = b.x;
+		const by = b.y;
+		if (ax === bx) {
+			const column = this.byX.get(ax);
+			if (!column) return [];
+			const low = Math.min(ay, by);
+			const high = Math.max(ay, by);
+			return column.filter((p) => p.y > low && p.y < high);
+		}
+		if (ay === by) {
+			const row = this.byY.get(ay);
+			if (!row) return [];
+			const low = Math.min(ax, bx);
+			const high = Math.max(ax, bx);
+			return row.filter((p) => p.x > low && p.x < high);
+		}
+		return [];
+	}
+}
+
 export function buildConnectivity(schematic: Schematic): Connectivity {
 	const set = new DisjointSet();
 	const pins: PinRef[] = [];
@@ -156,15 +207,14 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 	}
 
 	// Anything sitting mid-wire joins that wire: pins and other wires' corners.
-	const touchPoints: Point[] = [
+	const touchPoints = new LineIndex<Point>([
 		...pins.map((p) => ({ x: p.x, y: p.y })),
-		...schematic.wires.flatMap((w) => w.points)
-	];
+		...schematic.wires.flatMap((w) => w.points.map((p) => ({ x: p.x, y: p.y })))
+	]);
 	for (const segment of segments) {
-		for (const point of touchPoints) {
-			if (liesWithin(point.x, point.y, segment.a, segment.b)) {
-				set.union(pointKey(point.x, point.y), pointKey(segment.a.x, segment.a.y));
-			}
+		const start = pointKey(segment.a.x, segment.a.y);
+		for (const point of touchPoints.inside(segment.a, segment.b)) {
+			set.union(pointKey(point.x, point.y), start);
 		}
 	}
 
@@ -358,15 +408,13 @@ export function junctionDots(schematic: Schematic): Point[] {
 
 	// A wire that stops partway along another one is always a junction, however
 	// few ends meet there.
+	const corners = new LineIndex(
+		schematic.wires.flatMap((wire) => wire.points.map((p) => ({ x: p.x, y: p.y, wire })))
+	);
 	const midwire = new Set<string>();
 	for (const segment of segments) {
-		for (const wire of schematic.wires) {
-			if (wire === segment.wire) continue;
-			for (const point of wire.points) {
-				if (liesWithin(point.x, point.y, segment.a, segment.b)) {
-					midwire.add(pointKey(point.x, point.y));
-				}
-			}
+		for (const point of corners.inside(segment.a, segment.b)) {
+			if (point.wire !== segment.wire) midwire.add(pointKey(point.x, point.y));
 		}
 	}
 

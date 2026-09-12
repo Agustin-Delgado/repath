@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { app } from '../state.svelte';
 import {
+	LineIndex,
 	buildConnectivity,
 	junctionDots,
 	liesWithin,
@@ -46,6 +47,35 @@ describe('liesWithin', () => {
 
 	it('is false off the line', () => {
 		expect(liesWithin(50, 1, { x: 0, y: 0 }, { x: 100, y: 0 })).toBe(false);
+	});
+});
+
+describe('LineIndex', () => {
+	const index = new LineIndex([
+		{ x: 50, y: 0 },
+		{ x: 0, y: 0 },
+		{ x: 100, y: 0 },
+		{ x: 50, y: 1 },
+		{ x: 50, y: 40 },
+		{ x: 50, y: 100 }
+	]);
+
+	it('answers the same as liesWithin, along a row', () => {
+		expect(index.inside({ x: 0, y: 0 }, { x: 100, y: 0 })).toEqual([{ x: 50, y: 0 }]);
+		// Either direction.
+		expect(index.inside({ x: 100, y: 0 }, { x: 0, y: 0 })).toEqual([{ x: 50, y: 0 }]);
+	});
+
+	it('answers the same as liesWithin, up a column', () => {
+		expect(index.inside({ x: 50, y: 0 }, { x: 50, y: 100 })).toEqual([
+			{ x: 50, y: 1 },
+			{ x: 50, y: 40 }
+		]);
+	});
+
+	it('finds nothing on a line nobody sits on, or in a segment of no length', () => {
+		expect(index.inside({ x: 0, y: 7 }, { x: 100, y: 7 })).toEqual([]);
+		expect(index.inside({ x: 50, y: 40 }, { x: 50, y: 40 })).toEqual([]);
 	});
 });
 

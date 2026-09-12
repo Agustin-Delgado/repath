@@ -1223,6 +1223,20 @@ class AppState {
 		this.gesture = null;
 	}
 
+	/**
+	 * Move the selection a step, as the arrow keys do.
+	 *
+	 * The same three calls a drag makes, so a nudge lands exactly where a drag of
+	 * the same distance would — wires follow, joints become wires, the route is
+	 * the router's — and replays and undoes as one more move.
+	 */
+	nudgeSelection(dx: number, dy: number, route: RouteBetween): void {
+		if (this.selection.length === 0 || this.moveOrigin) return;
+		this.beginMove();
+		this.applyMove(dx, dy, route);
+		this.endMove();
+	}
+
 	/** Release the snapshot. The geometry is already final. */
 	endMove(): void {
 		const changed = this.dragStarted;
