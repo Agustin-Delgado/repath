@@ -146,6 +146,17 @@ export class Acquisition {
 		return this.run.setLogic(name, state, this.run.time);
 	}
 
+	/**
+	 * Follow a change of timebase: the run's step ceiling tracks the screen.
+	 *
+	 * Set when the run began from the width of the screen, and a screen zoomed
+	 * in ten times while the run is going would otherwise be twenty samples
+	 * wide. Nothing already solved changes; what comes next is solved finer.
+	 */
+	setMaxStep(step: number): void {
+		this.run.setMaxStep(step);
+	}
+
 	private step = (now: number) => {
 		const wall = Math.min((now - this.lastWall) / 1000, MAX_FRAME);
 		this.lastWall = now;

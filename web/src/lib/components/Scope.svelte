@@ -570,6 +570,27 @@
 		place(about - share * width, width);
 	}
 
+	/** Narrowest and widest the timebase can be turned to. */
+	const TIMEBASE = { least: 1e-9, most: 100 };
+
+	/**
+	 * Turn the timebase, as the knob on a bench scope does.
+	 *
+	 * Running, the window follows the sweep at whatever width it has, so the
+	 * knob is the width itself — the same setting as the field in the header,
+	 * and the run follows it without starting over. Stopped, the trace is a
+	 * picture, and the knob zooms the picture about the pointer.
+	 */
+	function turn(factor: number, about: number | null) {
+		if (!app.result) return;
+		if (app.playing) {
+			const width = Math.min(Math.max(app.stopTime * factor, TIMEBASE.least), TIMEBASE.most);
+			app.setStopTime(width);
+			return;
+		}
+		zoom(factor, about ?? (span.from + span.to) / 2);
+	}
+
 	/** Index of the sample nearest a time. */
 	function indexAt(time: Float64Array, at: number): number {
 		let lo = 0;
@@ -629,8 +650,65 @@
 	/** Where a drag started, in screen pixels and in seconds. */
 	let dragging: { x: number; from: number } | null = null;
 
+	/** Fingers on the plot, for a pinch. */
+	const touches = new Map<number, number>();
+	/** How far apart the two fingers were when the last turn was taken from them. */
+	let pinchSpread: number | null = null;
+
+	function onDown(event: PointerEvent) {
+		if (event.pointerType === 'touch') {
+			touches.set(event.pointerId, event.clientX);
+			canvas?.setPointerCapture(event.pointerId);
+			if (touches.size === 2) {
+				// Two fingers: the timebase, and neither of them is a seek or a drag.
+				dragging = null;
+				pinchSpread = spread();
+				return;
+			}
+		}
+		if (event.shiftKey) {
+			// Second press in the same place picks it up again.
+			marker =
+				marker !== null && cursor && Math.abs(marker - cursor.time) < 1e-12
+					? null
+					: (cursor?.time ?? null);
+			return;
+		}
+		seekTo(event);
+		// Stopped, the trace is a picture that can be dragged along. Running, the
+		// newest instant is the only place there is, so there is nowhere to drag to.
+		if (!app.playing && canvas) {
+			const rect = canvas.getBoundingClientRect();
+			dragging = { x: event.clientX - rect.left, from: span.from };
+		}
+	}
+
+	function onUp(event: PointerEvent) {
+		touches.delete(event.pointerId);
+		if (touches.size < 2) pinchSpread = null;
+		dragging = null;
+	}
+
+	function spread(): number {
+		const [a, b] = [...touches.values()];
+		return Math.abs(a - b);
+	}
+
 	function onMove(event: PointerEvent) {
 		if (!canvas) return;
+		if (touches.has(event.pointerId)) touches.set(event.pointerId, event.clientX);
+		if (pinchSpread !== null && touches.size === 2) {
+			// Wider apart is a narrower window: what was between the fingers grows to
+			// fill the screen. Taken in whole notches so the ratio is exact over the
+			// gesture rather than accumulating rounding from every move event.
+			const now = spread();
+			if (now > 0 && pinchSpread > 0) {
+				const [a, b] = [...touches.values()];
+				turn(pinchSpread / now, timeAt((a + b) / 2));
+				pinchSpread = now;
+			}
+			return;
+		}
 		const rect = canvas.getBoundingClientRect();
 		const x = event.clientX - rect.left;
 		const t = timeAt(event.clientX);
@@ -647,11 +725,9 @@
 	}
 
 	function onWheel(event: WheelEvent) {
-		if (app.playing || !app.result) return;
-		const about = timeAt(event.clientX);
-		if (about === null) return;
+		if (!app.result) return;
 		event.preventDefault();
-		zoom(event.deltaY > 0 ? 1.25 : 0.8, about);
+		turn(event.deltaY > 0 ? 1.25 : 0.8, timeAt(event.clientX));
 	}
 
 	$effect(() => {
@@ -693,16 +769,10 @@
 			style:width="{size.width}px"
 			style:height="{size.height}px"
 			onpointermove={onMove}
-			onpointerdown={(e) => {
-				if (e.shiftKey) {
-					// Second press in the same place picks it up again.
-					marker = marker !== null && cursor && Math.abs(marker - cursor.time) < 1e-12
-						? null
-						: (cursor?.time ?? null);
-					return;
-				}
-				seekTo(e);
-			}}
+			onpointerdown={onDown}
+			onpointerup={onUp}
+			onpointercancel={onUp}
+			onwheel={onWheel}
 			onpointerleave={() => (cursor = null)}
 		></canvas>
 
@@ -1064,6 +1134,8 @@
 	canvas {
 		display: block;
 		cursor: col-resize;
+		/* The plot takes the fingers: a pinch is the timebase, a drag is a pan. */
+		touch-action: none;
 	}
 
 	.empty {

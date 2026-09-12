@@ -269,6 +269,19 @@ impl Running {
         self.budget = steps.max(1);
     }
 
+    /// Change the step ceiling from here on.
+    ///
+    /// The ceiling is what sets the resolution of a flat trace, and it was
+    /// fixed when the run began from the width of the screen. Zooming the
+    /// screen in while the run is going would otherwise show a handful of
+    /// samples stretched across it; with this the run tightens up from the
+    /// moment of the zoom, and everything already solved stays as it was.
+    pub fn set_max_step(&mut self, step: f64) {
+        if step.is_finite() && step > 0.0 {
+            self.cfg.max_step = step.max(self.min_step);
+        }
+    }
+
     pub fn stats(&self) -> &Stats {
         &self.stats
     }

@@ -682,12 +682,16 @@ describe('when the simulator runs', () => {
 		expect(app.netlistSignature).not.toBe(before);
 	});
 
-	it('notices the time range', () => {
+	it('lets the timebase change without starting over', () => {
+		// The screen's width is the one setting a live run follows rather than
+		// restarts for: the step ceiling tracks it from the moment it changes, and
+		// restarting wiped the trace every time the scope was zoomed.
 		complete();
 		const before = app.netlistSignature;
 
-		app.stopTime = app.stopTime * 2;
-		expect(app.netlistSignature).not.toBe(before);
+		app.setStopTime(app.stopTime * 2);
+		expect(app.netlistSignature).toBe(before);
+		expect(app.trace.steps.at(-1)).toMatchObject({ op: 'stop' });
 	});
 
 	it('stops following a circuit that has been replaced', () => {

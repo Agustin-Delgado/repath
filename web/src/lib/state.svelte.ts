@@ -1727,6 +1727,11 @@ class AppState {
 		if (!(seconds > 0) || seconds === this.stopTime) return;
 		this.trace.record({ op: 'stop', seconds });
 		this.stopTime = seconds;
+		// The timebase is the one setting a run can follow without starting over:
+		// the sweep keeps going and the step ceiling tracks the screen from here.
+		// Restarting for it, as a netlist change does, made zooming the screen
+		// wipe the trace.
+		this.acquiring?.setMaxStep(seconds / 200);
 	}
 
 	/**
@@ -1873,7 +1878,6 @@ class AppState {
 		if (!compiled.netlist) return `error:${compiled.errors.join('|')}`;
 		return JSON.stringify([
 			compiled.netlist,
-			this.stopTime,
 			this.analysis,
 			this.acStart,
 			this.acStop

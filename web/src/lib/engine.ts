@@ -259,6 +259,12 @@ export class LiveRun {
 		this.simulation.setFrameBudget(Math.max(1, Math.round(steps)));
 	}
 
+	/** Change the step ceiling from here on: the resolution of what comes next. */
+	setMaxStep(step: number): void {
+		if (this.freed || !(step > 0)) return;
+		this.simulation.setLiveMaxStep(step);
+	}
+
 	free(): void {
 		if (this.freed) return;
 		this.simulation.free();
