@@ -68,4 +68,12 @@
 	:global(button) {
 		font: inherit;
 	}
+
+	/* A tap is a tap: no waiting to see whether it was the first half of a zoom. */
+	:global(button),
+	:global(select),
+	:global(input),
+	:global(label) {
+		touch-action: manipulation;
+	}
 </style>

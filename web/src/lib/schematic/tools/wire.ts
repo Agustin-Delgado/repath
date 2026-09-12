@@ -57,6 +57,11 @@ export function createWireTool(): Tool {
 			ctx.invalidate('overlay');
 		},
 
+		cancel(ctx) {
+			reset();
+			ctx.invalidate('overlay');
+		},
+
 		pointerDown(pointer, ctx) {
 			if (pointer.button !== 0) return;
 			const at = ctx.snap.resolve(pointer.world, ctx.tolerance * REACH, ctx.gridSize);

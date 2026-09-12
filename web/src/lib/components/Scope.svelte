@@ -976,14 +976,28 @@
 	.scope {
 		display: grid;
 		grid-template-columns: 1fr 190px;
+		/*
+			Explicit, because the row would otherwise size itself to the canvas —
+			which is sized to the row. Nothing in that loop can ever shrink, so a
+			scope that lost height kept its old canvas and spilled off the page.
+		*/
+		grid-template-rows: minmax(0, 1fr);
 		height: 100%;
 		min-height: 0;
 		background: var(--panel-bg);
 	}
 
+	@media (max-width: 900px) {
+		.scope {
+			grid-template-columns: 1fr 150px;
+		}
+	}
+
 	.plot {
 		position: relative;
 		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
 		--scope-grid: var(--grid-line);
 	}
 

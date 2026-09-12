@@ -243,4 +243,24 @@
 		color: #ff4e3e;
 		text-shadow: 0 0 5px #ff4e3e;
 	}
+
+	/* On a phone the panel scrolls sideways rather than wrapping. */
+	@media (max-width: 900px) {
+		.playback {
+			overflow-x: auto;
+			scrollbar-width: none;
+		}
+
+		.playback::-webkit-scrollbar {
+			display: none;
+		}
+
+		.playback > * {
+			flex: none;
+		}
+
+		.hint {
+			display: none;
+		}
+	}
 </style>

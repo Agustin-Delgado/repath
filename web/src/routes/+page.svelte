@@ -13,6 +13,22 @@
 	import { formatValue, parseValue } from '$lib/units';
 
 	let version = $state('');
+	let schematic = $state<ReturnType<typeof Schematic> | null>(null);
+	/**
+	 * Which side panel is out, on a screen too narrow to keep both open.
+	 *
+	 * On a phone the palette and the inspector slide over the drawing rather
+	 * than sitting beside it, one at a time, and go back when a part is picked:
+	 * the next thing after choosing a part is tapping the drawing, and the panel
+	 * would be covering it.
+	 */
+	let panel = $state<'parts' | 'details' | null>(null);
+	/** Whether the scope has its share of a small screen, or the drawing has it all. */
+	let scopeShown = $state(true);
+
+	$effect(() => {
+		if (app.tool.mode !== 'select') panel = null;
+	});
 	let stopField = $state(formatValue(app.stopTime, 3));
 	let acStartField = $state(formatValue(app.acStart, 3));
 	let acStopField = $state(formatValue(app.acStop, 3));
@@ -422,12 +438,59 @@
 	{/if}
 
 	<main>
-		<aside class="left"><Palette /></aside>
-		<section class="canvas"><Schematic /></section>
-		<aside class="right"><Inspector /></aside>
+		<aside class="left" class:open={panel === 'parts'}><Palette /></aside>
+		<section class="canvas"><Schematic bind:this={schematic} /></section>
+		<aside class="right" class:open={panel === 'details'}><Inspector /></aside>
+		{#if panel}
+			<button class="backdrop" aria-label="Close the panel" onclick={() => (panel = null)}></button>
+		{/if}
 	</main>
 
-	<section class="bottom">
+	<!--
+		What a phone has no room or keys for. The panels are one tap away instead
+		of always open; Rotate, Delete and Fit stand in for R, Del and F; and the
+		scope can be put away so the drawing gets the whole screen.
+	-->
+	<nav class="phone-bar" aria-label="Phone controls">
+		<button
+			class:active={panel === 'parts'}
+			onclick={() => (panel = panel === 'parts' ? null : 'parts')}
+		>
+			Parts
+		</button>
+		<button
+			class:active={panel === 'details'}
+			onclick={() => (panel = panel === 'details' ? null : 'details')}
+		>
+			Details
+		</button>
+		<span class="gap"></span>
+		<button
+			disabled={app.selection.length === 0}
+			onclick={() => app.rotateSelection()}
+			title="Turn a quarter turn; wires follow"
+		>
+			Rotate
+		</button>
+		<button
+			class="danger"
+			disabled={app.selection.length === 0}
+			onclick={() => app.deleteSelection()}
+		>
+			Delete
+		</button>
+		<span class="gap"></span>
+		<button onclick={() => schematic?.fitToContent()} title="Fit the drawing on screen">Fit</button>
+		<button
+			class:active={scopeShown}
+			onclick={() => (scopeShown = !scopeShown)}
+			title={scopeShown ? 'Put the scope away' : 'Bring the scope back'}
+		>
+			Scope
+		</button>
+	</nav>
+
+	<section class="bottom" class:collapsed={!scopeShown}>
 		{#if app.analysis === 'transient'}
 			<Playback />
 		{/if}
@@ -438,7 +501,9 @@
 <style>
 	.app {
 		display: grid;
-		grid-template-rows: auto auto minmax(0, 1fr) 300px;
+		/* The one column is sized by the window, not by the widest row in it. */
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto auto minmax(0, 1fr) auto 300px;
 		height: 100vh;
 		height: 100dvh;
 	}
@@ -455,8 +520,11 @@
 	main {
 		grid-row: 3;
 	}
-	.bottom {
+	.phone-bar {
 		grid-row: 4;
+	}
+	.bottom {
+		grid-row: 5;
 	}
 
 	header {
@@ -636,6 +704,13 @@
 		display: grid;
 		grid-template-columns: 200px minmax(0, 1fr) 250px;
 		min-height: 0;
+		position: relative;
+	}
+
+	/* Phone-only, and folded away on anything wider. */
+	.phone-bar,
+	.backdrop {
+		display: none;
 	}
 
 	/* `overflow: hidden` is doing real work here: without it the palette's own
@@ -678,11 +753,134 @@
 		min-height: 0;
 	}
 
+	/*
+		A phone, or a tablet held upright. The drawing takes the whole width; the
+		palette and inspector become drawers over it; the keys that have no key
+		become a row of buttons; and the header scrolls sideways rather than
+		wrapping into a wall of controls.
+	*/
 	@media (max-width: 900px) {
-		main {
-			grid-template-columns: 150px minmax(0, 1fr);
+		.app {
+			grid-template-rows: auto auto minmax(0, 1fr) auto auto;
 		}
+
+		header {
+			gap: 0.5rem;
+			padding: 0.4rem 0.6rem;
+		}
+
+		.tag,
+		.meta {
+			display: none;
+		}
+
+		.controls {
+			margin-left: 0;
+			min-width: 0;
+			flex: 1;
+			overflow-x: auto;
+			scrollbar-width: none;
+			/* Room for the focus ring, which overflow would otherwise clip. */
+			padding: 2px;
+		}
+
+		.controls::-webkit-scrollbar {
+			display: none;
+		}
+
+		.controls > * {
+			flex: none;
+		}
+
+		main {
+			grid-template-columns: minmax(0, 1fr);
+			/* The drawers wait just outside; the page must not scroll to them. */
+			overflow: hidden;
+		}
+
+		.left,
 		.right {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			width: min(300px, 85%);
+			z-index: 3;
+			transition: transform 0.18s ease-out;
+			box-shadow: 0 0 24px rgba(0, 0, 0, 0.45);
+		}
+
+		.left {
+			left: 0;
+			transform: translateX(-100%);
+		}
+
+		.right {
+			right: 0;
+			transform: translateX(100%);
+		}
+
+		.left.open,
+		.right.open {
+			transform: none;
+		}
+
+		.backdrop {
+			display: block;
+			position: absolute;
+			inset: 0;
+			z-index: 2;
+			border: none;
+			padding: 0;
+			background: rgba(0, 0, 0, 0.35);
+			cursor: pointer;
+		}
+
+		.phone-bar {
+			display: flex;
+			align-items: center;
+			gap: 0.3rem;
+			padding: 0.3rem 0.5rem;
+			background: var(--panel-bg);
+			border-top: 1px solid var(--border);
+			overflow-x: auto;
+			scrollbar-width: none;
+		}
+
+		.phone-bar .gap {
+			flex: 1;
+		}
+
+		.phone-bar button {
+			flex: none;
+			/* A finger's width, whatever the label says. */
+			min-height: 2.4rem;
+			padding: 0.3rem 0.7rem;
+			font-size: 0.78rem;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--control-bg);
+			color: var(--text);
+		}
+
+		.phone-bar button:disabled {
+			opacity: 0.45;
+		}
+
+		.phone-bar button.active {
+			border-color: var(--accent);
+			background: color-mix(in srgb, var(--accent) 14%, transparent);
+		}
+
+		.phone-bar button.danger:not(:disabled) {
+			color: var(--danger);
+		}
+
+		.scope-host {
+			flex: none;
+			height: 200px;
+		}
+
+		.bottom.collapsed .scope-host {
 			display: none;
 		}
 	}

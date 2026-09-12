@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rect, vec } from './geometry';
+import { rect, vec, type Vec2 } from './geometry';
 import { Viewport } from './viewport';
 
 describe('Viewport', () => {
@@ -28,6 +28,50 @@ describe('Viewport', () => {
 		expect(after.x).toBeCloseTo(before.x, 9);
 		expect(after.y).toBeCloseTo(before.y, 9);
 		expect(v.scale).toBeCloseTo(1.7, 10);
+	});
+
+	it('keeps both fingers over what they landed on through a pinch', () => {
+		const v = new Viewport();
+		v.x = 100;
+		v.y = 50;
+		v.scale = 2;
+		const before: [Vec2, Vec2] = [
+			{ x: 200, y: 200 },
+			{ x: 300, y: 200 }
+		];
+		const underA = v.toWorld(before[0]);
+		const underB = v.toWorld(before[1]);
+
+		// Spread apart and dragged down and to the right.
+		const after: [Vec2, Vec2] = [
+			{ x: 210, y: 260 },
+			{ x: 410, y: 260 }
+		];
+		v.pinch(before, after);
+
+		expect(v.scale).toBeCloseTo(4);
+		expect(v.toScreen(underA).x).toBeCloseTo(after[0].x);
+		expect(v.toScreen(underA).y).toBeCloseTo(after[0].y);
+		expect(v.toScreen(underB).x).toBeCloseTo(after[1].x);
+		expect(v.toScreen(underB).y).toBeCloseTo(after[1].y);
+	});
+
+	it('pans without zooming when the fingers only move together', () => {
+		const v = new Viewport();
+		v.scale = 1.5;
+		v.pinch(
+			[
+				{ x: 100, y: 100 },
+				{ x: 150, y: 100 }
+			],
+			[
+				{ x: 130, y: 90 },
+				{ x: 180, y: 90 }
+			]
+		);
+		expect(v.scale).toBe(1.5);
+		expect(v.x).toBe(30);
+		expect(v.y).toBe(-10);
 	});
 
 	it('refuses to zoom past its limits', () => {

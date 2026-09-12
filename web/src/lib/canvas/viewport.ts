@@ -66,6 +66,31 @@ export class Viewport {
 	}
 
 	/**
+	 * Follow two fingers: what was under each of them stays under it.
+	 *
+	 * The midpoint carries the pan and the spread carries the zoom, which is what
+	 * a pinch is once it is written down. The zoom is anchored on the new midpoint
+	 * so the two do not fight — panning first and then zooming about the old
+	 * centre would pull the page back the way it came.
+	 */
+	pinch(before: readonly [Vec2, Vec2], after: readonly [Vec2, Vec2]): void {
+		const centre = (pair: readonly [Vec2, Vec2]): Vec2 => ({
+			x: (pair[0].x + pair[1].x) / 2,
+			y: (pair[0].y + pair[1].y) / 2
+		});
+		const spread = (pair: readonly [Vec2, Vec2]) =>
+			Math.hypot(pair[1].x - pair[0].x, pair[1].y - pair[0].y);
+
+		const from = centre(before);
+		const to = centre(after);
+		this.panBy(to.x - from.x, to.y - from.y);
+
+		const was = spread(before);
+		// Two fingers on the same pixel have no spread to compare against.
+		if (was > 0) this.zoomAt(to, spread(after) / was);
+	}
+
+	/**
 	 * Centre `bounds` in a viewport of `size`, zooming to fit with a margin.
 	 *
 	 * `ceiling` caps how far it will zoom *in*. Without one, opening a three

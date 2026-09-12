@@ -208,9 +208,30 @@ export function createSelectTool(): Tool {
 		};
 	}
 
+	/** Drop the gesture in flight, putting back whatever it had started to move. */
+	function abandon(ctx: ToolContext): boolean {
+		if (mode === 'idle') return false;
+		if (mode === 'move') app.cancelMove();
+		mode = 'idle';
+		marquee = null;
+		wireFrom = null;
+		wireTo = null;
+		pressedId = null;
+		pressedSegment = null;
+		pendingJoin = null;
+		moved = false;
+		ctx.setCursor('default');
+		ctx.invalidate();
+		return true;
+	}
+
 	return {
 		name: 'select',
 		cursor: 'default',
+
+		cancel(ctx) {
+			abandon(ctx);
+		},
 
 		deactivate(ctx) {
 			// Switching tools with the pointer still down: settle the drag where it
@@ -415,29 +436,7 @@ export function createSelectTool(): Tool {
 				case 'Escape':
 					// Escape belongs to whatever gesture is in flight, and only falls
 					// through to clearing the selection when nothing is.
-					if (mode === 'wire') {
-						mode = 'idle';
-						wireFrom = null;
-						ctx.invalidate('overlay');
-						return true;
-					}
-					if (mode === 'move') {
-						app.cancelMove();
-						mode = 'idle';
-						pressedId = null;
-						pressedSegment = null;
-						pendingJoin = null;
-						moved = false;
-						ctx.setCursor('default');
-						ctx.invalidate();
-						return true;
-					}
-					if (mode === 'marquee') {
-						mode = 'idle';
-						marquee = null;
-						ctx.invalidate('overlay');
-						return true;
-					}
+					if (abandon(ctx)) return true;
 					app.selection = [];
 					ctx.invalidate();
 					return true;
