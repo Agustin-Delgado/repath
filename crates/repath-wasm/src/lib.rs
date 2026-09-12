@@ -193,6 +193,18 @@ impl Simulation {
         }
     }
 
+    /// Change the live run's step ceiling from here on, in seconds.
+    #[wasm_bindgen(js_name = setLiveMaxStep)]
+    pub fn set_live_max_step(&mut self, step: f64) -> bool {
+        match self.running.as_mut() {
+            Some(run) => {
+                run.set_max_step(step);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// How far the live run has got, in seconds.
     #[wasm_bindgen(js_name = liveTime)]
     pub fn live_time(&self) -> f64 {

@@ -2533,3 +2533,34 @@ fn a_budget_hands_the_run_back_short_and_nothing_is_lost() {
         assert!((a[index] - b[index]).abs() < 1e-9);
     }
 }
+
+/// A tighter step ceiling mid-run makes what follows finer, and leaves the past.
+///
+/// The ceiling is the resolution of a flat trace, and it was fixed for the run
+/// from the width of the screen. Zooming the screen in while the run goes on
+/// is the one thing that wants it changed without starting over.
+#[test]
+fn a_tighter_step_ceiling_takes_effect_from_where_the_run_is() {
+    let mut c = Circuit::new();
+    let out = c.node("out");
+    c.add(Box::new(VoltageSource::dc("V1", out, Circuit::GROUND, 5.0)));
+    c.add(Box::new(Resistor::new("R1", out, Circuit::GROUND, 1000.0)));
+
+    // A flat trace: every step is the ceiling, so the count is the resolution.
+    let cfg = TransientConfig::new(1e-3);
+    let mut sim = Simulator::default();
+    let (mut run, _) = sim.begin_transient(&mut c, cfg).unwrap();
+    let coarse = sim.advance_transient(&mut c, &mut run, 0.5e-3).unwrap();
+    run.set_max_step(cfg.max_step / 10.0);
+    let fine = sim.advance_transient(&mut c, &mut run, 1e-3).unwrap();
+
+    assert!(
+        fine.time.len() > coarse.time.len() * 5,
+        "the second half was not solved finer: {} points against {}",
+        fine.time.len(),
+        coarse.time.len()
+    );
+    // Nothing before the change moved: the first half's points are the ones it had.
+    assert!(coarse.time.iter().all(|t| *t <= 0.5e-3 + 1e-12));
+    assert!(fine.time.iter().all(|t| *t > 0.5e-3 - 1e-12));
+}
