@@ -881,6 +881,40 @@ describe('what moves when one thing moves', () => {
 	});
 });
 
+describe('a nudge from the keyboard', () => {
+	it('is a drag of one step: the part moves and its wires come along', () => {
+		app.place('resistor', 200, 170, 0); // pins (170,170), (230,170)
+		app.place('capacitor', 300, 230, 90); // pins (300,200), (300,260)
+		app.addWirePath([
+			{ x: 230, y: 170 },
+			{ x: 300, y: 170 },
+			{ x: 300, y: 200 }
+		]);
+		app.selection = [find('R1').id];
+
+		app.nudgeSelection(0, -10, routeFor(new Set(app.selection)));
+
+		expect([find('R1').x, find('R1').y]).toEqual([200, 160]);
+		expect(netOf('R1', 'b')).toBe(netOf('C1', 'a'));
+		expect(orthogonal()).toBe(true);
+		expect(app.trace.steps.at(-1)).toMatchObject({ op: 'move', dx: 0, dy: -10 });
+
+		app.undo();
+		expect([find('R1').x, find('R1').y]).toEqual([200, 170]);
+	});
+
+	it('does nothing with nothing selected', () => {
+		app.place('resistor', 200, 170, 0);
+		app.selection = [];
+		const before = app.trace.steps.length;
+
+		app.nudgeSelection(10, 0, routeFor(new Set()));
+
+		expect(find('R1').x).toBe(200);
+		expect(app.trace.steps.length).toBe(before);
+	});
+});
+
 describe('two pins that were touching', () => {
 	/** R1 at 100,200 and R2 at 160,200: R1's `b` and R2's `a` share 130,200. */
 	const touching = () => {

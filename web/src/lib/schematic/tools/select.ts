@@ -440,6 +440,21 @@ export function createSelectTool(): Tool {
 					app.selection = [];
 					ctx.invalidate();
 					return true;
+				case 'ArrowLeft':
+				case 'ArrowRight':
+				case 'ArrowUp':
+				case 'ArrowDown': {
+					// One grid point, or five with Shift. Not while a drag is in flight:
+					// the keyboard and the pointer would be fighting over the same
+					// snapshot.
+					if (mode !== 'idle' || app.selection.length === 0) return false;
+					const step = ctx.gridSize * (event.shiftKey ? 5 : 1);
+					const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
+					const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
+					app.nudgeSelection(dx, dy, routeDragged(ctx));
+					ctx.invalidate();
+					return true;
+				}
 			}
 			return false;
 		},
