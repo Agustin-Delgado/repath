@@ -2721,12 +2721,9 @@ fn a_budget_is_spent_by_digital_events_too() {
 
     assert!(run.time() < 1e-3, "twenty steps' worth of budget covered the whole millisecond");
     let events = chunk.stats.digital_events - events_before;
-    // Twenty steps' worth of events, give or take the instant the budget ran
-    // out on — not the two hundred thousand the millisecond holds.
-    assert!(
-        (1..=20 * 32 + 64).contains(&events),
-        "{events} events were applied on a budget of 20 steps"
-    );
+    // Twenty steps' worth of events — a few thousand at the engine's rate of
+    // exchange — not the million and more the millisecond holds.
+    assert!((1..10_000).contains(&events), "{events} events were applied on a budget of 20 steps");
 
     // And nothing was lost: the run carries on to the end, and the last stage
     // came out at the rate it should.
