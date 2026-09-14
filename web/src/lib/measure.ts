@@ -11,7 +11,7 @@
  * parts of a waveform the same as the interesting ones.
  */
 
-import type { DigitalTransition, LogicState } from './engine';
+import type { Burst, DigitalTransition, LogicState } from './engine';
 
 export interface Measurements {
 	min: number;
@@ -121,6 +121,31 @@ export interface LogicMeasurements {
 	duty: number;
 	/** Whole cycles the answer is averaged over. */
 	cycles: number;
+	/** Read off a burst — a span the engine folded — rather than off edges. */
+	folded?: boolean;
+}
+
+/**
+ * The same, read off a burst: a span in which the engine folded the edges
+ * because there were more of them than the screen could show.
+ *
+ * A burst carries how many edges it holds and how long it spent high, which
+ * is the whole measurement with the counting already done. Null for a span
+ * that has not completed a cycle, which a burst by definition has, or that has
+ * no length.
+ */
+export function measureBurst(burst: Burst): LogicMeasurements | null {
+	const span = burst.to - burst.from;
+	const cycles = Math.floor(burst.edges / 2);
+	if (span <= 0 || cycles < 1) return null;
+	const period = span / (burst.edges / 2);
+	return {
+		frequency: 1 / period,
+		period,
+		duty: Math.min(burst.high / span, 1),
+		cycles,
+		folded: true
+	};
 }
 
 /**

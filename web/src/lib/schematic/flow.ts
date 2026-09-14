@@ -559,7 +559,10 @@ export function sampleFlow(
 		// From the run handed over for this frame, not from the one the context was
 		// built against: on a live run those are different objects, and the older one
 		// stopped at the seed transition.
-		const state = stateAt(run.digital[index] ?? [], now);
+		// Inside a burst the net is switching faster than a frame can show, and
+		// is drawn as neither level: what the eye would see of it.
+		const busy = (run.bursts?.[index] ?? []).some((b) => b.from <= now && now <= b.to);
+		const state = busy ? 'unknown' : stateAt(run.digital[index] ?? [], now);
 		if (state === 'high') netVoltage.set(net, context.logicLevels.high);
 		else if (state === 'low') netVoltage.set(net, context.logicLevels.low);
 		else netUndriven.add(net);

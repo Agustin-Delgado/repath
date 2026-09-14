@@ -14,7 +14,7 @@
  * about.
  */
 
-import type { Chunk, DigitalTransition, LogicState, PartFailure, TransientRun } from './engine';
+import type { Burst, Chunk, DigitalTransition, LogicState, PartFailure, TransientRun } from './engine';
 
 /**
  * Samples kept per channel.
@@ -86,6 +86,13 @@ export class Capture {
 	private readonly currentChannels: Channel[];
 	/** Per net, the transitions still inside the memory. */
 	readonly digital: DigitalTransition[][];
+	/**
+	 * Per net, the spans it switched through too fast to record, still inside
+	 * the memory. The engine hands a long one over in pieces, one per frame;
+	 * they are joined here, so a span reads as what it is: one stretch of the
+	 * net being busy.
+	 */
+	readonly bursts: Burst[][];
 	readonly failures: PartFailure[] = [];
 	/** What the engine has been through over the whole sweep, as it last reported. */
 	private stats = {
@@ -112,6 +119,7 @@ export class Capture {
 		this.signals = unknownNames.map(() => new Channel(DEPTH));
 		this.currentChannels = elementNames.map(() => new Channel(DEPTH));
 		this.digital = netNames.map(() => []);
+		this.bursts = netNames.map(() => []);
 		this.opening = netNames.map(() => 'unknown');
 		this.history = netNames.map(() => []);
 		this.beforeHistory = netNames.map(() => 'unknown');
@@ -142,6 +150,17 @@ export class Capture {
 			this.currentChannels[i].append(chunk.currents[i] ?? new Float64Array(0));
 		}
 		for (let net = 0; net < this.digital.length; net++) {
+			for (const piece of chunk.bursts[net] ?? []) {
+				const spans = this.bursts[net];
+				const last = spans[spans.length - 1];
+				if (last && piece.from <= last.to) {
+					last.to = piece.to;
+					last.edges += piece.edges;
+					last.high += piece.high;
+				} else {
+					spans.push({ ...piece });
+				}
+			}
 			const events = chunk.digital[net];
 			if (!events || !events.length) continue;
 			this.digital[net].push(...events);
@@ -178,6 +197,11 @@ export class Capture {
 			this.opening[net] = events[drop - 1].state;
 			events.splice(0, drop);
 		}
+		for (const spans of this.bursts) {
+			let drop = 0;
+			while (drop < spans.length && spans[drop].to < from) drop++;
+			if (drop > 0) spans.splice(0, drop);
+		}
 	}
 
 	/** The level a net sits at when the visible history opens. */
@@ -211,6 +235,7 @@ export class Capture {
 			currents: this.currentChannels.map((c) => c.view),
 			netNames: this.netNames,
 			digital: this.digital,
+			bursts: this.bursts,
 			failures: this.failures,
 			stats: { ...this.stats },
 			elapsedMs: 0

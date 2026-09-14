@@ -28,13 +28,21 @@
 //! LED costs the analog solver nothing per tick — which is the difference
 //! between a simulation that keeps up with the clock on the wall and one that
 //! does not.
+//!
+//! And a bridged net switching faster than the step ceiling can show — more
+//! edges in one ceiling's worth of time than a screen has pixels for — is not
+//! resolved edge by edge either. Its bridge is held at the net's time average
+//! over each step, which is what the eye sees of an LED on a kilohertz net and
+//! what the scope would draw of it at that timebase. Only where the net's
+//! analog side is read back into the digital one is every edge still solved:
+//! an oscillator built round an RC does not get to be averaged into silence.
 
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
 use crate::complex::ComplexSystem;
 use crate::digital::{DriverId, Halt, Logic, NetId, Transition};
-use crate::element::{AcCtx, AcceptCtx, Integration, Mode, StampCtx};
-use crate::elements::{Diode, Failure};
+use crate::element::{AcCtx, AcceptCtx, Integration, Mode, StampCtx, node_index};
+use crate::elements::{Diode, Failure, VoltageSource};
 use crate::linalg::{LinearSystem, SolveError};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -162,8 +170,108 @@ impl Stats {
 
 /// How many digital events cost about as much as one analog step. Measured on
 /// a sixteen-stage ripple counter driving LEDs, in the browser: a step of that
-/// circuit is about sixteen microseconds, an event about half of one.
-const EVENTS_PER_STEP: f64 = 32.0;
+/// circuit is about sixteen microseconds, an event about ninety nanoseconds.
+const EVENTS_PER_STEP: f64 = 128.0;
+
+/// A bridged net is too fast to resolve once [`UNRESOLVED_RUN`] edges in a row
+/// have come closer together than this fraction of the step ceiling, and slow
+/// enough to resolve again once one gap is wider than [`RESOLVED_SPACING`] of
+/// it.
+///
+/// The ceiling is the resolution of the trace — a two-hundredth of the screen
+/// — so edges an eighth of it apart are sixteen hundred to a screen, past
+/// anything a pixel can show. The run of edges asked for before averaging
+/// begins is so that a burst does not qualify: a ripple counter starting up
+/// toggles every stage within a few gate delays, once. And the gap between
+/// the two thresholds is hysteresis, so a net near the line does not change
+/// its treatment on every edge.
+const UNRESOLVED_SPACING: f64 = 1.0 / 8.0;
+const UNRESOLVED_RUN: u32 = 4;
+const RESOLVED_SPACING: f64 = 1.0 / 4.0;
+
+/// How a digital-to-analog bridge is being driven.
+///
+/// Two clocks run here. The digital domain is ahead of the analog solver, so
+/// whether a change is to be resolved is decided when the change is absorbed,
+/// from the spacing of the edges around it; but the bridge is driven in analog
+/// time, and takes each change — and the treatment that came with it — only
+/// when the solver reaches it. Deciding and acting at the same moment put a
+/// bridge on hold at a level the net had not reached yet.
+#[derive(Debug, Clone)]
+struct Pacing {
+    /// Whether this bridge may be averaged at all: not if anything downstream
+    /// of its node is read back by an analog-to-digital bridge. `None` until
+    /// the first transient step has been solved and the coupling is known.
+    averageable: Option<bool>,
+    /// Whether the changes arriving from the digital side are, at present, too
+    /// close together to resolve.
+    fast: bool,
+    /// When the net last changed, in digital time.
+    last_change: f64,
+    /// How many edges in a row have come too close to resolve.
+    fast_run: u32,
+    /// The net's level at the last accepted timepoint.
+    level: Logic,
+    /// Whether the bridge is being held at an average as of the last accepted
+    /// timepoint — the treatment of the last change the solver reached.
+    averaging: bool,
+    /// Changes past the last accepted timepoint, oldest first.
+    ahead: Vec<Change>,
+}
+
+/// What a run keeps about the digital side between steps: how each net's
+/// trace is being recorded, and how each bridge is being driven.
+#[derive(Debug, Clone, Default)]
+struct Ledger {
+    /// Level last written into each net's trace.
+    last: Vec<Logic>,
+    /// One per digital net.
+    tracing: Vec<Tracing>,
+    /// One per digital-to-analog bridge, in the circuit's order.
+    ///
+    /// The digital domain is allowed to run ahead of the analog solver, so a
+    /// change it reports can be later than the last accepted timepoint — most
+    /// often when the step meant to land on it was refused and retried shorter.
+    /// A change to be resolved is a breakpoint until the solver gets there,
+    /// and the bridge is told only then: a ramp that began before a timepoint
+    /// already accepted would be a change to a solve that is finished.
+    pacing: Vec<Pacing>,
+    /// The digital log, taken a step at a time; kept so it is not reallocated.
+    changes: Vec<Transition>,
+}
+
+/// How a net's trace is being recorded: edge by edge, or as a burst.
+#[derive(Debug, Clone, Default)]
+struct Tracing {
+    /// When the net last changed.
+    last_change: f64,
+    /// How many edges in a row have come too close to resolve.
+    fast_run: u32,
+    /// The burst being folded into, if the net is in one.
+    burst: Option<Burst>,
+}
+
+/// A change on a bridged net, with what the bridge is to do about it.
+#[derive(Debug, Clone, Copy)]
+struct Change {
+    time: f64,
+    state: Logic,
+    /// Solve a timepoint on it and ramp; or fold it into an average.
+    resolve: bool,
+}
+
+/// A span of a net's trace that was switching too fast to record edge by edge.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Burst {
+    /// The first edge folded in.
+    pub from: f64,
+    /// The last edge folded in.
+    pub to: f64,
+    /// Edges folded in, both directions.
+    pub edges: usize,
+    /// Seconds spent high between `from` and `to`.
+    pub high: f64,
+}
 
 /// Result of a transient run.
 #[derive(Debug, Clone, Default)]
@@ -180,8 +288,20 @@ pub struct TransientResult {
     /// Current through every element, per recorded timepoint.
     pub currents: Vec<Vec<f64>>,
     pub net_names: Vec<String>,
-    /// Per net, the instants at which it changed value.
+    /// Per net, the instants at which it changed value — except inside a burst.
     pub digital: Vec<Vec<(f64, Logic)>>,
+    /// Per net, the spans in which it was switching too fast for the trace.
+    ///
+    /// A net toggling at a megahertz behind a step ceiling of milliseconds
+    /// would put thousands of edges into every pixel of a lane, and cost more
+    /// to carry to the screen than to simulate. Past a run of edges closer
+    /// together than the ceiling resolves, the trace stops recording them one
+    /// by one and keeps the span instead: where it began, where it ended, how
+    /// many edges, how long high. Enough to draw the lane as busy and to read
+    /// a frequency and a duty off it, which is all a screen could show anyway.
+    /// The level the net is at when a burst ends is recorded as a transition
+    /// at that instant, so the lane after it is right.
+    pub bursts: Vec<Vec<Burst>>,
     /// Parts destroyed during the run, soonest first.
     ///
     /// A failure is not an error: the run carries on with the part open, which is
@@ -246,6 +366,12 @@ impl TransientResult {
         for (net, events) in other.digital.iter_mut().enumerate() {
             self.digital[net].append(events);
         }
+        if self.bursts.len() < other.bursts.len() {
+            self.bursts.resize(other.bursts.len(), Vec::new());
+        }
+        for (net, spans) in other.bursts.iter_mut().enumerate() {
+            self.bursts[net].append(spans);
+        }
         self.failures.append(&mut other.failures);
         self.stats = other.stats;
     }
@@ -266,17 +392,8 @@ pub struct Running {
     euler_steps: usize,
     min_step: f64,
     stats: Stats,
-    /// Level last written into each net's trace.
-    last_logic: Vec<Logic>,
-    /// Changes on bridged nets the analog side has not reached yet.
-    ///
-    /// The digital domain is allowed to run ahead of the analog solver, so a
-    /// change it reports can be later than the last accepted timepoint — most
-    /// often when the step meant to land on it was refused and retried shorter.
-    /// Each is a breakpoint until the solver gets there, and the bridge is told
-    /// only then: a ramp that began before a timepoint already accepted would
-    /// be a change to a solve that is finished.
-    pending_dac: Vec<Transition>,
+    /// What the run keeps about the digital side between steps.
+    ledger: Ledger,
     /// How many destroyed parts the caller has already been told about.
     reported_failures: usize,
     /// Most steps one call to [`Simulator::advance_transient`] may take before
@@ -745,6 +862,7 @@ impl Simulator {
                 .map(|n| circuit.digital.net_name(n).unwrap_or("").to_string())
                 .collect(),
             digital: vec![Vec::new(); circuit.digital.net_count()],
+            bursts: vec![Vec::new(); circuit.digital.net_count()],
             ..Default::default()
         };
 
@@ -789,16 +907,31 @@ impl Simulator {
         self.x_accepted.copy_from_slice(&self.x);
         self.record(&mut result, circuit, 0.0);
 
-        let mut last_logic: Vec<Logic> =
-            (0..circuit.digital.net_count()).map(|n| circuit.digital.state(n)).collect();
-        let mut pending_dac = Vec::new();
+        let mut ledger = Ledger {
+            last: (0..circuit.digital.net_count()).map(|n| circuit.digital.state(n)).collect(),
+            tracing: vec![Tracing::default(); circuit.digital.net_count()],
+            pacing: circuit
+                .dacs()
+                .iter()
+                .map(|dac| Pacing {
+                    averageable: None,
+                    fast: false,
+                    last_change: 0.0,
+                    fast_run: 0,
+                    level: circuit.digital.state(dac.net),
+                    averaging: false,
+                    ahead: Vec::new(),
+                })
+                .collect(),
+            changes: Vec::new(),
+        };
         self.exchange_with_digital(
             circuit,
             0.0,
             &mut result,
             &mut stats,
-            &mut last_logic,
-            &mut pending_dac,
+            &mut ledger,
+            cfg.max_step,
         );
 
         // Measured against the step ceiling rather than the run length, because a
@@ -817,8 +950,7 @@ impl Simulator {
             euler_steps: CORNER_DAMPING,
             min_step,
             stats,
-            last_logic,
-            pending_dac,
+            ledger,
             reported_failures: 0,
             budget: usize::MAX,
         };
@@ -842,6 +974,7 @@ impl Simulator {
         let work_at_start = stats.work();
         let mut result = TransientResult {
             digital: vec![Vec::new(); circuit.digital.net_count()],
+            bursts: vec![Vec::new(); circuit.digital.net_count()],
             ..Default::default()
         };
         let mut t = run.t;
@@ -882,7 +1015,7 @@ impl Simulator {
                 (((run.budget as f64 - spent) * EVENTS_PER_STEP).ceil() as usize).max(1);
             let settled = circuit.digital.settle_until(t + proposal, true, events_allowed);
             stats.digital_events += settled.events;
-            self.absorb_digital(circuit, t, &mut result, &mut run.last_logic, &mut run.pending_dac);
+            self.absorb_digital(circuit, &mut result, &mut run.ledger, cfg.max_step);
             if settled.halt == Halt::Budget && settled.time <= t {
                 // The frame's share went on events that did not get the digital
                 // side past the analog one. Nothing to solve; the next call
@@ -904,8 +1037,7 @@ impl Simulator {
                 step = bp - t;
                 on_corner = true;
             }
-            if let Some(next) = run.pending_dac.iter().map(|c| c.time).reduce(f64::min)
-                && next > t
+            if let Some(next) = next_resolved(&run.ledger.pacing, t)
                 && next < t + step
             {
                 step = next - t;
@@ -931,6 +1063,7 @@ impl Simulator {
                 for element in circuit.elements_mut() {
                     element.rewind();
                 }
+                self.hold_averages(circuit, &run.ledger.pacing, t, attempt);
                 match self.newton(
                     circuit,
                     Mode::Transient,
@@ -966,6 +1099,10 @@ impl Simulator {
             self.accept_timepoint(circuit, Mode::Transient, integration, t, attempt);
             self.x_accepted.copy_from_slice(&self.x);
             stats.accepted_steps += 1;
+            self.reach_changes(circuit, &mut run.ledger.pacing, t);
+            if run.ledger.pacing.iter().any(|p| p.averageable.is_none()) {
+                self.learn_coupling(circuit, &mut run.ledger.pacing);
+            }
             euler_steps = euler_steps.saturating_sub(1);
 
             // Anything alternating step by step is the integrator, not the
@@ -998,8 +1135,8 @@ impl Simulator {
                 t,
                 &mut result,
                 &mut stats,
-                &mut run.last_logic,
-                &mut run.pending_dac,
+                &mut run.ledger,
+                cfg.max_step,
             );
 
             // Grow back gradually. Doubling every step overshoots straight into
@@ -1016,6 +1153,18 @@ impl Simulator {
             } else {
                 (attempt * 2.0).min(cfg.max_step)
             };
+        }
+
+        // A burst still open goes out as far as it has got, and carries on in
+        // the next piece from where this one left it: the caller joins them.
+        for (net, tracing) in run.ledger.tracing.iter_mut().enumerate() {
+            if let Some(burst) = tracing.burst.as_mut()
+                && burst.edges > 0
+            {
+                result.bursts[net].push(*burst);
+                result.digital[net].push((burst.to, run.ledger.last[net]));
+                *burst = Burst { from: burst.to, to: burst.to, edges: 0, high: 0.0 };
+            }
         }
 
         let mut failures: Vec<Failure> = circuit
@@ -1081,8 +1230,8 @@ impl Simulator {
         t: f64,
         result: &mut TransientResult,
         stats: &mut Stats,
-        last: &mut [Logic],
-        pending_dac: &mut Vec<Transition>,
+        ledger: &mut Ledger,
+        max_step: f64,
     ) {
         // Analog -> digital.
         let mut pending: Vec<(f64, DriverId, NetId, Logic)> = Vec::new();
@@ -1126,7 +1275,8 @@ impl Simulator {
         // the same as before the queue was allowed ahead.
         let settled = circuit.digital.settle_until(t, false, usize::MAX);
         stats.digital_events += settled.events;
-        self.absorb_digital(circuit, t, result, last, pending_dac);
+        self.absorb_digital(circuit, result, ledger, max_step);
+        self.reach_changes(circuit, &mut ledger.pacing, t);
     }
 
     /// Take what the digital domain has done since it was last asked: into the
@@ -1135,11 +1285,12 @@ impl Simulator {
     fn absorb_digital(
         &mut self,
         circuit: &mut Circuit,
-        t: f64,
         result: &mut TransientResult,
-        last: &mut [Logic],
-        pending_dac: &mut Vec<Transition>,
+        ledger: &mut Ledger,
+        max_step: f64,
     ) {
+        let Ledger { last, tracing, pacing, changes } = ledger;
+        let mut rewatch = false;
         // Into the recorded waveforms, at the instant the net actually took the
         // value and not at the end of the analog step that happened to notice.
         //
@@ -1147,44 +1298,160 @@ impl Simulator {
         // rather than against the last entry in this result: a run advanced in
         // pieces hands back one result per piece, and a chunk that starts empty
         // would take the first sample of an unchanged net as a transition.
-        for change in circuit.digital.take_log() {
-            if let (Some(trace), Some(previous)) =
-                (result.digital.get_mut(change.net), last.get_mut(change.net))
-                && *previous != change.state
+        circuit.digital.swap_log(changes);
+        for change in changes.iter() {
+            if let (Some(trace), Some(previous), Some(tracing)) = (
+                result.digital.get_mut(change.net),
+                last.get_mut(change.net),
+                tracing.get_mut(change.net),
+            ) && *previous != change.state
             {
-                trace.push((change.time, change.state));
+                record(
+                    trace,
+                    &mut result.bursts[change.net],
+                    tracing,
+                    change.time,
+                    *previous,
+                    change.state,
+                    max_step,
+                );
                 *previous = change.state;
             }
-            if circuit.dacs().iter().any(|d| d.net == change.net) {
-                pending_dac.push(change);
+            for (dac, pace) in circuit.dacs().iter().zip(pacing.iter_mut()) {
+                if dac.net != change.net {
+                    continue;
+                }
+                // Too fast to resolve, or slow enough again? Judged by the gap
+                // since the net last moved, against the step ceiling.
+                let gap = change.time - pace.last_change;
+                pace.last_change = change.time;
+                pace.fast_run =
+                    if gap < max_step * UNRESOLVED_SPACING { pace.fast_run + 1 } else { 0 };
+                let was = pace.fast;
+                if pace.fast {
+                    pace.fast = gap <= max_step * RESOLVED_SPACING;
+                } else {
+                    pace.fast = pace.averageable == Some(true) && pace.fast_run >= UNRESOLVED_RUN;
+                }
+                rewatch |= pace.fast != was;
+                pace.ahead.push(Change {
+                    time: change.time,
+                    state: change.state,
+                    resolve: !pace.fast,
+                });
             }
         }
+        if rewatch {
+            // Only the nets being resolved edge by edge stop the queue.
+            let watched: Vec<NetId> = circuit
+                .dacs()
+                .iter()
+                .zip(pacing.iter())
+                .filter(|(_, p)| !p.fast)
+                .map(|(d, _)| d.net)
+                .collect();
+            circuit.digital.watch(watched);
+        }
+    }
 
-        // The bridges the other way are told `t`, and deliberately.
-        //
-        // A DAC answers a level with a ramp, and a ramp that began before the
-        // timepoint just accepted would be a change to a solve that is already
-        // finished — the analog side would step from a voltage it was solved at to
-        // one partway along an edge it never saw. Worse for a fast edge inside a
-        // slow step: the whole ramp would be in the past, so the output would jump,
-        // which is the one thing this bridge exists to never do.
-        //
-        // So the record is honest about when the logic moved, and the analog side
-        // starts moving at the earliest instant it can honour — which is this
-        // one for a change it has reached, and a later timepoint, placed on the
-        // change as a breakpoint, for one it has not.
-        let mut i = 0;
-        while i < pending_dac.len() {
-            if pending_dac[i].time > t {
-                i += 1;
-                continue;
-            }
-            let change = pending_dac.remove(i);
-            for dac in circuit.dacs_mut() {
-                if dac.net == change.net {
+    /// The solver is at `t`: every change up to it has been reached, and the
+    /// bridges take them.
+    ///
+    /// A change to be resolved is answered with a ramp, and the bridge is told
+    /// `t` rather than the change's own time, deliberately. A ramp that began
+    /// before the timepoint just accepted would be a change to a solve that is
+    /// already finished — the analog side would step from a voltage it was
+    /// solved at to one partway along an edge it never saw. Worse for a fast
+    /// edge inside a slow step: the whole ramp would be in the past, so the
+    /// output would jump, which is the one thing this bridge exists to never
+    /// do. So the record is honest about when the logic moved, and the analog
+    /// side starts moving at the earliest instant it can honour — which is this
+    /// one, since a change to be resolved is a breakpoint and the step ends on
+    /// it.
+    ///
+    /// A change to be averaged only moves the level the next average starts
+    /// from; the bridge itself is set at each attempt, from what the step ahead
+    /// holds.
+    fn reach_changes(&mut self, circuit: &mut Circuit, pacing: &mut [Pacing], t: f64) {
+        for (dac, pace) in circuit.dacs_mut().iter_mut().zip(pacing.iter_mut()) {
+            let reached = pace.ahead.iter().take_while(|c| c.time <= t).count();
+            for change in pace.ahead.drain(..reached) {
+                pace.level = change.state;
+                pace.averaging = !change.resolve;
+                if change.resolve {
                     dac.notify(change.state, t);
                 }
             }
+        }
+    }
+
+    /// Hold every bridge that is being averaged at its net's time average over
+    /// the step about to be attempted, from `t` to `t + step`.
+    ///
+    /// Being averaged means either that the last change reached was one to
+    /// fold in, or that the step ahead holds one: the first such change is
+    /// where the bridge stops answering edges with ramps, and it is not a
+    /// breakpoint, so the step is simply averaged from there.
+    fn hold_averages(&mut self, circuit: &mut Circuit, pacing: &[Pacing], t: f64, step: f64) {
+        if step <= 0.0 {
+            return;
+        }
+        let end = t + step;
+        for (dac, pace) in circuit.dacs_mut().iter_mut().zip(pacing) {
+            let within = |c: &&Change| c.time > t && c.time < end;
+            if !pace.averaging && !pace.ahead.iter().filter(within).any(|c| !c.resolve) {
+                continue;
+            }
+            let mut level = pace.level;
+            let mut from = t;
+            let mut sum = 0.0;
+            for change in &pace.ahead {
+                if change.time <= t {
+                    level = change.state;
+                    continue;
+                }
+                if change.time >= end {
+                    break;
+                }
+                sum += dac.level_voltage(level) * (change.time - from);
+                level = change.state;
+                from = change.time;
+            }
+            sum += dac.level_voltage(level) * (end - from);
+            dac.hold(sum / step);
+        }
+    }
+
+    /// Work out, from the transient matrix just solved, which bridges drive a
+    /// part of the circuit nothing reads back — the ones that may be averaged.
+    ///
+    /// Two unknowns are coupled when a chain of nonzero entries joins them,
+    /// except through a node an ideal source holds: the supply rail is common
+    /// to everything and carries no signal. A bridge whose node shares a chain
+    /// with an analog-to-digital bridge's node is left alone: what it drives
+    /// comes back as logic, and an oscillator built that way would be averaged
+    /// into a level that never crosses a threshold.
+    fn learn_coupling(&mut self, circuit: &Circuit, pacing: &mut [Pacing]) {
+        let rails: Vec<usize> = circuit
+            .elements()
+            .iter()
+            .filter_map(|e| e.as_any().downcast_ref::<VoltageSource>())
+            .filter_map(|v| match (node_index(v.p), node_index(v.m)) {
+                (Some(p), None) => Some(p),
+                (None, Some(m)) => Some(m),
+                _ => None,
+            })
+            .collect();
+        let label = self.sys.coupled(&rails);
+        let read: Vec<usize> = circuit
+            .adcs()
+            .iter()
+            .filter_map(|adc| node_index(adc.node))
+            .map(|i| label[i])
+            .collect();
+        for (dac, pace) in circuit.dacs().iter().zip(pacing.iter_mut()) {
+            let coupled = node_index(dac.node).is_some_and(|i| read.contains(&label[i]));
+            pace.averageable = Some(!coupled);
         }
     }
 
@@ -1211,6 +1478,58 @@ impl Simulator {
     pub fn solution(&self) -> &[f64] {
         &self.x
     }
+}
+
+/// Put one change on a net into its trace: as an edge, or folded into a burst.
+///
+/// The same spacing that decides whether a bridge resolves an edge decides
+/// whether the trace records it. Past a run of edges closer together than the
+/// ceiling can show, the trace keeps a burst instead, and the burst ends at
+/// the first edge that comes after a gap wide enough to see — that edge is
+/// recorded, along with the level the net was at when the burst ended, so the
+/// lane between the two is drawn right.
+fn record(
+    trace: &mut Vec<(f64, Logic)>,
+    bursts: &mut Vec<Burst>,
+    tracing: &mut Tracing,
+    time: f64,
+    before: Logic,
+    state: Logic,
+    max_step: f64,
+) {
+    let gap = time - tracing.last_change;
+    tracing.last_change = time;
+    tracing.fast_run = if gap < max_step * UNRESOLVED_SPACING { tracing.fast_run + 1 } else { 0 };
+    if let Some(burst) = tracing.burst.as_mut() {
+        if gap <= max_step * RESOLVED_SPACING {
+            burst.to = time;
+            burst.edges += 1;
+            if before == Logic::High {
+                burst.high += gap;
+            }
+            return;
+        }
+        if burst.edges > 0 {
+            bursts.push(*burst);
+            trace.push((burst.to, before));
+        }
+        tracing.burst = None;
+    } else if tracing.fast_run >= UNRESOLVED_RUN {
+        tracing.burst = Some(Burst { from: time, to: time, edges: 1, high: 0.0 });
+        return;
+    }
+    trace.push((time, state));
+}
+
+/// The earliest change past `t` that the bridges are to resolve, if any: the
+/// analog step has to end there.
+fn next_resolved(pacing: &[Pacing], t: f64) -> Option<f64> {
+    pacing
+        .iter()
+        .flat_map(|p| p.ahead.iter())
+        .filter(|c| c.resolve && c.time > t)
+        .map(|c| c.time)
+        .reduce(f64::min)
 }
 
 /// Remove the 360-degree jumps `atan2` introduces.

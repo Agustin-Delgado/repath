@@ -79,6 +79,7 @@ function simulate(schematic: Schematic, stop = 1e-3, time = stop) {
 			element_names: string[];
 			net_names: string[];
 			digital: Array<Array<{ time: number; state: string }>>;
+			bursts: TransientRun['bursts'];
 		};
 		const signals = new Map<string, Float64Array>();
 		const signalsByIndex = meta.unknown_names.map((name, index) => {
@@ -96,6 +97,7 @@ function simulate(schematic: Schematic, stop = 1e-3, time = stop) {
 			currents: meta.element_names.map((_, index) => simulation.current(index)),
 			netNames: meta.net_names,
 			digital: meta.digital as TransientRun['digital'],
+			bursts: meta.bursts,
 			failures: [],
 			stats: { accepted_steps: 0, rejected_steps: 0, newton_iterations: 0, digital_events: 0, work: 0 },
 			elapsedMs: 0
