@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { measure, measureLogic } from '$lib/measure';
+	import { measure, measureBurst, measureLogic } from '$lib/measure';
 	import { DEPTH } from '$lib/capture';
 	import { netLabel } from '$lib/schematic/nets';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
-	import type { DigitalTransition, LogicState } from '$lib/engine';
+	import type { Burst, DigitalTransition, LogicState } from '$lib/engine';
 	import BodePlot from './BodePlot.svelte';
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
@@ -38,6 +38,13 @@
 		gain: number;
 		offset: number;
 		key: string;
+		/**
+		 * Whether the node is being driven with a time average at the moment: it
+		 * hangs off a logic net switching faster than this timebase shows, and the
+		 * engine holds the bridge at the net's average rather than solving every
+		 * edge. The trace is then a level where the circuit has a square wave.
+		 */
+		averaged: boolean;
 	}
 
 	const traces = $derived.by((): Trace[] => {
@@ -54,6 +61,9 @@
 			// time underneath a trace from another.
 			const band = app.envelope?.time.length === run.time.length ? app.envelope : null;
 			const knobs = app.channels[probe.key] ?? { gain: 1, offset: 0 };
+			const net = probe.digital ? run.netNames.indexOf(probe.digital) : -1;
+			const burst = net < 0 ? undefined : run.bursts?.[net]?.at(-1);
+			const newest = run.time[run.time.length - 1] ?? 0;
 			out.push({
 				label: probe.label,
 				colour: probe.colour,
@@ -62,7 +72,8 @@
 				high: band?.high.get(key),
 				gain: knobs.gain,
 				offset: knobs.offset,
-				key: probe.key
+				key: probe.key,
+				averaged: burst !== undefined && burst.to >= newest - app.stopTime / 200
 			});
 		}
 		return out;
@@ -77,6 +88,8 @@
 			/** Which net, in the run's numbering. */
 			index: number;
 			events: DigitalTransition[];
+			/** Spans the net switched through too fast for the events to record. */
+			bursts: Burst[];
 			/** The level the net was already at when the memory opens. */
 			opening: LogicState;
 			/** Where the lane sits, in lane heights. The one knob a lane has. */
@@ -92,6 +105,7 @@
 				colour: probe.colour,
 				index,
 				events: run.digital[index],
+				bursts: run.bursts?.[index] ?? [],
 				opening: app.capture?.openingState(index) ?? 'unknown',
 				offset: app.channels[probe.key]?.offset ?? 0
 			});
@@ -235,7 +249,12 @@
 		const run = app.result;
 		if (!run || !measuring) return [];
 		return traces
-			.map((t) => ({ label: t.label, colour: t.colour, m: measure(run.time, t.samples) }))
+			.map((t) => ({
+				label: t.label,
+				colour: t.colour,
+				averaged: t.averaged,
+				m: measure(run.time, t.samples)
+			}))
 			.filter((row) => row.m !== null);
 	});
 
@@ -253,7 +272,16 @@
 		// silence read as the button not working.
 		return digitalTraces.map((t) => {
 			const { events, opening } = capture.edges(t.index);
-			return { label: t.label, colour: t.colour, m: measureLogic(events, opening) };
+			// A net that is busy — switching faster than the screen can show — is
+			// read off the burst the engine folded it into, which is newer than any
+			// edge the history holds.
+			const burst = t.bursts[t.bursts.length - 1];
+			const newest = events[events.length - 1];
+			const m =
+				burst && (!newest || burst.to >= newest.time)
+					? measureBurst(burst)
+					: measureLogic(events, opening);
+			return { label: t.label, colour: t.colour, m };
 		});
 	});
 
@@ -480,6 +508,18 @@
 			}
 			if (started) ctx.lineTo(toX(to), previousY);
 			ctx.stroke();
+
+			// Where the net was switching faster than a pixel: a band between the
+			// levels, which is what a scope shows of a signal it cannot resolve.
+			for (const burst of trace.bursts) {
+				const left = Math.max(toX(burst.from), plot.x);
+				const right = Math.min(toX(burst.to), plot.x + plot.w);
+				if (right <= left) continue;
+				ctx.globalAlpha = 0.45;
+				ctx.fillStyle = trace.colour;
+				ctx.fillRect(left, top, right - left, bottom - top);
+				ctx.globalAlpha = 1;
+			}
 
 			labels.push({ text: trace.label, y: (top + bottom) / 2 });
 		});
@@ -976,6 +1016,12 @@
 								<dt>over</dt>
 								<dd>{Math.round(m.overshoot * 100)}%</dd>
 							{/if}
+							{#if row.averaged}
+								<dt></dt>
+								<dd class="folded" title="This node hangs off a logic net switching faster than this timebase can show, so the engine drives it with the net's time average rather than every edge. The trace is that average; zoom the window in to see the edges.">
+									averaged
+								</dd>
+							{/if}
 						</dl>
 					</div>
 				{/each}
@@ -993,6 +1039,12 @@
 								<dd>{Math.round(m.duty * 100)}%</dd>
 								<dt>cycles</dt>
 								<dd title="Whole cycles the numbers are averaged over">{m.cycles}</dd>
+								{#if m.folded}
+									<dt></dt>
+									<dd class="folded" title="Faster than this timebase can show: the numbers are averaged over the busy span, which the lane draws as a band. Zoom the window in to see the edges.">
+										busy
+									</dd>
+								{/if}
 							</dl>
 						{:else}
 							<span class="waiting" title="A period is two rising edges, and this lane has not had them yet. Leave it running.">
@@ -1076,6 +1128,11 @@
 	.measure .waiting {
 		display: block;
 		font-size: 0.64rem;
+		color: var(--label-dim);
+		font-style: italic;
+	}
+
+	.measure .folded {
 		color: var(--label-dim);
 		font-style: italic;
 	}

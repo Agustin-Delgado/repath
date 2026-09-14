@@ -23,6 +23,7 @@ struct RunMeta {
     element_names: Vec<String>,
     net_names: Vec<String>,
     digital: Vec<Vec<DigitalTransition>>,
+    bursts: Vec<Vec<BurstOut>>,
     failures: Vec<PartFailure>,
     stats: RunStats,
 }
@@ -41,6 +42,15 @@ struct PartFailure {
 struct DigitalTransition {
     time: f64,
     state: &'static str,
+}
+
+/// A span in which a net switched too fast for its trace to keep every edge.
+#[derive(Serialize)]
+struct BurstOut {
+    from: f64,
+    to: f64,
+    edges: usize,
+    high: f64,
 }
 
 #[derive(Serialize)]
@@ -264,6 +274,16 @@ fn meta_of(result: &TransientResult, with_names: bool) -> RunMeta {
                 trace
                     .iter()
                     .map(|(t, s)| DigitalTransition { time: *t, state: logic_name(*s) })
+                    .collect()
+            })
+            .collect(),
+        bursts: result
+            .bursts
+            .iter()
+            .map(|spans| {
+                spans
+                    .iter()
+                    .map(|b| BurstOut { from: b.from, to: b.to, edges: b.edges, high: b.high })
                     .collect()
             })
             .collect(),

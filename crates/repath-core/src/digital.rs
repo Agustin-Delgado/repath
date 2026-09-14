@@ -259,16 +259,19 @@ impl Gate {
         }
     }
 
-    fn compute(&self, values: &[Logic]) -> Logic {
+    /// The output for the inputs as read, without collecting them first: a
+    /// gate is evaluated a million times a second behind a fast clock, and a
+    /// list allocated for each of those was most of what an event cost.
+    fn compute(&self, mut values: impl Iterator<Item = Logic>) -> Logic {
         match self.kind {
-            GateKind::Buffer => values.first().copied().unwrap_or(Logic::Unknown).sense(),
-            GateKind::Not => values.first().copied().unwrap_or(Logic::Unknown).invert(),
-            GateKind::And => values.iter().fold(Logic::High, |a, b| a.and(*b)),
-            GateKind::Nand => values.iter().fold(Logic::High, |a, b| a.and(*b)).invert(),
-            GateKind::Or => values.iter().fold(Logic::Low, |a, b| a.or(*b)),
-            GateKind::Nor => values.iter().fold(Logic::Low, |a, b| a.or(*b)).invert(),
-            GateKind::Xor => values.iter().fold(Logic::Low, |a, b| a.xor(*b)),
-            GateKind::Xnor => values.iter().fold(Logic::Low, |a, b| a.xor(*b)).invert(),
+            GateKind::Buffer => values.next().unwrap_or(Logic::Unknown).sense(),
+            GateKind::Not => values.next().unwrap_or(Logic::Unknown).invert(),
+            GateKind::And => values.fold(Logic::High, |a, b| a.and(b)),
+            GateKind::Nand => values.fold(Logic::High, |a, b| a.and(b)).invert(),
+            GateKind::Or => values.fold(Logic::Low, |a, b| a.or(b)),
+            GateKind::Nor => values.fold(Logic::Low, |a, b| a.or(b)).invert(),
+            GateKind::Xor => values.fold(Logic::Low, |a, b| a.xor(b)),
+            GateKind::Xnor => values.fold(Logic::Low, |a, b| a.xor(b)).invert(),
         }
     }
 }
@@ -288,8 +291,7 @@ impl DigitalDevice for Gate {
     }
 
     fn evaluate(&mut self, ctx: &mut EvalCtx) {
-        let values: Vec<Logic> = self.inputs.iter().map(|n| ctx.read(*n)).collect();
-        let out = self.compute(&values);
+        let out = self.compute(self.inputs.iter().map(|n| ctx.read(*n)));
         ctx.drive(0, self.output, out, self.delay);
     }
 }
@@ -667,6 +669,9 @@ pub struct DigitalDomain {
     resolved: Vec<Logic>,
     /// Nets whose resolved value changed during the current instant.
     dirty: Vec<NetId>,
+    /// Devices to evaluate for the current instant. Kept between instants so
+    /// a fast clock does not allocate a list a million times a second.
+    touched: Vec<usize>,
     /// Every change of level since the log was last taken, in the order they
     /// happened: the time of the event that did it, never the instant somebody
     /// got round to asking.
@@ -842,6 +847,14 @@ impl DigitalDomain {
         std::mem::take(&mut self.log)
     }
 
+    /// The same, into a buffer the caller keeps: what it held is discarded, and
+    /// its allocation becomes the log's, so a run that asks every step does not
+    /// grow a fresh list every step.
+    pub fn swap_log(&mut self, into: &mut Vec<Transition>) {
+        into.clear();
+        std::mem::swap(&mut self.log, into);
+    }
+
     /// Apply every event due at or before `time`, instant by instant, and
     /// propagate each until the domain is stable. Returns how many nets changed.
     pub fn settle(&mut self, time: f64) -> usize {
@@ -923,19 +936,17 @@ impl DigitalDomain {
             }
 
             // Re-evaluate everything downstream of the nets that moved.
-            let touched: Vec<usize> = {
-                let mut devices = Vec::new();
-                for net in &self.dirty {
-                    for d in &self.fanout[*net] {
-                        if !devices.contains(d) {
-                            devices.push(*d);
-                        }
+            let mut touched = std::mem::take(&mut self.touched);
+            touched.clear();
+            for net in &self.dirty {
+                for d in &self.fanout[*net] {
+                    if !touched.contains(d) {
+                        touched.push(*d);
                     }
                 }
-                devices
-            };
+            }
 
-            for index in touched {
+            for &index in &touched {
                 let mut device = std::mem::replace(&mut self.devices[index], Box::new(NullDevice));
                 let mut ctx = EvalCtx {
                     now: instant,
@@ -946,6 +957,7 @@ impl DigitalDomain {
                 device.evaluate(&mut ctx);
                 self.devices[index] = device;
             }
+            self.touched = touched;
 
             // Anything those devices scheduled with zero delay is due right now,
             // so loop again; anything with real delay waits for its own instant.

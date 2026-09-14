@@ -15,6 +15,21 @@ export interface DigitalTransition {
 	state: LogicState;
 }
 
+/**
+ * A span in which a net switched too fast for its trace to keep every edge.
+ *
+ * The engine folds edges closer together than the step ceiling can show into
+ * one of these: where it began and ended, how many edges, how long high. The
+ * transitions of the net say nothing about the span; the level it was left at
+ * is recorded as a transition at `to`.
+ */
+export interface Burst {
+	from: number;
+	to: number;
+	edges: number;
+	high: number;
+}
+
 export interface RunStats {
 	accepted_steps: number;
 	rejected_steps: number;
@@ -41,6 +56,7 @@ interface RunMeta {
 	element_names: string[];
 	net_names: string[];
 	digital: DigitalTransition[][];
+	bursts: Burst[][];
 	failures: PartFailure[];
 	stats: RunStats;
 }
@@ -65,6 +81,8 @@ export interface TransientRun {
 	currents: Float64Array[];
 	netNames: string[];
 	digital: DigitalTransition[][];
+	/** Per net, the spans it switched through too fast for `digital` to record. */
+	bursts: Burst[][];
 	/**
 	 * Parts destroyed during the run, soonest first.
 	 *
@@ -155,6 +173,7 @@ export async function runTransient(
 			currents,
 			netNames: meta.net_names,
 			digital: meta.digital,
+			bursts: meta.bursts ?? meta.digital.map(() => []),
 			failures: meta.failures ?? [],
 			stats: meta.stats,
 			elapsedMs
@@ -175,6 +194,8 @@ export interface Chunk {
 	currents: Float64Array[];
 	/** Transitions that happened during this piece, per digital net. */
 	digital: DigitalTransition[][];
+	/** Spans of this piece in which a net switched too fast to record, per net. */
+	bursts: Burst[][];
 	failures: PartFailure[];
 	/** The run's totals so far, not this piece's share: the engine counts from the start. */
 	stats: RunStats;
@@ -280,6 +301,7 @@ export class LiveRun {
 			signalsByIndex: this.unknownNames.map((_, index) => this.simulation.signal(index)),
 			currents: this.elementNames.map((_, index) => this.simulation.current(index)),
 			digital: meta.digital,
+			bursts: meta.bursts ?? meta.digital.map(() => []),
 			failures: meta.failures ?? [],
 			stats: meta.stats
 		};

@@ -141,6 +141,24 @@ impl DacBridge {
         self.ramp_duration = duration.max(0.0);
     }
 
+    /// Hold the output at a voltage, with no ramp: the time average of a net
+    /// that is switching faster than anything on the analog side can follow.
+    pub fn hold(&mut self, voltage: f64) {
+        self.driving = true;
+        self.from = voltage;
+        self.to = voltage;
+        self.ramp_duration = 0.0;
+    }
+
+    /// The voltage a level is driven to.
+    pub fn level_voltage(&self, state: Logic) -> f64 {
+        match state {
+            Logic::Low => self.family.v_low,
+            Logic::High => self.family.v_high,
+            _ => self.family.mid(),
+        }
+    }
+
     /// Jump straight to a level with no ramp.
     ///
     /// Only correct at t=0, where a ramp would be an artifact of starting the

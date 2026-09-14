@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { measure, measureLogic } from './measure';
+import { measure, measureBurst, measureLogic } from './measure';
 
 /** `count` samples of `f` over `[0, span]`, evenly spaced. */
 function sampled(f: (t: number) => number, span: number, count: number) {
@@ -143,5 +143,21 @@ describe('measuring a logic lane', () => {
 		const m = measureLogic(events, 'low')!;
 		expect(m.cycles).toBe(2);
 		expect(m.duty).toBeCloseTo(0.5, 6);
+	});
+});
+
+describe('measuring a burst', () => {
+	it('reads frequency and duty off the folded count', () => {
+		// A megahertz for a millisecond, a quarter of the time high.
+		const m = measureBurst({ from: 1e-3, to: 2e-3, edges: 2000, high: 0.25e-3 })!;
+		expect(m.frequency).toBeCloseTo(1e6, 3);
+		expect(m.period).toBeCloseTo(1e-6, 12);
+		expect(m.duty).toBeCloseTo(0.25, 9);
+		expect(m.cycles).toBe(1000);
+		expect(m.folded).toBe(true);
+	});
+
+	it('has nothing to say about a span with no length', () => {
+		expect(measureBurst({ from: 1e-3, to: 1e-3, edges: 1, high: 0 })).toBeNull();
 	});
 });

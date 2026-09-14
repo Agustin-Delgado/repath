@@ -54,6 +54,39 @@ impl LinearSystem {
         }
     }
 
+    /// Which unknowns can affect which: a label per unknown, equal for any two
+    /// joined by a chain of nonzero entries.
+    ///
+    /// Unknowns in `barriers` are left out of every chain. A node held by an
+    /// ideal source is one: everything hangs off the supply rail, and a rail
+    /// carries no signal from one thing to another.
+    pub fn coupled(&self, barriers: &[usize]) -> Vec<usize> {
+        let n = self.n;
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(parent: &mut [usize], mut i: usize) -> usize {
+            while parent[i] != i {
+                parent[i] = parent[parent[i]];
+                i = parent[i];
+            }
+            i
+        }
+        for r in 0..n {
+            if barriers.contains(&r) {
+                continue;
+            }
+            for c in 0..n {
+                if r == c || barriers.contains(&c) || self.a[r * n + c] == 0.0 {
+                    continue;
+                }
+                let (a, b) = (find(&mut parent, r), find(&mut parent, c));
+                if a != b {
+                    parent[a] = b;
+                }
+            }
+        }
+        (0..n).map(|i| find(&mut parent, i)).collect()
+    }
+
     /// `b[row] += value`, dropping ground.
     #[inline]
     pub fn add_rhs(&mut self, row: Option<usize>, value: f64) {
@@ -279,5 +312,24 @@ mod tests {
         let mut x = Vec::new();
         sys.solve_into(&mut x).unwrap();
         assert!((x[0] - 2.0).abs() < 1e-12);
+    }
+
+    /// Coupling follows the nonzero pattern, and stops at a rail.
+    #[test]
+    fn coupling_follows_the_entries_and_stops_at_a_barrier() {
+        // Unknowns 0-1 joined, 2 on its own, 3 joined to 0 only through 4.
+        let mut sys = LinearSystem::new(5);
+        sys.add(Some(0), Some(1), 1.0);
+        sys.add(Some(3), Some(4), 1.0);
+        sys.add(Some(4), Some(0), 1.0);
+        let label = sys.coupled(&[]);
+        assert_eq!(label[0], label[1]);
+        assert_eq!(label[0], label[3]);
+        assert_ne!(label[0], label[2]);
+
+        // With 4 a barrier, 3 is cut off from 0.
+        let label = sys.coupled(&[4]);
+        assert_eq!(label[0], label[1]);
+        assert_ne!(label[0], label[3]);
     }
 }

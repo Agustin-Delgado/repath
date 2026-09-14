@@ -3,7 +3,7 @@
 //! is supposed to do. These are the tests that would catch a sign error in a
 //! stamp, which the unit tests cannot.
 
-use repath_core::digital::{AsyncInputs, Logic};
+use repath_core::digital::{AsyncInputs, Logic, LogicSource};
 use repath_core::elements::semiconductor::TNOM;
 use repath_core::netlist::{Component, Netlist};
 use repath_core::prelude::*;
@@ -2565,6 +2565,14 @@ fn a_tighter_step_ceiling_takes_effect_from_where_the_run_is() {
     assert!(fine.time.iter().all(|t| *t > 0.5e-3 - 1e-12));
 }
 
+/// Edges on a net after `since`, whether recorded one by one or folded into
+/// bursts.
+fn edges_on(result: &TransientResult, net: usize, since: f64) -> usize {
+    let single = result.digital[net].iter().filter(|(t, _)| *t > since).count();
+    let folded: usize = result.bursts[net].iter().filter(|b| b.from > since).map(|b| b.edges).sum();
+    single + folded
+}
+
 /// Build a chain of toggling flip-flops off a clock: stage `n` runs at the
 /// clock rate over 2ⁿ. Returns the nets, first stage first.
 fn ripple_counter(c: &mut Circuit, clock_hz: f64, stages: usize) -> Vec<usize> {
@@ -2614,7 +2622,7 @@ fn a_counter_behind_an_led_costs_the_analog_side_nothing_per_tick() {
 
     let first = result.net_names.iter().position(|n| n == "q0").unwrap();
     let last = result.net_names.iter().position(|n| n == "q5").unwrap();
-    let edges = |net: usize| result.digital[net].iter().filter(|(t, _)| *t > 0.0).count();
+    let edges = |net: usize| edges_on(&result, net, 0.0);
     assert!((1990..=2010).contains(&edges(first)), "the first stage made {} edges", edges(first));
     assert!((60..=64).contains(&edges(last)), "the last stage made {} edges", edges(last));
 
@@ -2734,4 +2742,192 @@ fn a_budget_is_spent_by_digital_events_too() {
     assert!(edges.len() >= 2, "the top stage moved {} times", edges.len());
     let spacing = edges[1] - edges[0];
     assert!((spacing - 327.68e-6).abs() < 1e-9, "the top stage half-period was {spacing:.6e}");
+}
+
+/// An LED off a fast net: too fast for the screen at this timebase, so the
+/// bridge is held at the net's time average instead of solving every edge.
+///
+/// A ceiling of twenty microseconds and a net toggling every microsecond is
+/// twenty edges per ceiling — four thousand to a screen. The eye sees such an
+/// LED at half brightness, and that is what the analog side gets: a level
+/// midway between the rails, for a few hundred steps rather than the ten
+/// thousand it took to resolve each edge and its ramp.
+#[test]
+fn a_net_too_fast_for_the_screen_drives_its_bridge_with_its_average() {
+    let family = LogicFamily::cmos_5v();
+    let mut c = Circuit::new();
+    let out = c.node("out");
+    let anode = c.node("anode");
+    c.add(Box::new(Resistor::new("R1", out, anode, 330.0)));
+    c.add(Box::new(Diode::new("D1", anode, Circuit::GROUND, DiodeModel::led(1.9, 0.02))));
+    // One stage off a 1 MHz clock: the net toggles every microsecond.
+    let stages = ripple_counter(&mut c, 1e6, 1);
+    c.bridge_to_analog("B1", stages[0], out, family);
+
+    let mut cfg = TransientConfig::new(1e-3);
+    cfg.max_step = 20e-6;
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+
+    // The logic trace has every edge, and past the first few it has them as a
+    // burst: a thousand to the screen is nothing a lane can draw, and the
+    // burst carries what can be read off it — how many, and how long high.
+    let net = result.net_names.iter().position(|n| n == "q0").unwrap();
+    let edges = edges_on(&result, net, 1e-6);
+    assert!((995..=1001).contains(&edges), "{edges} edges on the net");
+    let single = result.digital[net].iter().filter(|(t, _)| *t > 1e-6).count();
+    assert!(single < 10, "{single} edges recorded one by one");
+    let span: f64 = result.bursts[net].iter().map(|b| b.to - b.from).sum();
+    let high: f64 = result.bursts[net].iter().map(|b| b.high).sum();
+    assert!((high / span - 0.5).abs() < 0.01, "the burst says {:.3} high", high / span);
+
+    // The analog side took a few hundred steps, not ten thousand.
+    let steps = result.stats.accepted_steps;
+    assert!(steps < 400, "{steps} analog steps for a net that is being averaged");
+
+    // And sits at the average of the two levels: half of the time high.
+    let out_i = index_of(&result, "v(out)");
+    for t in [0.2e-3, 0.5e-3, 0.9e-3] {
+        let v = value_at(&result, out_i, t);
+        assert!((v - 2.5).abs() < 0.1, "{v:.3} V at {t:.1e}, not the 2.5 V average");
+    }
+    // The LED carries the current of a 2.5 V drive, which is neither on nor off.
+    let d = result.element_index("D1").unwrap();
+    let mid = result.time.iter().position(|t| *t >= 0.5e-3).unwrap();
+    let i = result.currents[mid][d];
+    assert!(i > 1e-3 && i < 3e-3, "{i:.2e} A through the LED");
+}
+
+/// The same net read back by an analog-to-digital bridge is resolved edge by
+/// edge, whatever the timebase: what it drives comes back as logic.
+#[test]
+fn a_fast_net_that_is_read_back_is_still_resolved_edge_by_edge() {
+    let family = LogicFamily::cmos_5v();
+    let mut c = Circuit::new();
+    let out = c.node("out");
+    // A megohm, so the bridge's output impedance does not pull the levels in.
+    c.add(Box::new(Resistor::new("R1", out, Circuit::GROUND, 1e6)));
+    let stages = ripple_counter(&mut c, 1e6, 1);
+    c.bridge_to_analog("B1", stages[0], out, family);
+    // The node read straight back into logic.
+    let back = c.net("back");
+    c.bridge_to_digital("A1", out, back, family);
+
+    let mut cfg = TransientConfig::new(1e-3);
+    cfg.max_step = 20e-6;
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+
+    let steps = result.stats.accepted_steps;
+    assert!(steps > 3000, "only {steps} analog steps: the edges were not resolved");
+    let out_i = index_of(&result, "v(out)");
+    let (lo, hi) = extremes(&result, out_i);
+    assert!(lo < 0.1 && hi > 4.9, "the node swung {lo:.2}..{hi:.2} V instead of rail to rail");
+    // And the read-back net followed every edge.
+    let back_i = result.net_names.iter().position(|n| n == "back").unwrap();
+    let edges = edges_on(&result, back_i, 1e-6);
+    assert!((990..=1001).contains(&edges), "{edges} edges came back");
+}
+
+/// Averaging follows the net: a net that stops is held at its level, and a
+/// net that starts again after a pause is resolved edge by edge until it is
+/// too fast once more.
+#[test]
+fn averaging_stops_when_the_net_slows_down() {
+    let family = LogicFamily::cmos_5v();
+    let mut c = Circuit::new();
+    let out = c.node("out");
+    c.add(Box::new(Resistor::new("R1", out, Circuit::GROUND, 1e6)));
+    let clk = c.net("clk");
+    let en = c.net("en");
+    let gated = c.net("gated");
+    c.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
+    // Running for the first 0.4 ms, silent to 0.7 ms, running again after.
+    c.add_device(Box::new(LogicSource::new("EN", en, Logic::High).operated_at([0.4e-3, 0.7e-3])));
+    c.add_device(Box::new(Gate::new("G1", GateKind::And, vec![clk, en], gated, 1e-9)));
+    c.bridge_to_analog("B1", gated, out, family);
+
+    let mut cfg = TransientConfig::new(1e-3);
+    cfg.max_step = 20e-6;
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+    let out_i = index_of(&result, "v(out)");
+
+    // Running: the average.
+    let v = value_at(&result, out_i, 0.3e-3);
+    assert!((v - 2.5).abs() < 0.1, "{v:.3} V while running");
+    // Silent: the level, with no edge to average against.
+    let v = value_at(&result, out_i, 0.6e-3);
+    assert!(v < 0.1, "{v:.3} V while silent");
+    // The first edge after the pause is resolved: a timepoint sits on it, and
+    // the node is at the rail a rise time later.
+    let net = result.net_names.iter().position(|n| n == "gated").unwrap();
+    let first = result.digital[net]
+        .iter()
+        .find(|(t, state)| *t > 0.7e-3 && *state == Logic::High)
+        .map(|(t, _)| *t)
+        .expect("the net starts again");
+    assert!(
+        result.time.iter().any(|t| (t - first).abs() < 1e-15),
+        "no timepoint on the first edge after the pause, at {first:.6e}"
+    );
+    let v = value_at(&result, out_i, first + 10e-9);
+    assert!(v > 4.5, "{v:.3} V ten nanoseconds after the first edge back");
+    // And a little later it is being averaged again.
+    let v = value_at(&result, out_i, 0.9e-3);
+    assert!((v - 2.5).abs() < 0.1, "{v:.3} V once running again");
+}
+
+/// A burst ends where the net slows down, with the level it left the net at
+/// recorded there; and a burst that spans two pieces of a run is handed over
+/// as two spans that meet.
+#[test]
+fn a_burst_ends_on_a_level_and_meets_itself_across_pieces() {
+    let mut c = Circuit::new();
+    let clk = c.net("clk");
+    let en = c.net("en");
+    let gated = c.net("gated");
+    c.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
+    // Running to 0.4 ms, then silent.
+    c.add_device(Box::new(LogicSource::new("EN", en, Logic::High).operated_at([0.4e-3])));
+    c.add_device(Box::new(Gate::new("G1", GateKind::And, vec![clk, en], gated, 1e-9)));
+    // Something analog, so there is a transient to run at all.
+    let out = c.node("out");
+    c.add(Box::new(VoltageSource::dc("V1", out, Circuit::GROUND, 1.0)));
+    c.add(Box::new(Resistor::new("R1", out, Circuit::GROUND, 1e3)));
+
+    let mut cfg = TransientConfig::new(1e-3);
+    cfg.max_step = 20e-6;
+    let mut sim = Simulator::default();
+    let (mut run, mut result) = sim.begin_transient(&mut c, cfg).unwrap();
+    let first = sim.advance_transient(&mut c, &mut run, 0.2e-3).unwrap();
+    let second = sim.advance_transient(&mut c, &mut run, 1e-3).unwrap();
+    let net = result.net_names.iter().position(|n| n == "gated").unwrap();
+
+    // The first piece ends inside the burst; the second picks it up exactly
+    // where the first left it.
+    let a = *first.bursts[net].last().expect("the first piece has the burst's start");
+    let b = first.bursts[net].len();
+    assert!(a.to <= 0.2e-3 && a.to > 0.19e-3, "the first piece's burst ends at {:.4e}", a.to);
+    result.append(first);
+    result.append(second);
+    let spans = &result.bursts[net];
+    assert!(spans.len() >= 2, "{} spans", spans.len());
+    assert_eq!(spans[b].from, spans[b - 1].to, "the pieces do not meet");
+
+    // The whole burst ends at the last edge before the pause.
+    let end = spans.last().unwrap().to;
+    assert!((end - 0.4e-3).abs() < 1.1e-6, "the burst ends at {end:.4e}");
+    // Every edge of the run is in the burst or the trace, and the trace's last
+    // word is the level the net was left at: low, since the gate is shut.
+    assert!(
+        (795..=802).contains(&edges_on(&result, net, 1e-6)),
+        "{} edges",
+        edges_on(&result, net, 1e-6)
+    );
+    let (when, level) = *result.digital[net].last().unwrap();
+    assert_eq!(level, Logic::Low);
+    assert!(
+        (when - end).abs() < 1e-12,
+        "the closing level is at {when:.4e}, the burst ends at {end:.4e}"
+    );
+    // And after the pause there is nothing: no edge, no burst.
+    assert!(result.digital[net].iter().all(|(t, _)| *t <= end + 1e-12));
 }

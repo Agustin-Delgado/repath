@@ -8,9 +8,14 @@
 
 import { describe, expect, it } from 'vitest';
 import { Capture, DEPTH, EDGE_HISTORY } from './capture';
-import type { Chunk, LogicState } from './engine';
+import type { Burst, Chunk, LogicState } from './engine';
 
-function chunk(from: number, count: number, edges: Array<[number, LogicState]> = []): Chunk {
+function chunk(
+	from: number,
+	count: number,
+	edges: Array<[number, LogicState]> = [],
+	bursts: Burst[] = []
+): Chunk {
 	const time = new Float64Array(count);
 	for (let i = 0; i < count; i++) time[i] = from + i * 1e-6;
 	return {
@@ -18,6 +23,7 @@ function chunk(from: number, count: number, edges: Array<[number, LogicState]> =
 		signalsByIndex: [new Float64Array(count)],
 		currents: [],
 		digital: [edges.map(([t, state]) => ({ time: t, state }))],
+		bursts: [bursts],
 		failures: [],
 		stats: { accepted_steps: count, rejected_steps: 0, newton_iterations: count, digital_events: edges.length, work: count }
 	};
@@ -50,5 +56,27 @@ describe('the capture', () => {
 		expect(events[0].time).toBeCloseTo(10e-6, 12);
 		// Edge 9 was 'high' (odd), and it is the one just before the kept run.
 		expect(opening).toBe('high');
+	});
+
+	it('joins the pieces of a burst the engine hands over frame by frame', () => {
+		const capture = new Capture(['v(n1)'], [], ['d1'], 1);
+		// A burst that began in one frame and went on through two more; then,
+		// after a gap, another.
+		capture.add(chunk(0, 10, [], [{ from: 1e-6, to: 9e-6, edges: 8, high: 4e-6 }]));
+		capture.add(chunk(10e-6, 10, [], [{ from: 9e-6, to: 19e-6, edges: 10, high: 5e-6 }]));
+		capture.add(chunk(20e-6, 10, [], [{ from: 19e-6, to: 25e-6, edges: 6, high: 3e-6 }]));
+		capture.add(chunk(30e-6, 10, [], [{ from: 33e-6, to: 39e-6, edges: 6, high: 3e-6 }]));
+
+		expect(capture.bursts[0]).toEqual([
+			{ from: 1e-6, to: 25e-6, edges: 24, high: 12e-6 },
+			{ from: 33e-6, to: 39e-6, edges: 6, high: 3e-6 }
+		]);
+	});
+
+	it('forgets a burst once the memory has moved past it', () => {
+		const capture = new Capture(['v(n1)'], [], ['d1'], 1);
+		capture.add(chunk(0, 10, [], [{ from: 1e-6, to: 9e-6, edges: 8, high: 4e-6 }]));
+		capture.add(chunk(1, DEPTH * 3));
+		expect(capture.bursts[0]).toEqual([]);
 	});
 });
