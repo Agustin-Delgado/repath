@@ -87,12 +87,13 @@ export class Capture {
 	/** Per net, the transitions still inside the memory. */
 	readonly digital: DigitalTransition[][];
 	readonly failures: PartFailure[] = [];
-	/** What the engine has been through, added up over the whole sweep. */
-	private readonly stats = {
+	/** What the engine has been through over the whole sweep, as it last reported. */
+	private stats = {
 		accepted_steps: 0,
 		rejected_steps: 0,
 		newton_iterations: 0,
-		digital_events: 0
+		digital_events: 0,
+		work: 0
 	};
 	/** Level each net was at when the memory begins, for a trace with no edge in it. */
 	private readonly opening: LogicState[];
@@ -153,10 +154,10 @@ export class Capture {
 			}
 		}
 		this.failures.push(...chunk.failures);
-		this.stats.accepted_steps += chunk.stats.accepted_steps;
-		this.stats.rejected_steps += chunk.stats.rejected_steps;
-		this.stats.newton_iterations += chunk.stats.newton_iterations;
-		this.stats.digital_events += chunk.stats.digital_events;
+		// Totals, not increments: adding them up counted every step once per
+		// chunk that came after it, and the footer said a hundred thousand steps
+		// for a run of four hundred.
+		this.stats = { ...chunk.stats };
 		this.forget(this.earliest);
 		this.cached = null;
 	}

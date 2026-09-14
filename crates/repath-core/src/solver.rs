@@ -18,13 +18,21 @@
 //!
 //! The transient loop never steps over a discontinuity. Before each step it takes
 //! the minimum of: the local truncation error budget, the shortest feature of any
-//! source waveform, the next waveform corner, the next digital event, and the end
-//! of any digital-to-analog ramp in flight.
+//! source waveform, the next waveform corner, the next digital change that reaches
+//! an analog node, and the end of any digital-to-analog ramp in flight.
+//!
+//! Digital events that stay digital are not on that list. The event queue is run
+//! ahead of the analog side, up to the end of the step it is about to take, and
+//! only a change on a net that a bridge drives into the analog circuit cuts the
+//! step short. A counter ticking away at tens of kilohertz behind a one-hertz
+//! LED costs the analog solver nothing per tick — which is the difference
+//! between a simulation that keeps up with the clock on the wall and one that
+//! does not.
 
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
 use crate::complex::ComplexSystem;
-use crate::digital::{DriverId, Logic, NetId};
+use crate::digital::{DriverId, Halt, Logic, NetId, Transition};
 use crate::element::{AcCtx, AcceptCtx, Integration, Mode, StampCtx};
 use crate::elements::{Diode, Failure};
 use crate::linalg::{LinearSystem, SolveError};
@@ -135,8 +143,27 @@ pub struct Stats {
     pub accepted_steps: usize,
     pub rejected_steps: usize,
     pub newton_iterations: usize,
+    /// Events applied by the digital domain.
     pub digital_events: usize,
 }
+
+impl Stats {
+    /// The work done so far, in analog steps.
+    ///
+    /// A digital event is a few hundred nanoseconds of bookkeeping; an analog
+    /// step is a Newton solve. Counting them as one unit each would have a
+    /// frame's budget spent by a fast clock before the analog side had moved,
+    /// and not counting the events at all would have a frame with a hundred
+    /// thousand of them take as long as it liked.
+    pub fn work(&self) -> f64 {
+        self.accepted_steps as f64 + self.digital_events as f64 / EVENTS_PER_STEP
+    }
+}
+
+/// How many digital events cost about as much as one analog step. Measured on
+/// a sixteen-stage ripple counter driving LEDs, in the browser: a step of that
+/// circuit is about sixteen microseconds, an event about half of one.
+const EVENTS_PER_STEP: f64 = 32.0;
 
 /// Result of a transient run.
 #[derive(Debug, Clone, Default)]
@@ -241,6 +268,15 @@ pub struct Running {
     stats: Stats,
     /// Level last written into each net's trace.
     last_logic: Vec<Logic>,
+    /// Changes on bridged nets the analog side has not reached yet.
+    ///
+    /// The digital domain is allowed to run ahead of the analog solver, so a
+    /// change it reports can be later than the last accepted timepoint — most
+    /// often when the step meant to land on it was refused and retried shorter.
+    /// Each is a breakpoint until the solver gets there, and the bridge is told
+    /// only then: a ramp that began before a timepoint already accepted would
+    /// be a change to a solve that is finished.
+    pending_dac: Vec<Transition>,
     /// How many destroyed parts the caller has already been told about.
     reported_failures: usize,
     /// Most steps one call to [`Simulator::advance_transient`] may take before
@@ -714,8 +750,12 @@ impl Simulator {
 
         // Bring the digital side up first: the analog operating point depends on
         // what the digital outputs are driving.
+        let bridged: Vec<NetId> = circuit.dacs().iter().map(|d| d.net).collect();
+        circuit.digital.watch(bridged);
         circuit.digital.initialize();
         circuit.digital.settle(0.0);
+        // The starting levels go into the trace below as levels, not as changes.
+        circuit.digital.take_log();
         self.force_dac_levels(circuit, 0.0);
 
         // Every net's starting value belongs in the trace. Without it a viewer
@@ -751,7 +791,15 @@ impl Simulator {
 
         let mut last_logic: Vec<Logic> =
             (0..circuit.digital.net_count()).map(|n| circuit.digital.state(n)).collect();
-        self.exchange_with_digital(circuit, 0.0, &mut result, &mut stats, &mut last_logic);
+        let mut pending_dac = Vec::new();
+        self.exchange_with_digital(
+            circuit,
+            0.0,
+            &mut result,
+            &mut stats,
+            &mut last_logic,
+            &mut pending_dac,
+        );
 
         // Measured against the step ceiling rather than the run length, because a
         // run that is advanced piece by piece has no length to measure against —
@@ -770,6 +818,7 @@ impl Simulator {
             min_step,
             stats,
             last_logic,
+            pending_dac,
             reported_failures: 0,
             budget: usize::MAX,
         };
@@ -790,6 +839,7 @@ impl Simulator {
         let min_step = run.min_step;
         let mut stats = std::mem::take(&mut run.stats);
         let started_at = stats.accepted_steps;
+        let work_at_start = stats.work();
         let mut result = TransientResult {
             digital: vec![Vec::new(); circuit.digital.net_count()],
             ..Default::default()
@@ -814,16 +864,33 @@ impl Simulator {
             }
             // Out of budget for this call: what was solved goes back as it is,
             // and the next call carries on from here.
-            if stats.accepted_steps - started_at >= run.budget {
+            let spent = stats.work() - work_at_start;
+            if spent >= run.budget as f64 {
                 break;
             }
 
             let integration =
                 if euler_steps > 0 { Integration::BackwardEuler } else { Integration::Trapezoidal };
 
-            let mut step = dt
-                .min(cfg.max_step)
-                .min(until - t)
+            // Run the digital side out to where this step could at most end.
+            // Whatever it does on its own nets in that span is its business; the
+            // first change on a net that reaches the analog circuit is where
+            // this step has to end, so that the bridge starts its ramp from a
+            // timepoint the solver has actually been at.
+            let proposal = dt.min(cfg.max_step).min(until - t);
+            let events_allowed =
+                (((run.budget as f64 - spent) * EVENTS_PER_STEP).ceil() as usize).max(1);
+            let settled = circuit.digital.settle_until(t + proposal, true, events_allowed);
+            stats.digital_events += settled.events;
+            self.absorb_digital(circuit, t, &mut result, &mut run.last_logic, &mut run.pending_dac);
+            if settled.halt == Halt::Budget && settled.time <= t {
+                // The frame's share went on events that did not get the digital
+                // side past the analog one. Nothing to solve; the next call
+                // carries on.
+                break;
+            }
+
+            let mut step = proposal
                 .min(self.element_step_limit(circuit, t))
                 .min(self.dac_step_limit(circuit, t));
 
@@ -837,12 +904,17 @@ impl Simulator {
                 step = bp - t;
                 on_corner = true;
             }
-            if let Some(event) = circuit.digital.next_event_time()
-                && event > t
-                && event < t + step
+            if let Some(next) = run.pending_dac.iter().map(|c| c.time).reduce(f64::min)
+                && next > t
+                && next < t + step
             {
-                step = event - t;
+                step = next - t;
                 on_corner = true;
+            }
+            // Not a corner: the queue was simply not run any further, and the
+            // analog side is not to get ahead of it.
+            if settled.halt == Halt::Budget && settled.time < t + step {
+                step = settled.time - t;
             }
             step = step.max(min_step);
 
@@ -921,11 +993,29 @@ impl Simulator {
             }
 
             self.record(&mut result, circuit, t);
-            self.exchange_with_digital(circuit, t, &mut result, &mut stats, &mut run.last_logic);
+            self.exchange_with_digital(
+                circuit,
+                t,
+                &mut result,
+                &mut stats,
+                &mut run.last_logic,
+                &mut run.pending_dac,
+            );
 
             // Grow back gradually. Doubling every step overshoots straight into
             // the next rejection.
-            dt = (attempt * 2.0).min(cfg.max_step);
+            //
+            // But only grow back from a step that was actually refused. A step
+            // that was merely cut short — by a corner, a ramp, an element's
+            // error estimate — says nothing against the size it was cut from,
+            // and doubling up from a two-nanosecond ramp to a twenty-millisecond
+            // cruise took twenty-five steps of nothing happening after every
+            // logic edge that reached an LED.
+            dt = if attempt >= step && step < proposal {
+                proposal
+            } else {
+                (attempt * 2.0).min(cfg.max_step)
+            };
         }
 
         let mut failures: Vec<Failure> = circuit
@@ -983,8 +1073,8 @@ impl Simulator {
         }
     }
 
-    /// Sample every ADC, let the digital domain settle, and hand any resulting
-    /// net changes back to the DAC bridges.
+    /// Sample every ADC, let the digital domain settle to the accepted instant,
+    /// and hand any resulting net changes back to the DAC bridges.
     fn exchange_with_digital(
         &mut self,
         circuit: &mut Circuit,
@@ -992,6 +1082,7 @@ impl Simulator {
         result: &mut TransientResult,
         stats: &mut Stats,
         last: &mut [Logic],
+        pending_dac: &mut Vec<Transition>,
     ) {
         // Analog -> digital.
         let mut pending: Vec<(f64, DriverId, NetId, Logic)> = Vec::new();
@@ -1021,35 +1112,54 @@ impl Simulator {
             stats.digital_events += 1;
         }
 
-        // Let the event queue run out to the current instant.
-        circuit.digital.settle(t);
-        let changed: Vec<(NetId, Logic, f64)> = circuit
-            .digital
-            .changed_nets()
-            .iter()
-            .map(|net| (*net, circuit.digital.state(*net), circuit.digital.changed_at(*net)))
-            .collect();
+        // Let the event queue run out to the current instant. Anything the ADCs
+        // just scheduled is due by now or soon; what the queue had already got
+        // to beyond `t` stays where it is.
+        //
+        // A crossing the bridge found inside the step is scheduled at the
+        // instant it happened, and the queue may already have been run past
+        // that instant. It goes in anyway and comes out first: what it wakes is
+        // evaluated at its own time, late only in the sense that a device which
+        // fired between the crossing and here did not see it. That device would
+        // have needed the analog side to stop at a crossing nobody knew about
+        // until the step that found it, which is one step of error either way —
+        // the same as before the queue was allowed ahead.
+        let settled = circuit.digital.settle_until(t, false, usize::MAX);
+        stats.digital_events += settled.events;
+        self.absorb_digital(circuit, t, result, last, pending_dac);
+    }
 
-        // Digital -> analog, and into the recorded waveforms.
+    /// Take what the digital domain has done since it was last asked: into the
+    /// recorded waveforms, and — for the nets that reach the analog circuit —
+    /// to the bridges, once the analog side has got to where each change is.
+    fn absorb_digital(
+        &mut self,
+        circuit: &mut Circuit,
+        t: f64,
+        result: &mut TransientResult,
+        last: &mut [Logic],
+        pending_dac: &mut Vec<Transition>,
+    ) {
+        // Into the recorded waveforms, at the instant the net actually took the
+        // value and not at the end of the analog step that happened to notice.
         //
         // The "did it really change" test is against the level carried by the run
         // rather than against the last entry in this result: a run advanced in
         // pieces hands back one result per piece, and a chunk that starts empty
         // would take the first sample of an unchanged net as a transition.
-        // Recorded at the instant the net actually took the value, not at the end
-        // of the analog step that happened to notice. A settle covers everything
-        // due up to `t`, so a gate delay of a nanosecond inside a microsecond step
-        // came back as having taken the whole microsecond, and every edge in the
-        // digital trace sat on the analog grid.
-        for (net, state, when) in &changed {
+        for change in circuit.digital.take_log() {
             if let (Some(trace), Some(previous)) =
-                (result.digital.get_mut(*net), last.get_mut(*net))
-                && *previous != *state
+                (result.digital.get_mut(change.net), last.get_mut(change.net))
+                && *previous != change.state
             {
-                trace.push((*when, *state));
-                *previous = *state;
+                trace.push((change.time, change.state));
+                *previous = change.state;
+            }
+            if circuit.dacs().iter().any(|d| d.net == change.net) {
+                pending_dac.push(change);
             }
         }
+
         // The bridges the other way are told `t`, and deliberately.
         //
         // A DAC answers a level with a ramp, and a ramp that began before the
@@ -1060,11 +1170,19 @@ impl Simulator {
         // which is the one thing this bridge exists to never do.
         //
         // So the record is honest about when the logic moved, and the analog side
-        // starts moving at the earliest instant it can honour.
-        if !changed.is_empty() {
+        // starts moving at the earliest instant it can honour — which is this
+        // one for a change it has reached, and a later timepoint, placed on the
+        // change as a breakpoint, for one it has not.
+        let mut i = 0;
+        while i < pending_dac.len() {
+            if pending_dac[i].time > t {
+                i += 1;
+                continue;
+            }
+            let change = pending_dac.remove(i);
             for dac in circuit.dacs_mut() {
-                if let Some((_, state, _)) = changed.iter().find(|(net, _, _)| *net == dac.net) {
-                    dac.notify(*state, t);
+                if dac.net == change.net {
+                    dac.notify(change.state, t);
                 }
             }
         }

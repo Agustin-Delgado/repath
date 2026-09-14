@@ -2564,3 +2564,174 @@ fn a_tighter_step_ceiling_takes_effect_from_where_the_run_is() {
     assert!(coarse.time.iter().all(|t| *t <= 0.5e-3 + 1e-12));
     assert!(fine.time.iter().all(|t| *t > 0.5e-3 - 1e-12));
 }
+
+/// Build a chain of toggling flip-flops off a clock: stage `n` runs at the
+/// clock rate over 2ⁿ. Returns the nets, first stage first.
+fn ripple_counter(c: &mut Circuit, clock_hz: f64, stages: usize) -> Vec<usize> {
+    let clk = c.net("clk");
+    c.add_device(Box::new(Clock::new("CLK", clk, clock_hz, 0.5)));
+    let mut outputs = Vec::new();
+    let mut previous = clk;
+    for stage in 0..stages {
+        let q = c.net(&format!("q{stage}"));
+        let qn = c.net(&format!("qn{stage}"));
+        c.add_device(Box::new(DFlipFlop::new(
+            format!("FF{stage}"),
+            previous,
+            qn,
+            AsyncInputs::default(),
+            q,
+            qn,
+            1e-9,
+        )));
+        outputs.push(q);
+        previous = q;
+    }
+    outputs
+}
+
+/// A clock ticking away behind an LED costs the analog solver nothing per tick.
+///
+/// Only a change that reaches an analog node is a reason to solve a timepoint.
+/// Every flip-flop in the chain moves thousands of times in this run; the one
+/// net that drives the resistor moves a few dozen, and the analog side should
+/// have taken about that many steps beyond its ceiling.
+#[test]
+fn a_counter_behind_an_led_costs_the_analog_side_nothing_per_tick() {
+    let family = LogicFamily::cmos_5v();
+    let mut c = Circuit::new();
+    let out = c.node("out");
+    c.add(Box::new(Resistor::new("R1", out, Circuit::GROUND, 1000.0)));
+    // 1 MHz over 2⁶ is 15.6 kHz on the last stage.
+    let stages = ripple_counter(&mut c, 1e6, 6);
+    c.bridge_to_analog("B1", stages[5], out, family);
+
+    // Two milliseconds, with a step ceiling of ten microseconds: two hundred
+    // steps of ceiling, two thousand clock cycles.
+    let mut cfg = TransientConfig::new(2e-3);
+    cfg.max_step = 10e-6;
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+
+    let first = result.net_names.iter().position(|n| n == "q0").unwrap();
+    let last = result.net_names.iter().position(|n| n == "q5").unwrap();
+    let edges = |net: usize| result.digital[net].iter().filter(|(t, _)| *t > 0.0).count();
+    assert!((1990..=2010).contains(&edges(first)), "the first stage made {} edges", edges(first));
+    assert!((60..=64).contains(&edges(last)), "the last stage made {} edges", edges(last));
+
+    // Every edge on the bridged net is a corner and a ramp — a handful of
+    // steps each — and nothing else is a reason to stop.
+    let steps = result.stats.accepted_steps;
+    assert!(steps < 1200, "{steps} analog steps for a run with {} bridged edges", edges(last));
+
+    // And the analog node followed the last stage, not the clock.
+    let out_i = index_of(&result, "v(out)");
+    let mut flips = 0;
+    let mut high = result.solution[0][out_i] > 2.5;
+    for row in &result.solution {
+        let now = row[out_i] > 2.5;
+        if now != high {
+            flips += 1;
+            high = now;
+        }
+    }
+    assert!((60..=64).contains(&flips), "the analog node flipped {flips} times");
+}
+
+/// The digital side runs ahead of the analog one; the bridge does not.
+///
+/// A change on a bridged net is where the analog step has to end, so that the
+/// ramp begins from a solved timepoint: the node is at the old level at the
+/// instant of the change, and at the new one a rise time later — not somewhere
+/// along a ramp that started inside a step nobody solved.
+#[test]
+fn a_bridged_edge_is_a_timepoint_and_its_ramp_starts_there() {
+    let family = LogicFamily::cmos_5v();
+    let mut c = Circuit::new();
+    let out = c.node("out");
+    c.add(Box::new(Resistor::new("R1", out, Circuit::GROUND, 1000.0)));
+    let stages = ripple_counter(&mut c, 1e6, 3);
+    c.bridge_to_analog("B1", stages[2], out, family);
+
+    // A ceiling far wider than the clock period, so every edge falls inside a
+    // step that would otherwise have gone straight over it.
+    let mut cfg = TransientConfig::new(100e-6);
+    cfg.max_step = 20e-6;
+    let result = Simulator::default().transient(&mut c, cfg).unwrap();
+
+    let net = result.net_names.iter().position(|n| n == "q2").unwrap();
+    let out_i = index_of(&result, "v(out)");
+    // Past the first microsecond: the flip-flop's first publish lands a delay
+    // after the start, from a net that had no level yet, and is not an edge.
+    let edges: Vec<(f64, Logic)> =
+        result.digital[net].iter().copied().filter(|(t, _)| *t > 1e-6).collect();
+    assert!(edges.len() >= 10, "only {} edges to check", edges.len());
+
+    for (when, state) in edges {
+        // A solved timepoint sits on the edge.
+        let at = result
+            .time
+            .iter()
+            .position(|t| (t - when).abs() < 1e-15)
+            .unwrap_or_else(|| panic!("no timepoint at the edge at {when:.6e}"));
+        let before = result.solution[at][out_i];
+        let after = value_at(&result, out_i, when + 10e-9);
+        match state {
+            Logic::High => {
+                assert!(before < 0.5, "already {before:.2} V at the rising edge at {when:.6e}");
+                assert!(after > 4.5, "only {after:.2} V ten nanoseconds after the rising edge");
+            }
+            Logic::Low => {
+                assert!(before > 4.5, "already {before:.2} V at the falling edge at {when:.6e}");
+                assert!(after < 0.5, "still {after:.2} V ten nanoseconds after the falling edge");
+            }
+            other => panic!("the counter output went {other:?}"),
+        }
+    }
+}
+
+/// A fast clock spends the frame's budget on events, and the call comes back.
+///
+/// With events not counted, a clock at a hundred megahertz behind one analog
+/// step of twenty milliseconds would hold the call for two million events
+/// before the budget was even looked at.
+#[test]
+fn a_budget_is_spent_by_digital_events_too() {
+    let family = LogicFamily::cmos_5v();
+    let mut c = Circuit::new();
+    let out = c.node("out");
+    c.add(Box::new(Resistor::new("R1", out, Circuit::GROUND, 1000.0)));
+    // Sixteen stages: the bridged net moves once in 655 µs, the clock every 5 ns.
+    let stages = ripple_counter(&mut c, 100e6, 16);
+    c.bridge_to_analog("B1", stages[15], out, family);
+
+    let cfg = TransientConfig::new(1e-3);
+    let mut sim = Simulator::default();
+    let (mut run, mut result) = sim.begin_transient(&mut c, cfg).unwrap();
+    run.set_budget(20);
+    let events_before = run.stats().digital_events;
+    let chunk = sim.advance_transient(&mut c, &mut run, 1e-3).unwrap();
+
+    assert!(run.time() < 1e-3, "twenty steps' worth of budget covered the whole millisecond");
+    let events = chunk.stats.digital_events - events_before;
+    // Twenty steps' worth of events, give or take the instant the budget ran
+    // out on — not the two hundred thousand the millisecond holds.
+    assert!(
+        (1..=20 * 32 + 64).contains(&events),
+        "{events} events were applied on a budget of 20 steps"
+    );
+
+    // And nothing was lost: the run carries on to the end, and the last stage
+    // came out at the rate it should.
+    result.append(chunk);
+    run.set_budget(usize::MAX);
+    result.append(sim.advance_transient(&mut c, &mut run, 1e-3).unwrap());
+    let net = result.net_names.iter().position(|n| n == "q15").unwrap();
+    // Past the start-up: the chain begins all low, and the first clock edge
+    // ripples a toggle through every stage at once, which is the count going
+    // from zero to all ones in sixteen gate delays.
+    let edges: Vec<f64> =
+        result.digital[net].iter().filter(|(t, _)| *t > 1e-6).map(|(t, _)| *t).collect();
+    assert!(edges.len() >= 2, "the top stage moved {} times", edges.len());
+    let spacing = edges[1] - edges[0];
+    assert!((spacing - 327.68e-6).abs() < 1e-9, "the top stage half-period was {spacing:.6e}");
+}

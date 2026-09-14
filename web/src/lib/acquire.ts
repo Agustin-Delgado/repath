@@ -76,14 +76,15 @@ export class Acquisition {
 	keeping = 1;
 
 	/**
-	 * Solver steps per wall-clock millisecond, as recently measured.
+	 * Solver work per wall-clock millisecond, as recently measured, in steps —
+	 * the engine counts a digital event as a fraction of one.
 	 *
 	 * What the next frame's budget is sized from. Eased like `keeping`, so one
 	 * frame that happened to share the machine with something else does not
 	 * halve the next.
 	 */
 	private stepsPerMs: number | null = null;
-	private stepsSoFar = 0;
+	private workSoFar = 0;
 
 	constructor(
 		netlist: unknown,
@@ -173,11 +174,11 @@ export class Acquisition {
 		try {
 			const chunk = this.run.advance(until);
 			this.capture.add(chunk);
-			// Steps are counted from the start of the run; the frame's share is the
+			// Work is counted from the start of the run; the frame's share is the
 			// difference. Timed around the whole call, since the samples coming back
 			// across the boundary are part of what the frame paid for.
-			const steps = chunk.stats.accepted_steps - this.stepsSoFar;
-			this.stepsSoFar = chunk.stats.accepted_steps;
+			const steps = chunk.stats.work - this.workSoFar;
+			this.workSoFar = chunk.stats.work;
 			const spent = performance.now() - began;
 			if (steps > 0 && spent > 0.5) {
 				const measured = steps / spent;
