@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { measure, measureLogic } from '$lib/measure';
+	import { DEPTH } from '$lib/capture';
 	import { netLabel } from '$lib/schematic/nets';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
@@ -73,6 +74,8 @@
 		const out: Array<{
 			label: string;
 			colour: string;
+			/** Which net, in the run's numbering. */
+			index: number;
 			events: DigitalTransition[];
 			/** The level the net was already at when the memory opens. */
 			opening: LogicState;
@@ -87,6 +90,7 @@
 			out.push({
 				label: probe.label,
 				colour: probe.colour,
+				index,
 				events: run.digital[index],
 				opening: app.capture?.openingState(index) ?? 'unknown',
 				offset: app.channels[probe.key]?.offset ?? 0
@@ -134,8 +138,14 @@
 	 */
 	const coverage = $derived.by(() => {
 		const width = Math.max(app.stopTime, 1e-12);
-		if (held.earliest <= 0) return width;
-		return Math.min(width, Math.max(held.now - held.earliest, 1e-12));
+		const time = app.result?.time;
+		if (!time || held.earliest <= 0) return width;
+		// The memory is a ring that holds between one and two depths of samples
+		// and lets a depth go at a time, so "everything held" lurches back and
+		// forth by half at every compaction — and a window sized to it lurched
+		// with it. What is guaranteed is the newest depth; the width is that.
+		const guaranteed = time[Math.max(0, time.length - DEPTH)];
+		return Math.min(width, Math.max(held.now - guaranteed, 1e-12));
 	});
 	const narrowed = $derived(app.result !== null && coverage < Math.max(app.stopTime, 1e-12) * 0.999);
 
@@ -234,10 +244,17 @@
 	 * were going — the one question anybody has about a counter's outputs.
 	 */
 	const logicMeasurements = $derived.by(() => {
-		if (!app.result || !measuring) return [];
-		return digitalTraces
-			.map((t) => ({ label: t.label, colour: t.colour, m: measureLogic(t.events, t.opening) }))
-			.filter((row) => row.m !== null);
+		void app.result;
+		const capture = app.capture;
+		if (!capture || !measuring) return [];
+		// Measured from the edges the capture keeps beyond its samples: the top of
+		// a counter changes once in seconds, and the memory holds milliseconds. A
+		// lane that has not gone round even once still gets a row, saying so —
+		// silence read as the button not working.
+		return digitalTraces.map((t) => {
+			const { events, opening } = capture.edges(t.index);
+			return { label: t.label, colour: t.colour, m: measureLogic(events, opening) };
+		});
 	});
 
 	/** One range per trace, for when they are drawn separated. */
@@ -963,19 +980,25 @@
 					</div>
 				{/each}
 				{#each logicMeasurements as row (row.label)}
-					{@const m = row.m!}
 					<div class="measure">
 						<span class="who" style:color={row.colour}>{row.label}</span>
-						<dl>
-							<dt>freq</dt>
-							<dd>{formatValue(m.frequency, 3)}Hz</dd>
-							<dt>period</dt>
-							<dd>{formatValue(m.period, 3)}s</dd>
-							<dt>duty</dt>
-							<dd>{Math.round(m.duty * 100)}%</dd>
-							<dt>cycles</dt>
-							<dd title="Whole cycles the numbers are averaged over">{m.cycles}</dd>
-						</dl>
+						{#if row.m}
+							{@const m = row.m}
+							<dl>
+								<dt>freq</dt>
+								<dd>{formatValue(m.frequency, 3)}Hz</dd>
+								<dt>period</dt>
+								<dd>{formatValue(m.period, 3)}s</dd>
+								<dt>duty</dt>
+								<dd>{Math.round(m.duty * 100)}%</dd>
+								<dt>cycles</dt>
+								<dd title="Whole cycles the numbers are averaged over">{m.cycles}</dd>
+							</dl>
+						{:else}
+							<span class="waiting" title="A period is two rising edges, and this lane has not had them yet. Leave it running.">
+								no full cycle yet
+							</span>
+						{/if}
 					</div>
 				{/each}
 			</div>
@@ -1048,6 +1071,13 @@
 	.measure .who {
 		font-size: 0.66rem;
 		font-family: var(--font-mono);
+	}
+
+	.measure .waiting {
+		display: block;
+		font-size: 0.64rem;
+		color: var(--label-dim);
+		font-style: italic;
 	}
 
 	.measure dl {
