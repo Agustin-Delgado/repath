@@ -20,6 +20,8 @@ export interface RunStats {
 	rejected_steps: number;
 	newton_iterations: number;
 	digital_events: number;
+	/** Steps and digital events added up in units of a step, which is what a frame is paced by. */
+	work: number;
 }
 
 /** A part the engine destroyed partway through the run. */
@@ -174,6 +176,7 @@ export interface Chunk {
 	/** Transitions that happened during this piece, per digital net. */
 	digital: DigitalTransition[][];
 	failures: PartFailure[];
+	/** The run's totals so far, not this piece's share: the engine counts from the start. */
 	stats: RunStats;
 }
 

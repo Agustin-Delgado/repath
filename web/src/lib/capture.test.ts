@@ -19,7 +19,7 @@ function chunk(from: number, count: number, edges: Array<[number, LogicState]> =
 		currents: [],
 		digital: [edges.map(([t, state]) => ({ time: t, state }))],
 		failures: [],
-		stats: { accepted_steps: count, rejected_steps: 0, newton_iterations: count, digital_events: edges.length }
+		stats: { accepted_steps: count, rejected_steps: 0, newton_iterations: count, digital_events: edges.length, work: count }
 	};
 }
 

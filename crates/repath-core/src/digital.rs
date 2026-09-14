@@ -667,14 +667,50 @@ pub struct DigitalDomain {
     resolved: Vec<Logic>,
     /// Nets whose resolved value changed during the current instant.
     dirty: Vec<NetId>,
-    /// When each net last changed, which is the time of the event that did it and
-    /// not the instant somebody got round to asking.
+    /// Every change of level since the log was last taken, in the order they
+    /// happened: the time of the event that did it, never the instant somebody
+    /// got round to asking.
     ///
-    /// A settle covers everything due up to a time, so several instants can be
-    /// resolved in one call. Stamping the answer with the time of the call is what
-    /// puts every digital edge on the analog grid: a gate delay of a nanosecond
-    /// inside a microsecond step comes back as having taken a microsecond.
-    changed_at: Vec<f64>,
+    /// A settle can run out many instants' worth of queue in one call, and a
+    /// net can move several times in that span. A single "last value" per net
+    /// would fold a whole burst into its final level, so the record is the
+    /// sequence itself.
+    log: Vec<Transition>,
+    /// Nets whose changes the analog side has to be told about, because a
+    /// bridge drives an analog node from them.
+    watched: Vec<bool>,
+    /// How far the queue has been run out, in seconds.
+    now: f64,
+}
+
+/// One net taking a new level at an instant.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transition {
+    pub time: f64,
+    pub net: NetId,
+    pub state: Logic,
+}
+
+/// Why [`DigitalDomain::settle_until`] handed control back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Halt {
+    /// The queue was run out to the time asked for.
+    Reached,
+    /// A watched net changed; the domain stands at that instant, with every event
+    /// due at it applied and nothing later.
+    Watched,
+    /// The event budget ran out; the domain stands at the last instant it
+    /// finished.
+    Budget,
+}
+
+/// Where a settle stopped, and why.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Settled {
+    pub time: f64,
+    pub halt: Halt,
+    /// Events applied along the way — the work done, for pacing.
+    pub events: usize,
 }
 
 impl DigitalDomain {
@@ -687,7 +723,7 @@ impl DigitalDomain {
         self.nets.push(Net { name: name.into(), drivers: Vec::new(), resolved: Logic::HighZ });
         self.resolved.push(Logic::HighZ);
         self.fanout.push(Vec::new());
-        self.changed_at.push(0.0);
+        self.watched.push(false);
         id
     }
 
@@ -786,31 +822,84 @@ impl DigitalDomain {
         self.settle(0.0);
     }
 
-    /// Nets whose resolved value changed during the most recent [`Self::settle`].
-    pub fn changed_nets(&self) -> &[NetId] {
-        &self.dirty
+    /// Mark the nets whose changes stop a [`Self::settle_until`].
+    pub fn watch(&mut self, nets: impl IntoIterator<Item = NetId>) {
+        self.watched.fill(false);
+        for net in nets {
+            if let Some(w) = self.watched.get_mut(net) {
+                *w = true;
+            }
+        }
     }
 
-    /// When a net last took the value it is holding.
-    ///
-    /// The time of the event that set it, which is what a waveform has to be drawn
-    /// against. It is not the same as the instant the caller settled to: one call
-    /// can run out several instants' worth of queue.
-    pub fn changed_at(&self, net: NetId) -> f64 {
-        self.changed_at.get(net).copied().unwrap_or(0.0)
+    /// How far the queue has been run out.
+    pub fn now(&self) -> f64 {
+        self.now
     }
 
-    /// Apply every event due at or before `time`, then propagate until the
-    /// domain is stable. Returns how many nets changed value; the nets themselves
-    /// are available from [`Self::changed_nets`].
+    /// Every level change since this was last called, oldest first.
+    pub fn take_log(&mut self) -> Vec<Transition> {
+        std::mem::take(&mut self.log)
+    }
+
+    /// Apply every event due at or before `time`, instant by instant, and
+    /// propagate each until the domain is stable. Returns how many nets changed.
     pub fn settle(&mut self, time: f64) -> usize {
-        self.dirty.clear();
-        let mut changed_any = Vec::new();
+        let before = self.log.len();
+        self.settle_until(time, false, usize::MAX);
+        let mut changed: Vec<NetId> = Vec::new();
+        for entry in &self.log[before..] {
+            if !changed.contains(&entry.net) {
+                changed.push(entry.net);
+            }
+        }
+        changed.len()
+    }
 
+    /// Run the queue out towards `time`, one instant at a time.
+    ///
+    /// Each instant is finished before the next is begun: everything due at it
+    /// is applied, the devices downstream are evaluated with the clock reading
+    /// that instant, and whatever they schedule for the same instant goes round
+    /// again. That is what lets a call cover any span at all — a device sees
+    /// events in the order they happen and measures its delay from the event,
+    /// not from wherever the caller happened to stop.
+    ///
+    /// Two things cut the span short. With `stop_at_watched`, the first instant
+    /// at which a watched net changes is the last one done, so the caller can
+    /// bring the analog side up to exactly there before going on. And a call is
+    /// never allowed more than `budget` events, so a fast clock cannot hold the
+    /// caller for as long as its span is wide.
+    pub fn settle_until(&mut self, time: f64, stop_at_watched: bool, budget: usize) -> Settled {
+        let mut events = 0;
+        loop {
+            let Some(instant) = self.queue.next_time().filter(|t| *t <= time) else {
+                self.now = self.now.max(time);
+                return Settled { time: self.now, halt: Halt::Reached, events };
+            };
+            if events >= budget {
+                return Settled { time: self.now, halt: Halt::Budget, events };
+            }
+            let before = self.log.len();
+            events += self.run_instant(instant);
+            self.now = self.now.max(instant);
+            if stop_at_watched && self.log[before..].iter().any(|t| self.watched[t.net]) {
+                return Settled { time: instant, halt: Halt::Watched, events };
+            }
+        }
+    }
+
+    /// Apply everything due at exactly `instant`, and keep going while the
+    /// devices it wakes schedule more for the same instant. Returns the events
+    /// applied.
+    fn run_instant(&mut self, instant: f64) -> usize {
+        let mut events = 0;
         for _ in 0..MAX_DELTA_CYCLES {
+            self.dirty.clear();
             let mut applied = false;
-            while let Some(event) = self.queue.pop_due(time) {
+            while let Some(event) = self.queue.pop_due(instant) {
                 applied = true;
+                events += 1;
                 if self.driver_values[event.driver.0] == event.state {
                     continue;
                 }
@@ -819,12 +908,9 @@ impl DigitalDomain {
                 if resolved != self.resolved[event.net] {
                     self.resolved[event.net] = resolved;
                     self.nets[event.net].resolved = resolved;
-                    self.changed_at[event.net] = event.time;
+                    self.log.push(Transition { time: event.time, net: event.net, state: resolved });
                     if !self.dirty.contains(&event.net) {
                         self.dirty.push(event.net);
-                    }
-                    if !changed_any.contains(&event.net) {
-                        changed_any.push(event.net);
                     }
                 }
             }
@@ -848,12 +934,11 @@ impl DigitalDomain {
                 }
                 devices
             };
-            self.dirty.clear();
 
             for index in touched {
                 let mut device = std::mem::replace(&mut self.devices[index], Box::new(NullDevice));
                 let mut ctx = EvalCtx {
-                    now: time,
+                    now: instant,
                     resolved: &self.resolved,
                     queue: &mut self.queue,
                     driver_base: self.driver_base[index],
@@ -863,14 +948,12 @@ impl DigitalDomain {
             }
 
             // Anything those devices scheduled with zero delay is due right now,
-            // so loop again; anything with real delay waits for a later call.
-            if self.queue.next_time().is_none_or(|t| t > time) {
+            // so loop again; anything with real delay waits for its own instant.
+            if self.queue.next_time().is_none_or(|t| t > instant) {
                 break;
             }
         }
-
-        self.dirty = changed_any;
-        self.dirty.len()
+        events
     }
 
     fn resolve(&self, net: NetId) -> Logic {
@@ -886,12 +969,13 @@ impl DigitalDomain {
         for (i, n) in self.nets.iter_mut().enumerate() {
             n.resolved = Logic::HighZ;
             self.resolved[i] = Logic::HighZ;
-            self.changed_at[i] = 0.0;
         }
         for d in &mut self.devices {
             d.reset();
         }
         self.dirty.clear();
+        self.log.clear();
+        self.now = 0.0;
     }
 }
 
@@ -1111,5 +1195,114 @@ mod tests {
         d.schedule(1e-9, en_drv, en, Logic::Low);
         d.settle(1e-9);
         assert_eq!(d.state(bus), Logic::HighZ);
+    }
+
+    /// One call may run out any span, and a device measures its delay from the
+    /// event that woke it, not from the end of the span.
+    ///
+    /// Settling everything due in a span at once, and only then evaluating,
+    /// folded the span's instants into one: a clock told to settle a whole
+    /// period saw both its edges applied before it was asked, and rescheduled
+    /// from the end of the call. Every caller had to stop at every event to
+    /// keep the timing honest — which is what made a fast clock slow.
+    #[test]
+    fn a_span_is_settled_instant_by_instant() {
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        let q = d.add_net("q");
+        let qn = d.add_net("qn");
+        d.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
+        d.add_device(Box::new(DFlipFlop::new("FF", clk, qn, AsyncInputs::default(), q, qn, 1e-9)));
+        d.initialize();
+        // Past the flip-flop's first publish, which lands a delay after the
+        // start and is the net getting a level rather than changing one.
+        d.settle(2e-9);
+        d.take_log();
+
+        // Ten periods in one call. A little past the last edge, since ten
+        // periods added up half a period at a time need not land on `10e-6`.
+        let settled = d.settle_until(10.25e-6, false, usize::MAX);
+        assert_eq!(settled.halt, Halt::Reached);
+        assert!((settled.time - 10.25e-6).abs() < 1e-18);
+
+        let log = d.take_log();
+        let clock_edges: Vec<f64> = log.iter().filter(|t| t.net == clk).map(|t| t.time).collect();
+        assert_eq!(clock_edges.len(), 20, "{clock_edges:?}");
+        for (i, t) in clock_edges.iter().enumerate() {
+            let expected = 0.5e-6 * (i + 1) as f64;
+            assert!((t - expected).abs() < 1e-15, "edge {i} at {t:.6e}, not {expected:.6e}");
+        }
+        // And the flip-flop's delay is measured from the edge that clocked it.
+        let q_edges: Vec<f64> = log.iter().filter(|t| t.net == q).map(|t| t.time).collect();
+        assert_eq!(q_edges.len(), 10, "{q_edges:?}");
+        for (i, t) in q_edges.iter().enumerate() {
+            let expected = 0.5e-6 + 1e-6 * i as f64 + 1e-9;
+            assert!((t - expected).abs() < 1e-15, "q edge {i} at {t:.6e}, not {expected:.6e}");
+        }
+        // The log is in the order things happened.
+        assert!(log.windows(2).all(|w| w[0].time <= w[1].time));
+    }
+
+    /// A watched net stops the settle at the instant it changes, with that
+    /// instant complete and nothing later touched.
+    #[test]
+    fn a_watched_net_stops_the_span_where_it_changes() {
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        let q = d.add_net("q");
+        let qn = d.add_net("qn");
+        d.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
+        d.add_device(Box::new(DFlipFlop::new("FF", clk, qn, AsyncInputs::default(), q, qn, 1e-9)));
+        d.watch([q]);
+        d.initialize();
+        // Past the flip-flop's first publish, which lands a delay after the
+        // start and is the net getting a level rather than changing one.
+        d.settle(2e-9);
+        d.take_log();
+
+        // The first clock edge is at 0.5 µs; q follows a nanosecond later.
+        let settled = d.settle_until(10e-6, true, usize::MAX);
+        assert_eq!(settled.halt, Halt::Watched);
+        assert!((settled.time - 0.501e-6).abs() < 1e-15, "stopped at {:.6e}", settled.time);
+        assert_eq!(d.state(q), Logic::High);
+        assert!((d.now() - 0.501e-6).abs() < 1e-15);
+        // Nothing beyond that instant: the clock's next edge is still to come.
+        assert_eq!(d.state(clk), Logic::High);
+        assert_eq!(d.next_event_time().map(|t| (t - 1e-6).abs() < 1e-15), Some(true));
+
+        // Asked again, it goes on to the next change and no further.
+        let settled = d.settle_until(10e-6, true, usize::MAX);
+        assert_eq!(settled.halt, Halt::Watched);
+        assert!((settled.time - 1.501e-6).abs() < 1e-15, "stopped at {:.6e}", settled.time);
+        assert_eq!(d.state(q), Logic::Low);
+
+        // Without the watch, the same call runs to the end.
+        let settled = d.settle_until(10e-6, false, usize::MAX);
+        assert_eq!(settled.halt, Halt::Reached);
+        assert!((d.now() - 10e-6).abs() < 1e-18);
+    }
+
+    /// The budget stops the settle between instants, never inside one.
+    #[test]
+    fn a_budget_stops_the_span_between_instants() {
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        d.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
+        d.initialize();
+        d.take_log();
+
+        // The first edge is two events — the clock schedules it once from
+        // `initialize` and once more on seeing its own starting level — so
+        // five events is four edges, and the fifth edge is not begun.
+        let settled = d.settle_until(10.25e-6, false, 5);
+        assert_eq!(settled.halt, Halt::Budget);
+        assert_eq!(settled.events, 5);
+        assert!((settled.time - 2e-6).abs() < 1e-15, "stood at {:.6e}", settled.time);
+        assert_eq!(d.take_log().len(), 4);
+
+        // What was not done is still to do.
+        let rest = d.settle_until(10.25e-6, false, usize::MAX);
+        assert_eq!(rest.halt, Halt::Reached);
+        assert_eq!(d.take_log().len(), 16);
     }
 }

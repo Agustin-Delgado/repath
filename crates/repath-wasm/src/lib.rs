@@ -49,6 +49,9 @@ struct RunStats {
     rejected_steps: usize,
     newton_iterations: usize,
     digital_events: usize,
+    /// Steps and events together, in units of a step: what a frame's budget is
+    /// measured in, since a fast clock spends it on events.
+    work: f64,
 }
 
 fn logic_name(state: Logic) -> &'static str {
@@ -279,6 +282,7 @@ fn meta_of(result: &TransientResult, with_names: bool) -> RunMeta {
             rejected_steps: result.stats.rejected_steps,
             newton_iterations: result.stats.newton_iterations,
             digital_events: result.stats.digital_events,
+            work: result.stats.work(),
         },
     }
 }

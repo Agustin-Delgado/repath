@@ -46,7 +46,7 @@ function run(...failures: PartFailure[]): TransientRun {
 		netNames: [],
 		digital: [],
 		failures,
-		stats: { accepted_steps: 0, rejected_steps: 0, newton_iterations: 0, digital_events: 0 },
+		stats: { accepted_steps: 0, rejected_steps: 0, newton_iterations: 0, digital_events: 0, work: 0 },
 		elapsedMs: 0
 	};
 }
