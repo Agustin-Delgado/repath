@@ -26,6 +26,17 @@ import type { Chunk, DigitalTransition, LogicState, PartFailure, TransientRun } 
  */
 export const DEPTH = 20_000;
 
+/**
+ * Transitions kept per net beyond the sample memory.
+ *
+ * The memory is a fixed number of samples, and a busy circuit spends them in
+ * milliseconds; a slow net — the top of a ripple counter — may not change once
+ * in that time, and its frequency was unmeasurable for as long as the fast nets
+ * were busy. Its edges are a few dozen objects, so the last of them are kept
+ * however old they are.
+ */
+export const EDGE_HISTORY = 256;
+
 /** One signal's history. */
 class Channel {
 	private data: Float64Array;
@@ -85,6 +96,10 @@ export class Capture {
 	};
 	/** Level each net was at when the memory begins, for a trace with no edge in it. */
 	private readonly opening: LogicState[];
+	/** Per net, the last `EDGE_HISTORY` transitions, whether or not the memory still covers them. */
+	private readonly history: DigitalTransition[][];
+	/** Level each net was at before the oldest transition in `history`. */
+	private readonly beforeHistory: LogicState[];
 	private cached: TransientRun | null = null;
 
 	constructor(
@@ -97,6 +112,8 @@ export class Capture {
 		this.currentChannels = elementNames.map(() => new Channel(DEPTH));
 		this.digital = netNames.map(() => []);
 		this.opening = netNames.map(() => 'unknown');
+		this.history = netNames.map(() => []);
+		this.beforeHistory = netNames.map(() => 'unknown');
 	}
 
 	/** Simulated time of the newest sample. */
@@ -125,7 +142,15 @@ export class Capture {
 		}
 		for (let net = 0; net < this.digital.length; net++) {
 			const events = chunk.digital[net];
-			if (events && events.length) this.digital[net].push(...events);
+			if (!events || !events.length) continue;
+			this.digital[net].push(...events);
+			const history = this.history[net];
+			history.push(...events);
+			if (history.length > EDGE_HISTORY) {
+				const drop = history.length - EDGE_HISTORY;
+				this.beforeHistory[net] = history[drop - 1].state;
+				history.splice(0, drop);
+			}
 		}
 		this.failures.push(...chunk.failures);
 		this.stats.accepted_steps += chunk.stats.accepted_steps;
@@ -157,6 +182,16 @@ export class Capture {
 	/** The level a net sits at when the visible history opens. */
 	openingState(net: number): LogicState {
 		return this.opening[net] ?? 'unknown';
+	}
+
+	/**
+	 * A net's recent edges, reaching further back than the samples do.
+	 *
+	 * For measuring: a period is two rising edges, and on a slow net those can
+	 * be seconds apart while the memory holds milliseconds.
+	 */
+	edges(net: number): { events: readonly DigitalTransition[]; opening: LogicState } {
+		return { events: this.history[net] ?? [], opening: this.beforeHistory[net] ?? 'unknown' };
 	}
 
 	/** Everything remembered, in the shape a finished run has. */
