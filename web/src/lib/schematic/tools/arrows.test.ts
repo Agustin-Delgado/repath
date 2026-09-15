@@ -100,3 +100,35 @@ describe('the arrow keys', () => {
 		expect(part.x).toBe(250);
 	});
 });
+
+describe('the right button', () => {
+	it('turns the part under the pointer, and takes the selection with it if it is part of one', () => {
+		app.place('resistor', 200, 200, 0);
+		const part = app.schematic.instances[0];
+		app.selection = [];
+		const tool = createSelectTool();
+		const ctx = context();
+
+		const right = { ...press(200, 200), button: 2, buttons: 2 };
+		tool.pointerDown!(right, ctx);
+		expect(part.rotation).toBe(90);
+		expect(app.selection).toEqual([part.id]);
+		tool.pointerDown!(right, ctx);
+		expect(part.rotation).toBe(180);
+	});
+
+	it('turns the selection when the press lands on nothing, and does nothing with none', () => {
+		app.place('resistor', 200, 200, 0);
+		const part = app.schematic.instances[0];
+		const tool = createSelectTool();
+		const ctx = context();
+
+		app.selection = [part.id];
+		tool.pointerDown!({ ...press(500, 500), button: 2, buttons: 2 }, ctx);
+		expect(part.rotation).toBe(90);
+
+		app.selection = [];
+		tool.pointerDown!({ ...press(500, 500), button: 2, buttons: 2 }, ctx);
+		expect(part.rotation).toBe(90);
+	});
+});

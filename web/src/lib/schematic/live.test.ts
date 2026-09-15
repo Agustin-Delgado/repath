@@ -19,6 +19,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import init, { Simulation } from '../wasm/repath.js';
 import { LiveRun } from '$lib/engine';
 import { Capture } from '$lib/capture';
+import { Acquisition } from '$lib/acquire';
 import { EXAMPLES } from '../examples';
 import { compileSchematic } from './netlist';
 import { isFlowing } from './animate';
@@ -985,5 +986,45 @@ describe('a frame with a budget', () => {
 		expect(frames).toBeGreaterThan(1);
 		expect(live.time).toBeCloseTo(1e-4, 12);
 		live.free();
+	});
+});
+
+describe('a frame wider than the window', () => {
+	it('is solved finely across the window that will be drawn, and coarsely before it', () => {
+		// At real time on a narrow window a frame carries more simulated time
+		// than the window is wide, and only the last window's worth is ever on
+		// screen. Solving the rest at the window's resolution was tens of
+		// thousands of samples a second nobody would see, and the sweep fell
+		// behind the clock the moment the scope was zoomed in.
+		const compiled = compileSchematic(lamp('closed'));
+		expect(compiled.errors).toEqual([]);
+
+		// A 5 ms window: a step ceiling of 25 µs.
+		const fine = 25e-6;
+		const acquisition = new Acquisition(compiled.netlist, fine, {
+			onChunk() {},
+			onError(message) {
+				throw new Error(message);
+			},
+			rate: () => 1
+		});
+		// One 16 ms frame, driven by hand.
+		const inner = acquisition as unknown as { lastWall: number; step: (now: number) => void };
+		inner.lastWall = 1000;
+		inner.step(1016);
+		expect(acquisition.time).toBeCloseTo(16e-3, 6);
+
+		const time = acquisition.capture.run().time;
+		const opens = 16e-3 - fine * 200;
+		let before = 0;
+		let across = 0;
+		for (const t of time) {
+			if (t > 0 && t < opens) before++;
+			else if (t >= opens) across++;
+		}
+		// Two hundred across the window, a couple of dozen before it.
+		expect(across).toBeGreaterThanOrEqual(195);
+		expect(across).toBeLessThanOrEqual(215);
+		expect(before).toBeLessThan(40);
 	});
 });
