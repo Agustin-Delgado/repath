@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { Capture, DEPTH, EDGE_HISTORY } from './capture';
+import { Capture, DEPTH, EDGE_DEPTH, EDGE_HISTORY } from './capture';
 import type { Burst, Chunk, LogicState } from './engine';
 
 function chunk(
@@ -56,6 +56,18 @@ describe('the capture', () => {
 		expect(events[0].time).toBeCloseTo(10e-6, 12);
 		// Edge 9 was 'high' (odd), and it is the one just before the kept run.
 		expect(opening).toBe('high');
+	});
+
+	it('bounds the edges kept for drawing a net', () => {
+		const capture = new Capture(['v(n1)'], [], ['d1'], 1);
+		const edges: Array<[number, LogicState]> = [];
+		for (let i = 0; i < EDGE_DEPTH + 100; i++) edges.push([i * 1e-9, i % 2 ? 'high' : 'low']);
+		capture.add(chunk(0, 10, edges));
+
+		expect(capture.digital[0].length).toBe(EDGE_DEPTH);
+		expect(capture.digital[0][0].time).toBeCloseTo(100e-9, 15);
+		// Edge 99 was 'high' (odd): the level the kept run opens on.
+		expect(capture.openingState(0)).toBe('high');
 	});
 
 	it('joins the pieces of a burst the engine hands over frame by frame', () => {

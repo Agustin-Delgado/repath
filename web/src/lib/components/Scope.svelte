@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { measure, measureBurst, measureLogic } from '$lib/measure';
+	import { firstAfter, levelAt } from '$lib/transitions';
 	import { DEPTH } from '$lib/capture';
 	import { netLabel } from '$lib/schematic/nets';
 	import { logicFamily } from '$lib/schematic/logic';
@@ -487,26 +488,26 @@
 			const levelY = (state: string) =>
 				state === 'high' ? top : state === 'low' ? bottom : (top + bottom) / 2;
 
-			// Starting from what the net was already at when the memory opens: a net
-			// that has not changed in a while has no transition inside the window, and
-			// left to the events alone its lane would simply be empty.
-			let previousY = levelY(trace.opening);
-			let started = true;
+			// Starting from what the net was at when the window opens — the last
+			// edge before it, or what it was already at when the memory opens: a
+			// net that has not changed in a while has no transition inside the
+			// window, and left to the events alone its lane would simply be empty.
+			// Only the edges inside the window are drawn; the memory holds every
+			// edge of a long sweep, and walking them all for each frame was a frame
+			// that grew for as long as the run went on.
+			let previousY = levelY(levelAt(trace.events, from, trace.opening));
 			ctx.moveTo(toX(from), previousY);
 
-			for (const event of trace.events) {
+			for (let i = firstAfter(trace.events, from); i < trace.events.length; i++) {
+				const event = trace.events[i];
+				if (event.time > to) break;
 				const x = toX(event.time);
 				const y = levelY(event.state);
-				if (!started) {
-					ctx.moveTo(x, y);
-					started = true;
-				} else {
-					ctx.lineTo(x, previousY);
-					ctx.lineTo(x, y);
-				}
+				ctx.lineTo(x, previousY);
+				ctx.lineTo(x, y);
 				previousY = y;
 			}
-			if (started) ctx.lineTo(toX(to), previousY);
+			ctx.lineTo(toX(to), previousY);
 			ctx.stroke();
 
 			// Where the net was switching faster than a pixel: a band between the
@@ -689,7 +690,7 @@
 			// levels and a label, so "is that a one, and what is a one here" was a
 			// question the panel underneath the trace could not answer.
 			logic: digitalTraces.map((t) => {
-				const state = t.events.filter((e) => e.time <= at).at(-1)?.state ?? 'unknown';
+				const state = levelAt(t.events, at, t.opening);
 				const volts =
 					state === 'high' ? family.v_high : state === 'low' ? family.v_low : null;
 				return {
