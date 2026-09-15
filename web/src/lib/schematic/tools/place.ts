@@ -45,6 +45,13 @@ export function createPlaceTool(kind: string): Tool {
 		},
 
 		pointerDown(pointer, ctx) {
+			// The right button turns the part before it is dropped, as R does.
+			if (pointer.button === 2) {
+				rotation = ((rotation + 90) % 360) as Rotation;
+				stickyRotation = rotation;
+				ctx.invalidate('overlay');
+				return;
+			}
 			if (pointer.button !== 0) return;
 			const where = snapPoint(pointer.world, ctx.gridSize);
 			app.place(kind, where.x, where.y, rotation);

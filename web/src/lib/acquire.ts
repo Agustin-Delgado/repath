@@ -52,6 +52,25 @@ const OPENING_BUDGET = 2_000;
 /** The budget never goes below this: a frame that could not take a step would never learn its speed. */
 const LEAST_BUDGET = 200;
 
+/** Samples across one window: what the step ceiling is set from. */
+const SAMPLES_PER_WINDOW = 200;
+
+/**
+ * Samples across the part of a frame's span that no screen will show.
+ *
+ * At real time on a narrow window, a frame carries more simulated time than the
+ * window is wide: sixteen milliseconds of it at a five-millisecond window. Only
+ * the last window's worth is ever drawn — the frames are snapshots, and the
+ * stretch between them is never on screen. Solving that stretch at the
+ * window's resolution was forty thousand steps a second for samples nobody
+ * would see, and the sweep fell behind the clock the moment the scope was
+ * zoomed in. Now the run is solved coarsely up to where the window opens and
+ * finely across it. The coarse part is a ceiling, not a grid: the circuit's own
+ * dynamics and every logic edge that reaches the analog side still cut the
+ * steps as short as they need to be.
+ */
+const SAMPLES_BETWEEN_WINDOWS = 20;
+
 export class Acquisition {
 	readonly capture: Capture;
 	private run: LiveRun;
@@ -85,12 +104,15 @@ export class Acquisition {
 	 */
 	private stepsPerMs: number | null = null;
 	private workSoFar = 0;
+	/** The step ceiling across a window: what the screen resolves. */
+	private fine: number;
 
 	constructor(
 		netlist: unknown,
 		maxStep: number,
 		private readonly host: AcquisitionHost
 	) {
+		this.fine = maxStep;
 		this.run = new LiveRun(netlist, maxStep);
 		this.capture = new Capture(
 			this.run.unknownNames,
@@ -155,6 +177,7 @@ export class Acquisition {
 	 * wide. Nothing already solved changes; what comes next is solved finer.
 	 */
 	setMaxStep(step: number): void {
+		this.fine = step;
 		this.run.setMaxStep(step);
 	}
 
@@ -164,7 +187,7 @@ export class Acquisition {
 
 		const asked = wall * this.host.rate();
 		const target = this.run.time + asked;
-		const until = this.limit === null ? target : Math.min(target, this.limit);
+		let until = this.limit === null ? target : Math.min(target, this.limit);
 
 		const from = this.run.time;
 		const budget =
@@ -172,13 +195,35 @@ export class Acquisition {
 		this.run.setFrameBudget(budget);
 		const began = performance.now();
 		try {
-			const chunk = this.run.advance(until);
-			this.capture.add(chunk);
+			// Coarsely up to where the window that will be drawn opens, if the
+			// frame carries more than a window; then finely across it.
+			const window = this.fine * SAMPLES_PER_WINDOW;
+			const opens = until - window;
+			let work = this.workSoFar;
+			if (opens > from + this.fine) {
+				this.run.setMaxStep(Math.max(this.fine, (opens - from) / SAMPLES_BETWEEN_WINDOWS));
+				const coarse = this.run.advance(opens);
+				this.capture.add(coarse);
+				work = coarse.stats.work;
+				this.run.setMaxStep(this.fine);
+				// What is left of the frame's share, if it got there at all.
+				const remaining = budget - (work - this.workSoFar);
+				if (this.run.time < opens - this.fine || remaining < LEAST_BUDGET) {
+					until = this.run.time;
+				} else {
+					this.run.setFrameBudget(remaining);
+				}
+			}
+			if (until > this.run.time) {
+				const chunk = this.run.advance(until);
+				this.capture.add(chunk);
+				work = chunk.stats.work;
+			}
 			// Work is counted from the start of the run; the frame's share is the
 			// difference. Timed around the whole call, since the samples coming back
 			// across the boundary are part of what the frame paid for.
-			const steps = chunk.stats.work - this.workSoFar;
-			this.workSoFar = chunk.stats.work;
+			const steps = work - this.workSoFar;
+			this.workSoFar = work;
 			const spent = performance.now() - began;
 			if (steps > 0 && spent > 0.5) {
 				const measured = steps / spent;

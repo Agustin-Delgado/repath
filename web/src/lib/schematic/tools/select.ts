@@ -253,6 +253,21 @@ export function createSelectTool(): Tool {
 		},
 
 		pointerDown(pointer, ctx) {
+			// The right button turns a part: the one under the pointer, along with
+			// the rest of the selection if it is part of one, or the selection as
+			// it stands if the press lands on nothing. The same turn as R, for a
+			// hand that is already on the mouse.
+			if (pointer.button === 2) {
+				if (mode !== 'idle') return;
+				const under = ctx.scene.top(pointer.world, ctx.tolerance);
+				if (under?.kind === 'instance' && !app.selection.includes(under.id)) {
+					app.selection = [under.id];
+				}
+				if (app.selection.length === 0) return;
+				app.rotateSelection(routeDragged(ctx));
+				ctx.invalidate();
+				return;
+			}
 			if (pointer.button !== 0) return;
 
 			// A pin under the cursor means the gesture is a connection, not a move.
