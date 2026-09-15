@@ -18,7 +18,8 @@
  * animation frame only re-runs the accumulation.
  */
 
-import type { DigitalTransition, LogicState, TransientRun } from '$lib/engine';
+import type { TransientRun } from '$lib/engine';
+import { levelAt } from '$lib/transitions';
 import { definitionOf, pointKey, wireSegments, type Point, type Schematic } from './model';
 import { DEFAULT_FAMILY, logicFamily, type LogicFamily } from './logic';
 import { SEGMENTS } from './led';
@@ -562,7 +563,7 @@ export function sampleFlow(
 		// Inside a burst the net is switching faster than a frame can show, and
 		// is drawn as neither level: what the eye would see of it.
 		const busy = (run.bursts?.[index] ?? []).some((b) => b.from <= now && now <= b.to);
-		const state = busy ? 'unknown' : stateAt(run.digital[index] ?? [], now);
+		const state = busy ? 'unknown' : levelAt(run.digital[index] ?? [], now);
 		if (state === 'high') netVoltage.set(net, context.logicLevels.high);
 		else if (state === 'low') netVoltage.set(net, context.logicLevels.low);
 		else netUndriven.add(net);
@@ -638,12 +639,3 @@ function latestChangeAt(run: TransientRun, from: number, at: number): number {
 	return latest > lower ? Math.min(sampleIndexAt(run.time, latest), at) : from;
 }
 
-/** The state a digital net had settled on at an instant. */
-function stateAt(transitions: readonly DigitalTransition[], time: number): LogicState {
-	let state: LogicState = 'unknown';
-	for (const transition of transitions) {
-		if (transition.time > time) break;
-		state = transition.state;
-	}
-	return state;
-}

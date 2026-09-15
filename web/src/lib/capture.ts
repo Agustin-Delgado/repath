@@ -37,6 +37,17 @@ export const DEPTH = 20_000;
  */
 export const EDGE_HISTORY = 256;
 
+/**
+ * Most transitions kept per net for drawing.
+ *
+ * The samples of a slow sweep reach back hundreds of screens, and a net
+ * toggling a thousand times a screen — anything faster is folded into a burst
+ * by the engine — would keep a million edges in that span: more memory than
+ * the rest of the run put together, for a stretch of lane nobody scrolls back
+ * to. Three screens of the densest lane the trace resolves is plenty.
+ */
+export const EDGE_DEPTH = 5_000;
+
 /** One signal's history. */
 class Channel {
 	private data: Float64Array;
@@ -163,7 +174,13 @@ export class Capture {
 			}
 			const events = chunk.digital[net];
 			if (!events || !events.length) continue;
-			this.digital[net].push(...events);
+			const kept = this.digital[net];
+			kept.push(...events);
+			if (kept.length > EDGE_DEPTH) {
+				const drop = kept.length - EDGE_DEPTH;
+				this.opening[net] = kept[drop - 1].state;
+				kept.splice(0, drop);
+			}
 			const history = this.history[net];
 			history.push(...events);
 			if (history.length > EDGE_HISTORY) {
