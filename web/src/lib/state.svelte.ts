@@ -426,8 +426,18 @@ class AppState {
 	 * you look at something that has already happened.
 	 */
 	playbackTime = $state(0);
-	/** How many times faster or slower than the default four-second sweep. */
-	playbackSpeed = $state(1);
+	/**
+	 * How fast the sweep goes: a multiple of the default four-second sweep of
+	 * the window, or `'real'` for a simulated second per real second whatever
+	 * the window is.
+	 *
+	 * The two are different questions. A multiple keeps the trace moving across
+	 * the screen at a pace the eye can follow, and a wide window then runs far
+	 * faster than the clock on the wall — a hundred-second window at 1× is
+	 * twenty-five seconds a second. Real time is what a lamp is judged by: a
+	 * one-hertz blink is one a second, and no other setting shows it that way.
+	 */
+	playbackSpeed = $state<number | 'real'>(1);
 	showVoltage = $state(true);
 	showCurrent = $state(true);
 	showLight = $state(true);
@@ -473,6 +483,7 @@ class AppState {
 
 	/** Simulated seconds per real second at the current speed setting. */
 	get playbackRate(): number {
+		if (this.playbackSpeed === 'real') return 1;
 		return (this.stopTime / 4) * this.playbackSpeed;
 	}
 
