@@ -11,7 +11,20 @@
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
 
-	const SPEEDS = [0.25, 1, 4];
+	/** A multiple of the four-second sweep, or a second per second. */
+	const SPEEDS: Array<number | 'real'> = [0.25, 1, 4, 'real'];
+
+	/** What a setting comes to, against the clock on the wall, with this window. */
+	function against(speed: number | 'real'): string {
+		const rate = speed === 'real' ? 1 : (app.stopTime / 4) * speed;
+		if (Math.abs(rate - 1) < 1e-9) return 'real time';
+		return rate > 1 ? `${formatValue(rate, 3)}× real time` : `1/${formatValue(1 / rate, 3)} real time`;
+	}
+
+	function describe(speed: number | 'real'): string {
+		if (speed === 'real') return 'A simulated second per real second, whatever the window';
+		return `${speed}× — a window every ${formatValue(4 / speed, 2)} seconds, which here is ${against(speed)}`;
+	}
 
 	const started = $derived(app.acquiring !== null);
 	/**
@@ -85,12 +98,20 @@
 
 	<span class="spacer"></span>
 
+	<!--
+		How fast the sweep goes, and what that comes to against a clock: a wide
+		window at 1× runs many times faster than real time, a narrow one many
+		times slower, and the number is the only way to know which.
+	-->
 	<div class="speeds" role="group" aria-label="Sweep speed">
+		<span class="against" title="Simulated time against real time at this speed and window">
+			{against(app.playbackSpeed)}
+		</span>
 		{#each SPEEDS as speed (speed)}
 			<button
 				class:active={app.playbackSpeed === speed}
 				onclick={() => (app.playbackSpeed = speed)}
-				title="{speed}× — a window every {formatValue(4 / speed, 2)} seconds">{speed}×</button
+				title={describe(speed)}>{speed === 'real' ? '1:1' : `${speed}×`}</button
 			>
 		{/each}
 	</div>
@@ -214,6 +235,15 @@
 	.speeds button {
 		padding: 0.25rem 0.35rem;
 		font-family: var(--font-mono);
+	}
+
+	.speeds .against {
+		align-self: center;
+		margin-right: 0.3rem;
+		font-family: var(--font-mono);
+		font-size: 0.66rem;
+		color: var(--label-dim);
+		white-space: nowrap;
 	}
 
 	button.active {

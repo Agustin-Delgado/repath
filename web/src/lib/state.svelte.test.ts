@@ -343,3 +343,25 @@ describe('reading one run against another run\u2019s clock', () => {
 		expect(valueAt(new Float64Array(), new Float64Array(), 1)).toBe(0);
 	});
 });
+
+describe('the sweep against the clock on the wall', () => {
+	it('runs a window in four seconds at 1×, whatever the window', () => {
+		app.stopTime = 100;
+		app.playbackSpeed = 1;
+		expect(app.playbackRate).toBeCloseTo(25, 9);
+		app.playbackSpeed = 4;
+		expect(app.playbackRate).toBeCloseTo(100, 9);
+		app.stopTime = 5e-3;
+		app.playbackSpeed = 1;
+		expect(app.playbackRate).toBeCloseTo(1.25e-3, 12);
+	});
+
+	it('runs a second per second in real time, whatever the window', () => {
+		app.playbackSpeed = 'real';
+		app.stopTime = 100;
+		expect(app.playbackRate).toBe(1);
+		app.stopTime = 5e-3;
+		expect(app.playbackRate).toBe(1);
+		app.playbackSpeed = 1;
+	});
+});
