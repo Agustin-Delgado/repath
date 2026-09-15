@@ -36,6 +36,21 @@ import {
 export interface NetNames {
 	analog?: string;
 	digital?: string;
+	/**
+	 * The digital net the inputs on this net read, where it is not `digital`.
+	 *
+	 * A net that is driven by a logic output, read by a logic input, and also
+	 * wired to something analog is two things: what the output drives — which
+	 * goes into the analog node through a bridge — and what the node has become
+	 * after the analog side has had its say, which is what the input reads
+	 * through a bridge the other way. With one digital net for both, the bridge
+	 * reading the node back drove the same net the output was driving, and an
+	 * LED that pulled the node down to its forward voltage had the net resolve
+	 * to "unknown" — the output and its own echo disagreeing — rather than to
+	 * what it was: high on the driving side, and not high enough to read on the
+	 * other.
+	 */
+	readBack?: string;
 }
 
 export interface CompileResult {
@@ -255,6 +270,9 @@ export function compileSchematic(
 		if (net.isGround) entry.analog = 'gnd';
 		else if (net.hasAnalog) entry.analog = `n${++analogCounter}`;
 		if (net.hasDigitalInput || net.hasDigitalOutput) entry.digital = `d${++digitalCounter}`;
+		if (entry.analog && net.hasDigitalInput && net.hasDigitalOutput) {
+			entry.readBack = `${entry.digital}_in`;
+		}
 		names.set(net.index, entry);
 	}
 
@@ -302,7 +320,12 @@ export function compileSchematic(
 	};
 	const digitalOf = (instance: Instance, pin: string): string => {
 		const index = connectivity.netOfPin.get(pinKey(instance.id, pin));
-		return (index !== undefined && names.get(index)?.digital) || `unused_${instance.id}_${pin}`;
+		const entry = index === undefined ? undefined : names.get(index);
+		if (!entry?.digital) return `unused_${instance.id}_${pin}`;
+		// An input on a net the analog side has a say in reads the node, not the
+		// output that drives it.
+		const reads = definitionFor(instance).pins.find((p) => p.name === pin)?.direction === 'in';
+		return (reads && entry.readBack) || entry.digital;
 	};
 
 	// ---- components ------------------------------------------------------
@@ -723,6 +746,34 @@ export function compileSchematic(
 		}
 	}
 
+	// An LED straight across a logic output and the return, with nothing in
+	// series. The most common mistake there is with a lamp, and one the drawing
+	// does not show as one: it lights, which looks like success. The output is
+	// clamped at the LED's forward voltage — a couple of volts, which is neither
+	// a High nor a Low to anything else reading that net — and the current is
+	// whatever the output can give, which is the LED's problem or the output's.
+	// A counter with a lamp on every stage and no resistors stops counting at
+	// the first lamp, because the stage after it never sees a High.
+	for (const instance of schematic.instances) {
+		if (instance.kind !== 'led') continue;
+		const anode = connectivity.netOfPin.get(pinKey(instance.id, 'anode'));
+		const cathode = connectivity.netOfPin.get(pinKey(instance.id, 'cathode'));
+		if (anode === undefined || cathode === undefined) continue;
+		const [a, k] = [connectivity.nets[anode], connectivity.nets[cathode]];
+		const railed = (net: Net) =>
+			net.isGround || net.pins.some((pin) => pin.instance.kind === 'supply');
+		const driven = a.hasDigitalOutput && railed(k) ? a : k.hasDigitalOutput && railed(a) ? k : null;
+		if (!driven) continue;
+		const output = driven.pins.find((pin) => pin.pin.direction === 'out');
+		const who = output ? `${output.instance.name}.${output.pin.name}` : 'a logic output';
+		const readers = driven.pins
+			.filter((pin) => pin.pin.domain === 'digital' && pin.pin.direction === 'in')
+			.map((pin) => `${pin.instance.name}.${pin.pin.name}`);
+		warnings.push(
+			`${instance.name} sits straight across ${who} and the rail with nothing to limit the current. The output is held at the LED's forward voltage, about 2 V — which is not a High to anything else on that net${readers.length ? ` (${readers.join(', ')} read${readers.length === 1 ? 's' : ''} it)` : ''} — and the current is whatever the output can give. A resistor in series, 330 Ω for about 10 mA from 5 V, is what makes it a lamp.`
+		);
+	}
+
 	// A logic input with nothing holding it at either rail is the most common
 	// mistake there is with a switch, and the one that looks least like a
 	// mistake: the level it reads is decided by leakage, so the gate answers with
@@ -776,7 +827,7 @@ export function compileSchematic(
 				direction: 'to_digital',
 				name: `BAD${net.index}`,
 				node: entry.analog,
-				net: entry.digital,
+				net: entry.readBack ?? entry.digital,
 				delay: 0
 			});
 		}

@@ -1092,3 +1092,55 @@ describe('every example that ships with the app', () => {
 	});
 
 });
+
+describe('a logic net the analog side has a say in', () => {
+	// A NOT gate driving an LED straight to ground, with a second NOT reading
+	// the same net. The LED clamps the node at its forward voltage, so what the
+	// second gate reads is not what the first one drives.
+	function lampBetweenGates() {
+		const driver = at('not', 'U1', 300, 300);
+		// U1.y is at (330, 300); the LED's anode sits there, its cathode 60 right.
+		const lamp = at('led', 'D1', 360, 300);
+		// Ground's pin is 10 above its origin; put it on the cathode.
+		const ground = at('ground', 'GND1', 390, 310);
+		// U2.a is 30 left of its origin: on the same point as U1.y.
+		const reader = at('not', 'U2', 360, 360);
+		return drawing([driver, lamp, ground, reader], [[330, 300, 330, 360]]);
+	}
+
+	it('gives the driving output and the reading input different digital nets', () => {
+		const compiled = compileSchematic(lampBetweenGates());
+		const netlist = compiled.netlist as {
+			devices: Array<{ name: string; output?: string; inputs?: string[] }>;
+			bridges: Array<{ direction: string; net: string; node: string }>;
+		};
+		const u1 = netlist.devices.find((d) => d.name === 'U1')!;
+		const u2 = netlist.devices.find((d) => d.name === 'U2')!;
+		expect(u1.output).toBeDefined();
+		expect(u2.inputs![0]).toBe(`${u1.output}_in`);
+		// The bridge into the node is driven by the output's net; the bridge back
+		// out drives the net the input reads.
+		const into = netlist.bridges.find((b) => b.direction === 'to_analog')!;
+		const back = netlist.bridges.find((b) => b.direction === 'to_digital')!;
+		expect(into.net).toBe(u1.output);
+		expect(back.net).toBe(u2.inputs![0]);
+		expect(into.node).toBe(back.node);
+	});
+
+	it('says that the lamp has nothing in series, and who reads the clamped node', () => {
+		const warnings = compileSchematic(lampBetweenGates()).warnings;
+		const lamp = warnings.find((w) => w.startsWith('D1 sits straight across U1.y'));
+		expect(lamp).toBeDefined();
+		expect(lamp).toContain('U2.a reads it');
+		expect(lamp).toContain('resistor in series');
+	});
+
+	it('says nothing about a lamp with a resistor in front of it', () => {
+		const driver = at('not', 'U1', 300, 300);
+		const resistor = at('resistor', 'R1', 360, 300);
+		const lamp = at('led', 'D1', 420, 300);
+		const ground = at('ground', 'GND1', 450, 310);
+		const warnings = compileSchematic(drawing([driver, resistor, lamp, ground], [])).warnings;
+		expect(warnings.some((w) => w.includes('straight across'))).toBe(false);
+	});
+});
