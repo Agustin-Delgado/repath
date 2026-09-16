@@ -36,6 +36,7 @@ schematic, both domains, no converters placed by hand.</sub>
 - [Status](#status) · [Running it](#running-it) · [How it works](#how-it-works)
 - [What is in the box](#what-is-in-the-box) · [Using the editor](#using-the-editor)
 - [Roadmap](#roadmap) · [Testing](#testing) · [Contributing](#contributing)
+- [CHANGELOG.md](CHANGELOG.md) — what changed, from the user's side
 
 ## Status
 

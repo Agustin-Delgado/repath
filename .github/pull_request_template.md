@@ -20,3 +20,4 @@ actually caused problems here are on it.
 - [ ] `npm run check`, `npm run build` in `web/`
 - [ ] New behaviour is checked against something independent of the code (say what, above); with the `tests/` mount, it has a test that would fail without the change
 - [ ] Anything left unfixed is written into `BACKLOG.md` rather than left to be discovered
+- [ ] Anything a user would notice has an entry at the top of `CHANGELOG.md`, written for them and pointing at this pull request
