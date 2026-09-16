@@ -28,6 +28,7 @@ import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
 import { OPERABLE, wireSegments, type Point } from '../model';
 import { elbow, fallback, routeWire } from '../route';
+import { groupLabelAt } from '../groups';
 import type { SchematicItem } from '../scene';
 import { connectsAt, drawSnapHint, netAt } from './shared';
 
@@ -281,6 +282,48 @@ export function createSelectTool(): Tool {
 				return;
 			}
 
+			// A group's name is its handle. Pressing it takes the group — all of
+			// its parts and the wires between them — and dragging from it moves
+			// them; a double click on it is a rename. A part is only ever picked
+			// on its own, so a group is never in the way of editing what is in it.
+			const label = groupLabelAt(
+				app.schematic,
+				pointer.screen,
+				(world) => ctx.viewport.toScreen(world),
+				ctx.viewport.scale
+			);
+			if (label) {
+				const whole = app.withGroups(label.members);
+				if (pointer.detail >= 2) {
+					app.selection = whole;
+					app.renamingGroup = label.id;
+					// The box that opens takes the focus; the press's own default
+					// action would take it straight back and close the box unchanged.
+					pointer.native.preventDefault();
+					ctx.invalidate('schematic');
+					return;
+				}
+				const wasSelected = whole.every((id) => app.selection.includes(id));
+				if (pointer.shift) {
+					const leaving = new Set(whole);
+					app.selection = wasSelected
+						? app.selection.filter((id) => !leaving.has(id))
+						: [...new Set([...app.selection, ...whole])];
+				} else if (!wasSelected) {
+					app.selection = whole;
+				}
+				pressedId = null;
+				pressedSegment = null;
+				mode = 'move';
+				origin = snapPoint(pointer.world, ctx.gridSize);
+				moved = false;
+				pendingJoin = null;
+				app.beginMove();
+				ctx.setCursor('grabbing');
+				ctx.invalidate('schematic', 'overlay');
+				return;
+			}
+
 			const item = ctx.scene.top(pointer.world, ctx.tolerance);
 
 			// Pressing a wire used to be ambiguous — a click to select it, or the
@@ -293,17 +336,12 @@ export function createSelectTool(): Tool {
 				pressedId = item.id;
 				pressedWasSelected = app.selection.includes(item.id);
 
-				// A press on a part in a group takes the group: that is what a group
-				// is for. A click on it once it is selected narrows to the part (see
-				// pointerUp), which is how one member is picked out again.
-				const whole = app.withGroups([item.id]);
 				if (pointer.shift) {
-					const leaving = new Set(whole);
 					app.selection = pressedWasSelected
-						? app.selection.filter((id) => !leaving.has(id))
-						: [...new Set([...app.selection, ...whole])];
+						? app.selection.filter((id) => id !== item.id)
+						: [...app.selection, item.id];
 				} else if (!pressedWasSelected) {
-					app.selection = whole;
+					app.selection = [item.id];
 				}
 
 				mode = 'move';
@@ -407,8 +445,7 @@ export function createSelectTool(): Tool {
 				}
 			} else if (mode === 'marquee' && marquee) {
 				if (marquee.w > 2 || marquee.h > 2) {
-					// A box that catches any part of a group catches the group.
-					const hits = app.withGroups(ctx.scene.enclosed(marquee).map((item) => item.id));
+					const hits = ctx.scene.enclosed(marquee).map((item) => item.id);
 					app.selection = pointer.shift ? [...new Set([...app.selection, ...hits])] : hits;
 				}
 			}

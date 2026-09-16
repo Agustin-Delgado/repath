@@ -308,7 +308,7 @@ would show you.
 | Back to selecting | `V` or `Esc` |
 | Copy / cut / paste | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` — paste lands at the cursor |
 | Duplicate | `Ctrl+D` |
-| Group / ungroup | `Ctrl+G` / `Ctrl+Shift+G` — a click on any part of a group takes the whole group; a second click narrows to that part |
+| Group / ungroup | `Ctrl+G` / `Ctrl+Shift+G`, or the buttons in the inspector — the group's name is its handle: click it to select the group, drag it to move the group, double-click it to rename |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Run / stop the sweep | `Space` |
 | Simulate | press Run — nothing runs until you ask |
@@ -346,11 +346,12 @@ the same router runs in both cases, so nothing rearranges itself when you let go
 
 A group is a name over a handful of parts, the way a design tool groups shapes:
 a dashed frame around them with the name in the corner, drawn from wherever the
-parts are. Clicking any member takes the group, so it moves, turns and deletes as
-one; clicking again narrows to the member under the pointer. The name is edited in
-the inspector, and the group travels in links and files. It is not a subcircuit —
-the parts stay on the drawing, wired to whatever they are wired to — and groups do
-not nest.
+parts are. The name is the handle. Clicking it takes the group, so it moves, turns
+and deletes as one; dragging it moves the group; double-clicking it renames it. A
+part is only ever picked on its own, so the group is never in the way of editing
+what is in it — and a part dragged clear of the frame has left the group. Groups
+travel in links and files. A group is not a subcircuit — the parts stay on the
+drawing, wired to whatever they are wired to — and groups do not nest.
 
 The symbol standard is the reader's, not the drawing's. A resistor is the same
 resistor whether it is drawn as a zigzag or a box, so the choice is not in a share
