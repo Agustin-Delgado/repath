@@ -11,7 +11,14 @@
  * where the leads drawn here end.
  */
 
-import { definitionOf, gateInputCount, gatePins, gateReach, SUBCIRCUIT_PREFIX } from './model';
+import {
+	BLOCK_PREFIX,
+	definitionOf,
+	gateInputCount,
+	gatePins,
+	gateReach,
+	SUBCIRCUIT_PREFIX
+} from './model';
 import { SEGMENTS, SEGMENT_SHAPES } from './led';
 import { CHIP_BODY_HALF_WIDTH, chipOf, chipPinLayout, chipReach } from './model';
 import { chipName, isUnused, type ChipDef } from './chips';
@@ -133,8 +140,9 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 			// cache key. Re-importing a definition under the same handle then misses
 			// both this cache and the one holding the built paths, instead of needing
 			// somebody to remember to clear them.
-			if (kind.startsWith(SUBCIRCUIT_PREFIX)) {
-				return `${kind}(${definitionOf(kind).pins.map((p) => p.name).join(',')})`;
+			if (kind.startsWith(SUBCIRCUIT_PREFIX) || kind.startsWith(BLOCK_PREFIX)) {
+				const def = definitionOf(kind);
+				return `${kind}(${def.pins.map((p) => `${p.name}@${p.x},${p.y}`).join(',')})${def.label}`;
 			}
 			return kind;
 	}
@@ -628,6 +636,7 @@ export function symbolGeometry(
 		geometry = gate(kind, gateInputCount(params as Record<string, number | string>), standard);
 	}
 	else if (kind.startsWith(SUBCIRCUIT_PREFIX)) geometry = block(kind);
+	else if (kind.startsWith(BLOCK_PREFIX)) geometry = block(kind, true);
 	else if (chipOf(kind)) geometry = dip(chipOf(kind)!);
 	else geometry = STATIC[`${kind}@${standardFamily(standard)}`] ?? STATIC[kind] ?? EMPTY;
 
@@ -651,7 +660,7 @@ export function symbolExtent(
  * names matter more here than on any other symbol — a `.subckt` numbers its
  * terminals `1 2 3` and nothing but their position says which is the output.
  */
-function block(kind: string): SymbolGeometry {
+function block(kind: string, named = false): SymbolGeometry {
 	const def = definitionOf(kind);
 	const { x, y, w, h } = def.box;
 	const bodyX = x + LEAD;
@@ -670,7 +679,12 @@ function block(kind: string): SymbolGeometry {
 			size: 8
 		});
 	}
-	return { shapes, labels };
+	// A boxed-up circuit is known by the name it was given, which is the one
+	// thing that says what is inside. Along the bottom edge, under the ports.
+	if (named) {
+		labels.push({ x: 0, y: y + h - 7, text: def.label, size: 9, anchor: 'middle', fine: true });
+	}
+	return { shapes, labels, extent: { x: Math.max(DEFAULT_EXTENT, -x), y: Math.max(DEFAULT_EXTENT, -y) } };
 }
 
 /** SVG `d` for a shape, so the palette can render one element per shape. */

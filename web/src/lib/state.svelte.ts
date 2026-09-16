@@ -23,6 +23,7 @@ import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import { groupFrame, outside } from './schematic/groups';
+import { blockInUse, planBlock } from './schematic/blocks';
 import {
 	DEFAULT_STANDARD,
 	isSymbolStandard,
@@ -30,6 +31,8 @@ import {
 	type SymbolStandard
 } from './schematic/symbols';
 import {
+	BLOCK_PREFIX,
+	blockOf,
 	GRID,
 	defaultParams,
 	definitionFor,
@@ -41,11 +44,13 @@ import {
 	pinPosition,
 	pointKey,
 	rotatePoint,
+	registerBlocks,
 	registerSubcircuits,
 	simplifyPath,
 	snap,
 	SUBCIRCUIT_PREFIX,
 	validateParam,
+	type BlockDef,
 	type PartGroup,
 	type Instance,
 	type Point,
@@ -54,7 +59,7 @@ import {
 	type SubcircuitDef,
 	type Wire
 } from './schematic/model';
-import { elbow } from './schematic/route';
+import { elbow, routeWire } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
 import {
 	buildConnectivity,
@@ -112,6 +117,7 @@ const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`
  */
 function adopt(schematic: Schematic): Schematic {
 	registerSubcircuits(schematic);
+	registerBlocks(schematic);
 	return schematic;
 }
 
@@ -240,7 +246,16 @@ function rememberedStandard(): SymbolStandard {
 	return DEFAULT_STANDARD;
 }
 
-/** `PartGroup 1`, `PartGroup 2`… — the first number not already in use. */
+/** `Block 1`, `Block 2`… — the first number not already in use. */
+function nextBlockName(blocks: readonly BlockDef[]): string {
+	const taken = new Set(blocks.map((b) => b.name));
+	for (let n = 1; ; n++) {
+		const name = `Block ${n}`;
+		if (!taken.has(name)) return name;
+	}
+}
+
+/** `Group 1`, `Group 2`… — the first number not already in use. */
 function nextGroupName(groups: readonly PartGroup[]): string {
 	const taken = new Set(groups.map((g) => g.name));
 	for (let n = 1; ; n++) {
@@ -591,7 +606,12 @@ class AppState {
 	private future: HistoryEntry[] = [];
 	/** Running total of the serialized history, so it can be capped by size. */
 	private historyBytes = 0;
-	private clipboard: { instances: Instance[]; wires: Wire[]; groups?: PartGroup[] } | null = null;
+	private clipboard: {
+		instances: Instance[];
+		wires: Wire[];
+		groups?: PartGroup[];
+		blocks?: BlockDef[];
+	} | null = null;
 	/** Snapshot taken at the start of a drag; null when nothing is being dragged. */
 	private moveOrigin: MoveOrigin | null = null;
 	private dragStarted = false;
@@ -1575,13 +1595,322 @@ class AppState {
 			.filter((g) => g.members.length > 0);
 	}
 
+	// -- blocks -----------------------------------------------------------
+
+	/** The block the selection is one placed copy of, if that is what it is. */
+	selectedBlock = $derived.by((): { instance: Instance; block: BlockDef } | null => {
+		if (this.selectedInstances.length !== 1) return null;
+		const instance = this.selectedInstances[0];
+		const block = blockOf(this.schematic, instance.kind);
+		return block ? { instance, block } : null;
+	});
+
+	/**
+	 * Box the selected parts up as a block.
+	 *
+	 * The parts and the wires between them leave the drawing for the
+	 * definition, one part stands where they were, and every wire that reached
+	 * in from outside is re-attached to the pin on the box that its net became.
+	 * A group is taken whole and gives the block its name; otherwise the block
+	 * is `Block 1`, and can be renamed. The definition joins the palette, so a
+	 * second copy is a click away.
+	 */
+	boxSelection(route: RouteBetween = this.router()): BlockDef | null {
+		const members = this.selectedInstances;
+		if (members.length === 0) return null;
+		const memberIds = new Set(members.map((i) => i.id));
+		const plan = planBlock(this.schematic, memberIds);
+		if (!plan) return null;
+
+		const name = this.freeBlockName(this.selectedGroup?.name ?? nextBlockName(this.schematic.blocks ?? []));
+		this.trace.record({ op: 'box', parts: members.map((i) => i.name), name });
+		this.checkpoint();
+
+		const block: BlockDef = {
+			id: freshId(),
+			name,
+			instances: plan.instances,
+			wires: plan.wires,
+			ports: plan.ports
+		};
+		this.schematic.blocks = [...(this.schematic.blocks ?? []), block];
+		registerBlocks(this.schematic);
+
+		const kind = BLOCK_PREFIX + block.id;
+		this.forgetMembers(memberIds);
+		const staying = this.schematic.instances.filter((i) => !memberIds.has(i.id));
+		const placed: Instance = {
+			id: freshId(),
+			kind,
+			// Named among what stays: a block boxed up inside this one has taken
+			// its name with it.
+			name: nextName(staying, kind),
+			x: plan.at.x,
+			y: plan.at.y,
+			rotation: 0,
+			params: {}
+		};
+		this.schematic.instances = [...staying, placed];
+		this.schematic.wires = this.schematic.wires.filter((w) => !plan.inside.has(w.id));
+
+		const pinAt = new Map(
+			definitionFor(placed).pins.map((pin) => [pin.name, pinPosition(placed, pin)] as const)
+		);
+		const settling = new Set(plan.reattach.map(({ wire }) => wire.id));
+		for (const { wire, end, port } of plan.reattach) {
+			const target = pinAt.get(port);
+			const live = this.schematic.wires.find((w) => w.id === wire.id);
+			if (!target || !live) continue;
+			const from = live.points;
+			const last = from.length - 1;
+			const start = end === 0 ? target : from[0];
+			const finish = end === 0 ? from[last] : target;
+			live.points = simplifyPath(route(start, finish, settling, from));
+		}
+		this.tidyWires();
+		this.selection = [placed.id];
+		return block;
+	}
+
+	/**
+	 * A router for the edits that have no gesture behind them — a button in
+	 * the inspector, a replayed step. The tools route through the same
+	 * function with a frame deadline on it; here there is no frame to keep.
+	 *
+	 * Not the plain elbow the other button-driven edits fall back on: a wire
+	 * moved from a part to a box's pin has to get *around* the box, and an
+	 * elbow drawn straight through it lands on the pin on the far side.
+	 */
+	private router(): RouteBetween {
+		return (from, to, settling, prefer) =>
+			routeWire(this.schematic, from, to, { grid: GRID, ignoreWires: settling, prefer });
+	}
+
+	/**
+	 * Open a placed block back up into the parts it is made of.
+	 *
+	 * They come back where the box stood, in the arrangement they were boxed up
+	 * in, turned with the box if it was turned; the wires on the box's pins
+	 * are re-attached to the pins inside; and they come back as a group under
+	 * the block's name, so boxing them up again is one keystroke. The
+	 * definition stays in the palette. Every selected block is opened.
+	 */
+	unboxSelection(route: RouteBetween = this.router()): void {
+		const boxes = this.selectedInstances.filter((i) => blockOf(this.schematic, i.kind));
+		if (boxes.length === 0) return;
+		this.trace.record({ op: 'unbox', parts: boxes.map((i) => i.name) });
+		this.checkpoint();
+		const opened: string[] = [];
+		for (const placed of boxes) {
+			const block = blockOf(this.schematic, placed.kind);
+			if (!block) continue;
+			opened.push(...this.open(placed, block, route));
+		}
+		this.tidyWires();
+		this.selection = this.withGroups(opened);
+	}
+
+	private open(placed: Instance, block: BlockDef, route: RouteBetween): string[] {
+		const turn = (p: Point): Point => {
+			const r = rotatePoint(p.x, p.y, placed.rotation);
+			return { x: placed.x + r.x, y: placed.y + r.y };
+		};
+		const fresh = new Map<string, Instance>();
+		const existing = this.schematic.instances.filter((i) => i.id !== placed.id);
+		for (const inner of block.instances) {
+			const at = turn(inner);
+			const copy: Instance = {
+				...inner,
+				id: freshId(),
+				// Its own name back if nothing has taken it since, which after
+				// boxing up and opening again is the usual case.
+				name: existing.some((i) => i.name === inner.name) ? nextName(existing, inner.kind) : inner.name,
+				x: at.x,
+				y: at.y,
+				rotation: ((inner.rotation + placed.rotation) % 360) as Rotation,
+				params: { ...inner.params }
+			};
+			existing.push(copy);
+			fresh.set(inner.id, copy);
+		}
+		const wires: Wire[] = block.wires.map((w) => ({ id: freshId(), points: w.points.map(turn) }));
+
+		// Where each pin of the box was, and where the pins it stood for now are.
+		const outerPins = definitionFor(placed).pins;
+		const joins: Array<[Point, Point]> = [];
+		const moved = new Map<string, Point>();
+		for (const port of block.ports) {
+			const outerPin = outerPins.find((p) => p.name === port.name);
+			if (!outerPin) continue;
+			const targets = port.pins.flatMap(({ instance, pin }) => {
+				const copy = fresh.get(instance);
+				const def = copy && definitionFor(copy).pins.find((p) => p.name === pin);
+				return copy && def ? [pinPosition(copy, def)] : [];
+			});
+			if (targets.length === 0) continue;
+			const was = pinPosition(placed, outerPin);
+			moved.set(pointKey(was.x, was.y), targets[0]);
+			for (const other of targets.slice(1)) joins.push([targets[0], other]);
+		}
+
+		this.schematic.instances = [...existing];
+		this.schematic.wires = [...this.schematic.wires, ...wires];
+		this.rewire(moved, route);
+		// Two pins that were one port without a wire between them get one now.
+		for (const [a, b] of joins) {
+			const id = freshId();
+			this.schematic.wires.push({ id, points: simplifyPath(route(a, b, new Set([id]))) });
+		}
+
+		const members = [...fresh.values()].map((i) => i.id);
+		this.schematic.groups = [
+			...(this.schematic.groups ?? []),
+			{ id: freshId(), name: block.name, members }
+		];
+		return members;
+	}
+
+	/**
+	 * Every wire with an end at one of `moved`'s keys is re-routed to the
+	 * point that key maps to, keeping its shape where it can. How a pin that
+	 * moved keeps what was plugged into it.
+	 */
+	private rewire(moved: ReadonlyMap<string, Point>, route: RouteBetween): void {
+		if (moved.size === 0) return;
+		const settling = new Set<string>();
+		for (const wire of this.schematic.wires) {
+			const last = wire.points.length - 1;
+			for (const end of [0, last]) {
+				if (moved.has(pointKey(wire.points[end].x, wire.points[end].y))) settling.add(wire.id);
+			}
+		}
+		for (const wire of this.schematic.wires) {
+			if (!settling.has(wire.id)) continue;
+			const last = wire.points.length - 1;
+			const from = wire.points;
+			const start = moved.get(pointKey(from[0].x, from[0].y)) ?? from[0];
+			const finish = moved.get(pointKey(from[last].x, from[last].y)) ?? from[last];
+			wire.points = simplifyPath(route(start, finish, settling, from));
+		}
+	}
+
+	/** Rename a block. Returns why it was refused, or null on success. */
+	renameBlock(id: string, name: string): string | null {
+		const trimmed = name.trim();
+		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
+		if (!block) return null;
+		if (!trimmed) return 'A block needs a name.';
+		if (block.name === trimmed) return null;
+		if ((this.schematic.blocks ?? []).some((b) => b.id !== id && b.name === trimmed)) {
+			return `There is already a block called ${trimmed}.`;
+		}
+		const placed = this.schematic.instances.find((i) => i.kind === BLOCK_PREFIX + id);
+		if (placed) this.trace.record({ op: 'reblock', part: placed.name, name: trimmed });
+		this.checkpoint();
+		block.name = trimmed;
+		registerBlocks(this.schematic);
+		return null;
+	}
+
+	/**
+	 * Rename one terminal of a block. Every placed copy follows, since the pin
+	 * is the port. Returns why it was refused, or null on success.
+	 */
+	renamePort(id: string, port: string, name: string): string | null {
+		const trimmed = name.trim();
+		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
+		const entry = block?.ports.find((p) => p.name === port);
+		if (!block || !entry) return null;
+		if (!trimmed) return 'A port needs a name.';
+		if (/\s/.test(trimmed)) return 'A port name cannot have spaces in it.';
+		if (entry.name === trimmed) return null;
+		if (block.ports.some((p) => p.name === trimmed)) {
+			return `${block.name} already has a port called ${trimmed}.`;
+		}
+		const kind = BLOCK_PREFIX + id;
+		const copies = this.schematic.instances.filter((i) => i.kind === kind);
+		if (copies[0]) this.trace.record({ op: 'port', part: copies[0].name, from: port, to: trimmed });
+		this.checkpoint();
+		// The box is as wide as its longest names, so a longer name can push
+		// every pin a step outward. Where each pin was is noted first, and the
+		// wires on the ones that moved follow them.
+		const before = new Map<string, Point>();
+		for (const placed of copies) {
+			for (const pin of definitionFor(placed).pins) {
+				before.set(`${placed.id}:${pin.name}`, pinPosition(placed, pin));
+			}
+		}
+		entry.name = trimmed;
+		registerBlocks(this.schematic);
+		const moved = new Map<string, Point>();
+		for (const placed of copies) {
+			for (const pin of definitionFor(placed).pins) {
+				const was = before.get(`${placed.id}:${pin.name === trimmed ? port : pin.name}`);
+				const now = pinPosition(placed, pin);
+				if (was && (was.x !== now.x || was.y !== now.y)) moved.set(pointKey(was.x, was.y), now);
+			}
+		}
+		this.rewire(moved, this.router());
+		if (moved.size > 0) this.tidyWires();
+		// A probe on the pin is a probe on the port, and follows the name.
+		this.probes = this.probes.map((handle) => {
+			const owner = this.schematic.instances.find((i) => handle === probePin(i.id, port));
+			return owner && owner.kind === kind ? probePin(owner.id, trimmed) : handle;
+		});
+		return null;
+	}
+
+	/**
+	 * Forget a block, and delete anything placed from it. Refused while another
+	 * block is built out of it: that one would be left with a hole in it.
+	 */
+	removeBlock(id: string): void {
+		const kind = BLOCK_PREFIX + id;
+		if ((this.schematic.blocks ?? []).some((b) => b.instances.some((i) => i.kind === kind))) {
+			const name = this.schematic.blocks?.find((b) => b.id === id)?.name ?? 'That block';
+			this.notice = `${name} is used inside another block, so it stays.`;
+			return;
+		}
+		this.checkpoint();
+		this.schematic.instances = this.schematic.instances.filter((i) => i.kind !== kind);
+		this.schematic.blocks = (this.schematic.blocks ?? []).filter((b) => b.id !== id);
+		this.selection = this.stillPresent(this.selection);
+		this.tidyWires();
+	}
+
+	/**
+	 * A name for a new block. The one asked for if it is free — or if the block
+	 * that has it is placed nowhere, in which case that one is dropped: boxing
+	 * a group up again after opening it is an edit, not a second block. Taken
+	 * and in use, the new one is numbered after it.
+	 */
+	private freeBlockName(wanted: string): string {
+		const blocks = this.schematic.blocks ?? [];
+		const holder = blocks.find((b) => b.name === wanted);
+		if (!holder) return wanted;
+		if (!blockInUse(this.schematic, holder.id)) {
+			this.schematic.blocks = blocks.filter((b) => b.id !== holder.id);
+			return wanted;
+		}
+		const taken = new Set(blocks.map((b) => b.name));
+		for (let n = 2; ; n++) {
+			const name = `${wanted} ${n}`;
+			if (!taken.has(name)) return name;
+		}
+	}
+
 	clear(): void {
 		this.trace.record({ op: 'clear' });
 		this.checkpoint();
 		// Imported parts survive clearing the drawing. They are a library rather
 		// than part of the circuit, and having to paste the op-amp again because
 		// you started a new sketch with it would make importing one not worth doing.
-		this.schematic = { instances: [], wires: [], subcircuits: this.schematic.subcircuits };
+		this.schematic = {
+			instances: [],
+			wires: [],
+			subcircuits: this.schematic.subcircuits,
+			blocks: this.schematic.blocks
+		};
 		this.selection = [];
 		this.probes = [];
 		// Like every other path that replaces the whole drawing. Clearing `result`
@@ -1660,7 +1989,11 @@ class AppState {
 			// A group travels only whole: half a group pasted is just parts.
 			groups: (this.schematic.groups ?? [])
 				.filter((g) => g.members.every((m) => chosen.has(m)))
-				.map((g) => structuredClone($state.snapshot(g)) as PartGroup)
+				.map((g) => structuredClone($state.snapshot(g)) as PartGroup),
+			// What a copied block is made of, in case it is pasted into a drawing
+			// that has never seen it. Every definition travels: a block inside
+			// the copied one needs its own along too.
+			blocks: (this.schematic.blocks ?? []).map((b) => structuredClone($state.snapshot(b)) as BlockDef)
 		};
 		return true;
 	}
@@ -1687,6 +2020,12 @@ class AppState {
 		const dy = at ? snap(at.y) - snap(minY) : GRID * 3;
 
 		this.checkpoint();
+		const known = new Set((this.schematic.blocks ?? []).map((b) => b.id));
+		const missing = (this.clipboard.blocks ?? []).filter((b) => !known.has(b.id));
+		if (missing.length > 0) {
+			this.schematic.blocks = [...(this.schematic.blocks ?? []), ...missing];
+			registerBlocks(this.schematic);
+		}
 		const existing = [...this.schematic.instances];
 		const fresh: string[] = [];
 
@@ -1871,6 +2210,18 @@ class AppState {
 		// every part is and an imported one would not be there yet.
 		const subcircuits = parsed.schematic.subcircuits ?? [];
 		registerSubcircuits({ instances: [], wires: [], subcircuits });
+		// A block's insides keep their own ids: they name nothing outside the
+		// definition, and the ports inside it refer to them.
+		const blocks: BlockDef[] = (parsed.schematic.blocks ?? []).map((block) => ({
+			id: String(block.id),
+			name: String(block.name ?? ''),
+			instances: (block.instances ?? []).map((i) => migrateInstance(i)),
+			wires: (block.wires ?? [])
+				.map((wire, index) => normaliseWire(wire, `w${index}`))
+				.filter((wire): wire is Wire => wire !== null),
+			ports: block.ports ?? []
+		}));
+		registerBlocks({ instances: [], wires: [], blocks });
 		// Re-key everything so a pasted circuit cannot collide with what is open.
 		const remap = new Map<string, string>();
 		const instances = parsed.schematic.instances.map((instance) => {
@@ -1898,7 +2249,7 @@ class AppState {
 
 		this.past.length = 0;
 		this.future.length = 0;
-		this.schematic = { instances, wires, subcircuits, groups };
+		this.schematic = { instances, wires, subcircuits, blocks, groups };
 		this.tidyWires();
 		this.stopTime = parsed.stopTime ?? 1e-3;
 		// Pointed at the ids this load minted, not the ones the file was written
@@ -2064,8 +2415,34 @@ class AppState {
 					this.rename(id, step.to);
 					break;
 				}
-				case 'group':
-				case 'ungroup': {
+				case 'box':
+				case 'unbox': {
+					const ids: string[] = [];
+					for (const name of step.parts) {
+						const id = partId(name);
+						if (!id) return stop(`no component named ${name}`);
+						ids.push(id);
+					}
+					this.selection = ids;
+					if (step.op === 'unbox') this.unboxSelection(route);
+					else {
+						const block = this.boxSelection(route);
+						if (block) this.renameBlock(block.id, step.name);
+					}
+					break;
+				}
+				case 'reblock':
+				case 'port': {
+					const id = partId(step.part);
+					const placed = this.schematic.instances.find((i) => i.id === id);
+					const block = placed && blockOf(this.schematic, placed.kind);
+					if (!block) return stop(`${step.part} is not a block`);
+					if (step.op === 'reblock') this.renameBlock(block.id, step.name);
+					else this.renamePort(block.id, step.from, step.to);
+					break;
+				}
+			case 'group':
+			case 'ungroup': {
 					const ids: string[] = [];
 					for (const name of step.parts) {
 						const id = partId(name);

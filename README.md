@@ -309,6 +309,7 @@ would show you.
 | Copy / cut / paste | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` — paste lands at the cursor |
 | Duplicate | `Ctrl+D` |
 | Group / ungroup | `G` / `U` (also `Ctrl+G` / `Ctrl+Shift+G`), or the buttons in the inspector — the group's name is its handle: click it to select the group, drag it to move the group, double-click it to rename |
+| Box up / open up | `B` boxes the selected parts (or group) up as a block — one part with a pin per net that left them; `U` on a block opens it back up. Rename the block and its ports in the inspector; place more copies from the palette |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Run / stop the sweep | `Space` |
 | Simulate | press Run — nothing runs until you ask |
@@ -352,6 +353,18 @@ part is only ever picked on its own, so the group is never in the way of editing
 what is in it — and a part dragged clear of the frame has left the group. Groups
 travel in links and files. A group is not a subcircuit — the parts stay on the
 drawing, wired to whatever they are wired to — and groups do not nest.
+
+A block is the next step: a piece of the drawing boxed up as a part of its own.
+Select the parts — or the group — and press `B`, and they are replaced by one box
+with a pin for every net that reached in from outside, named for the pin it came
+from, inputs on the left and outputs on the right. The circuit simulates exactly
+as before, because the engine never sees the box: it sees the parts inside,
+under names like `B1.U3`. The block joins the palette, so a counter stage or a
+gain block drawn once can be placed as many times as it is needed, and its name
+and port names are edited in the inspector for every copy at once. `U` opens a
+block back up into its parts, as a group under the block's name, wired as they
+were; box them up again and the block is updated. Blocks nest, and travel in
+links and files with the drawing.
 
 The symbol standard is the reader's, not the drawing's. A resistor is the same
 resistor whether it is drawn as a zigzag or a box, so the choice is not in a share

@@ -259,6 +259,30 @@
 		delete problems.group;
 	}
 
+	function commitBlockName(raw: string, field: HTMLInputElement) {
+		const boxed = app.selectedBlock;
+		if (!boxed) return;
+		const refusal = app.renameBlock(boxed.block.id, raw);
+		if (refusal) {
+			problems.block = refusal;
+			field.value = boxed.block.name;
+			return;
+		}
+		delete problems.block;
+	}
+
+	function commitPortName(port: string, raw: string, field: HTMLInputElement) {
+		const boxed = app.selectedBlock;
+		if (!boxed) return;
+		const refusal = app.renamePort(boxed.block.id, port, raw);
+		if (refusal) {
+			problems[`port:${port}`] = refusal;
+			field.value = port;
+			return;
+		}
+		delete problems[`port:${port}`];
+	}
+
 	function commitName(raw: string, field: HTMLInputElement) {
 		if (!instance) return;
 		const refusal = app.rename(instance.id, raw);
@@ -314,11 +338,13 @@
 		</p>
 		<div class="actions">
 			<button onclick={() => app.ungroupSelection()}>Ungroup <kbd>U</kbd></button>
+			<button onclick={() => app.boxSelection()}>Box up <kbd>B</kbd></button>
 		</div>
 	{:else if !instance || !def}
 		{#if app.selectedInstances.length > 1}
 			<div class="actions">
 				<button onclick={() => app.groupSelection()}>Group <kbd>G</kbd></button>
+				<button onclick={() => app.boxSelection()}>Box up <kbd>B</kbd></button>
 			</div>
 		{/if}
 		<p class="hint">
@@ -342,6 +368,62 @@
 		</header>
 		{#if problems.name}
 			<p class="problem" role="alert">{problems.name}</p>
+		{/if}
+
+		<!--
+			A block is a circuit in a box, and the box is what is edited here: its
+			name, and the name on each of its terminals. Every copy placed from
+			the same definition changes with it. What is inside is edited by
+			opening the box up.
+		-->
+		{#if app.selectedBlock}
+			{@const boxed = app.selectedBlock}
+			<section class="block">
+				<label>
+					<span class="field-label">Block</span>
+					<input
+						class="text"
+						class:rejected={problems.block}
+						value={boxed.block.name}
+						onchange={(e) => commitBlockName(e.currentTarget.value, e.currentTarget)}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') e.currentTarget.blur();
+						}}
+						aria-label="Block name"
+					/>
+					{#if problems.block}
+						<span class="problem" role="alert">{problems.block}</span>
+					{/if}
+				</label>
+				<h3>Ports</h3>
+				<div class="ports">
+					{#each boxed.block.ports as port (port.name)}
+						<label>
+							<span class="field-label">{port.side === 'left' ? 'in' : 'out'}</span>
+							<input
+								class="text"
+								class:rejected={problems[`port:${port.name}`]}
+								value={port.name}
+								onchange={(e) => commitPortName(port.name, e.currentTarget.value, e.currentTarget)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter') e.currentTarget.blur();
+								}}
+								aria-label="Port {port.name}"
+							/>
+							{#if problems[`port:${port.name}`]}
+								<span class="problem" role="alert">{problems[`port:${port.name}`]}</span>
+							{/if}
+						</label>
+					{/each}
+				</div>
+				<p class="hint">
+					{boxed.block.instances.length} components inside. Open it up to edit them; boxing them up
+					again puts the block back. The block stays in the palette either way.
+				</p>
+				<div class="actions">
+					<button onclick={() => app.unboxSelection()}>Open up <kbd>U</kbd></button>
+				</div>
+			</section>
 		{/if}
 
 		<div class="fields">
@@ -703,6 +785,37 @@
 	.actions {
 		display: flex;
 		gap: 0.35rem;
+	}
+
+	.block {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin-bottom: 0.75rem;
+	}
+
+	.block h3 {
+		margin: 0.25rem 0 0;
+		font-size: 0.7rem;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--label-dim);
+	}
+
+	.block label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+
+	.ports {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 0.35rem 0.5rem;
+	}
+
+	.ports .field-label {
+		font-size: 0.65rem;
 	}
 
 	button.link {

@@ -496,7 +496,19 @@ export function createSelectTool(): Tool {
 				case 'u':
 				case 'U':
 					if (event.ctrlKey || event.metaKey || event.altKey) return false;
-					app.ungroupSelection();
+					// One key undoes either kind of bundling. A group is taken apart
+					// first, since a block sitting in a group is a member before it
+					// is a box; with no group in the selection, a block is opened.
+					if (app.selectedInstances.some((i) => app.groupOf(i.id))) app.ungroupSelection();
+					else app.unboxSelection(routeDragged(ctx));
+					ctx.invalidate();
+					return true;
+				case 'b':
+				case 'B':
+					if (event.ctrlKey || event.metaKey || event.altKey) return false;
+					// Routed: the wires that reached the parts are re-attached to the
+					// box, and land the same way a drag would land them.
+					app.boxSelection(routeDragged(ctx));
 					ctx.invalidate();
 					return true;
 				case 'a':
