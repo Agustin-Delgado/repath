@@ -119,6 +119,10 @@ export class Trace {
 }
 
 const list = (names: readonly string[]) => (names.length ? names.join(',') : '-');
+// A wire is referred to by its ends, `x,y-x,y`, so a comma cannot separate two
+// of them: a list of wires joined with commas read back as a list of numbers,
+// and every move or delete that carried a wire failed to replay.
+const wireList = (refs: readonly WireRef[]) => (refs.length ? refs.join(';') : '-');
 
 /**
  * A value onto one line.
@@ -148,13 +152,13 @@ function format(step: Step): string {
 		case 'wire':
 			return `wire ${step.points.map((p) => `${p.x},${p.y}`).join(' ')}`;
 		case 'move':
-			return `move ${list(step.parts)} ${list(step.wires)} ${step.dx} ${step.dy}`;
+			return `move ${list(step.parts)} ${wireList(step.wires)} ${step.dx} ${step.dy}`;
 		case 'segment':
 			return `segment ${step.wire} ${step.index} ${step.dx} ${step.dy}`;
 		case 'delete':
-			return `delete ${list(step.parts)} ${list(step.wires)}`;
+			return `delete ${list(step.parts)} ${wireList(step.wires)}`;
 		case 'rotate':
-			return `rotate ${list(step.parts)} ${list(step.wires)}`;
+			return `rotate ${list(step.parts)} ${wireList(step.wires)}`;
 		case 'param':
 			return `param ${step.part} ${step.key} ${flatten(step.value)}`;
 		case 'import':
@@ -185,6 +189,7 @@ function format(step: Step): string {
 }
 
 const names = (token: string) => (token === '-' ? [] : token.split(','));
+const wireNames = (token: string) => (token === '-' ? [] : token.split(';'));
 const number = (token: string) => {
 	const value = Number(token);
 	if (!Number.isFinite(value)) throw new Error(`expected a number, got "${token}"`);
@@ -236,7 +241,7 @@ function read(op: string, rest: string[]): Step {
 			return {
 				op,
 				parts: names(rest[0]),
-				wires: names(rest[1]),
+				wires: wireNames(rest[1]),
 				dx: number(rest[2]),
 				dy: number(rest[3])
 			};
@@ -244,7 +249,7 @@ function read(op: string, rest: string[]): Step {
 			return { op, wire: rest[0], index: number(rest[1]), dx: number(rest[2]), dy: number(rest[3]) };
 		case 'delete':
 		case 'rotate':
-			return { op, parts: names(rest[0]), wires: names(rest[1]) };
+			return { op, parts: names(rest[0]), wires: wireNames(rest[1]) };
 		case 'param': {
 			const value = rest.slice(2).join(' ');
 			return {
