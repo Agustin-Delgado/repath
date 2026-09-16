@@ -57,7 +57,10 @@ jobs:
         if: env.TESTS_MOUNTED == '1'
       - run: cargo clippy --workspace -- -D warnings
         if: env.TESTS_MOUNTED != '1'
-      - run: cargo test --workspace
+      # Quiet on purpose: the log of a public repository is public, and the
+      # verbose reporter prints the name of every test in a private suite.
+      # A failure is still reported in full.
+      - run: cargo test --workspace --quiet
         if: env.TESTS_MOUNTED == '1'
 
   web:
@@ -115,7 +118,8 @@ jobs:
         working-directory: web
       - run: npm run check
         working-directory: web
-      - run: npm test
+      # Quiet for the same reason as `cargo test` above.
+      - run: npm test -- --reporter=dot
         working-directory: web
         if: env.TESTS_MOUNTED == '1'
       - run: npm run build
