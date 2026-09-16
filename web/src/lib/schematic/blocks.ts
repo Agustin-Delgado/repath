@@ -364,7 +364,14 @@ export function planBlock(schematic: Schematic, memberIds: ReadonlySet<string>):
 	const taken = new Set(members.map((i) => i.name));
 	const rows = { left: new Set<number>(), right: new Set<number>() };
 	let minted = 0;
-	/** Put a port down beside the frame, level with `near`, wired to `pins`. */
+	/**
+	 * The wires from ports to pins, routed only once every port is down. A
+	 * wire routed before a later port was planted ran straight through the
+	 * cell that port then landed on, and a pin sitting mid-wire is a junction:
+	 * two terminals quietly became one net.
+	 */
+	const pending: Array<{ port: Instance; pins: Point[] }> = [];
+	/** Put a port down beside the frame, level with `near`, to be wired to `pins`. */
 	const plant = (name: string, flow: 'in' | 'out', near: Point, pins: Point[]): string => {
 		let unique = name;
 		for (let n = 2; taken.has(unique); n++) unique = `${name}${n}`;
@@ -385,12 +392,7 @@ export function planBlock(schematic: Schematic, memberIds: ReadonlySet<string>):
 			params: { flow }
 		};
 		instances.push(port);
-		for (const [index, pin] of pins.entries()) {
-			wires.push({
-				id: `${port.id}w${index}`,
-				points: routeWire({ instances, wires }, { x, y }, pin, { grid: GRID })
-			});
-		}
+		pending.push({ port, pins });
 		return unique;
 	};
 
@@ -444,6 +446,15 @@ export function planBlock(schematic: Schematic, memberIds: ReadonlySet<string>):
 			oneOfEach(ordered).map((ref) => ({ x: ref.x, y: ref.y }))
 		);
 		portOfNet.set(net.index, name);
+	}
+
+	for (const { port, pins } of pending) {
+		for (const [index, pin] of pins.entries()) {
+			wires.push({
+				id: `${port.id}w${index}`,
+				points: routeWire({ instances, wires }, { x: port.x, y: port.y }, pin, { grid: GRID })
+			});
+		}
 	}
 
 	const reattach: BlockPlan['reattach'] = [];
