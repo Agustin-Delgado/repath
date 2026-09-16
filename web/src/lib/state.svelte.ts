@@ -23,6 +23,12 @@ import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import {
+	DEFAULT_STANDARD,
+	isSymbolStandard,
+	setSymbolStandard,
+	type SymbolStandard
+} from './schematic/symbols';
+import {
 	GRID,
 	defaultParams,
 	definitionFor,
@@ -219,6 +225,19 @@ const HISTORY_BYTES = 8 * 1024 * 1024;
  */
 const DEFAULT_STOP_TIME = 5e-3;
 
+const STANDARD_KEY = 'repath.symbols';
+
+/** The standard chosen last time, if the browser kept it. */
+function rememberedStandard(): SymbolStandard {
+	try {
+		const stored = localStorage.getItem(STANDARD_KEY);
+		if (stored && isSymbolStandard(stored)) return stored;
+	} catch {
+		// No storage here; the default is fine.
+	}
+	return DEFAULT_STANDARD;
+}
+
 class AppState {
 	/**
 	 * An empty sheet.
@@ -282,6 +301,15 @@ class AppState {
 	 */
 	logicFamily = $state(DEFAULT_FAMILY);
 	/**
+	 * Which drawing standard the symbols are shown in.
+	 *
+	 * The reader's, not the drawing's: it is not in a share link or a saved
+	 * file, because a resistor is the same resistor whichever way it is drawn,
+	 * and the person opening the link reads best in the symbols they learnt.
+	 * Kept in the browser so it is only ever chosen once.
+	 */
+	symbolStandard = $state<SymbolStandard>(rememberedStandard());
+	/**
 	 * Which sample of the circuit is being simulated.
 	 *
 	 * Zero means every part is exactly its marking, which is the circuit nobody
@@ -312,6 +340,7 @@ class AppState {
 	exampleId = $state('');
 
 	constructor() {
+		setSymbolStandard(this.symbolStandard);
 		// The circuit the app opens with is assigned to the field above, which is
 		// the one way into the editor that skipped this. Loading an example, opening
 		// a file and following a link all tidy first; the default did not, so the
@@ -1725,6 +1754,18 @@ class AppState {
 		const clamped = Math.min(Math.max(celsius, -273), 1000);
 		this.trace.record({ op: 'temperature', celsius: clamped });
 		this.temperature = clamped;
+	}
+
+	/** Choose the standard the symbols are drawn in, and remember it. */
+	setSymbolStandard(value: string): void {
+		if (!isSymbolStandard(value) || value === this.symbolStandard) return;
+		setSymbolStandard(value);
+		this.symbolStandard = value;
+		try {
+			localStorage.setItem(STANDARD_KEY, value);
+		} catch {
+			// Storage can be off, full or private; the choice still holds for the session.
+		}
 	}
 
 	/** Set the logic family every digital part belongs to. */

@@ -58,8 +58,60 @@ const LEAD = 16;
 /** What a symbol reaches from the origin unless it says otherwise. */
 const DEFAULT_EXTENT = 40;
 
+/**
+ * The drawing conventions a schematic can be read in.
+ *
+ * The same circuit is drawn three ways depending on where you learnt it: a
+ * resistor is a zigzag in North America and a box everywhere else, an AND gate
+ * is a D-shape or a box with an ampersand, and a source of EMF is a circle
+ * with plus and minus or, east of the Oder, a circle with an arrow. None of
+ * these change what the part is or where its pins are, only how it looks — so
+ * the standard is a viewing preference, kept by the reader rather than by the
+ * drawing, and a link opened in another country comes up in that reader's own
+ * symbols.
+ */
+export type SymbolStandard = 'ansi' | 'iec' | 'gost';
+
+export const SYMBOL_STANDARDS: ReadonlyArray<{
+	value: SymbolStandard;
+	label: string;
+	description: string;
+}> = [
+	{ value: 'ansi', label: 'ANSI', description: 'Zigzag resistors and shaped gates (IEEE 315)' },
+	{ value: 'iec', label: 'IEC', description: 'Box resistors and box gates with & and ≥1 (IEC 60617)' },
+	{ value: 'gost', label: 'GOST', description: 'IEC shapes, sources drawn with an arrow (ГОСТ 2.7xx)' }
+];
+
+export const DEFAULT_STANDARD: SymbolStandard = 'ansi';
+
+export function isSymbolStandard(value: string): value is SymbolStandard {
+	return SYMBOL_STANDARDS.some((s) => s.value === value);
+}
+
+/**
+ * The standard everything is currently drawn in.
+ *
+ * Module state rather than an argument, deliberately: the geometry is asked
+ * for from the canvas renderer, the palette and the hit tester, none of which
+ * has a reason to know about viewing preferences. The variant key carries the
+ * standard, so every cache built on it misses by itself when this changes.
+ */
+let currentStandard: SymbolStandard = DEFAULT_STANDARD;
+
+export function setSymbolStandard(standard: SymbolStandard): void {
+	currentStandard = standard;
+}
+
+export function symbolStandard(): SymbolStandard {
+	return currentStandard;
+}
+
 /** Which variant of a symbol a set of parameters selects. Used as a cache key. */
 export function symbolVariant(kind: string, params: Record<string, unknown> = {}): string {
+	return `${currentStandard}:${variantWithin(kind, params)}`;
+}
+
+function variantWithin(kind: string, params: Record<string, unknown>): string {
 	switch (kind) {
 		case 'diode':
 			return `diode:${String(params.model ?? 'silicon')}`;
@@ -100,6 +152,13 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
+	// The same part, as North America draws it: six turns of the zigzag between
+	// the same lead ends, so a drawing switched between the two moves nothing.
+	'resistor@ansi': {
+		shapes: [path('M-30 0 H-18 L-15 -7 L-9 7 L-3 -7 L3 7 L9 -7 L15 7 L18 0 H30')],
+		labels: []
+	},
+
 	capacitor: {
 		shapes: [path('M-30 0 H-5 M-5 -12 V12 M5 -12 V12 M5 0 H30')],
 		labels: []
@@ -130,15 +189,6 @@ const STATIC: Record<string, SymbolGeometry> = {
 		// Ground's mirror image, and read the same way: a stem up to a rail, with
 		// an arrow saying which way the potential goes.
 		shapes: [path('M0 10 V-4 M-11 -4 H11 M-6 -10 L0 -16 L6 -10')],
-		labels: []
-	},
-
-	isource: {
-		shapes: [
-			path('M0 -30 V-16 M0 16 V30'),
-			{ kind: 'circle', cx: 0, cy: 0, r: 16 },
-			path('M0 9 V-9 M-5 -4 L0 -9 L5 -4')
-		],
 		labels: []
 	},
 
@@ -266,6 +316,35 @@ const STATIC: Record<string, SymbolGeometry> = {
 		]
 	},
 
+	// The box forms of the single-input gates: a `1` in a rectangle, the
+	// inversion as the same bubble the shaped form has. The body spans the same
+	// 28 units as the triangle, so the leads and the bubble are where they were.
+	'not@iec': {
+		shapes: [
+			path('M-30 0 H-14 M22 0 H30'),
+			{ kind: 'rect', x: -14, y: -16, w: 28, h: 32 },
+			{ kind: 'circle', cx: 18, cy: 0, r: 3.5 }
+		],
+		labels: [{ x: 0, y: 4, text: '1', size: 12 }]
+	},
+
+	'buffer@iec': {
+		shapes: [path('M-30 0 H-14 M14 0 H30'), { kind: 'rect', x: -14, y: -16, w: 28, h: 32 }],
+		labels: [{ x: 0, y: 4, text: '1', size: 12 }]
+	},
+
+	'tristate@iec': {
+		shapes: [
+			path('M-30 0 H-14 M14 0 H30'),
+			{ kind: 'rect', x: -14, y: -16, w: 28, h: 32 },
+			path('M0 -30 V-16')
+		],
+		labels: [
+			{ x: 0, y: 4, text: '1', size: 12 },
+			{ x: 4, y: -19, text: 'EN', anchor: 'start', size: 8 }
+		]
+	},
+
 	clock: {
 		shapes: [
 			path('M22 0 H30'),
@@ -284,10 +363,11 @@ const STATIC: Record<string, SymbolGeometry> = {
  * directions instead would push the output pin off the grid and leave the wide
  * gates twice the size of the narrow ones sitting next to them.
  */
-function gate(kind: string, count: number): SymbolGeometry {
+function gate(kind: string, count: number, standard: SymbolStandard): SymbolGeometry {
 	const half = gateReach(count);
 	const rounded = kind === 'and' || kind === 'nand';
 	const inverted = kind === 'nand' || kind === 'nor' || kind === 'xnor';
+	if (standard !== 'ansi') return boxGate(kind, count, half, inverted, standard);
 	// Where the body ends on the right, which is where the bubble and the output
 	// lead have to start from.
 	const nose = rounded ? 18 : 20;
@@ -323,6 +403,37 @@ function gate(kind: string, count: number): SymbolGeometry {
 	}
 
 	return { shapes, labels: [] };
+}
+
+/**
+ * The same gate as a box with its function written inside, which is how IEC
+ * 60617 and GOST 2.743 draw every gate. The box spans the width the shaped
+ * body did, so the leads land on the same pins; the inversion is the same
+ * bubble. The two standards differ only in what OR is called: `≥1` says "at
+ * least one input", GOST simply writes `1`.
+ */
+function boxGate(
+	kind: string,
+	count: number,
+	half: number,
+	inverted: boolean,
+	standard: SymbolStandard
+): SymbolGeometry {
+	const or = standard === 'gost' ? '1' : '≥1';
+	const text =
+		kind === 'and' || kind === 'nand' ? '&' : kind === 'xor' || kind === 'xnor' ? '=1' : or;
+	const shapes: Shape[] = [{ kind: 'rect', x: -20, y: -half, w: 40, h: 2 * half }];
+	for (const pin of gatePins(count)) {
+		if (pin.name === 'y') continue;
+		shapes.push(path(`M-30 ${pin.y} H-20`));
+	}
+	if (inverted) {
+		shapes.push({ kind: 'circle', cx: 23.5, cy: 0, r: 3.5 });
+		shapes.push(path('M27 0 H30'));
+	} else {
+		shapes.push(path('M20 0 H30'));
+	}
+	return { shapes, labels: [{ x: 0, y: 4, text, size: 12 }] };
 }
 
 /**
@@ -392,7 +503,7 @@ function diode(variant: string): SymbolGeometry {
 	return { shapes, labels: [] };
 }
 
-function voltageSource(waveform: string): SymbolGeometry {
+function voltageSource(waveform: string, standard: SymbolStandard): SymbolGeometry {
 	const shapes: Shape[] = [
 		path('M0 -30 V-16 M0 16 V30'),
 		{ kind: 'circle', cx: 0, cy: 0, r: 16 }
@@ -401,13 +512,44 @@ function voltageSource(waveform: string): SymbolGeometry {
 		shapes.push(path('M-9 0 a4.5 4.5 0 0 1 9 0 a4.5 4.5 0 0 0 9 0'));
 	} else if (waveform === 'pulse') {
 		shapes.push(path('M-10 5 H-5 V-5 H2 V5 H8 V-5 H10'));
+	} else if (standard === 'gost') {
+		// A source of EMF is an arrow inside the circle, pointing at the
+		// terminal the EMF raises — the plus pin, up here.
+		shapes.push(path('M0 10 V-10 M-5 -5 L0 -10 L5 -5'));
 	} else {
 		shapes.push(path('M-5 -6 H5 M0 -11 V-1 M-5 7 H5'));
 	}
 	return { shapes, labels: [] };
 }
 
+/**
+ * A current source. Under GOST the arrow of an EMF source is taken, so a
+ * current source carries a double arrow instead: two shafts side by side,
+ * which is what a Russian textbook draws for an ideal current source.
+ */
+function currentSource(standard: SymbolStandard): SymbolGeometry {
+	const shapes: Shape[] = [
+		path('M0 -30 V-16 M0 16 V30'),
+		{ kind: 'circle', cx: 0, cy: 0, r: 16 }
+	];
+	if (standard === 'gost') {
+		shapes.push(path('M-3 9 V-9 M-8 -4 L-3 -9 L2 -4'));
+		shapes.push(path('M3 9 V-9 M-2 -4 L3 -9 L8 -4'));
+	} else {
+		shapes.push(path('M0 9 V-9 M-5 -4 L0 -9 L5 -4'));
+	}
+	return { shapes, labels: [] };
+}
+
 const variantCache = new Map<string, SymbolGeometry>();
+
+/**
+ * Which hand-drawn set a standard reads from. GOST shares its box gates and
+ * box resistor with IEC; what it draws differently is generated, not stored.
+ */
+function standardFamily(standard: SymbolStandard): 'ansi' | 'iec' {
+	return standard === 'ansi' ? 'ansi' : 'iec';
+}
 
 /** Geometry for a component, memoized per variant. */
 /**
@@ -473,19 +615,21 @@ export function symbolGeometry(
 	const cached = variantCache.get(variant);
 	if (cached) return cached;
 
+	const standard = currentStandard;
 	let geometry: SymbolGeometry;
 	if (kind === 'diode') geometry = diode(String(params.model ?? 'silicon'));
-	else if (kind === 'vsource') geometry = voltageSource(String(params.waveform ?? 'dc'));
+	else if (kind === 'vsource') geometry = voltageSource(String(params.waveform ?? 'dc'), standard);
+	else if (kind === 'isource') geometry = currentSource(standard);
 	else if (kind === 'switch') {
 		geometry = switchSymbol(String(params.action ?? 'toggle'), String(params.start ?? 'open'));
 	}
 	else if (kind === 'toggle') geometry = toggleSymbol(String(params.state ?? 'low'));
 	else if (GATES.has(kind)) {
-		geometry = gate(kind, gateInputCount(params as Record<string, number | string>));
+		geometry = gate(kind, gateInputCount(params as Record<string, number | string>), standard);
 	}
 	else if (kind.startsWith(SUBCIRCUIT_PREFIX)) geometry = block(kind);
 	else if (chipOf(kind)) geometry = dip(chipOf(kind)!);
-	else geometry = STATIC[kind] ?? EMPTY;
+	else geometry = STATIC[`${kind}@${standardFamily(standard)}`] ?? STATIC[kind] ?? EMPTY;
 
 	variantCache.set(variant, geometry);
 	return geometry;

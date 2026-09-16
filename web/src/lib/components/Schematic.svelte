@@ -311,8 +311,11 @@
 	});
 
 	// Appearance-only changes: repaint the schematic, leave the index alone.
+	// The symbol standard is one of these: pins and boxes stay put, only the
+	// drawing between them changes, and the paths are rebuilt on their own
+	// because the standard is part of their cache key.
 	$effect(() => {
-		void [selectionSet, probeColours, app.hoverNet];
+		void [selectionSet, probeColours, app.hoverNet, app.symbolStandard];
 		editor?.invalidate('schematic');
 	});
 
