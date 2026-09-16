@@ -39,8 +39,7 @@ jobs:
             exit 0
           fi
           mkdir -p ~/.ssh
-          printf '%s
-' "$TESTS_DEPLOY_KEY" > ~/.ssh/tests_deploy_key
+          printf '%s\n' "$TESTS_DEPLOY_KEY" > ~/.ssh/tests_deploy_key
           chmod 600 ~/.ssh/tests_deploy_key
           ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tests_deploy_key -o IdentitiesOnly=yes"
@@ -80,8 +79,7 @@ jobs:
             exit 0
           fi
           mkdir -p ~/.ssh
-          printf '%s
-' "$TESTS_DEPLOY_KEY" > ~/.ssh/tests_deploy_key
+          printf '%s\n' "$TESTS_DEPLOY_KEY" > ~/.ssh/tests_deploy_key
           chmod 600 ~/.ssh/tests_deploy_key
           ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tests_deploy_key -o IdentitiesOnly=yes"
