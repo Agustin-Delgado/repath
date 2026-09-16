@@ -23,7 +23,7 @@ import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import { groupFrame, outside } from './schematic/groups';
-import { blockInUse, planBlock } from './schematic/blocks';
+import { blockInUse, blockPorts, interior, planBlock, registerBlocks } from './schematic/blocks';
 import {
 	DEFAULT_STANDARD,
 	isSymbolStandard,
@@ -44,7 +44,6 @@ import {
 	pinPosition,
 	pointKey,
 	rotatePoint,
-	registerBlocks,
 	registerSubcircuits,
 	simplifyPath,
 	snap,
@@ -1452,6 +1451,8 @@ class AppState {
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return null;
 		if (!trimmed) return 'A component needs a name.';
+		// A port's name is a pin name on the box, and pin names are one word.
+		if (instance.kind === 'port' && /\s/.test(trimmed)) return 'A port name cannot have spaces in it.';
 		if (this.schematic.instances.some((i) => i.id !== id && i.name === trimmed)) {
 			return `${trimmed} is already taken.`;
 		}
@@ -1606,13 +1607,36 @@ class AppState {
 	});
 
 	/**
+	 * The block whose inside is on the canvas, when the drawing has been left
+	 * for one. `null` on the drawing itself.
+	 */
+	inside = $state<BlockDef | null>(null);
+
+	/**
+	 * Where the drawing went while a block's inside is being edited: the
+	 * document, its history and what was selected, so leaving the block puts
+	 * everything back. One entry per level, since a block can be entered from
+	 * inside another.
+	 */
+	private outside: Array<{
+		schematic: Schematic;
+		selection: string[];
+		probes: string[];
+		past: HistoryEntry[];
+		future: HistoryEntry[];
+		historyBytes: number;
+		editing: BlockDef;
+	}> = [];
+
+	/**
 	 * Box the selected parts up as a block.
 	 *
 	 * The parts and the wires between them leave the drawing for the
-	 * definition, one part stands where they were, and every wire that reached
-	 * in from outside is re-attached to the pin on the box that its net became.
-	 * A group is taken whole and gives the block its name; otherwise the block
-	 * is `Block 1`, and can be renamed. The definition joins the palette, so a
+	 * definition, with a port planted for every net that reached in from
+	 * outside; one part stands where they were, and every wire that reached
+	 * in is re-attached to the pin on the box that its net became. A group is
+	 * taken whole and gives the block its name; otherwise the block is
+	 * `Block 1`, and can be renamed. The definition joins the palette, so a
 	 * second copy is a click away.
 	 */
 	boxSelection(route: RouteBetween = this.router()): BlockDef | null {
@@ -1622,7 +1646,9 @@ class AppState {
 		const plan = planBlock(this.schematic, memberIds);
 		if (!plan) return null;
 
-		const name = this.freeBlockName(this.selectedGroup?.name ?? nextBlockName(this.schematic.blocks ?? []));
+		const name = this.freeBlockName(
+			this.selectedGroup?.name ?? nextBlockName(this.schematic.blocks ?? [])
+		);
 		this.trace.record({ op: 'box', parts: members.map((i) => i.name), name });
 		this.checkpoint();
 
@@ -1630,8 +1656,7 @@ class AppState {
 			id: freshId(),
 			name,
 			instances: plan.instances,
-			wires: plan.wires,
-			ports: plan.ports
+			wires: plan.wires
 		};
 		this.schematic.blocks = [...(this.schematic.blocks ?? []), block];
 		registerBlocks(this.schematic);
@@ -1691,9 +1716,10 @@ class AppState {
 	 *
 	 * They come back where the box stood, in the arrangement they were boxed up
 	 * in, turned with the box if it was turned; the wires on the box's pins
-	 * are re-attached to the pins inside; and they come back as a group under
-	 * the block's name, so boxing them up again is one keystroke. The
-	 * definition stays in the palette. Every selected block is opened.
+	 * are re-attached where the ports inside stood, which is where the inside
+	 * wires reach; and they come back as a group under the block's name, so
+	 * boxing them up again is one keystroke. The definition stays in the
+	 * palette. Every selected block is opened.
 	 */
 	unboxSelection(route: RouteBetween = this.router()): void {
 		const boxes = this.selectedInstances.filter((i) => blockOf(this.schematic, i.kind));
@@ -1718,13 +1744,17 @@ class AppState {
 		const fresh = new Map<string, Instance>();
 		const existing = this.schematic.instances.filter((i) => i.id !== placed.id);
 		for (const inner of block.instances) {
+			// The ports are the box's terminals, and the box is going.
+			if (inner.kind === 'port') continue;
 			const at = turn(inner);
 			const copy: Instance = {
 				...inner,
 				id: freshId(),
 				// Its own name back if nothing has taken it since, which after
 				// boxing up and opening again is the usual case.
-				name: existing.some((i) => i.name === inner.name) ? nextName(existing, inner.kind) : inner.name,
+				name: existing.some((i) => i.name === inner.name)
+					? nextName(existing, inner.kind)
+					: inner.name,
 				x: at.x,
 				y: at.y,
 				rotation: ((inner.rotation + placed.rotation) % 360) as Rotation,
@@ -1735,33 +1765,25 @@ class AppState {
 		}
 		const wires: Wire[] = block.wires.map((w) => ({ id: freshId(), points: w.points.map(turn) }));
 
-		// Where each pin of the box was, and where the pins it stood for now are.
+		// Where each pin of the box was, and where the port it stood for was.
 		const outerPins = definitionFor(placed).pins;
-		const joins: Array<[Point, Point]> = [];
 		const moved = new Map<string, Point>();
-		for (const port of block.ports) {
+		for (const port of blockPorts(block)) {
 			const outerPin = outerPins.find((p) => p.name === port.name);
-			if (!outerPin) continue;
-			const targets = port.pins.flatMap(({ instance, pin }) => {
-				const copy = fresh.get(instance);
-				const def = copy && definitionFor(copy).pins.find((p) => p.name === pin);
-				return copy && def ? [pinPosition(copy, def)] : [];
-			});
-			if (targets.length === 0) continue;
+			const inner = block.instances.find((i) => i.id === port.instance);
+			if (!outerPin || !inner) continue;
 			const was = pinPosition(placed, outerPin);
-			moved.set(pointKey(was.x, was.y), targets[0]);
-			for (const other of targets.slice(1)) joins.push([targets[0], other]);
+			moved.set(pointKey(was.x, was.y), turn(inner));
 		}
 
 		this.schematic.instances = [...existing];
 		this.schematic.wires = [...this.schematic.wires, ...wires];
 		this.rewire(moved, route);
-		// Two pins that were one port without a wire between them get one now.
-		for (const [a, b] of joins) {
-			const id = freshId();
-			this.schematic.wires.push({ id, points: simplifyPath(route(a, b, new Set([id]))) });
-		}
 
+		// Back as one group under the block's name, so boxing them up again
+		// is one keystroke. Groups drawn inside the block are not kept apart:
+		// a group holds parts and never groups, and the block's is the one
+		// that says what these parts were.
 		const members = [...fresh.values()].map((i) => i.id);
 		this.schematic.groups = [
 			...(this.schematic.groups ?? []),
@@ -1784,6 +1806,9 @@ class AppState {
 				if (moved.has(pointKey(wire.points[end].x, wire.points[end].y))) settling.add(wire.id);
 			}
 		}
+		// One at a time, each routed around the ones already settled: two
+		// wires bound for neighbouring pins that could not see each other
+		// landed one on the other's end and made a junction nobody drew.
 		for (const wire of this.schematic.wires) {
 			if (!settling.has(wire.id)) continue;
 			const last = wire.points.length - 1;
@@ -1791,7 +1816,129 @@ class AppState {
 			const start = moved.get(pointKey(from[0].x, from[0].y)) ?? from[0];
 			const finish = moved.get(pointKey(from[last].x, from[last].y)) ?? from[last];
 			wire.points = simplifyPath(route(start, finish, settling, from));
+			settling.delete(wire.id);
 		}
+	}
+
+	/**
+	 * Leave the drawing for the inside of a block, to edit it there.
+	 *
+	 * The inside becomes the document on the canvas — its parts, wires and
+	 * ports, editable like any drawing, with the palette to add to it — and
+	 * the drawing waits, history and all, until `leaveBlock`. The block's
+	 * definitions come along, so a block can be placed inside another; not
+	 * this one or anything built from it, which the palette keeps out of
+	 * reach.
+	 */
+	enterBlock(id: string): void {
+		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
+		if (!block) return;
+		this.trace.record({ op: 'enter', name: block.name });
+		this.discardRun();
+		this.outside.push({
+			schematic: this.schematic,
+			selection: this.selection,
+			probes: this.probes,
+			past: this.past,
+			future: this.future,
+			historyBytes: this.historyBytes,
+			editing: block
+		});
+		this.past = [];
+		this.future = [];
+		this.historyBytes = 0;
+		// A copy, so that undo inside the block never reaches into the
+		// definition: what is edited here is written back on the way out.
+		const inside = structuredClone($state.snapshot(interior(block, this.schematic))) as Schematic;
+		inside.blocks = this.schematic.blocks;
+		inside.subcircuits = this.schematic.subcircuits;
+		this.schematic = inside;
+		this.selection = [];
+		this.probes = [];
+		this.inside = block;
+		this.error = null;
+		this.notice = null;
+	}
+
+	/**
+	 * Back to the drawing, taking the edited inside with it.
+	 *
+	 * Every placed copy of the block changes with the definition. Its pins may
+	 * have moved — a port renamed, added or taken away — so each copy's wires
+	 * are re-attached to where its pins are now; a pin that is gone leaves
+	 * its wire hanging, which is the truth of it.
+	 */
+	leaveBlock(): void {
+		const frame = this.outside.pop();
+		if (!frame) return;
+		this.trace.record({ op: 'leave' });
+		this.discardRun();
+		const edited = this.schematic;
+		const block = frame.editing;
+		const outer = frame.schematic;
+
+		// Boxing something up inside made a definition; it belongs to the
+		// document as a whole.
+		outer.blocks = edited.blocks ?? outer.blocks;
+		const target = (outer.blocks ?? []).find((b) => b.id === block.id) ?? block;
+		this.schematic = outer;
+		const copies = outer.instances.filter((i) => i.kind === BLOCK_PREFIX + target.id);
+		// Pins are followed by the port they are, not by name: a port renamed
+		// inside is the same terminal, and the wire on it stays on it.
+		const wasPort = new Map(blockPorts(target).map((p) => [p.name, p.instance]));
+		const before = new Map<string, Point>();
+		for (const placed of copies) {
+			for (const pin of definitionFor(placed).pins) {
+				const port = wasPort.get(pin.name);
+				if (port) before.set(`${placed.id}:${port}`, pinPosition(placed, pin));
+			}
+		}
+		target.instances = edited.instances;
+		target.wires = edited.wires;
+		target.groups = edited.groups;
+		registerBlocks(outer);
+		const moved = new Map<string, Point>();
+		for (const placed of copies) {
+			const pins = definitionFor(placed).pins;
+			const still = new Set<string>();
+			for (const port of blockPorts(target)) {
+				const pin = pins.find((p) => p.name === port.name);
+				const was = before.get(`${placed.id}:${port.instance}`);
+				if (!pin || !was) continue;
+				still.add(`${placed.id}:${port.instance}`);
+				const now = pinPosition(placed, pin);
+				if (was.x !== now.x || was.y !== now.y) moved.set(pointKey(was.x, was.y), now);
+			}
+			// A wire on a pin that is gone goes with it. Left hanging where the
+			// pin was, it sat exactly where the pins that remain close up to,
+			// and one of them landing on the loose end was a connection nobody
+			// drew. The part at its far end is then unconnected, and says so.
+			for (const [key, was] of before) {
+				if (!key.startsWith(`${placed.id}:`) || still.has(key)) continue;
+				const at = pointKey(was.x, was.y);
+				this.schematic.wires = this.schematic.wires.filter((w) => {
+					const ends = [w.points[0], w.points[w.points.length - 1]];
+					return !ends.some((p) => pointKey(p.x, p.y) === at);
+				});
+			}
+		}
+		this.rewire(moved, this.router());
+		if (moved.size > 0) this.tidyWires();
+
+		this.past = frame.past;
+		this.future = frame.future;
+		this.historyBytes = frame.historyBytes;
+		this.selection = this.stillPresent(frame.selection);
+		this.probes = frame.probes;
+		this.inside = this.outside.length > 0 ? this.outside[this.outside.length - 1].editing : null;
+		this.error = null;
+		this.notice = null;
+	}
+
+	/** Every level left behind, for a load that replaces the whole document. */
+	private leaveEverything(): void {
+		this.outside = [];
+		this.inside = null;
 	}
 
 	/** Rename a block. Returns why it was refused, or null on success. */
@@ -1804,8 +1951,7 @@ class AppState {
 		if ((this.schematic.blocks ?? []).some((b) => b.id !== id && b.name === trimmed)) {
 			return `There is already a block called ${trimmed}.`;
 		}
-		const placed = this.schematic.instances.find((i) => i.kind === BLOCK_PREFIX + id);
-		if (placed) this.trace.record({ op: 'reblock', part: placed.name, name: trimmed });
+		this.trace.record({ op: 'reblock', from: block.name, to: trimmed });
 		this.checkpoint();
 		block.name = trimmed;
 		registerBlocks(this.schematic);
@@ -1813,27 +1959,28 @@ class AppState {
 	}
 
 	/**
-	 * Rename one terminal of a block. Every placed copy follows, since the pin
-	 * is the port. Returns why it was refused, or null on success.
+	 * Rename one terminal of a block: the port inside it. Every placed copy
+	 * follows, since the pin is the port. Returns why it was refused, or null
+	 * on success.
 	 */
 	renamePort(id: string, port: string, name: string): string | null {
 		const trimmed = name.trim();
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
-		const entry = block?.ports.find((p) => p.name === port);
+		const entry = block?.instances.find((i) => i.kind === 'port' && i.name === port);
 		if (!block || !entry) return null;
 		if (!trimmed) return 'A port needs a name.';
 		if (/\s/.test(trimmed)) return 'A port name cannot have spaces in it.';
 		if (entry.name === trimmed) return null;
-		if (block.ports.some((p) => p.name === trimmed)) {
-			return `${block.name} already has a port called ${trimmed}.`;
+		if (block.instances.some((i) => i.name === trimmed)) {
+			return `${block.name} already has something called ${trimmed}.`;
 		}
-		const kind = BLOCK_PREFIX + id;
-		const copies = this.schematic.instances.filter((i) => i.kind === kind);
-		if (copies[0]) this.trace.record({ op: 'port', part: copies[0].name, from: port, to: trimmed });
+		this.trace.record({ op: 'port', block: block.name, from: port, to: trimmed });
 		this.checkpoint();
 		// The box is as wide as its longest names, so a longer name can push
 		// every pin a step outward. Where each pin was is noted first, and the
 		// wires on the ones that moved follow them.
+		const kind = BLOCK_PREFIX + id;
+		const copies = this.schematic.instances.filter((i) => i.kind === kind);
 		const before = new Map<string, Point>();
 		for (const placed of copies) {
 			for (const pin of definitionFor(placed).pins) {
@@ -2147,6 +2294,7 @@ class AppState {
 	loadExample(id: string): void {
 		const example = exampleById(id);
 		this.trace.record({ op: 'example', id: example.id });
+		this.leaveEverything();
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = example.build();
@@ -2171,6 +2319,7 @@ class AppState {
 
 	/** Adopt a circuit that arrived in a link. */
 	loadShared(circuit: { schematic: Schematic; stopTime: number; probes?: string[] }): void {
+		this.leaveEverything();
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = adopt(circuit.schematic);
@@ -2219,7 +2368,7 @@ class AppState {
 			wires: (block.wires ?? [])
 				.map((wire, index) => normaliseWire(wire, `w${index}`))
 				.filter((wire): wire is Wire => wire !== null),
-			ports: block.ports ?? []
+			groups: block.groups
 		}));
 		registerBlocks({ instances: [], wires: [], blocks });
 		// Re-key everything so a pasted circuit cannot collide with what is open.
@@ -2247,6 +2396,7 @@ class AppState {
 			}))
 			.filter((group) => group.members.length > 0);
 
+		this.leaveEverything();
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = { instances, wires, subcircuits, blocks, groups };
@@ -2432,15 +2582,19 @@ class AppState {
 					break;
 				}
 				case 'reblock':
-				case 'port': {
-					const id = partId(step.part);
-					const placed = this.schematic.instances.find((i) => i.id === id);
-					const block = placed && blockOf(this.schematic, placed.kind);
-					if (!block) return stop(`${step.part} is not a block`);
-					if (step.op === 'reblock') this.renameBlock(block.id, step.name);
-					else this.renamePort(block.id, step.from, step.to);
+				case 'port':
+				case 'enter': {
+					const wanted = step.op === 'reblock' ? step.from : step.op === 'port' ? step.block : step.name;
+					const block = (this.schematic.blocks ?? []).find((b) => b.name === wanted);
+					if (!block) return stop(`no block called ${wanted}`);
+					if (step.op === 'reblock') this.renameBlock(block.id, step.to);
+					else if (step.op === 'port') this.renamePort(block.id, step.from, step.to);
+					else this.enterBlock(block.id);
 					break;
 				}
+				case 'leave':
+					this.leaveBlock();
+					break;
 			case 'group':
 			case 'ungroup': {
 					const ids: string[] = [];

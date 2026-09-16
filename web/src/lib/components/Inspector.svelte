@@ -3,6 +3,7 @@
 	import { ledRating } from '$lib/schematic/led';
 	import { pinKey } from '$lib/schematic/nets';
 	import { definitionFor, isParamVisible } from '$lib/schematic/model';
+	import { blockPorts } from '$lib/schematic/blocks';
 	import { bjtFromCard, cardFor, diodeFromCard, mosfetFromCard, parseModelCards } from '$lib/spice';
 	import {
 		formatWithUnit,
@@ -397,7 +398,7 @@
 				</label>
 				<h3>Ports</h3>
 				<div class="ports">
-					{#each boxed.block.ports as port (port.name)}
+					{#each blockPorts(boxed.block) as port (port.instance)}
 						<label>
 							<span class="field-label">{port.side === 'left' ? 'in' : 'out'}</span>
 							<input
@@ -417,10 +418,13 @@
 					{/each}
 				</div>
 				<p class="hint">
-					{boxed.block.instances.length} components inside. Open it up to edit them; boxing them up
-					again puts the block back. The block stays in the palette either way.
+					{boxed.block.instances.filter((i) => i.kind !== 'port').length} components inside. Edit
+					them in there — every copy of the block follows, and a port added or removed is a pin
+					on the box — or open the box up here into its parts. The block stays in the palette
+					either way.
 				</p>
 				<div class="actions">
+					<button onclick={() => app.enterBlock(boxed.block.id)}>Edit inside</button>
 					<button onclick={() => app.unboxSelection()}>Open up <kbd>U</kbd></button>
 				</div>
 			</section>

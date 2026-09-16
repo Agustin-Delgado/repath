@@ -246,27 +246,32 @@ export interface PartGroup {
 	members: string[];
 }
 
-/** One terminal of a block: a name on the box, standing for pins inside it. */
+/**
+ * One terminal of a block, as the box shows it.
+ *
+ * Worked out from the port parts inside the block rather than stored: the port
+ * part is the terminal, its name is the name on the box, and what it is wired
+ * to inside decides whether the pin is analog and which way it faces.
+ */
 export interface BlockPort {
-	/** The pin's name on the placed part, and what is printed on the box. */
 	name: string;
 	side: 'left' | 'right';
-	/**
-	 * The inner pins this terminal reaches. Usually one. Several when two parts
-	 * inside were fed from the same outside net without a wire between them,
-	 * which is a connection the box has to keep making.
-	 */
-	pins: Array<{ instance: string; pin: string }>;
+	/** The port part inside the block that this terminal is. */
+	instance: string;
+	domain: Domain;
+	direction: PinDirection;
 }
 
 /**
  * A circuit drawn here and boxed up as a part.
  *
- * The inside is a schematic of its own — parts, wires, and the ports that say
- * which of its pins reach the outside — kept as it was drawn, so it can be
- * opened back up and edited. Placed, it is one part with one pin per port; for
- * the engine it is unfolded back into the parts it is made of, the way an
- * imported `.subckt` is. Positions inside are relative to where the box sits.
+ * The inside is a schematic of its own — parts, wires, groups — kept as it was
+ * drawn, so it can be opened back up and edited. Its terminals are the port
+ * parts in it: a wire from a pin to a port makes that pin reachable from
+ * outside, under the port's name. Placed, it is one part with one pin per
+ * port; for the engine it is unfolded back into the parts it is made of, the
+ * way an imported `.subckt` is. Positions inside are relative to where the box
+ * sits.
  */
 export interface BlockDef {
 	/** Stable handle. The part's `kind` is `b:` followed by this. */
@@ -274,7 +279,7 @@ export interface BlockDef {
 	name: string;
 	instances: Instance[];
 	wires: Wire[];
-	ports: BlockPort[];
+	groups?: PartGroup[];
 }
 
 export interface Schematic {
@@ -737,6 +742,34 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				nonZero: true,
 				description: 'Air, and whatever is condensed on the insulator beside it. Never actually infinite.'
+			}
+		]
+	},
+	{
+		/**
+		 * A terminal of a block, from the inside.
+		 *
+		 * A port is what makes a pin of a boxed-up circuit reachable from outside:
+		 * the box gets a pin under the port's name, on the side its flow says.
+		 * Like a probe it is a name attached to a point — it carries nothing and
+		 * changes nothing — so on an ordinary drawing it is a label and no more.
+		 */
+		kind: 'port',
+		box: { x: -40, y: -8, w: 40, h: 16 },
+		label: 'Port',
+		group: 'logic',
+		prefix: 'IO',
+		pins: [analog('p', 0, 0)],
+		params: [
+			{
+				key: 'flow',
+				label: 'Flow',
+				unit: '',
+				default: 'in',
+				choices: [
+					{ value: 'in', label: 'Input — on the left of the box' },
+					{ value: 'out', label: 'Output — on the right of the box' }
+				]
 			}
 		]
 	},
@@ -1281,6 +1314,19 @@ export const CATALOG: ComponentDef[] = [
  */
 export const OPERABLE = new Set(['switch', 'toggle']);
 
+/**
+ * Parts that are a name attached to a point: they join a net without making
+ * it anything, carry nothing, and the engine never builds them.
+ */
+export const MARKERS = new Set(['probe', 'port']);
+
+export type PortFlow = 'in' | 'out';
+
+/** Which way a port faces: an input comes in on the left of the box. */
+export function portFlow(instance: Instance): PortFlow {
+	return instance.params.flow === 'out' ? 'out' : 'in';
+}
+
 // ---------------------------------------------------------------------------
 // Integrated circuits
 // ---------------------------------------------------------------------------
@@ -1382,6 +1428,12 @@ export function definitionOf(kind: string): ComponentDef {
 
 const gateShapes = new Map<string, ComponentDef>();
 
+/** An output port: the same part with its flag on the other side of the pin. */
+const PORT_OUT: ComponentDef = {
+	...(CATALOG.find((d) => d.kind === 'port') as ComponentDef),
+	box: { x: 0, y: -8, w: 40, h: 16 }
+};
+
 /**
  * What a *placed* part looks like, which is not always what its kind says.
  *
@@ -1393,6 +1445,8 @@ const gateShapes = new Map<string, ComponentDef>();
  */
 export function definitionFor(instance: Instance): ComponentDef {
 	const base = definitionOf(instance.kind);
+	// A port's flag hangs off whichever side of its pin the signal comes from.
+	if (instance.kind === 'port') return portFlow(instance) === 'out' ? PORT_OUT : base;
 	if (!WIDE_GATES.has(instance.kind)) return base;
 
 	const count = gateInputCount(instance.params);
@@ -1498,8 +1552,8 @@ const BLOCK_CHAR = 5;
 const BLOCK_NAME_ROOM = 20;
 
 /** The ports on one side, top to bottom. */
-export function blockSide(block: BlockDef, side: 'left' | 'right'): BlockPort[] {
-	return block.ports.filter((port) => port.side === side);
+export function blockSide(ports: readonly BlockPort[], side: 'left' | 'right'): BlockPort[] {
+	return ports.filter((port) => port.side === side);
 }
 
 /**
@@ -1507,9 +1561,9 @@ export function blockSide(block: BlockDef, side: 'left' | 'right'): BlockPort[] 
  * fits inside its edge. Grown in grid steps so the pins, a lead further out,
  * stay on the grid.
  */
-export function blockHalfWidth(block: BlockDef): number {
+export function blockHalfWidth(ports: readonly BlockPort[]): number {
 	const longest = (side: 'left' | 'right') =>
-		Math.max(0, ...blockSide(block, side).map((port) => port.name.length));
+		Math.max(0, ...blockSide(ports, side).map((port) => port.name.length));
 	const wanted = (longest('left') + longest('right')) * BLOCK_CHAR + 16;
 	let half = SUB_HALF_WIDTH;
 	while (half * 2 < wanted) half += GRID;
@@ -1517,45 +1571,32 @@ export function blockHalfWidth(block: BlockDef): number {
 }
 
 /** Half the height of the body: the longer column of ports, plus the name. */
-export function blockReach(block: BlockDef): number {
-	const rows = Math.max(blockSide(block, 'left').length, blockSide(block, 'right').length, 1);
+export function blockReach(ports: readonly BlockPort[]): number {
+	const rows = Math.max(blockSide(ports, 'left').length, blockSide(ports, 'right').length, 1);
 	return Math.max(22, ((rows - 1) * SUB_PITCH) / 2 + 12 + BLOCK_NAME_ROOM / 2);
 }
 
 /**
- * A placeable part built from a boxed-up circuit.
- *
- * Each pin says what the pins inside it say: analog if any of them is, an
- * output if any of them drives. The engine never reads these — it sees the
- * inside — but the drawing does, to know which way a wire should arrive and
- * whether a net has become analog.
+ * A placeable part built from a boxed-up circuit and its terminals. The
+ * terminals arrive worked out — which is a question about connectivity, and
+ * so is answered next to it rather than here.
  */
-export function blockDefinition(block: BlockDef): ComponentDef {
-	const byId = new Map(block.instances.map((i) => [i.id, i]));
-	const half = blockReach(block);
-	const x = blockHalfWidth(block) + SUB_LEAD;
-	const pinFor = (port: BlockPort, px: number, py: number): PinDef => {
-		const inner = port.pins.flatMap(({ instance, pin }) => {
-			const owner = byId.get(instance);
-			const def = owner ? definitionFor(owner).pins.find((p) => p.name === pin) : undefined;
-			return def ? [def] : [];
-		});
-		const analogPin = inner.some((p) => p.domain === 'analog');
-		const drives = inner.some((p) => p.direction === 'out');
-		return {
-			name: port.name,
-			x: px,
-			y: py,
-			domain: analogPin ? 'analog' : 'digital',
-			direction: analogPin ? 'inout' : drives ? 'out' : 'in'
-		};
-	};
-	const left = blockSide(block, 'left');
-	const right = blockSide(block, 'right');
+export function blockDefinition(block: BlockDef, ports: readonly BlockPort[]): ComponentDef {
+	const half = blockReach(ports);
+	const hw = blockHalfWidth(ports);
+	const x = hw + SUB_LEAD;
+	const left = blockSide(ports, 'left');
+	const right = blockSide(ports, 'right');
 	// The name sits under the ports, so the columns are shifted up to leave it
 	// room without the box growing on both ends.
 	const lift = BLOCK_NAME_ROOM / 2;
-	const hw = blockHalfWidth(block);
+	const pin = (port: BlockPort, px: number, py: number): PinDef => ({
+		name: port.name,
+		x: px,
+		y: py,
+		domain: port.domain,
+		direction: port.direction
+	});
 	return {
 		kind: BLOCK_PREFIX + block.id,
 		label: block.name,
@@ -1564,32 +1605,21 @@ export function blockDefinition(block: BlockDef): ComponentDef {
 		box: { x: -x, y: -half, w: x * 2, h: half * 2 },
 		body: { x: -hw, y: -half, w: hw * 2, h: half * 2 },
 		pins: [
-			...left.map((port, i) => pinFor(port, -x, portY(i, left.length) - lift)),
-			...right.map((port, i) => pinFor(port, x, portY(i, right.length) - lift))
+			...left.map((port, i) => pin(port, -x, portY(i, left.length) - lift)),
+			...right.map((port, i) => pin(port, x, portY(i, right.length) - lift))
 		],
 		params: []
 	};
 }
 
-/**
- * Make a drawing's blocks available to everything that asks about a kind, on
- * the same terms as `registerSubcircuits`: before anything reads the instances.
- *
- * A block can hold another block, and the inner one has to be known before the
- * outer one is built — its pins are read off the parts inside. The list is in
- * no particular order, so this goes round until every one is built, and a block
- * whose contents it cannot resolve is left out rather than allowed to throw.
- */
-export function registerBlocks(schematic: Schematic): void {
-	let pending = [...(schematic.blocks ?? [])];
-	while (pending.length > 0) {
-		const ready = pending.filter((block) =>
-			block.instances.every((i) => !i.kind.startsWith(BLOCK_PREFIX) || BY_KIND.has(i.kind))
-		);
-		if (ready.length === 0) return;
-		for (const block of ready) BY_KIND.set(BLOCK_PREFIX + block.id, blockDefinition(block));
-		pending = pending.filter((block) => !ready.includes(block));
-	}
+/** Put a generated definition where everything that asks about a kind will find it. */
+export function registerKind(def: ComponentDef): void {
+	BY_KIND.set(def.kind, def);
+}
+
+/** Whether a kind can be asked about without throwing. */
+export function isKnownKind(kind: string): boolean {
+	return BY_KIND.has(kind);
 }
 
 /** The definition a placed block was built from, if it is one. */

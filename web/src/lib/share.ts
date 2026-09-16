@@ -12,13 +12,13 @@
 
 import {
 	migrateInstance,
-	registerBlocks,
 	registerSubcircuits,
 	type BlockDef,
 	type Instance,
 	type Schematic,
 	type Wire
 } from './schematic/model';
+import { registerBlocks } from './schematic/blocks';
 import { probePin } from './schematic/nets';
 
 export interface SharedCircuit {
@@ -92,52 +92,22 @@ function unpackWires(flat: number[][] | undefined, id: () => string): Wire[] {
 }
 
 /**
- * A block as it travels: its insides packed the way the drawing is, with the
- * ports naming inner parts by index rather than by id, since the ids are what
- * does not travel.
+ * A block as it travels: its insides packed the way the drawing is. Its
+ * terminals are port parts among the instances, so nothing else needs to.
  */
-type TravellingBlock = [
-	string,
-	string,
-	TravellingInstance[],
-	number[][],
-	Array<[string, 'left' | 'right', Array<[number, string]>]>
-];
+type TravellingBlock = [string, string, TravellingInstance[], number[][]];
 
 function packBlock(block: BlockDef): TravellingBlock {
-	const at = new Map(block.instances.map((n, index) => [n.id, index] as const));
-	return [
-		block.id,
-		block.name,
-		block.instances.map(packInstance),
-		block.wires.map(packWire),
-		block.ports.map((port) => [
-			port.name,
-			port.side,
-			port.pins.flatMap(({ instance, pin }) => {
-				const index = at.get(instance);
-				return index === undefined ? [] : [[index, pin] as [number, string]];
-			})
-		])
-	];
+	return [block.id, block.name, block.instances.map(packInstance), block.wires.map(packWire)];
 }
 
 function unpackBlock(packed: TravellingBlock, id: () => string): BlockDef {
-	const [bid, name, instances, wires, ports] = packed;
-	const unpacked = instances.map((packedInstance) => unpackInstance(packedInstance, id()));
+	const [bid, name, instances, wires] = packed;
 	return {
 		id: bid,
 		name,
-		instances: unpacked,
-		wires: unpackWires(wires, id),
-		ports: ports.map(([portName, side, pins]) => ({
-			name: portName,
-			side,
-			pins: pins.flatMap(([index, pin]) => {
-				const owner = unpacked[index];
-				return owner ? [{ instance: owner.id, pin }] : [];
-			})
-		}))
+		instances: instances.map((packedInstance) => unpackInstance(packedInstance, id())),
+		wires: unpackWires(wires, id)
 	};
 }
 

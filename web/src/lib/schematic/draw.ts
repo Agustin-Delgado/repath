@@ -16,6 +16,7 @@ import { ledInk, ledRating } from './led';
 import {
 	definitionFor,
 	definitionOf,
+	portFlow,
 	rotatePoint,
 	wireStart,
 	type ComponentDef,
@@ -490,6 +491,24 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 					align: 'center',
 					baseline: 'bottom',
 					minSize: 6
+				}
+			);
+			continue;
+		}
+
+		// A port wears its name inside the flag: the name is the terminal.
+		if (showLabels && instance.kind === 'port') {
+			const inward = portFlow(instance) === 'out' ? 20 : -20;
+			const centre = rotatePoint(inward, 0, instance.rotation);
+			painter.text(
+				instance.name,
+				{ x: instance.x + centre.x, y: instance.y + centre.y },
+				{
+					size: Math.min(8 * scale, 12),
+					color: theme.labelStrong,
+					align: 'center',
+					baseline: 'middle',
+					minSize: 5
 				}
 			);
 			continue;
