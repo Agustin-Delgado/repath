@@ -308,7 +308,7 @@ would show you.
 | Back to selecting | `V` or `Esc` |
 | Copy / cut / paste | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` — paste lands at the cursor |
 | Duplicate | `Ctrl+D` |
-| Group / ungroup | `Ctrl+G` / `Ctrl+Shift+G`, or the buttons in the inspector — the group's name is its handle: click it to select the group, drag it to move the group, double-click it to rename |
+| Group / ungroup | `G` / `U` (also `Ctrl+G` / `Ctrl+Shift+G`), or the buttons in the inspector — the group's name is its handle: click it to select the group, drag it to move the group, double-click it to rename |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Run / stop the sweep | `Space` |
 | Simulate | press Run — nothing runs until you ask |

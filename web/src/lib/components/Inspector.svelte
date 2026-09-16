@@ -313,12 +313,12 @@
 			part out of the frame to take it out of the group.
 		</p>
 		<div class="actions">
-			<button onclick={() => app.ungroupSelection()}>Ungroup <kbd>Ctrl+Shift+G</kbd></button>
+			<button onclick={() => app.ungroupSelection()}>Ungroup <kbd>U</kbd></button>
 		</div>
 	{:else if !instance || !def}
 		{#if app.selectedInstances.length > 1}
 			<div class="actions">
-				<button onclick={() => app.groupSelection()}>Group <kbd>Ctrl+G</kbd></button>
+				<button onclick={() => app.groupSelection()}>Group <kbd>G</kbd></button>
 			</div>
 		{/if}
 		<p class="hint">
