@@ -483,6 +483,22 @@ export function createSelectTool(): Tool {
 					app.rotateSelection(routeDragged(ctx));
 					ctx.invalidate();
 					return true;
+				// Plain letters as well as Ctrl+G / Ctrl+Shift+G, because a graphics
+				// driver on Windows takes Ctrl+Shift+G for itself before the page
+				// ever sees it, and a shortcut that sometimes opens a control panel
+				// is worse than none.
+				case 'g':
+				case 'G':
+					if (event.ctrlKey || event.metaKey || event.altKey) return false;
+					app.groupSelection();
+					ctx.invalidate();
+					return true;
+				case 'u':
+				case 'U':
+					if (event.ctrlKey || event.metaKey || event.altKey) return false;
+					app.ungroupSelection();
+					ctx.invalidate();
+					return true;
 				case 'a':
 				case 'A':
 					if (event.ctrlKey || event.metaKey) {
