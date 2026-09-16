@@ -83,6 +83,11 @@ function compact(circuit: SharedCircuit): unknown {
 		// Imported definitions travel with the drawing. A link that carried a part
 		// but not what it is made of would open as a hole in someone's circuit.
 		x: circuit.schematic.subcircuits?.map((s) => [s.id, s.name, s.ports, s.source]),
+		// Groups, by the index of each member for the same reason probes are.
+		g: circuit.schematic.groups?.map((group) => [
+			group.name,
+			group.members.map((m) => at.get(m)).filter((i) => i !== undefined)
+		]),
 		// What the sender was watching. A link is usually sent *because* of a
 		// signal, and one that arrived with the scope empty made the person
 		// receiving it go and find it again.
@@ -104,6 +109,7 @@ function expand(raw: unknown): SharedCircuit {
 		w?: number[][];
 		x?: Array<[string, string, string[], string]>;
 		p?: Array<string | [number, string]>;
+		g?: Array<[string, number[]]>;
 	};
 	if (data.v !== VERSION) throw new Error('That link was made by a different version of repath.');
 
@@ -156,7 +162,14 @@ function expand(raw: unknown): SharedCircuit {
 					}
 					return { id: id(), points };
 				})
-				.filter((wire) => wire.points.length >= 2)
+				.filter((wire) => wire.points.length >= 2),
+			groups: (data.g ?? [])
+				.map(([name, members]) => ({
+					id: id(),
+					name,
+					members: members.map((index) => instances[index]?.id).filter((m) => m !== undefined)
+				}))
+				.filter((group) => group.members.length > 0)
 		}
 	};
 }

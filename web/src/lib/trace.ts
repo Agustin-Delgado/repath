@@ -66,6 +66,9 @@ export type Step =
 	| { op: 'param'; part: string; key: string; value: number | string }
 	| { op: 'import'; source: string }
 	| { op: 'rename'; part: string; to: string }
+	| { op: 'group'; parts: string[]; name: string }
+	| { op: 'ungroup'; parts: string[] }
+	| { op: 'regroup'; part: string; name: string }
 	| { op: 'undo' }
 	| { op: 'redo' }
 	| { op: 'stop'; seconds: number }
@@ -165,6 +168,13 @@ function format(step: Step): string {
 			return `import ${flatten(step.source)}`;
 		case 'rename':
 			return `rename ${step.part} ${step.to}`;
+		// A group's name goes last: it may have spaces in it.
+		case 'group':
+			return `group ${list(step.parts)} ${step.name}`;
+		case 'ungroup':
+			return `ungroup ${list(step.parts)}`;
+		case 'regroup':
+			return `regroup ${step.part} ${step.name}`;
 		case 'undo':
 			return 'undo';
 		case 'redo':
@@ -264,6 +274,12 @@ function read(op: string, rest: string[]): Step {
 			return { op, source: unflatten(rest.join(' ')) };
 		case 'rename':
 			return { op, part: rest[0], to: rest[1] };
+		case 'group':
+			return { op, parts: names(rest[0]), name: rest.slice(1).join(' ') };
+		case 'ungroup':
+			return { op, parts: names(rest[0]) };
+		case 'regroup':
+			return { op, part: rest[0], name: rest.slice(1).join(' ') };
 		case 'undo':
 		case 'redo':
 			return { op };

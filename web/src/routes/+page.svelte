@@ -566,6 +566,15 @@
 	.tag {
 		color: var(--label-dim);
 		font-size: 0.72rem;
+		/* The tagline yields before the controls do: a header short on room
+		   dropped it onto three lines and pushed the toolbar down with it. */
+		white-space: nowrap;
+	}
+
+	@media (max-width: 1500px) {
+		.tag {
+			display: none;
+		}
 	}
 
 	.controls {

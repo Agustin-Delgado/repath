@@ -247,6 +247,18 @@
 		apply(key, joinValue(split(key, instance.params[key]).mantissa, prefix));
 	}
 
+	function commitGroupName(raw: string, field: HTMLInputElement) {
+		const group = app.selectedGroup;
+		if (!group) return;
+		const refusal = app.renameGroup(group.id, raw);
+		if (refusal) {
+			problems.group = refusal;
+			field.value = group.name;
+			return;
+		}
+		delete problems.group;
+	}
+
 	function commitName(raw: string, field: HTMLInputElement) {
 		if (!instance) return;
 		const refusal = app.rename(instance.id, raw);
@@ -277,11 +289,34 @@
 </script>
 
 <div class="inspector">
-	{#if !instance || !def}
+	{#if app.selectedGroup && !instance}
+		<!--
+			A group is a name over its parts, and the name is the one thing about it
+			to edit here. Everything else — moving, turning, removing — is done to
+			the parts, which are what is selected.
+		-->
+		<header>
+			<input
+				class="ref"
+				class:rejected={problems.group}
+				value={app.selectedGroup.name}
+				onchange={(e) => commitGroupName(e.currentTarget.value, e.currentTarget)}
+				aria-label="Group name"
+			/>
+			<span class="kind">Group</span>
+		</header>
+		{#if problems.group}
+			<p class="problem" role="alert">{problems.group}</p>
+		{/if}
+		<p class="hint">
+			{app.selectedGroup.members.length} components. Click one of them to pick it out on its own;
+			<kbd>Ctrl+Shift+G</kbd> takes the group apart.
+		</p>
+	{:else if !instance || !def}
 		<p class="hint">
 			{#if app.selectedInstances.length > 1}
 				{app.selectedInstances.length} components selected. Press <kbd>R</kbd> to rotate or
-				<kbd>Del</kbd> to remove them.
+				<kbd>Del</kbd> to remove them, <kbd>Ctrl+G</kbd> to make them a group.
 			{:else}
 				Select a component to edit its values.
 			{/if}
