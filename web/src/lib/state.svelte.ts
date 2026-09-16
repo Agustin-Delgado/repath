@@ -45,6 +45,7 @@ import {
 	snap,
 	SUBCIRCUIT_PREFIX,
 	validateParam,
+	type PartGroup,
 	type Instance,
 	type Point,
 	type Rotation,
@@ -236,6 +237,15 @@ function rememberedStandard(): SymbolStandard {
 		// No storage here; the default is fine.
 	}
 	return DEFAULT_STANDARD;
+}
+
+/** `PartGroup 1`, `PartGroup 2`… — the first number not already in use. */
+function nextGroupName(groups: readonly PartGroup[]): string {
+	const taken = new Set(groups.map((g) => g.name));
+	for (let n = 1; ; n++) {
+		const name = `Group ${n}`;
+		if (!taken.has(name)) return name;
+	}
 }
 
 class AppState {
@@ -577,7 +587,7 @@ class AppState {
 	private future: HistoryEntry[] = [];
 	/** Running total of the serialized history, so it can be capped by size. */
 	private historyBytes = 0;
-	private clipboard: { instances: Instance[]; wires: Wire[] } | null = null;
+	private clipboard: { instances: Instance[]; wires: Wire[]; groups?: PartGroup[] } | null = null;
 	/** Snapshot taken at the start of a drag; null when nothing is being dragged. */
 	private moveOrigin: MoveOrigin | null = null;
 	private dragStarted = false;
@@ -633,6 +643,22 @@ class AppState {
 	selectedInstances = $derived(
 		this.schematic.instances.filter((i) => this.selection.includes(i.id))
 	);
+
+	/**
+	 * The group the selection *is*, if it is exactly one: every member selected
+	 * and no part selected from outside it. Anything looser is a selection that
+	 * happens to overlap a group, and gets the plain multi-selection treatment.
+	 */
+	selectedGroup = $derived.by((): PartGroup | null => {
+		const parts = this.selectedInstances.map((i) => i.id);
+		if (parts.length === 0) return null;
+		const chosen = new Set(parts);
+		for (const group of this.schematic.groups ?? []) {
+			if (group.members.length !== chosen.size) continue;
+			if (group.members.every((id) => chosen.has(id))) return group;
+		}
+		return null;
+	});
 
 	canUndo = $derived(this.past.length > 0);
 
@@ -845,6 +871,7 @@ class AppState {
 		this.schematic.instances = this.schematic.instances.filter((i) => !doomed.has(i.id));
 		this.schematic.wires = survivingWires;
 		this.selection = [];
+		this.forgetMembers(doomed);
 
 		const healing = new Set(gaps.map(() => freshId()));
 		const ids = [...healing];
@@ -1410,6 +1437,104 @@ class AppState {
 		return null;
 	}
 
+	// -- groups -----------------------------------------------------------
+
+	/** The group a part belongs to, if any. */
+	groupOf(instanceId: string): PartGroup | undefined {
+		return (this.schematic.groups ?? []).find((g) => g.members.includes(instanceId));
+	}
+
+	/**
+	 * A selection widened to whole groups: for every part in it that belongs to
+	 * a group, the rest of that group and the wires running between its members.
+	 *
+	 * This is what a click on a member selects. The wires come along so the
+	 * highlight shows what will move and a rotation turns the arrangement,
+	 * though a move would carry them regardless.
+	 */
+	withGroups(ids: readonly string[]): string[] {
+		const out = new Set(ids);
+		const members = new Set<string>();
+		for (const id of ids) {
+			const group = this.groupOf(id);
+			if (!group) continue;
+			for (const member of group.members) {
+				out.add(member);
+				members.add(member);
+			}
+		}
+		if (members.size === 0) return [...out];
+
+		const pins = new Set<string>();
+		for (const instance of this.schematic.instances) {
+			if (!members.has(instance.id)) continue;
+			for (const pin of definitionFor(instance).pins) {
+				const at = pinPosition(instance, pin);
+				pins.add(pointKey(at.x, at.y));
+			}
+		}
+		for (const wire of this.schematic.wires) {
+			const [a, b] = [wire.points[0], wire.points[wire.points.length - 1]];
+			if (pins.has(pointKey(a.x, a.y)) && pins.has(pointKey(b.x, b.y))) out.add(wire.id);
+		}
+		return [...out];
+	}
+
+	/**
+	 * Make the selected parts a group.
+	 *
+	 * A part already in another group leaves it — groups do not nest, so this
+	 * is the only reading that keeps every part in at most one. A group left
+	 * empty is dropped, and one left with a single part is kept: a group of one
+	 * is odd but it is what was asked for, and it can still be named.
+	 */
+	groupSelection(): PartGroup | null {
+		const parts = this.selectedInstances.map((i) => i.id);
+		if (parts.length === 0) return null;
+		if (this.selectedGroup) return this.selectedGroup;
+
+		const name = nextGroupName(this.schematic.groups ?? []);
+		this.trace.record({ op: 'group', parts: this.selectedInstances.map((i) => i.name), name });
+		this.checkpoint();
+		this.forgetMembers(new Set(parts));
+		const group: PartGroup = { id: freshId(), name, members: parts };
+		this.schematic.groups = [...(this.schematic.groups ?? []), group];
+		this.selection = this.withGroups(this.selection);
+		return group;
+	}
+
+	/** Dissolve every group that has a selected part in it. The parts stay selected. */
+	ungroupSelection(): void {
+		const parts = this.selectedInstances.map((i) => i.id);
+		const doomed = new Set(parts.map((id) => this.groupOf(id)?.id).filter((id) => id !== undefined));
+		if (doomed.size === 0) return;
+		this.trace.record({ op: 'ungroup', parts: this.selectedInstances.map((i) => i.name) });
+		this.checkpoint();
+		this.schematic.groups = (this.schematic.groups ?? []).filter((g) => !doomed.has(g.id));
+	}
+
+	/** Rename a group. Returns why it was refused, or null on success. */
+	renameGroup(id: string, name: string): string | null {
+		const trimmed = name.trim();
+		const group = (this.schematic.groups ?? []).find((g) => g.id === id);
+		if (!group) return null;
+		if (!trimmed) return 'A group needs a name.';
+		const member = this.schematic.instances.find((i) => i.id === group.members[0]);
+		if (member) this.trace.record({ op: 'regroup', part: member.name, name: trimmed });
+		if (group.name === trimmed) return null;
+		this.checkpoint();
+		group.name = trimmed;
+		return null;
+	}
+
+	/** Take these parts out of whatever groups hold them, dropping groups left empty. */
+	private forgetMembers(ids: ReadonlySet<string>): void {
+		if (!this.schematic.groups?.length) return;
+		this.schematic.groups = this.schematic.groups
+			.map((g) => ({ ...g, members: g.members.filter((m) => !ids.has(m)) }))
+			.filter((g) => g.members.length > 0);
+	}
+
 	clear(): void {
 		this.trace.record({ op: 'clear' });
 		this.checkpoint();
@@ -1491,7 +1616,11 @@ class AppState {
 				.map((i) => structuredClone($state.snapshot(i)) as Instance),
 			wires: this.schematic.wires
 				.filter((w) => chosen.has(w.id))
-				.map((w) => structuredClone($state.snapshot(w)) as Wire)
+				.map((w) => structuredClone($state.snapshot(w)) as Wire),
+			// A group travels only whole: half a group pasted is just parts.
+			groups: (this.schematic.groups ?? [])
+				.filter((g) => g.members.every((m) => chosen.has(m)))
+				.map((g) => structuredClone($state.snapshot(g)) as PartGroup)
 		};
 		return true;
 	}
@@ -1521,6 +1650,7 @@ class AppState {
 		const existing = [...this.schematic.instances];
 		const fresh: string[] = [];
 
+		const renamed = new Map<string, string>();
 		for (const source of instances) {
 			// Names have to be regenerated as we go, or pasting three resistors
 			// would produce three of whatever R-number was free at the start.
@@ -1534,6 +1664,7 @@ class AppState {
 			existing.push(copy);
 			this.schematic.instances.push(copy);
 			fresh.push(copy.id);
+			renamed.set(source.id, copy.id);
 		}
 
 		for (const source of wires) {
@@ -1543,6 +1674,17 @@ class AppState {
 			};
 			this.schematic.wires.push(copy);
 			fresh.push(copy.id);
+		}
+
+		for (const group of this.clipboard.groups ?? []) {
+			this.schematic.groups = [
+				...(this.schematic.groups ?? []),
+				{
+					id: freshId(),
+					name: group.name,
+					members: group.members.map((m) => renamed.get(m)).filter((m) => m !== undefined)
+				}
+			];
 		}
 
 		this.selection = fresh;
@@ -1704,9 +1846,19 @@ class AppState {
 			.map((wire) => normaliseWire(wire, freshId()))
 			.filter((wire): wire is Wire => wire !== null);
 
+		// Groups follow their parts to the new ids; one whose parts are all gone
+		// from the file is nothing and is not kept.
+		const groups: PartGroup[] = (parsed.schematic.groups ?? [])
+			.map((group) => ({
+				id: freshId(),
+				name: String(group.name ?? ''),
+				members: (group.members ?? []).map((m) => remap.get(m)).filter((m) => m !== undefined)
+			}))
+			.filter((group) => group.members.length > 0);
+
 		this.past.length = 0;
 		this.future.length = 0;
-		this.schematic = { instances, wires, subcircuits };
+		this.schematic = { instances, wires, subcircuits, groups };
 		this.tidyWires();
 		this.stopTime = parsed.stopTime ?? 1e-3;
 		// Pointed at the ids this load minted, not the ones the file was written
@@ -1870,6 +2022,30 @@ class AppState {
 					const id = partId(step.part);
 					if (!id) return stop(`no component named ${step.part}`);
 					this.rename(id, step.to);
+					break;
+				}
+				case 'group':
+				case 'ungroup': {
+					const ids: string[] = [];
+					for (const name of step.parts) {
+						const id = partId(name);
+						if (!id) return stop(`no component named ${name}`);
+						ids.push(id);
+					}
+					this.selection = ids;
+					if (step.op === 'ungroup') this.ungroupSelection();
+					else {
+						const group = this.groupSelection();
+						if (group) this.renameGroup(group.id, step.name);
+					}
+					break;
+				}
+				case 'regroup': {
+					const id = partId(step.part);
+					if (!id) return stop(`no component named ${step.part}`);
+					const group = this.groupOf(id);
+					if (!group) return stop(`${step.part} is not in a group`);
+					this.renameGroup(group.id, step.name);
 					break;
 				}
 				case 'param': {

@@ -293,12 +293,17 @@ export function createSelectTool(): Tool {
 				pressedId = item.id;
 				pressedWasSelected = app.selection.includes(item.id);
 
+				// A press on a part in a group takes the group: that is what a group
+				// is for. A click on it once it is selected narrows to the part (see
+				// pointerUp), which is how one member is picked out again.
+				const whole = app.withGroups([item.id]);
 				if (pointer.shift) {
+					const leaving = new Set(whole);
 					app.selection = pressedWasSelected
-						? app.selection.filter((id) => id !== item.id)
-						: [...app.selection, item.id];
+						? app.selection.filter((id) => !leaving.has(id))
+						: [...new Set([...app.selection, ...whole])];
 				} else if (!pressedWasSelected) {
-					app.selection = [item.id];
+					app.selection = whole;
 				}
 
 				mode = 'move';
@@ -402,7 +407,8 @@ export function createSelectTool(): Tool {
 				}
 			} else if (mode === 'marquee' && marquee) {
 				if (marquee.w > 2 || marquee.h > 2) {
-					const hits = ctx.scene.enclosed(marquee).map((item) => item.id);
+					// A box that catches any part of a group catches the group.
+					const hits = app.withGroups(ctx.scene.enclosed(marquee).map((item) => item.id));
 					app.selection = pointer.shift ? [...new Set([...app.selection, ...hits])] : hits;
 				}
 			}

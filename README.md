@@ -308,6 +308,7 @@ would show you.
 | Back to selecting | `V` or `Esc` |
 | Copy / cut / paste | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` — paste lands at the cursor |
 | Duplicate | `Ctrl+D` |
+| Group / ungroup | `Ctrl+G` / `Ctrl+Shift+G` — a click on any part of a group takes the whole group; a second click narrows to that part |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Run / stop the sweep | `Space` |
 | Simulate | press Run — nothing runs until you ask |
@@ -342,6 +343,14 @@ Moving keeps connections. A dragged component brings its wires along and they
 re-route; a dragged *wire* stays plugged into whatever it was plugged into and
 grows legs to reach. The shape you see mid-drag is the shape you get on release —
 the same router runs in both cases, so nothing rearranges itself when you let go.
+
+A group is a name over a handful of parts, the way a design tool groups shapes:
+a dashed frame around them with the name in the corner, drawn from wherever the
+parts are. Clicking any member takes the group, so it moves, turns and deletes as
+one; clicking again narrows to the member under the pointer. The name is edited in
+the inspector, and the group travels in links and files. It is not a subcircuit —
+the parts stay on the drawing, wired to whatever they are wired to — and groups do
+not nest.
 
 The symbol standard is the reader's, not the drawing's. A resistor is the same
 resistor whether it is drawn as a zigzag or a box, so the choice is not in a share

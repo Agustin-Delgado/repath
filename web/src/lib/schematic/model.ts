@@ -228,6 +228,24 @@ export interface SubcircuitDef {
 	source: string;
 }
 
+/**
+ * A named handful of parts that move as one.
+ *
+ * Nothing but a name over a list of instances. Not a subcircuit — the parts
+ * stay on the drawing, wired to whatever they are wired to — and not a
+ * hierarchy: a group holds parts, never groups. Wires are not members either,
+ * on purpose. A wire between two members travels with them anyway, since a
+ * move carries any wire whose both ends are on moving pins, and wires are
+ * split and merged whenever the drawing is tidied, so a membership list of
+ * wire ids would silently rot.
+ */
+export interface PartGroup {
+	id: string;
+	name: string;
+	/** Instance ids. */
+	members: string[];
+}
+
 export interface Schematic {
 	instances: Instance[];
 	wires: Wire[];
@@ -237,6 +255,7 @@ export interface Schematic {
 	 * as a hole in the middle of someone's circuit.
 	 */
 	subcircuits?: SubcircuitDef[];
+	groups?: PartGroup[];
 }
 
 // ---------------------------------------------------------------------------

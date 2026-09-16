@@ -316,6 +316,9 @@
 	// because the standard is part of their cache key.
 	$effect(() => {
 		void [selectionSet, probeColours, app.hoverNet, app.symbolStandard];
+		// Groups are drawn from the parts, so only their names and membership
+		// are theirs to watch; the index does not know they exist.
+		void app.schematic.groups?.map((g) => `${g.name}:${g.members.length}`);
 		editor?.invalidate('schematic');
 	});
 
@@ -511,6 +514,11 @@
 				case 'd':
 					event.preventDefault();
 					app.duplicateSelection();
+					return;
+				case 'g':
+					event.preventDefault();
+					if (event.shiftKey) app.ungroupSelection();
+					else app.groupSelection();
 					return;
 			}
 		}
