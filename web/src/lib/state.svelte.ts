@@ -22,6 +22,7 @@ import { Trace, wireRef, type Step } from './trace';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
+import { groupFrame, outside } from './schematic/groups';
 import {
 	DEFAULT_STANDARD,
 	isSymbolStandard,
@@ -363,6 +364,9 @@ class AppState {
 
 	/** Net under the cursor, highlighted across every wire that carries it. */
 	hoverNet = $state<number | null>(null);
+
+	/** The group whose name is being typed over on the drawing, if any. */
+	renamingGroup = $state<string | null>(null);
 
 	/**
 	 * What has been done to this editor, in replayable form.
@@ -1308,6 +1312,7 @@ class AppState {
 	endMove(): void {
 		const changed = this.dragStarted;
 		if (changed && this.gesture) this.trace.record(this.gesture);
+		if (changed && this.moveOrigin) this.leaveGroups(this.moveOrigin.instances);
 		this.gesture = null;
 		this.moveOrigin = null;
 		this.dragStarted = false;
@@ -1525,6 +1530,41 @@ class AppState {
 		this.checkpoint();
 		group.name = trimmed;
 		return null;
+	}
+
+	/**
+	 * A part dragged clear of its group has left it.
+	 *
+	 * Clear of the frame the group had when the drag began: a part whose box
+	 * no longer touches it is out, and one nudged around inside it stays. The
+	 * frame is the one from before rather than one measured from the parts
+	 * that stayed put, because two parts side by side each sit outside a frame
+	 * drawn around the other, and a nudge of one would have taken it out. A
+	 * group moved whole keeps everyone: nothing was left to be clear of. This
+	 * runs at the end of every move, inside the same history entry as the
+	 * move, so undoing the drag puts the part back in.
+	 */
+	private leaveGroups(moved: ReadonlyMap<string, Point>): void {
+		if (!this.schematic.groups?.length) return;
+		const now = new Map(this.schematic.instances.map((i) => [i.id, i]));
+		// Every part where it was when the drag began.
+		const before = new Map(
+			this.schematic.instances.map((i) => {
+				const from = moved.get(i.id);
+				return [i.id, from ? { ...i, x: from.x, y: from.y } : i];
+			})
+		);
+		const leaving = new Set<string>();
+		for (const group of this.schematic.groups) {
+			if (group.members.every((id) => moved.has(id))) continue;
+			const frame = groupFrame(group, before);
+			if (!frame) continue;
+			for (const id of group.members) {
+				const instance = now.get(id);
+				if (moved.has(id) && instance && outside(instance, frame)) leaving.add(id);
+			}
+		}
+		if (leaving.size > 0) this.forgetMembers(leaving);
 	}
 
 	/** Take these parts out of whatever groups hold them, dropping groups left empty. */

@@ -24,6 +24,7 @@
 	import { logicFamily } from '$lib/schematic/logic';
 	import { burnoutsById } from '$lib/schematic/led';
 	import { GRID } from '$lib/schematic/model';
+	import { groupLabelBox, groupLabelSize, placeGroups } from '$lib/schematic/groups';
 	import { routeWire } from '$lib/schematic/route';
 	import { parseTrace } from '$lib/trace';
 	import { junctionDots } from '$lib/schematic/nets';
@@ -184,8 +185,49 @@
 			probeColours,
 			probes: probeLabels,
 			switchStates,
-			junctions
+			junctions,
+			renamingGroup: app.renamingGroup
 		};
+	}
+
+	/**
+	 * The box a group's name is typed into, over the name itself.
+	 *
+	 * Placed once, when the rename starts, from where the label is on screen
+	 * at that moment. The canvas can still be panned underneath it; the box
+	 * does not follow, and finishing the name (Enter, or clicking away) is what
+	 * closes it.
+	 */
+	let renameBox = $state<{ id: string; name: string; x: number; y: number; size: number } | null>(
+		null
+	);
+	$effect(() => {
+		const id = app.renamingGroup;
+		const active = editor;
+		if (!id || !active) {
+			renameBox = null;
+			return;
+		}
+		const placed = placeGroups(app.schematic).find((g) => g.group.id === id);
+		if (!placed) {
+			app.renamingGroup = null;
+			return;
+		}
+		const scale = active.viewport.scale;
+		const box = groupLabelBox(
+			active.viewport.toScreen({ x: placed.frame.x, y: placed.frame.y }),
+			placed.group.name,
+			scale
+		);
+		renameBox = { id, name: placed.group.name, x: box.x, y: box.y, size: groupLabelSize(scale) };
+		active.invalidate('schematic');
+	});
+
+	function finishRename(value: string | null) {
+		const box = renameBox;
+		app.renamingGroup = null;
+		if (box && value !== null) app.renameGroup(box.id, value);
+		editor?.invalidate('schematic');
 	}
 
 	/**
@@ -561,6 +603,29 @@
 
 <div class="stage">
 	<div class="host" bind:this={host} role="application" aria-label="Schematic editor"></div>
+	{#if renameBox}
+		<!-- svelte-ignore a11y_autofocus -->
+		<input
+			class="rename"
+			style:left="{renameBox.x}px"
+			style:top="{renameBox.y}px"
+			style:font-size="{renameBox.size}px"
+			value={renameBox.name}
+			size={Math.max(4, renameBox.name.length + 1)}
+			aria-label="Group name"
+			autofocus
+			onfocus={(e) => e.currentTarget.select()}
+			onblur={(e) => finishRename(e.currentTarget.value)}
+			onkeydown={(e) => {
+				if (e.key === 'Enter') e.currentTarget.blur();
+				else if (e.key === 'Escape') {
+					e.preventDefault();
+					finishRename(null);
+				}
+				e.stopPropagation();
+			}}
+		/>
+	{/if}
 </div>
 
 <style>
@@ -579,5 +644,18 @@
 		overflow: hidden;
 		touch-action: none;
 		user-select: none;
+	}
+
+	.rename {
+		position: absolute;
+		padding: 2px 3px;
+		border: 1px solid var(--accent, #4ea8ff);
+		border-radius: 3px;
+		background: var(--panel-bg);
+		color: var(--text, inherit);
+		font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+		line-height: 1;
+		width: auto;
+		outline: none;
 	}
 </style>

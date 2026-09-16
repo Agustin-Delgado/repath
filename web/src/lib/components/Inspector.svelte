@@ -309,14 +309,22 @@
 			<p class="problem" role="alert">{problems.group}</p>
 		{/if}
 		<p class="hint">
-			{app.selectedGroup.members.length} components. Click one of them to pick it out on its own;
-			<kbd>Ctrl+Shift+G</kbd> takes the group apart.
+			{app.selectedGroup.members.length} components. Drag the name to move them together, or a
+			part out of the frame to take it out of the group.
 		</p>
+		<div class="actions">
+			<button onclick={() => app.ungroupSelection()}>Ungroup <kbd>Ctrl+Shift+G</kbd></button>
+		</div>
 	{:else if !instance || !def}
+		{#if app.selectedInstances.length > 1}
+			<div class="actions">
+				<button onclick={() => app.groupSelection()}>Group <kbd>Ctrl+G</kbd></button>
+			</div>
+		{/if}
 		<p class="hint">
 			{#if app.selectedInstances.length > 1}
 				{app.selectedInstances.length} components selected. Press <kbd>R</kbd> to rotate or
-				<kbd>Del</kbd> to remove them, <kbd>Ctrl+G</kbd> to make them a group.
+				<kbd>Del</kbd> to remove them.
 			{:else}
 				Select a component to edit its values.
 			{/if}

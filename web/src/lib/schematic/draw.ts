@@ -24,7 +24,8 @@ import {
 	type Schematic,
 	type Wire
 } from './model';
-import { instanceBounds, instancePins } from './scene';
+import { GROUP_LABEL_GAP, groupLabelSize, placeGroups } from './groups';
+import { instancePins } from './scene';
 import { symbolGeometry, symbolVariant, type Shape } from './symbols';
 
 export interface Theme {
@@ -258,6 +259,8 @@ export interface SchematicView {
 	probeColours: ReadonlyMap<number, string>;
 	/** Probe instance id -> the name and colour it appears under on the scope. */
 	probes?: ReadonlyMap<string, { label: string; colour: string }>;
+	/** The group whose name is being typed over, so it is not drawn twice. */
+	renamingGroup?: string | null;
 	/**
 	 * Operable instance id -> whether it is thrown right now.
 	 *
@@ -345,43 +348,18 @@ function valueLabel(instance: Instance): string | null {
  */
 export const JUNCTION_RADIUS = 3;
 
-/** How far a group's frame stands off the parts inside it, in schematic units. */
-const GROUP_MARGIN = 14;
-
 /**
  * A group is a dashed frame around its parts with its name in the corner,
  * drawn under everything else. The frame is measured from the parts every
  * time rather than stored, so it follows them wherever they are dragged and
  * there is nothing to keep in step. Selected, it takes the selection colour,
- * which is how the drawing says "this is what will move".
+ * which is how the drawing says "this is what will move". The name is the
+ * handle: pressing it picks the group up, double-clicking it renames it.
  */
-function drawGroups(painter: Painter, view: SchematicView, region: Rect, labelSize: number): void {
-	const groups = view.schematic.groups;
-	if (!groups?.length) return;
-	const byId = new Map(view.schematic.instances.map((i) => [i.id, i]));
-	for (const group of groups) {
-		let minX = Infinity;
-		let minY = Infinity;
-		let maxX = -Infinity;
-		let maxY = -Infinity;
-		let selected = group.members.length > 0;
-		for (const id of group.members) {
-			const instance = byId.get(id);
-			if (!instance) continue;
-			const b = instanceBounds(instance);
-			minX = Math.min(minX, b.x);
-			minY = Math.min(minY, b.y);
-			maxX = Math.max(maxX, b.x + b.w);
-			maxY = Math.max(maxY, b.y + b.h);
-			selected &&= view.selection.has(id);
-		}
-		if (minX === Infinity) continue;
-		const frame = {
-			x: minX - GROUP_MARGIN,
-			y: minY - GROUP_MARGIN,
-			w: maxX - minX + 2 * GROUP_MARGIN,
-			h: maxY - minY + 2 * GROUP_MARGIN
-		};
+function drawGroups(painter: Painter, view: SchematicView, region: Rect): void {
+	const scale = painter.viewport.scale;
+	const size = groupLabelSize(scale);
+	for (const { group, frame } of placeGroups(view.schematic)) {
 		if (
 			frame.x > region.x + region.w ||
 			frame.x + frame.w < region.x ||
@@ -390,12 +368,14 @@ function drawGroups(painter: Painter, view: SchematicView, region: Rect, labelSi
 		) {
 			continue;
 		}
+		const selected = group.members.every((id) => view.selection.has(id));
 		const colour = selected ? view.theme.selection : view.theme.labelDim;
 		painter.rect(frame, undefined, { color: colour, width: 1, dash: [6, 4], alpha: selected ? 0.9 : 0.55 });
+		if (view.renamingGroup === group.id) continue;
 		painter.text(
 			group.name,
-			{ x: frame.x, y: frame.y - 4 },
-			{ size: labelSize, color: colour, align: 'left', baseline: 'bottom', minSize: 6 }
+			{ x: frame.x, y: frame.y - GROUP_LABEL_GAP / scale },
+			{ size, color: colour, align: 'left', baseline: 'bottom', minSize: 6 }
 		);
 	}
 }
@@ -409,7 +389,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 	// A little slack so a component straddling the edge is not clipped mid-symbol.
 	const region = rectExpand(visible, 60);
 
-	drawGroups(painter, view, region, labelSize);
+	drawGroups(painter, view, region);
 
 	for (const wire of view.schematic.wires) {
 		if (!wireVisible(wire, region)) continue;

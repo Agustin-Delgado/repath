@@ -536,27 +536,36 @@ export function fallback(from: Point, to: Point, prefer?: readonly Point[]): Poi
 }
 
 /**
- * `path` with its ends moved to `from` and `to`, each end keeping the axis
- * of the leg it is on: a vertical leg whose foot moved sideways gets a jog at
- * the foot rather than a slant.
+ * `path` with its ends moved to `from` and `to`.
+ *
+ * The leg an end sits on keeps its axis and slides across to meet the new
+ * position: a vertical leg down to a pin that moved sideways moves sideways
+ * as a whole, so the wire still arrives at the pin along its lead and the
+ * jog happens at the far corner, up where there is room. The jog was at the
+ * foot once, and on a pin in a row of pins a jog at the foot runs along the
+ * row — through the neighbours — for as far as the pin moved. Only a wire
+ * that is one straight leg, whose far end is fixed, has nowhere to slide to
+ * and bends at that end instead.
  */
 export function stretched(path: readonly Point[], from: Point, to: Point): Point[] {
-	const points = path.map((p) => ({ x: p.x, y: p.y }));
-	const last = points.length - 1;
+	let points = path.map((p) => ({ x: p.x, y: p.y }));
 	const same = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
-	if (!same(points[last], to)) {
-		const leg = points[last - 1];
-		const vertical = leg.x === points[last].x;
-		points[last] = vertical ? { x: leg.x, y: to.y } : { x: to.x, y: leg.y };
-		points.push({ x: to.x, y: to.y });
-	}
-	if (!same(points[0], from)) {
-		const leg = points[1];
-		const vertical = leg.x === points[0].x;
-		points[0] = vertical ? { x: leg.x, y: from.y } : { x: from.x, y: leg.y };
-		points.unshift({ x: from.x, y: from.y });
-	}
+	if (!same(points[points.length - 1], to)) points = slideEnd(points.reverse(), to).reverse();
+	if (!same(points[0], from)) points = slideEnd(points, from);
 	return collapse(points);
+}
+
+/** `points` with its first point moved to `at`, the first leg sliding to follow. */
+function slideEnd(points: Point[], at: Point): Point[] {
+	const [end, corner] = points;
+	const vertical = corner.x === end.x;
+	if (points.length === 2) {
+		// One straight leg with the other end fixed: bend at the fixed end,
+		// still arriving along the leg's own axis.
+		return [at, vertical ? { x: at.x, y: corner.y } : { x: corner.x, y: at.y }, corner];
+	}
+	const slid = vertical ? { x: at.x, y: corner.y } : { x: corner.x, y: at.y };
+	return [{ x: at.x, y: at.y }, slid, ...points.slice(2)];
 }
 
 /** The plain two-segment route, used as a preview and as the fallback. */
