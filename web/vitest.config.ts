@@ -16,7 +16,10 @@ export default defineConfig({
 		conditions: ['browser']
 	},
 	test: {
-		include: ['src/**/*.test.ts'],
+		// The suite lives in its own repository, mounted at `tests/` in the root
+		// of this one; see CONTRIBUTING.md. Without the mount there is nothing to
+		// run, and vitest says so rather than passing an empty suite.
+		include: ['../tests/web/**/*.test.ts'],
 		// Nothing under test touches the DOM; jsdom costs seconds per run for nothing.
 		environment: 'node'
 	}
