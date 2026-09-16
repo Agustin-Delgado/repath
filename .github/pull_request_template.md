@@ -16,7 +16,7 @@ actually caused problems here are on it.
      comparing against — a closed-form solution, a conservation law, a datasheet
      equation, hand analysis? Asserting today's output is not a check. -->
 
-- [ ] `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
-- [ ] `npm run check`, `npm test`, `npm run build` in `web/`
-- [ ] New behaviour has a test that would fail without the change
+- [ ] `cargo fmt --all --check`, `cargo clippy --workspace -- -D warnings`
+- [ ] `npm run check`, `npm run build` in `web/`
+- [ ] New behaviour is checked against something independent of the code (say what, above); with the `tests/` mount, it has a test that would fail without the change
 - [ ] Anything left unfixed is written into `BACKLOG.md` rather than left to be discovered

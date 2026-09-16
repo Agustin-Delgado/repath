@@ -12,7 +12,11 @@ what the engine computes needs a test that checks it against something derived
 law, a datasheet equation, hand analysis. A test that asserts today's output is
 not a test, it is a snapshot of a bug waiting to be blessed.
 
-The existing tests are the pattern:
+The suite lives in a private repository, mounted here as the submodule `tests/`,
+so a clone of this one does not have it. That changes what a pull request from
+outside can check for itself, not what it is held to: describe the independent
+source your change is compared against in the pull request, and the suite is
+run against it before it is merged. The existing tests are the pattern:
 
 - RC and RL step responses against the closed-form exponential.
 - An LC tank against conservation of energy.
@@ -43,17 +47,23 @@ cd web && npm install && npm run dev
 
 ## Before you open a pull request
 
-Everything CI runs, you can run:
+What CI checks on a pull request from a fork, you can run without the suite:
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace -- -D warnings
 
 cd web
 npm run check     # svelte-check, zero errors expected
-npm test          # the canvas engine, the router, the editor rules
 npm run build
+```
+
+With the `tests/` mount there is also the suite, and CI runs it on every push:
+
+```sh
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cd web && npm test          # the canvas engine, the router, the editor rules
 ```
 
 Clippy is `-D warnings` on purpose: a warning nobody is required to fix is a
@@ -85,8 +95,9 @@ connected to what when things move. The rules are in `state.svelte.ts` and they
 are covered by tests that fail the way the bugs did — a component dragged off its
 wires, a wire torn off its pins, a rotation that quietly disconnected everything.
 
-If you change `beginMove`, `applyMove`, `rotateSelection` or the router, please
-add a case to `state.edits.svelte.test.ts`. Two invariants carry most of the
+If you change `beginMove`, `applyMove`, `rotateSelection` or the router, say in
+the pull request which gesture you checked and how; with the mount, that is a
+case in `tests/web/state.edits.svelte.test.ts`. Two invariants carry most of the
 weight:
 
 1. **A drag and its release are the same computation.** The move is a pure

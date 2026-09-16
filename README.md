@@ -376,6 +376,12 @@ cd web && npm test         # canvas engine
 cd web && npm run check    # types
 ```
 
+The suite itself is kept in a private repository, mounted here as the submodule
+`tests/`; a clone of this one has the code and not the tests, and the two
+commands above need the mount. CI runs the whole suite on every push and on
+pull requests from this repository, and checks what it can — formatting, lints,
+types and the build — on pull requests from a fork.
+
 The engine's integration tests check circuits against answers derived independently:
 RC and RL step responses against the closed-form exponential, an LC tank against
 conservation of energy, a MOSFET's saturation current against the Shichman-Hodges

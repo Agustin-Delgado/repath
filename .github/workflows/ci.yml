@@ -25,20 +25,68 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The suite is a private repository mounted at `tests/`, and a checkout
+      # of this one does not bring it: the deploy key that can read it is a
+      # secret, and a pull request from a fork has no secrets. Without the
+      # mount the job still checks everything it can — formatting, lints and
+      # the build — and skips the tests rather than failing on a missing file.
+      - name: Mount the test suite
+        env:
+          TESTS_DEPLOY_KEY: ${{ secrets.TESTS_DEPLOY_KEY }}
+        run: |
+          if [ -z "$TESTS_DEPLOY_KEY" ]; then
+            echo "::warning::No access to the test suite from here; running without it."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s
+' "$TESTS_DEPLOY_KEY" > ~/.ssh/tests_deploy_key
+          chmod 600 ~/.ssh/tests_deploy_key
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tests_deploy_key -o IdentitiesOnly=yes"
+          git -c url."git@github.com:".insteadOf="https://github.com/" submodule update --init tests
+          echo "TESTS_MOUNTED=1" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
+      # `--all-targets` names the integration test, which is a file in the
+      # mount; without it clippy can still look at everything else.
       - run: cargo clippy --workspace --all-targets -- -D warnings
+        if: env.TESTS_MOUNTED == '1'
+      - run: cargo clippy --workspace -- -D warnings
+        if: env.TESTS_MOUNTED != '1'
       - run: cargo test --workspace
+        if: env.TESTS_MOUNTED == '1'
 
   web:
     name: Web
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The suite is a private repository mounted at `tests/`, and a checkout
+      # of this one does not bring it: the deploy key that can read it is a
+      # secret, and a pull request from a fork has no secrets. Without the
+      # mount the job still checks everything it can — formatting, lints and
+      # the build — and skips the tests rather than failing on a missing file.
+      - name: Mount the test suite
+        env:
+          TESTS_DEPLOY_KEY: ${{ secrets.TESTS_DEPLOY_KEY }}
+        run: |
+          if [ -z "$TESTS_DEPLOY_KEY" ]; then
+            echo "::warning::No access to the test suite from here; running without it."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s
+' "$TESTS_DEPLOY_KEY" > ~/.ssh/tests_deploy_key
+          chmod 600 ~/.ssh/tests_deploy_key
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tests_deploy_key -o IdentitiesOnly=yes"
+          git -c url."git@github.com:".insteadOf="https://github.com/" submodule update --init tests
+          echo "TESTS_MOUNTED=1" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
@@ -71,6 +119,7 @@ jobs:
         working-directory: web
       - run: npm test
         working-directory: web
+        if: env.TESTS_MOUNTED == '1'
       - run: npm run build
         working-directory: web
 
