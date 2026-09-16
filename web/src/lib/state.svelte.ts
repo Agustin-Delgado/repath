@@ -1612,6 +1612,9 @@ class AppState {
 	 */
 	inside = $state<BlockDef | null>(null);
 
+	/** How many blocks deep the canvas is: 0 on the drawing, 1 inside a block, and so on. */
+	depth = $state(0);
+
 	/**
 	 * Where the drawing went while a block's inside is being edited: the
 	 * document, its history and what was selected, so leaving the block puts
@@ -1856,6 +1859,7 @@ class AppState {
 		this.selection = [];
 		this.probes = [];
 		this.inside = block;
+		this.depth = this.outside.length;
 		this.error = null;
 		this.notice = null;
 	}
@@ -1931,6 +1935,7 @@ class AppState {
 		this.selection = this.stillPresent(frame.selection);
 		this.probes = frame.probes;
 		this.inside = this.outside.length > 0 ? this.outside[this.outside.length - 1].editing : null;
+		this.depth = this.outside.length;
 		this.error = null;
 		this.notice = null;
 	}
@@ -1939,6 +1944,7 @@ class AppState {
 	private leaveEverything(): void {
 		this.outside = [];
 		this.inside = null;
+		this.depth = 0;
 	}
 
 	/** Rename a block. Returns why it was refused, or null on success. */
