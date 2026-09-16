@@ -188,7 +188,15 @@ export class LineIndex<T extends Point> {
 	}
 }
 
-export function buildConnectivity(schematic: Schematic): Connectivity {
+/**
+ * `ties` are pairs of points that are one conductor without a wire between
+ * them: how an unfolded block's port reaches the pins inside it. Nothing on
+ * the drawing itself needs them.
+ */
+export function buildConnectivity(
+	schematic: Schematic,
+	ties: ReadonlyArray<readonly [Point, Point]> = []
+): Connectivity {
 	const set = new DisjointSet();
 	const pins: PinRef[] = [];
 
@@ -205,6 +213,7 @@ export function buildConnectivity(schematic: Schematic): Connectivity {
 	for (const segment of segments) {
 		set.union(pointKey(segment.a.x, segment.a.y), pointKey(segment.b.x, segment.b.y));
 	}
+	for (const [a, b] of ties) set.union(pointKey(a.x, a.y), pointKey(b.x, b.y));
 
 	// Anything sitting mid-wire joins that wire: pins and other wires' corners.
 	const touchPoints = new LineIndex<Point>([

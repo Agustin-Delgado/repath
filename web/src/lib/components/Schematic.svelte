@@ -337,6 +337,10 @@
 		const schematic = app.schematic;
 		if (!active) return;
 
+		// A block's box is drawn from its definition, which the parts on the
+		// drawing only point at: renaming it or one of its ports changes the
+		// shape of every copy without touching a single instance.
+		void schematic.blocks?.map((b) => `${b.name}:${b.ports.map((p) => p.name).join()}`);
 		active.scene.replaceAll(buildSceneItems(schematic));
 		const targets = buildSnapTargets(schematic);
 		active.snap.rebuild(targets.points, targets.segments);

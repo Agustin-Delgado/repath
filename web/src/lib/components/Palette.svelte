@@ -1,6 +1,12 @@
 <script lang="ts">
 	import { app } from '$lib/state.svelte';
-	import { CATALOG, SUBCIRCUIT_PREFIX, chipDefinition, type Group } from '$lib/schematic/model';
+	import {
+		BLOCK_PREFIX,
+		CATALOG,
+		SUBCIRCUIT_PREFIX,
+		chipDefinition,
+		type Group
+	} from '$lib/schematic/model';
 	import { CHIPS } from '$lib/schematic/chips';
 	import { symbolExtent } from '$lib/schematic/symbols';
 	import Symbol from './Symbol.svelte';
@@ -31,6 +37,8 @@
 
 	/** The imported parts this drawing carries. */
 	const imported = $derived(app.schematic.subcircuits ?? []);
+	/** The circuits boxed up as parts in this drawing. */
+	const blocks = $derived(app.schematic.blocks ?? []);
 
 	let importing = $state(false);
 	let source = $state('');
@@ -112,6 +120,46 @@
 			</div>
 		</section>
 	{/each}
+
+	<!--
+		Parts made here, out of a piece of the drawing. Only shown once there is
+		one: a heading over nothing would be a promise about a gesture the palette
+		does not explain.
+	-->
+	{#if blocks.length > 0}
+		<section>
+			<h3>Blocks</h3>
+			<div class="grid">
+				<!--
+					Keyed on what the icon is drawn from, so renaming a block or one
+					of its ports redraws it: the symbol is built from the definition,
+					which the component's props never mention.
+				-->
+				{#each blocks as block (`${block.id}:${block.name}:${block.ports.map((p) => p.name).join()}`)}
+					{@const reach = symbolExtent(BLOCK_PREFIX + block.id)}
+					<button
+						class="part"
+						class:active={app.tool.mode === 'place' && app.tool.kind === BLOCK_PREFIX + block.id}
+						onclick={() => select(BLOCK_PREFIX + block.id)}
+						oncontextmenu={(e) => {
+							e.preventDefault();
+							app.removeBlock(block.id);
+						}}
+						title="{block.name} ({block.ports.map((p) => p.name).join(' ')}) — right-click to remove"
+					>
+						<svg
+							viewBox="{-reach.x} {-reach.y} {reach.x * 2} {reach.y * 2}"
+							class:tall={reach.y > reach.x}
+							aria-hidden="true"
+						>
+							<Symbol kind={BLOCK_PREFIX + block.id} />
+						</svg>
+						<span>{block.name}</span>
+					</button>
+				{/each}
+			</div>
+		</section>
+	{/if}
 
 	<!--
 		A library, not a group of the catalog: these parts arrived with the drawing

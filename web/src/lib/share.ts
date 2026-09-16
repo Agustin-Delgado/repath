@@ -10,7 +10,15 @@
  * the host, which keeps the promise that circuits stay on your machine.
  */
 
-import { migrateInstance, registerSubcircuits, type Schematic } from './schematic/model';
+import {
+	migrateInstance,
+	registerBlocks,
+	registerSubcircuits,
+	type BlockDef,
+	type Instance,
+	type Schematic,
+	type Wire
+} from './schematic/model';
 import { probePin } from './schematic/nets';
 
 export interface SharedCircuit {
@@ -68,6 +76,85 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array | null> {
  * off the payload — which matters, because a URL that wraps across three lines
  * of a chat message does not get clicked.
  */
+type TravellingInstance = [string, string, number, number, number, Record<string, number | string>];
+
+const packInstance = (n: Instance): TravellingInstance => [n.kind, n.name, n.x, n.y, n.rotation, n.params];
+const packWire = (w: Wire): number[] => w.points.flatMap((p) => [p.x, p.y]);
+
+function unpackWires(flat: number[][] | undefined, id: () => string): Wire[] {
+	return (flat ?? [])
+		.map((coords) => {
+			const points: Array<{ x: number; y: number }> = [];
+			for (let i = 0; i + 1 < coords.length; i += 2) points.push({ x: coords[i], y: coords[i + 1] });
+			return { id: id(), points };
+		})
+		.filter((wire) => wire.points.length >= 2);
+}
+
+/**
+ * A block as it travels: its insides packed the way the drawing is, with the
+ * ports naming inner parts by index rather than by id, since the ids are what
+ * does not travel.
+ */
+type TravellingBlock = [
+	string,
+	string,
+	TravellingInstance[],
+	number[][],
+	Array<[string, 'left' | 'right', Array<[number, string]>]>
+];
+
+function packBlock(block: BlockDef): TravellingBlock {
+	const at = new Map(block.instances.map((n, index) => [n.id, index] as const));
+	return [
+		block.id,
+		block.name,
+		block.instances.map(packInstance),
+		block.wires.map(packWire),
+		block.ports.map((port) => [
+			port.name,
+			port.side,
+			port.pins.flatMap(({ instance, pin }) => {
+				const index = at.get(instance);
+				return index === undefined ? [] : [[index, pin] as [number, string]];
+			})
+		])
+	];
+}
+
+function unpackBlock(packed: TravellingBlock, id: () => string): BlockDef {
+	const [bid, name, instances, wires, ports] = packed;
+	const unpacked = instances.map((packedInstance) => unpackInstance(packedInstance, id()));
+	return {
+		id: bid,
+		name,
+		instances: unpacked,
+		wires: unpackWires(wires, id),
+		ports: ports.map(([portName, side, pins]) => ({
+			name: portName,
+			side,
+			pins: pins.flatMap(([index, pin]) => {
+				const owner = unpacked[index];
+				return owner ? [{ instance: owner.id, pin }] : [];
+			})
+		}))
+	};
+}
+
+function unpackInstance([kind, name, x, y, rotation, params]: TravellingInstance, id: string): Instance {
+	// A link outlives the catalog it was written against, so what comes out of
+	// one is brought up to date before anything else touches it.
+	return migrateInstance({
+		id,
+		kind,
+		name,
+		x,
+		y,
+		rotation: rotation as 0 | 90 | 180 | 270,
+		params: params ?? {}
+	});
+}
+
 function compact(circuit: SharedCircuit): unknown {
 	// Probes name a pin by *which* instance rather than by its id, because ids are
 	// exactly what does not travel: they are dropped here and minted again on the
@@ -76,13 +163,14 @@ function compact(circuit: SharedCircuit): unknown {
 	return {
 		v: VERSION,
 		t: circuit.stopTime,
-		i: circuit.schematic.instances.map((n) => [n.kind, n.name, n.x, n.y, n.rotation, n.params]),
+		i: circuit.schematic.instances.map(packInstance),
 		// Corners flattened to a number list: a wire is mostly coordinates, and
 		// every character saved here is a character of URL someone has to paste.
-		w: circuit.schematic.wires.map((w) => w.points.flatMap((p) => [p.x, p.y])),
+		w: circuit.schematic.wires.map(packWire),
 		// Imported definitions travel with the drawing. A link that carried a part
 		// but not what it is made of would open as a hole in someone's circuit.
 		x: circuit.schematic.subcircuits?.map((s) => [s.id, s.name, s.ports, s.source]),
+		b: circuit.schematic.blocks?.map(packBlock),
 		// Groups, by the index of each member for the same reason probes are.
 		g: circuit.schematic.groups?.map((group) => [
 			group.name,
@@ -105,9 +193,10 @@ function expand(raw: unknown): SharedCircuit {
 	const data = raw as {
 		v?: number;
 		t?: number;
-		i?: Array<[string, string, number, number, number, Record<string, number | string>]>;
+		i?: TravellingInstance[];
 		w?: number[][];
 		x?: Array<[string, string, string[], string]>;
+		b?: TravellingBlock[];
 		p?: Array<string | [number, string]>;
 		g?: Array<[string, number[]]>;
 	};
@@ -126,20 +215,10 @@ function expand(raw: unknown): SharedCircuit {
 		source
 	}));
 	registerSubcircuits({ instances: [], wires: [], subcircuits });
+	const blocks = (data.b ?? []).map((packed) => unpackBlock(packed, id));
+	registerBlocks({ instances: [], wires: [], blocks });
 
-	const instances = (data.i ?? []).map(([kind, name, x, y, rotation, params]) =>
-		// A link outlives the catalog it was written against, so what comes out of
-		// one is brought up to date before anything else touches it.
-		migrateInstance({
-			id: id(),
-			kind,
-			name,
-			x,
-			y,
-			rotation: rotation as 0 | 90 | 180 | 270,
-			params: params ?? {}
-		})
-	);
+	const instances = (data.i ?? []).map((packed) => unpackInstance(packed, id()));
 
 	return {
 		stopTime: data.t ?? 1e-3,
@@ -153,16 +232,9 @@ function expand(raw: unknown): SharedCircuit {
 		}),
 		schematic: {
 			subcircuits,
+			blocks,
 			instances,
-			wires: (data.w ?? [])
-				.map((flat) => {
-					const points: Array<{ x: number; y: number }> = [];
-					for (let i = 0; i + 1 < flat.length; i += 2) {
-						points.push({ x: flat[i], y: flat[i + 1] });
-					}
-					return { id: id(), points };
-				})
-				.filter((wire) => wire.points.length >= 2),
+			wires: unpackWires(data.w, id),
 			groups: (data.g ?? [])
 				.map(([name, members]) => ({
 					id: id(),

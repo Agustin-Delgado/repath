@@ -184,6 +184,12 @@ export interface FlowFrame {
 	segmentCurrent: Map<string, number>;
 }
 
+/** Which reported current arrives at one pin of a part, if any does. */
+export function pinFlow(kind: string, pin: string): { sign: number; series?: string } | null {
+	const entry = PIN_FLOW[kind]?.find(([name]) => name === pin);
+	return entry ? { sign: entry[1], series: entry[2] } : null;
+}
+
 /** Plan the accumulation for every net. Call once per run, not per frame. */
 export function prepareFlow(
 	schematic: Schematic,

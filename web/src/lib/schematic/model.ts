@@ -246,6 +246,37 @@ export interface PartGroup {
 	members: string[];
 }
 
+/** One terminal of a block: a name on the box, standing for pins inside it. */
+export interface BlockPort {
+	/** The pin's name on the placed part, and what is printed on the box. */
+	name: string;
+	side: 'left' | 'right';
+	/**
+	 * The inner pins this terminal reaches. Usually one. Several when two parts
+	 * inside were fed from the same outside net without a wire between them,
+	 * which is a connection the box has to keep making.
+	 */
+	pins: Array<{ instance: string; pin: string }>;
+}
+
+/**
+ * A circuit drawn here and boxed up as a part.
+ *
+ * The inside is a schematic of its own — parts, wires, and the ports that say
+ * which of its pins reach the outside — kept as it was drawn, so it can be
+ * opened back up and edited. Placed, it is one part with one pin per port; for
+ * the engine it is unfolded back into the parts it is made of, the way an
+ * imported `.subckt` is. Positions inside are relative to where the box sits.
+ */
+export interface BlockDef {
+	/** Stable handle. The part's `kind` is `b:` followed by this. */
+	id: string;
+	name: string;
+	instances: Instance[];
+	wires: Wire[];
+	ports: BlockPort[];
+}
+
 export interface Schematic {
 	instances: Instance[];
 	wires: Wire[];
@@ -255,6 +286,8 @@ export interface Schematic {
 	 * as a hole in the middle of someone's circuit.
 	 */
 	subcircuits?: SubcircuitDef[];
+	/** Circuits boxed up as parts, for the same reason. */
+	blocks?: BlockDef[];
 	groups?: PartGroup[];
 }
 
@@ -1451,6 +1484,119 @@ export function subcircuitOf(schematic: Schematic, kind: string): SubcircuitDef 
 	if (!kind.startsWith(SUBCIRCUIT_PREFIX)) return null;
 	const id = kind.slice(SUBCIRCUIT_PREFIX.length);
 	return schematic.subcircuits?.find((s) => s.id === id) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Boxed-up circuits as parts
+// ---------------------------------------------------------------------------
+
+export const BLOCK_PREFIX = 'b:';
+
+/** Room the body needs beyond a name printed inside its edge, per character. */
+const BLOCK_CHAR = 5;
+/** Space under the lowest port for the block's name. */
+const BLOCK_NAME_ROOM = 20;
+
+/** The ports on one side, top to bottom. */
+export function blockSide(block: BlockDef, side: 'left' | 'right'): BlockPort[] {
+	return block.ports.filter((port) => port.side === side);
+}
+
+/**
+ * Half the width of the body, wide enough that the longest name on each side
+ * fits inside its edge. Grown in grid steps so the pins, a lead further out,
+ * stay on the grid.
+ */
+export function blockHalfWidth(block: BlockDef): number {
+	const longest = (side: 'left' | 'right') =>
+		Math.max(0, ...blockSide(block, side).map((port) => port.name.length));
+	const wanted = (longest('left') + longest('right')) * BLOCK_CHAR + 16;
+	let half = SUB_HALF_WIDTH;
+	while (half * 2 < wanted) half += GRID;
+	return half;
+}
+
+/** Half the height of the body: the longer column of ports, plus the name. */
+export function blockReach(block: BlockDef): number {
+	const rows = Math.max(blockSide(block, 'left').length, blockSide(block, 'right').length, 1);
+	return Math.max(22, ((rows - 1) * SUB_PITCH) / 2 + 12 + BLOCK_NAME_ROOM / 2);
+}
+
+/**
+ * A placeable part built from a boxed-up circuit.
+ *
+ * Each pin says what the pins inside it say: analog if any of them is, an
+ * output if any of them drives. The engine never reads these — it sees the
+ * inside — but the drawing does, to know which way a wire should arrive and
+ * whether a net has become analog.
+ */
+export function blockDefinition(block: BlockDef): ComponentDef {
+	const byId = new Map(block.instances.map((i) => [i.id, i]));
+	const half = blockReach(block);
+	const x = blockHalfWidth(block) + SUB_LEAD;
+	const pinFor = (port: BlockPort, px: number, py: number): PinDef => {
+		const inner = port.pins.flatMap(({ instance, pin }) => {
+			const owner = byId.get(instance);
+			const def = owner ? definitionFor(owner).pins.find((p) => p.name === pin) : undefined;
+			return def ? [def] : [];
+		});
+		const analogPin = inner.some((p) => p.domain === 'analog');
+		const drives = inner.some((p) => p.direction === 'out');
+		return {
+			name: port.name,
+			x: px,
+			y: py,
+			domain: analogPin ? 'analog' : 'digital',
+			direction: analogPin ? 'inout' : drives ? 'out' : 'in'
+		};
+	};
+	const left = blockSide(block, 'left');
+	const right = blockSide(block, 'right');
+	// The name sits under the ports, so the columns are shifted up to leave it
+	// room without the box growing on both ends.
+	const lift = BLOCK_NAME_ROOM / 2;
+	const hw = blockHalfWidth(block);
+	return {
+		kind: BLOCK_PREFIX + block.id,
+		label: block.name,
+		group: 'logic',
+		prefix: 'B',
+		box: { x: -x, y: -half, w: x * 2, h: half * 2 },
+		body: { x: -hw, y: -half, w: hw * 2, h: half * 2 },
+		pins: [
+			...left.map((port, i) => pinFor(port, -x, portY(i, left.length) - lift)),
+			...right.map((port, i) => pinFor(port, x, portY(i, right.length) - lift))
+		],
+		params: []
+	};
+}
+
+/**
+ * Make a drawing's blocks available to everything that asks about a kind, on
+ * the same terms as `registerSubcircuits`: before anything reads the instances.
+ *
+ * A block can hold another block, and the inner one has to be known before the
+ * outer one is built — its pins are read off the parts inside. The list is in
+ * no particular order, so this goes round until every one is built, and a block
+ * whose contents it cannot resolve is left out rather than allowed to throw.
+ */
+export function registerBlocks(schematic: Schematic): void {
+	let pending = [...(schematic.blocks ?? [])];
+	while (pending.length > 0) {
+		const ready = pending.filter((block) =>
+			block.instances.every((i) => !i.kind.startsWith(BLOCK_PREFIX) || BY_KIND.has(i.kind))
+		);
+		if (ready.length === 0) return;
+		for (const block of ready) BY_KIND.set(BLOCK_PREFIX + block.id, blockDefinition(block));
+		pending = pending.filter((block) => !ready.includes(block));
+	}
+}
+
+/** The definition a placed block was built from, if it is one. */
+export function blockOf(schematic: Schematic, kind: string): BlockDef | null {
+	if (!kind.startsWith(BLOCK_PREFIX)) return null;
+	const id = kind.slice(BLOCK_PREFIX.length);
+	return schematic.blocks?.find((b) => b.id === id) ?? null;
 }
 
 /**

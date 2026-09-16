@@ -75,9 +75,11 @@ because each step is what makes the next one worth having:
 3. **Subcircuits**, then `.subckt` import. This is what turns "has an op-amp"
    into "has the op-amp you are going to buy", with its bandwidth and its slew
    rate, and it is the only way a library grows past what fits in one file.
-   *(The import half is in: a `.subckt` pasted from a vendor's file becomes a
-   placeable part, flattened into the netlist when the drawing compiles. Drawing
-   your own block and reusing it is what is left.)*
+   *(Both halves are in: a `.subckt` pasted from a vendor's file becomes a
+   placeable part, and a piece of the drawing boxes up as a block with a pin per
+   net that left it. Either is unfolded into the netlist when the drawing
+   compiles. What is left is editing a block in place rather than by opening it
+   up.)*
 4. **Sparse solver.** Dense LU is fine to a few hundred nodes and quadratic-ish
    past that. It matters once steps 2 and 3 bring circuits big enough to feel it,
    which is why it is fourth and not first.
@@ -90,11 +92,13 @@ because each step is what makes the next one worth having:
 
 ### Engine
 
-- [ ] **Subcircuits you draw** — turn a selection into a block, reuse it, nest it.
-      Imported ones are in and share the machinery: a definition with ports, a
-      generated symbol, and flattening at compile time. What is left is a body that
-      comes from a drawing rather than from pasted text, and somewhere to edit it.
-      Needed before any circuit larger than a page is bearable.
+- [x] **Subcircuits you draw** — turn a selection into a block, reuse it, nest it.
+      `B` boxes the selection up, the ports are the nets that left it, `U` opens
+      it back up, and the definition lives in the palette and travels with the
+      drawing. *What is left:* editing the inside in place — today a block is
+      opened up, edited and boxed up again, which replaces the definition for
+      every copy only when no other copy is placed; ports go on the left and
+      right only, and are not reordered by hand.
 - [ ] **Current-controlled sources** (`F`, `H`), which some vendor macromodels
       need before they will build.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz

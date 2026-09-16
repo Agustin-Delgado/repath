@@ -69,6 +69,10 @@ export type Step =
 	| { op: 'group'; parts: string[]; name: string }
 	| { op: 'ungroup'; parts: string[] }
 	| { op: 'regroup'; part: string; name: string }
+	| { op: 'box'; parts: string[]; name: string }
+	| { op: 'unbox'; parts: string[] }
+	| { op: 'reblock'; part: string; name: string }
+	| { op: 'port'; part: string; from: string; to: string }
 	| { op: 'undo' }
 	| { op: 'redo' }
 	| { op: 'stop'; seconds: number }
@@ -175,6 +179,14 @@ function format(step: Step): string {
 			return `ungroup ${list(step.parts)}`;
 		case 'regroup':
 			return `regroup ${step.part} ${step.name}`;
+		case 'box':
+			return `box ${list(step.parts)} ${step.name}`;
+		case 'unbox':
+			return `unbox ${list(step.parts)}`;
+		case 'reblock':
+			return `reblock ${step.part} ${step.name}`;
+		case 'port':
+			return `port ${step.part} ${step.from} ${step.to}`;
 		case 'undo':
 			return 'undo';
 		case 'redo':
@@ -280,6 +292,14 @@ function read(op: string, rest: string[]): Step {
 			return { op, parts: names(rest[0]) };
 		case 'regroup':
 			return { op, part: rest[0], name: rest.slice(1).join(' ') };
+		case 'box':
+			return { op, parts: names(rest[0]), name: rest.slice(1).join(' ') };
+		case 'unbox':
+			return { op, parts: names(rest[0]) };
+		case 'reblock':
+			return { op, part: rest[0], name: rest.slice(1).join(' ') };
+		case 'port':
+			return { op, part: rest[0], from: rest[1], to: rest[2] };
 		case 'undo':
 		case 'redo':
 			return { op };

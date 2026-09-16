@@ -11,7 +11,8 @@
 
 import { contactControl, restingContact } from './contacts';
 import { ledDiodeModel, ledRating, SEGMENTS } from './led';
-import { chipOf } from './model';
+import { blockOf, chipOf, pointKey } from './model';
+import { unfoldBlocks } from './blocks';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
 import {
@@ -233,12 +234,17 @@ function drawn(instance: Instance, key: string, nominal: number, seed: number): 
 }
 
 export function compileSchematic(
-	schematic: Schematic,
+	sheet: Schematic,
 	temperature = 300.15,
 	seed = 0,
 	family = DEFAULT_FAMILY
 ): CompileResult {
-	const connectivity = buildConnectivity(schematic);
+	// Blocks are unfolded before anything else looks: from here on the drawing
+	// is flat, with the insides of every block in it under `B1.` names and the
+	// boxes themselves still standing where their pins are.
+	const unfolded = unfoldBlocks(sheet);
+	const schematic = unfolded.schematic;
+	const connectivity = buildConnectivity(schematic, unfolded.ties);
 	const errors: string[] = [];
 	const warnings: string[] = [];
 	const names = new Map<number, NetNames>();
@@ -282,14 +288,27 @@ export function compileSchematic(
 		errors.push('No ground. Every analog circuit needs one ground symbol as a voltage reference.');
 	}
 
+	// The points the drawing's own wires pass through, for telling a box's pin
+	// with a wire on it from one with nothing but its own insides behind it.
+	const drawnPoints = new Set(sheet.wires.flatMap((w) => w.points.map((p) => pointKey(p.x, p.y))));
 	for (const instance of schematic.instances) {
 		const def = definitionFor(instance);
+		const box = blockOf(schematic, instance.kind) !== null;
 		for (const pin of def.pins) {
 			const index = connectivity.netOfPin.get(pinKey(instance.id, pin.name));
 			const net = index === undefined ? undefined : connectivity.nets[index];
 			// A pin with a wire hanging off it is fine — that is how you leave a
 			// test point. Only a pin touching literally nothing is worth a warning.
-			if (!net || (net.pins.length < 2 && net.points.length < 2)) {
+			//
+			// A box's pin is always on a net with the pins inside it, so for a box
+			// the question is whether anything *else* is there: another part's
+			// pin, or a wire somebody drew.
+			const alone = box
+				? !net ||
+					(net.pins.every((ref) => ref.instance.id === instance.id || ref.instance.id.startsWith(`${instance.id}/`)) &&
+						!net.points.some((key) => drawnPoints.has(key)))
+				: !net || (net.pins.length < 2 && net.points.length < 2);
+			if (alone) {
 				warnings.push(`${instance.name}.${pin.name} is not connected to anything.`);
 			}
 		}
@@ -331,7 +350,7 @@ export function compileSchematic(
 	// ---- components ------------------------------------------------------
 	const components: unknown[] = [];
 	const devices: unknown[] = [];
-	const portFlow = new Map<string, PortInjection[]>();
+	const portFlow = new Map<string, PortInjection[]>(unfolded.portFlow);
 	/** Nets already held at a voltage by a supply symbol, by net index. */
 	const railed = new Map<number, { name: string; volts: number }>();
 
@@ -346,6 +365,10 @@ export function compileSchematic(
 		// A pin name a block uses that the package does not have is internal, and
 		// gets a net of its own per instance — two 7476s on one drawing must not
 		// share the inside of their flip-flops.
+		// A block is already in the list as the parts inside it. The box builds
+		// nothing of its own; its pins are on the nets they tie to and that is all.
+		if (blockOf(schematic, instance.kind)) continue;
+
 		const chip = chipOf(instance.kind);
 		if (chip) {
 			const legs = new Set(chip.layout);
