@@ -348,7 +348,7 @@ export function routeWire(
 		if (!attempt.clipped) break;
 	}
 
-	return best ? best.path : elbow(from, to);
+	return best ? best.path : fallback(from, to, options.prefer);
 
 	interface Node {
 		x: number;
@@ -513,6 +513,50 @@ function collapse(points: Point[]): Point[] {
 	}
 	out.push(points[points.length - 1]);
 	return out;
+}
+
+/**
+ * What a route is when the search could not finish: the shape the wire had,
+ * if it had one, with the end that moved stretched to where it is now; a
+ * plain elbow otherwise.
+ *
+ * The distinction matters more than it looks. A search gives up on a long
+ * wire — a feed from a flip-flop on the far side of the page to a gate input
+ * — when its cell budget or the frame's time runs out, and both run out on
+ * exactly the wires that have the most to lose from a bad guess. An elbow
+ * between two far-apart points runs a leg across the whole page, and when the
+ * moved end is a pin in a row of pins that leg goes straight through every
+ * one of them: one nudge of a selection, and eight nets became one. The old
+ * shape with a jog at the end was right before the nudge and is within one
+ * cell of right after it.
+ */
+export function fallback(from: Point, to: Point, prefer?: readonly Point[]): Point[] {
+	if (!prefer || prefer.length < 2) return elbow(from, to);
+	return stretched(prefer, from, to);
+}
+
+/**
+ * `path` with its ends moved to `from` and `to`, each end keeping the axis
+ * of the leg it is on: a vertical leg whose foot moved sideways gets a jog at
+ * the foot rather than a slant.
+ */
+export function stretched(path: readonly Point[], from: Point, to: Point): Point[] {
+	const points = path.map((p) => ({ x: p.x, y: p.y }));
+	const last = points.length - 1;
+	const same = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
+	if (!same(points[last], to)) {
+		const leg = points[last - 1];
+		const vertical = leg.x === points[last].x;
+		points[last] = vertical ? { x: leg.x, y: to.y } : { x: to.x, y: leg.y };
+		points.push({ x: to.x, y: to.y });
+	}
+	if (!same(points[0], from)) {
+		const leg = points[1];
+		const vertical = leg.x === points[0].x;
+		points[0] = vertical ? { x: leg.x, y: from.y } : { x: from.x, y: leg.y };
+		points.unshift({ x: from.x, y: from.y });
+	}
+	return collapse(points);
 }
 
 /** The plain two-segment route, used as a preview and as the fallback. */

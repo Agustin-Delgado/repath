@@ -27,7 +27,7 @@ import {
 import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
 import { OPERABLE, wireSegments, type Point } from '../model';
-import { elbow, routeWire } from '../route';
+import { elbow, fallback, routeWire } from '../route';
 import type { SchematicItem } from '../scene';
 import { connectsAt, drawSnapHint, netAt } from './shared';
 
@@ -184,7 +184,7 @@ export function createSelectTool(): Tool {
 		// cannot make the committed shape differ from the previewed one.
 		const deadline = performance.now() + FRAME_ROUTING_MS;
 		return (from: Point, to: Point, settling: ReadonlySet<string>, prefer?: readonly Point[]) => {
-			if (performance.now() > deadline) return elbow(from, to);
+			if (performance.now() > deadline) return fallback(from, to, prefer);
 			return routeWire(app.schematic, from, to, {
 				grid: ctx.gridSize,
 				// What the wire looked like before this drag. Leaving it costs, which
