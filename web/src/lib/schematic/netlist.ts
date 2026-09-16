@@ -408,6 +408,9 @@ export function compileSchematic(
 			// changes nothing, so the engine never hears about it — but its pin
 			// still joins a net, which is how it knows what it is measuring.
 			case 'probe':
+			// A port is the same from in here: the box's pin is tied to it, and
+			// the tie is the whole of what it does.
+			case 'port':
 				break;
 			case 'supply': {
 				const index = connectivity.netOfPin.get(pinKey(instance.id, 'v'));

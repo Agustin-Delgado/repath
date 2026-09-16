@@ -29,6 +29,7 @@ import { currentTheme } from '../draw';
 import { OPERABLE, wireSegments, type Point } from '../model';
 import { elbow, fallback, routeWire } from '../route';
 import { groupLabelAt } from '../groups';
+import { blockOf } from '../model';
 import type { SchematicItem } from '../scene';
 import { connectsAt, drawSnapHint, netAt } from './shared';
 
@@ -333,6 +334,18 @@ export function createSelectTool(): Tool {
 			// a tool of its own; here, a wire is a wire.
 
 			if (item) {
+				// A double click on a box goes inside it: the box is the one part
+				// whose insides are a drawing, and this is how a drawing is opened.
+				if (pointer.detail >= 2) {
+					const part = app.schematic.instances.find((i) => i.id === item.id);
+					const block = part && blockOf(app.schematic, part.kind);
+					if (block) {
+						pointer.native.preventDefault?.();
+						app.enterBlock(block.id);
+						ctx.invalidate();
+						return;
+					}
+				}
 				pressedId = item.id;
 				pressedWasSelected = app.selection.includes(item.id);
 

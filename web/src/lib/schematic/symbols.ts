@@ -128,6 +128,8 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 			return `switch:${String(params.action ?? 'toggle')}:${String(params.start ?? 'open')}`;
 		case 'toggle':
 			return `toggle:${String(params.state ?? 'low')}`;
+		case 'port':
+			return `port:${String(params.flow ?? 'in')}`;
 		case 'and':
 		case 'nand':
 		case 'or':
@@ -632,6 +634,7 @@ export function symbolGeometry(
 		geometry = switchSymbol(String(params.action ?? 'toggle'), String(params.start ?? 'open'));
 	}
 	else if (kind === 'toggle') geometry = toggleSymbol(String(params.state ?? 'low'));
+	else if (kind === 'port') geometry = portSymbol(String(params.flow ?? 'in'));
 	else if (GATES.has(kind)) {
 		geometry = gate(kind, gateInputCount(params as Record<string, number | string>), standard);
 	}
@@ -685,6 +688,20 @@ function block(kind: string, named = false): SymbolGeometry {
 		labels.push({ x: 0, y: y + h - 7, text: def.label, size: 9, anchor: 'middle', fine: true });
 	}
 	return { shapes, labels, extent: { x: Math.max(DEFAULT_EXTENT, -x), y: Math.max(DEFAULT_EXTENT, -y) } };
+}
+
+/**
+ * A block's terminal, from the inside: a flag pointing the way the signal
+ * goes, with its pin at the tip for an input and at the tail for an output,
+ * so both read left to right. The name is drawn by the canvas, since a
+ * symbol does not know which instance it is.
+ */
+function portSymbol(flow: string): SymbolGeometry {
+	const out = flow === 'out';
+	return {
+		shapes: [path(out ? 'M0 -8 H34 L40 0 L34 8 H0 Z' : 'M-40 -8 H-6 L0 0 L-6 8 H-40 Z')],
+		labels: []
+	};
 }
 
 /** SVG `d` for a shape, so the palette can render one element per shape. */

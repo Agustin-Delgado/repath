@@ -340,7 +340,13 @@
 		// A block's box is drawn from its definition, which the parts on the
 		// drawing only point at: renaming it or one of its ports changes the
 		// shape of every copy without touching a single instance.
-		void schematic.blocks?.map((b) => `${b.name}:${b.ports.map((p) => p.name).join()}`);
+		void schematic.blocks?.map(
+			(b) =>
+				`${b.name}:${b.instances
+					.filter((i) => i.kind === 'port')
+					.map((i) => `${i.name}${i.params.flow}${i.y}`)
+					.join()}`
+		);
 		active.scene.replaceAll(buildSceneItems(schematic));
 		const targets = buildSnapTargets(schematic);
 		active.snap.rebuild(targets.points, targets.segments);
@@ -607,6 +613,20 @@
 
 <div class="stage">
 	<div class="host" bind:this={host} role="application" aria-label="Schematic editor"></div>
+	<!--
+		Inside a block, the canvas is the block and not the drawing, and that has
+		to be said out loud: an edit here reaches every copy. The way back is here
+		too, since nothing on the canvas is the drawing to click on.
+	-->
+	{#if app.inside}
+		<div class="inside">
+			<span>
+				Inside <strong>{app.inside.name}</strong> — every copy of the block changes with it. Wire a
+				pin to a <em>Port</em> to give the box a pin.
+			</span>
+			<button onclick={() => app.leaveBlock()}>Back to the drawing</button>
+		</div>
+	{/if}
 	{#if renameBox}
 		<!-- svelte-ignore a11y_autofocus -->
 		<input
@@ -648,6 +668,39 @@
 		overflow: hidden;
 		touch-action: none;
 		user-select: none;
+	}
+
+	.inside {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		padding: 0.4rem 0.75rem;
+		background: var(--panel-bg);
+		border-bottom: 1px solid var(--accent, #4ea8ff);
+		color: var(--text, inherit);
+		font-size: 0.8rem;
+		pointer-events: none;
+	}
+
+	.inside button {
+		pointer-events: auto;
+		padding: 0.3rem 0.6rem;
+		font-size: 0.75rem;
+		border: 1px solid var(--accent, #4ea8ff);
+		border-radius: 5px;
+		background: var(--control-bg);
+		color: inherit;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+
+	.inside button:hover {
+		background: var(--hover);
 	}
 
 	.rename {

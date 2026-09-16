@@ -71,8 +71,10 @@ export type Step =
 	| { op: 'regroup'; part: string; name: string }
 	| { op: 'box'; parts: string[]; name: string }
 	| { op: 'unbox'; parts: string[] }
-	| { op: 'reblock'; part: string; name: string }
-	| { op: 'port'; part: string; from: string; to: string }
+	| { op: 'reblock'; from: string; to: string }
+	| { op: 'port'; block: string; from: string; to: string }
+	| { op: 'enter'; name: string }
+	| { op: 'leave' }
 	| { op: 'undo' }
 	| { op: 'redo' }
 	| { op: 'stop'; seconds: number }
@@ -183,10 +185,16 @@ function format(step: Step): string {
 			return `box ${list(step.parts)} ${step.name}`;
 		case 'unbox':
 			return `unbox ${list(step.parts)}`;
+		// Block names may have spaces in them, so the ones that take one put
+		// it last; a rename has two, and separates them with an arrow.
 		case 'reblock':
-			return `reblock ${step.part} ${step.name}`;
+			return `reblock ${step.from} -> ${step.to}`;
 		case 'port':
-			return `port ${step.part} ${step.from} ${step.to}`;
+			return `port ${step.from} ${step.to} ${step.block}`;
+		case 'enter':
+			return `enter ${step.name}`;
+		case 'leave':
+			return 'leave';
 		case 'undo':
 			return 'undo';
 		case 'redo':
@@ -296,10 +304,16 @@ function read(op: string, rest: string[]): Step {
 			return { op, parts: names(rest[0]), name: rest.slice(1).join(' ') };
 		case 'unbox':
 			return { op, parts: names(rest[0]) };
-		case 'reblock':
-			return { op, part: rest[0], name: rest.slice(1).join(' ') };
+		case 'reblock': {
+			const arrow = rest.indexOf('->');
+			return { op, from: rest.slice(0, arrow).join(' '), to: rest.slice(arrow + 1).join(' ') };
+		}
 		case 'port':
-			return { op, part: rest[0], from: rest[1], to: rest[2] };
+			return { op, from: rest[0], to: rest[1], block: rest.slice(2).join(' ') };
+		case 'enter':
+			return { op, name: rest.join(' ') };
+		case 'leave':
+			return { op };
 		case 'undo':
 		case 'redo':
 			return { op };

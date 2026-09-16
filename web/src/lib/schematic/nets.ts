@@ -267,9 +267,13 @@ export function buildConnectivity(
 		// a gate output conjures an analog node, a bridge to drive it and — since
 		// every analog circuit needs a reference — a demand for a ground symbol
 		// that has nothing to do with what was drawn.
+		//
+		// A port is the same kind of thing with even less to say: what a block's
+		// terminal is gets read off the rest of the net, so the port itself
+		// must not colour it.
 		else if (ref.pin.domain === 'analog') {
 			if (ref.instance.kind === 'probe') probed.add(net);
-			else net.hasAnalog = true;
+			else if (ref.instance.kind !== 'port') net.hasAnalog = true;
 		} else if (ref.pin.direction === 'out') net.hasDigitalOutput = true;
 		else net.hasDigitalInput = true;
 	}
@@ -776,7 +780,7 @@ function short(pin: string): string {
  * it is an open circuit when it is open and a piece of wire when it is closed,
  * which is a fact about the moment rather than about the drawing.
  */
-const NO_DC_PATH = new Set(['capacitor', 'isource', 'probe']);
+const NO_DC_PATH = new Set(['capacitor', 'isource', 'probe', 'port']);
 
 /** One conductive route between two nets. `via` is a switch that has to be closed. */
 interface DcEdge {

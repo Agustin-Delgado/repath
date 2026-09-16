@@ -76,10 +76,9 @@ because each step is what makes the next one worth having:
    into "has the op-amp you are going to buy", with its bandwidth and its slew
    rate, and it is the only way a library grows past what fits in one file.
    *(Both halves are in: a `.subckt` pasted from a vendor's file becomes a
-   placeable part, and a piece of the drawing boxes up as a block with a pin per
-   net that left it. Either is unfolded into the netlist when the drawing
-   compiles. What is left is editing a block in place rather than by opening it
-   up.)*
+   placeable part, and a piece of the drawing boxes up as a block whose
+   terminals are the ports drawn inside it, edited on its own canvas. Either is
+   unfolded into the netlist when the drawing compiles.)*
 4. **Sparse solver.** Dense LU is fine to a few hundred nodes and quadratic-ish
    past that. It matters once steps 2 and 3 bring circuits big enough to feel it,
    which is why it is fourth and not first.
@@ -93,12 +92,11 @@ because each step is what makes the next one worth having:
 ### Engine
 
 - [x] **Subcircuits you draw** — turn a selection into a block, reuse it, nest it.
-      `B` boxes the selection up, the ports are the nets that left it, `U` opens
-      it back up, and the definition lives in the palette and travels with the
-      drawing. *What is left:* editing the inside in place — today a block is
-      opened up, edited and boxed up again, which replaces the definition for
-      every copy only when no other copy is placed; ports go on the left and
-      right only, and are not reordered by hand.
+      `B` boxes the selection up, a port inside is a pin on the box, double-click
+      edits the inside on its own canvas for every copy at once, `U` opens it
+      back up into the drawing, and the definition lives in the palette and
+      travels with the drawing. *What is left:* ports go on the left and right
+      only, in the order they sit inside; a symbol of one's own for a block.
 - [ ] **Current-controlled sources** (`F`, `H`), which some vendor macromodels
       need before they will build.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz

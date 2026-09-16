@@ -9,6 +9,7 @@
 	} from '$lib/schematic/model';
 	import { CHIPS } from '$lib/schematic/chips';
 	import { symbolExtent } from '$lib/schematic/symbols';
+	import { blockPorts, contains } from '$lib/schematic/blocks';
 	import Symbol from './Symbol.svelte';
 
 	const GROUPS: Array<{ id: Group; label: string }> = [
@@ -37,8 +38,22 @@
 
 	/** The imported parts this drawing carries. */
 	const imported = $derived(app.schematic.subcircuits ?? []);
-	/** The circuits boxed up as parts in this drawing. */
-	const blocks = $derived(app.schematic.blocks ?? []);
+	/**
+	 * The circuits boxed up as parts in this drawing. Inside a block, the block
+	 * itself and anything built from it are kept out of reach: placed in there,
+	 * it would contain itself.
+	 */
+	const blocks = $derived(
+		(app.schematic.blocks ?? []).filter(
+			(block) => !app.inside || !contains(app.schematic, block.id, app.inside.id)
+		)
+	);
+	/** What the icon is drawn from, so renaming a block or a port redraws it. */
+	const drawnAs = (block: (typeof blocks)[number]) =>
+		`${block.id}:${block.name}:${block.instances
+			.filter((i) => i.kind === 'port')
+			.map((i) => `${i.name}${i.params.flow}`)
+			.join()}`;
 
 	let importing = $state(false);
 	let source = $state('');
@@ -87,6 +102,24 @@
 				</svg>
 				<span>Wire</span>
 			</button>
+			<!--
+				Only inside a block, where a port means something: it is how a pin
+				in here becomes a pin on the box. On the drawing itself it would be
+				a label and nothing more.
+			-->
+			{#if app.inside}
+				<button
+					class="part"
+					class:active={app.tool.mode === 'place' && app.tool.kind === 'port'}
+					onclick={() => select('port')}
+					title="A terminal of this block: wire a pin to it and the box gets a pin under its name"
+				>
+					<svg viewBox="-40 -40 80 80" aria-hidden="true">
+						<Symbol kind="port" />
+					</svg>
+					<span>Port</span>
+				</button>
+			{/if}
 		</div>
 	</section>
 
@@ -135,7 +168,7 @@
 					of its ports redraws it: the symbol is built from the definition,
 					which the component's props never mention.
 				-->
-				{#each blocks as block (`${block.id}:${block.name}:${block.ports.map((p) => p.name).join()}`)}
+				{#each blocks as block (drawnAs(block))}
 					{@const reach = symbolExtent(BLOCK_PREFIX + block.id)}
 					<button
 						class="part"
@@ -145,7 +178,9 @@
 							e.preventDefault();
 							app.removeBlock(block.id);
 						}}
-						title="{block.name} ({block.ports.map((p) => p.name).join(' ')}) — right-click to remove"
+						title="{block.name} ({blockPorts(block)
+							.map((p) => p.name)
+							.join(' ')}) — right-click to remove"
 					>
 						<svg
 							viewBox="{-reach.x} {-reach.y} {reach.x * 2} {reach.y * 2}"
