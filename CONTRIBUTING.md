@@ -47,6 +47,11 @@ cd web && npm install && npm run dev
 
 ## Before you open a pull request
 
+If a user would notice the change, give it an entry at the top of
+[CHANGELOG.md](CHANGELOG.md): what they can do now, or what stopped going wrong,
+in their words rather than the code's, with a link to the pull request. The
+mechanism goes in the pull request; the changelog is the tour.
+
 What CI checks on a pull request from a fork, you can run without the suite:
 
 ```sh
