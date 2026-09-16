@@ -312,6 +312,7 @@ would show you.
 | Run / stop the sweep | `Space` |
 | Simulate | press Run — nothing runs until you ask |
 | Plot a net | tick it in the Signals list |
+| Read it in your own symbols | the **ANSI / IEC / GOST** selector in the toolbar — zigzag or box resistors, shaped or boxed gates, an EMF drawn with an arrow |
 
 Nothing simulates on load. Press **Run** and the simulation starts and keeps
 going, the way an instrument does: simulated time moves forward, the scope rolls,
@@ -341,6 +342,12 @@ Moving keeps connections. A dragged component brings its wires along and they
 re-route; a dragged *wire* stays plugged into whatever it was plugged into and
 grows legs to reach. The shape you see mid-drag is the shape you get on release —
 the same router runs in both cases, so nothing rearranges itself when you let go.
+
+The symbol standard is the reader's, not the drawing's. A resistor is the same
+resistor whether it is drawn as a zigzag or a box, so the choice is not in a share
+link or a saved file: someone opening your link in another country sees it in the
+symbols they learnt, and the browser remembers yours. Pins never move between
+standards, so switching changes nothing about what is connected to what.
 
 Values are a number and a scale, side by side, so digits and letters never share
 a box. The arrow keys nudge the number and apply it as they go — `Shift` for ten

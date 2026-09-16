@@ -9,6 +9,7 @@
 	import { decodeCircuit, shareUrl } from '$lib/share';
 	import { definitionFor } from '$lib/schematic/model';
 	import { LOGIC_FAMILIES } from '$lib/schematic/logic';
+	import { SYMBOL_STANDARDS } from '$lib/schematic/symbols';
 	import { app } from '$lib/state.svelte';
 	import { formatValue, parseValue } from '$lib/units';
 
@@ -330,6 +331,21 @@
 					{/each}
 				</select>
 			{/if}
+
+			<!--
+				How the symbols are drawn, which is the reader's habit rather than a
+				property of the circuit: not shared, not saved with the drawing.
+			-->
+			<select
+				aria-label="Symbol standard"
+				title="How the parts are drawn: zigzag or box resistors, shaped or boxed gates"
+				value={app.symbolStandard}
+				onchange={(e) => app.setSymbolStandard(e.currentTarget.value)}
+			>
+				{#each SYMBOL_STANDARDS as option (option.value)}
+					<option value={option.value} title={option.description}>{option.label}</option>
+				{/each}
+			</select>
 
 			<!--
 				One sample says nothing; half a dozen say whether the corner of a

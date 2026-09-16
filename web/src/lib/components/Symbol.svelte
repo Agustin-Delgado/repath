@@ -7,6 +7,7 @@
 	 * symbols end up subtly different between the palette and the schematic.
 	 */
 	import { shapeToPathData, symbolGeometry } from '$lib/schematic/symbols';
+	import { app } from '$lib/state.svelte';
 
 	interface Props {
 		kind: string;
@@ -15,7 +16,12 @@
 
 	let { kind, params = {} }: Props = $props();
 
-	const geometry = $derived(symbolGeometry(kind, params));
+	// Read the standard so the palette redraws when it changes; the geometry
+	// itself takes it from the module, like the canvas does.
+	const geometry = $derived.by(() => {
+		void app.symbolStandard;
+		return symbolGeometry(kind, params);
+	});
 
 	/**
 	 * An icon here is 46x34 pixels for a symbol drawn 80 units wide, so everything
