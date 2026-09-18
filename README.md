@@ -347,6 +347,19 @@ re-route; a dragged *wire* stays plugged into whatever it was plugged into and
 grows legs to reach. The shape you see mid-drag is the shape you get on release —
 the same router runs in both cases, so nothing rearranges itself when you let go.
 
+And moving never makes connections you did not ask for. A re-routed wire goes
+round every pin and every corner of every other wire, however far the detour;
+when no such route can be found it comes out as one straight leg from pin to
+pin, which joins nothing on the way and is plainly waiting to be tidied, rather
+than as an elbow through a row of pins. What the router cannot prevent — a pin
+coming down on a wire as a part turns, or grazing one as it is dragged past —
+is caught afterwards: what was joined to what is compared before and after, and
+a turn or a drop that would change it is undone with a notice saying what it
+would have joined. A pin dropped onto another pin, or onto the end of a wire,
+is the join the snap dot announced and goes through. Deleting a part takes the
+wires that led only to it, back to the last junction still doing something: a
+probe leaves nothing behind.
+
 A group is a name over a handful of parts, the way a design tool groups shapes:
 a dashed frame around them with the name in the corner, drawn from wherever the
 parts are. The name is the handle. Clicking it takes the group, so it moves, turns

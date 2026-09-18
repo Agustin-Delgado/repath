@@ -326,6 +326,54 @@ export function pinPartition(connectivity: Connectivity): string {
 }
 
 /**
+ * Something a change put on one net when it was on two, unless the join
+ * happened at a point the change was allowed to join at.
+ *
+ * `allowed` is where a gesture meant to connect something — a pin dropped
+ * onto another pin, or onto the end of a wire, with the snap dot showing it.
+ * A net that holds one of those points was joined on purpose; one that was
+ * joined anywhere else was joined by accident: a wire routed through a pin, a
+ * corner landing on a wire, a pin grazing a rail.
+ *
+ * What counts as "was on two": the pins, which keep their identity through
+ * any edit, and the points of `stable` — the wires the change did not touch,
+ * whose points mean the same net they meant before. A wire that was re-routed
+ * has new points, and where its old ones were says nothing.
+ *
+ * Returns two things to name, or null when every join was meant. A wire with
+ * no pin on it is named by its point.
+ */
+export function unexpectedJoin(
+	before: Connectivity,
+	after: Connectivity,
+	allowed: ReadonlySet<string>,
+	stable: ReadonlySet<string>
+): [string, string] | null {
+	const name = (ref: PinRef) => `${ref.instance.name}.${ref.pin.name}`;
+	for (const net of after.nets) {
+		if (net.points.some((key) => allowed.has(key))) continue;
+		const seen = new Map<number, string>();
+		const meet = (was: number | undefined, what: string): [string, string] | null => {
+			if (was === undefined) return null;
+			const other = [...seen.entries()].find(([index]) => index !== was);
+			if (other) return [other[1], what];
+			seen.set(was, what);
+			return null;
+		};
+		for (const ref of net.pins) {
+			const hit = meet(before.netOfPin.get(pinKey(ref.instance.id, ref.pin.name)), name(ref));
+			if (hit) return hit;
+		}
+		for (const key of net.points) {
+			if (!stable.has(key)) continue;
+			const hit = meet(before.netOfPoint.get(key), `the wire at ${key.replace(',', ', ')}`);
+			if (hit) return hit;
+		}
+	}
+	return null;
+}
+
+/**
  * Join wires that meet end to end with nothing else at the joint.
  *
  * Two wires touching at a bare point are one conductor drawn in two pieces, and

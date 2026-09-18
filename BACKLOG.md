@@ -182,7 +182,14 @@ because each step is what makes the next one worth having:
 
 - [ ] **Dirty-rectangle repaint** in the canvas engine.
 - [ ] **Property-based tests** for the router: any two points, any obstacle field,
-      the result is orthogonal, connected, and lands on both endpoints.
+      the result is connected, lands on both endpoints and joins nothing on the
+      way (`joinsSomething`). Orthogonal too, except for the one case where nothing
+      orthogonal could be found and it came out as a straight diagonal leg.
+- [ ] **A router that never gives up.** When the search, both elbows and the old
+      shape all run into something, the wire is drawn as one straight diagonal leg
+      from pin to pin — safe, since the drawing's rules only see contact along a
+      row or column, but not a drawing anyone wants. A search that widens out to a
+      free lane beyond the drawing's extent would nearly always find a real route.
 - [ ] **Golden-file regression tests** for the analyses, so a numerical change is
       noticed rather than discovered.
 - [ ] **Browser checks in CI.** Playwright is a dev dependency and has found three

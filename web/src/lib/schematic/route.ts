@@ -3,11 +3,21 @@
  *
  * A* over the schematic grid, with costs rather than hard walls almost
  * everywhere. A router that refuses to produce a wire when the ideal path is
- * blocked is worse than one that produces a slightly ugly wire, so the only true
- * obstacles are component bodies; everything else — crossing a wire, running
- * alongside one, turning a corner — is expensive but possible. The route that
- * comes out is the cheapest compromise available, and when there is no
- * compromise it still finds something.
+ * blocked is worse than one that produces a slightly ugly wire, so a route may
+ * cross a wire, run alongside one, or even pass over a component body — all of
+ * it expensive, none of it forbidden. The route that comes out is the cheapest
+ * compromise available, and when there is no compromise it still finds
+ * something.
+ *
+ * The one thing a route is never allowed to do is *connect* something. By the
+ * drawing's own rules a pin sitting on a wire is on that wire's net, a wire's
+ * corner sitting on another wire joins it, and a wire passing through another's
+ * corner joins it too. A route that did any of those would not be ugly, it would
+ * be a different circuit — and the change would be invisible, since nothing on
+ * the page says "these two used to be apart". So a foreign pin, a foreign wire's
+ * corner, and a corner of our own on a foreign wire are walls, not costs, and
+ * when nothing else can be found the answer is a wire that joins nothing rather
+ * than one that joins the wrong thing (`fallback`, `lastResort`).
  *
  * The penalties encode what a person drawing by hand would care about, in order:
  * do not run *along* an existing wire (two conductors on the same line are
@@ -20,7 +30,10 @@ import { definitionFor, rotatePoint, wireSegments, type Point, type Schematic } 
 
 export interface RouteOptions {
 	grid: number;
-	/** Ignore these instances when building obstacles — usually the ones moving. */
+	/**
+	 * Ignore the bodies of these instances — usually the ones moving. Their pins
+	 * stay in the way regardless: a pin is a connection wherever its part is.
+	 */
 	ignoreInstances?: ReadonlySet<string>;
 	/** Ignore these wires — usually the one being re-routed. */
 	ignoreWires?: ReadonlySet<string>;
@@ -56,8 +69,6 @@ const COST = {
 	overlap: 240,
 	/** Passing over a component's body. Expensive, but not impossible. */
 	body: 400,
-	/** Landing on a pin that is not the destination. */
-	foreignPin: 500,
 	/**
 	 * Leaving or meeting a pin across its lead instead of along it.
 	 *
@@ -159,8 +170,11 @@ interface Obstacles {
 	horizontal: Set<number>;
 	/** Cells a wire runs through vertically. */
 	vertical: Set<number>;
-	/** Cells occupied by a pin. */
-	pins: Set<number>;
+	/**
+	 * Cells a route may not pass through: every pin, and every point of every
+	 * wire. Landing on one of those is a connection, not a detour.
+	 */
+	touch: Set<number>;
 	/**
 	 * Which way each pin's lead points, by cell.
 	 *
@@ -201,7 +215,7 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 		body: new Set(),
 		horizontal: new Set(),
 		vertical: new Set(),
-		pins: new Set(),
+		touch: new Set(),
 		leads: new Map()
 	};
 
@@ -221,8 +235,14 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 	}
 
 	for (const instance of schematic.instances) {
-		if (options.ignoreInstances?.has(instance.id)) continue;
 		const def = definitionFor(instance);
+		for (const pin of def.pins) {
+			const offset = rotatePoint(pin.x, pin.y, instance.rotation);
+			obstacles.touch.add(
+				cell(Math.round((instance.x + offset.x) / grid), Math.round((instance.y + offset.y) / grid))
+			);
+		}
+		if (options.ignoreInstances?.has(instance.id)) continue;
 
 		const corners = [
 			{ x: def.box.x, y: def.box.y },
@@ -244,17 +264,13 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 				obstacles.body.add(cell(x, y));
 			}
 		}
-
-		for (const pin of def.pins) {
-			const offset = rotatePoint(pin.x, pin.y, instance.rotation);
-			obstacles.pins.add(
-				cell(Math.round((instance.x + offset.x) / grid), Math.round((instance.y + offset.y) / grid))
-			);
-		}
 	}
 
 	for (const wire of schematic.wires) {
 		if (options.ignoreWires?.has(wire.id)) continue;
+		for (const point of wire.points) {
+			obstacles.touch.add(cell(Math.round(point.x / grid), Math.round(point.y / grid)));
+		}
 		for (const segment of wireSegments(wire)) {
 			const horizontal = segment.a.y === segment.b.y;
 			const from = horizontal ? segment.a.x : segment.a.y;
@@ -348,7 +364,14 @@ export function routeWire(
 		if (!attempt.clipped) break;
 	}
 
-	return best ? best.path : fallback(from, to, options.prefer);
+	if (best) return best.path;
+
+	// The search gave up — its cell budget, usually, on a wire across the whole
+	// page. Anything else is only taken if it joins nothing.
+	const settled = fallback(schematic, from, to, options);
+	if (settled) return settled;
+	const wide = search(SEARCH_MARGINS[SEARCH_MARGINS.length - 1] * 3, effort * 4);
+	return wide.path ?? lastResort(from, to);
 
 	interface Node {
 		x: number;
@@ -361,7 +384,10 @@ export function routeWire(
 	}
 
 	/** One bounded pass. Reports *why* it failed, so the caller knows to widen. */
-	function search(margin: number): {
+	function search(
+		margin: number,
+		budget = effort
+	): {
 		path?: Point[];
 		/** Total cost of `path`, for comparing one box against another. */
 		cost: number;
@@ -389,7 +415,7 @@ export function routeWire(
 		best.set(key(start.x, start.y, -1), 0);
 
 		let explored = 0;
-		while (open.length > 0 && explored < effort) {
+		while (open.length > 0 && explored < budget) {
 			// A linear scan is fine at this size — a schematic route explores hundreds
 			// of cells, and a heap would cost more in bookkeeping than it saves.
 			let bestIndex = 0;
@@ -424,12 +450,20 @@ export function routeWire(
 				const here = cell(nx, ny);
 				const isGoal = nx === goal.x && ny === goal.y;
 				const permitted = options.allow?.has(`${nx},${ny}`) ?? false;
+				const turning = node.axis !== -1 && node.axis !== axis;
+
+				// Walls, not costs: passing through a pin or a wire's corner joins it,
+				// and so does putting a corner of our own down on a wire.
+				if (!isGoal && !permitted && obstacles.touch.has(here)) continue;
+				if (turning && !permitted) {
+					const corner = cell(node.x, node.y);
+					if (obstacles.horizontal.has(corner) || obstacles.vertical.has(corner)) continue;
+				}
 
 				let step = COST.step;
-				if (node.axis !== -1 && node.axis !== axis) step += COST.turn;
+				if (turning) step += COST.turn;
 				if (!isGoal && !permitted) {
 					if (obstacles.body.has(here)) step += COST.body;
-					if (obstacles.pins.has(here)) step += COST.foreignPin;
 
 					// Running along a wire is much worse than crossing it: two conductors
 					// drawn on the same line cannot be told apart.
@@ -472,8 +506,49 @@ export function routeWire(
 			}
 		}
 
-		return { cost: Infinity, clipped, exhausted: explored >= effort };
+		return { cost: Infinity, clipped, exhausted: explored >= budget };
 	}
+}
+
+/**
+ * Would this path join something it was not asked to?
+ *
+ * The three ways a wire connects by geometry alone: it passes through a pin, it
+ * passes through a corner of another wire, or one of its own corners lands on
+ * another wire. Its two ends are exempt — they are the pins it is for, and
+ * whatever those already touch is not this route's doing. A leg that is not
+ * axis-aligned is exempt too, since the drawing's rules only recognise contact
+ * along a straight row or column; that is what makes `lastResort` safe.
+ */
+export function joinsSomething(
+	schematic: Schematic,
+	path: readonly Point[],
+	options: RouteOptions
+): boolean {
+	if (path.length < 2) return false;
+	const { grid } = options;
+	const obstacles = buildObstacles(schematic, options);
+	const at = (p: Point) => cell(Math.round(p.x / grid), Math.round(p.y / grid));
+
+	for (let i = 1; i < path.length - 1; i++) {
+		const corner = at(path[i]);
+		if (obstacles.touch.has(corner)) return true;
+		if (obstacles.horizontal.has(corner) || obstacles.vertical.has(corner)) return true;
+	}
+	for (let i = 0; i < path.length - 1; i++) {
+		const a = path[i];
+		const b = path[i + 1];
+		if (a.x !== b.x && a.y !== b.y) continue;
+		const steps = Math.round((Math.abs(b.x - a.x) + Math.abs(b.y - a.y)) / grid);
+		const dx = Math.sign(b.x - a.x);
+		const dy = Math.sign(b.y - a.y);
+		for (let k = 1; k < steps; k++) {
+			const x = Math.round(a.x / grid) + dx * k;
+			const y = Math.round(a.y / grid) + dy * k;
+			if (obstacles.touch.has(cell(x, y))) return true;
+		}
+	}
+	return false;
 }
 
 /**
@@ -530,9 +605,33 @@ function collapse(points: Point[]): Point[] {
  * shape with a jog at the end was right before the nudge and is within one
  * cell of right after it.
  */
-export function fallback(from: Point, to: Point, prefer?: readonly Point[]): Point[] {
-	if (!prefer || prefer.length < 2) return elbow(from, to);
-	return stretched(prefer, from, to);
+export function fallback(
+	schematic: Schematic,
+	from: Point,
+	to: Point,
+	options: RouteOptions
+): Point[] | null {
+	const { prefer } = options;
+	const candidates = [elbow(from, to), elbow(from, to, true)];
+	if (prefer && prefer.length >= 2) candidates.unshift(stretched(prefer, from, to));
+	return candidates.find((path) => !joinsSomething(schematic, path, options)) ?? null;
+}
+
+/**
+ * A wire that joins nothing, for when nothing better could be found.
+ *
+ * One straight leg from end to end, however it lies. It is not a drawing anybody
+ * wants — but the drawing's rules only see contact along a row or a column, so
+ * a leg that is on neither can connect nothing on the way, and a wire that is
+ * plainly waiting to be tidied is better than one that quietly rewired the
+ * circuit. Reached only when the search, both elbows and the old shape all ran
+ * into something.
+ */
+export function lastResort(from: Point, to: Point): Point[] {
+	return [
+		{ x: from.x, y: from.y },
+		{ x: to.x, y: to.y }
+	];
 }
 
 /**
