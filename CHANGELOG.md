@@ -11,6 +11,18 @@ early entries point at those instead.
 
 ---
 
+## 18 September 2026 — Dots that stood still
+
+**The current dots on a lamp no longer freeze for the rest of the run.** On a
+counter with six LEDs, the first lamp's dots stood still while the second's
+raced and then settled. A second into the run one lamp was lit and eleven
+supply terminals were carrying the picoamp of leakage the solver always has,
+so "full speed" was set to a picoamp, and the lit lamp was owed a billion
+dot-spacings of travel it then paid off at exactly one spacing a frame — which
+looks like nothing moving. Parts that carry nothing no longer get a vote on the
+speed, and a wire can never be owed more than a fraction of a second of motion.
+[#44](https://github.com/Agustin-Delgado/repath/pull/44)
+
 ## 16 September 2026 — Your own chips
 
 **Box up a piece of the drawing and use it as a part.** Select the stage you
