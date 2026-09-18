@@ -80,7 +80,7 @@ const MOTION_FLOOR = 0.002;
  * anybody watches move. A circuit whose signal really is a few picoamps is not
  * one being read off dots on a wire, and it still has the scope.
  */
-const CURRENT_FLOOR = 1e-9;
+export const CURRENT_FLOOR = 1e-9;
 
 /**
  * How long a burst goes on being drawn after it has passed, in seconds.
@@ -105,6 +105,17 @@ const LEVEL_FALL = 0.4;
  * shorter than a frame.
  */
 const SPREAD = 0.16;
+
+/**
+ * The most travel a wire can be owed, in spacings.
+ *
+ * A bucket with no ceiling turned one bad frame into a permanent one: a reference
+ * current that briefly landed on leakage put a billion spacings into it, and the
+ * wire spent the rest of the run paying that off at the cap, which is not motion
+ * (see `release` below). Ten spacings is more than any real burst hands over in
+ * a frame and drains in a fraction of a second.
+ */
+const MAX_OWED = 10 * DOT_SPACING;
 
 export interface AnimationState {
 	/** Accumulated travel per wire or device, in schematic units. */
@@ -172,14 +183,19 @@ export function advance(
 			return;
 		}
 
-		const owed = (state.pending.get(key) ?? 0) + (current / scale) * REFERENCE_SPEED * dt;
+		const owed = Math.max(
+			-MAX_OWED,
+			Math.min(MAX_OWED, (state.pending.get(key) ?? 0) + (current / scale) * REFERENCE_SPEED * dt)
+		);
 		// Paid out over a fraction of a second rather than all at once, and never
-		// more than a spacing in a single frame. A steady current fills and drains
-		// this at the same rate and comes out unchanged apart from a tenth of a
-		// second of lag; a burst comes out as a glide, which is the same travel
-		// spread over enough frames for an eye to follow it.
+		// more than half a spacing in a single frame: a whole spacing puts every
+		// dot where its neighbour was, which is no motion at all. A steady current
+		// fills and drains this at the same rate and comes out unchanged apart from
+		// a tenth of a second of lag; a burst comes out as a glide, which is the
+		// same travel spread over enough frames for an eye to follow it.
 		const drain = 1 - Math.exp(-dt / SPREAD);
-		let release = Math.max(-DOT_SPACING, Math.min(DOT_SPACING, owed * drain));
+		const most = DOT_SPACING / 2;
+		let release = Math.max(-most, Math.min(most, owed * drain));
 		// Crumbs left in the bucket would keep a wire that has stopped carrying
 		// anything twitching forever.
 		if (Math.abs(owed - release) < 0.005) release = owed;

@@ -23,6 +23,7 @@ import { levelAt } from '$lib/transitions';
 import { definitionOf, pointKey, wireSegments, type Point, type Schematic } from './model';
 import { DEFAULT_FAMILY, logicFamily, type LogicFamily } from './logic';
 import { SEGMENTS } from './led';
+import { CURRENT_FLOOR } from './animate';
 import type { Connectivity } from './nets';
 import type { NetNames } from './netlist';
 import type { PortInjection } from '../spice';
@@ -387,7 +388,12 @@ export function rescale(context: FlowContext, run: TransientRun, from: number, t
 			charge += magnitude * width;
 			elapsed += width;
 		}
-		if (elapsed > 0 && charge > 0) averages.push(charge / elapsed);
+		// A part that carries nothing does not get a vote. Eleven supply terminals
+		// feeding chips sit at the picoamp of gmin, and five resistors on lamps that
+		// are off sit at nothing at all; against the one lamp that was lit, the
+		// ninetieth percentile landed on a picoamp, and every dot on the drawing
+		// was owed a billion spacings of travel.
+		if (elapsed > 0 && charge / elapsed >= CURRENT_FLOOR) averages.push(charge / elapsed);
 	}
 	if (averages.length === 0) {
 		context.currentScale = 1;
