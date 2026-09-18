@@ -27,7 +27,7 @@ import {
 import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
 import { OPERABLE, wireSegments, type Point } from '../model';
-import { elbow, fallback, routeWire } from '../route';
+import { elbow, fallback, lastResort, routeWire } from '../route';
 import { groupLabelAt } from '../groups';
 import { blockOf } from '../model';
 import type { SchematicItem } from '../scene';
@@ -186,7 +186,12 @@ export function createSelectTool(): Tool {
 		// cannot make the committed shape differ from the previewed one.
 		const deadline = performance.now() + FRAME_ROUTING_MS;
 		return (from: Point, to: Point, settling: ReadonlySet<string>, prefer?: readonly Point[]) => {
-			if (performance.now() > deadline) return fallback(from, to, prefer);
+			if (performance.now() > deadline) {
+				return (
+					fallback(app.schematic, from, to, { grid: ctx.gridSize, prefer, ignoreWires: settling }) ??
+					lastResort(from, to)
+				);
+			}
 			return routeWire(app.schematic, from, to, {
 				grid: ctx.gridSize,
 				// What the wire looked like before this drag. Leaving it costs, which
@@ -266,7 +271,7 @@ export function createSelectTool(): Tool {
 					app.selection = [under.id];
 				}
 				if (app.selection.length === 0) return;
-				app.rotateSelection(routeDragged(ctx));
+				app.rotateSelection();
 				ctx.invalidate();
 				return;
 			}
@@ -484,16 +489,17 @@ export function createSelectTool(): Tool {
 			switch (event.key) {
 				case 'Delete':
 				case 'Backspace':
-					// Routed, so pulling a part out of a series chain closes the gap
-					// along a sensible path rather than a bare diagonal-free guess.
-					app.deleteSelection(routeDragged(ctx));
+					// One-off edits get the full router — no frame deadline, the whole
+					// cell budget. `routeDragged` is for the sixty routes a second of a
+					// drag; a rotation is one, and it was the frame budget running out
+					// on a long wire that used to hand a turned block an elbow through a
+					// row of pins.
+					app.deleteSelection();
 					ctx.invalidate();
 					return true;
 				case 'r':
 				case 'R':
-					// Rotation moves pins, so the wires plugged into them re-route
-					// through the same router a drag would use.
-					app.rotateSelection(routeDragged(ctx));
+					app.rotateSelection();
 					ctx.invalidate();
 					return true;
 				// Plain letters as well as Ctrl+G / Ctrl+Shift+G, because a graphics
@@ -513,15 +519,13 @@ export function createSelectTool(): Tool {
 					// first, since a block sitting in a group is a member before it
 					// is a box; with no group in the selection, a block is opened.
 					if (app.selectedInstances.some((i) => app.groupOf(i.id))) app.ungroupSelection();
-					else app.unboxSelection(routeDragged(ctx));
+					else app.unboxSelection();
 					ctx.invalidate();
 					return true;
 				case 'b':
 				case 'B':
 					if (event.ctrlKey || event.metaKey || event.altKey) return false;
-					// Routed: the wires that reached the parts are re-attached to the
-					// box, and land the same way a drag would land them.
-					app.boxSelection(routeDragged(ctx));
+					app.boxSelection();
 					ctx.invalidate();
 					return true;
 				case 'a':
@@ -550,7 +554,7 @@ export function createSelectTool(): Tool {
 					const step = ctx.gridSize * (event.shiftKey ? 5 : 1);
 					const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
 					const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
-					app.nudgeSelection(dx, dy, routeDragged(ctx));
+					app.nudgeSelection(dx, dy, app.router());
 					ctx.invalidate();
 					return true;
 				}

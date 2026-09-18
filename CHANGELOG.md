@@ -11,6 +11,26 @@ early entries point at those instead.
 
 ---
 
+## 18 September 2026 — Moving things never rewires them
+
+**Turning or dragging a part cannot join two nets any more.** Turning a boxed
+block used to send its wires straight through a chip's row of pins — eight nets
+became one, with nothing on the page to say so. The router now treats every pin
+and every corner of every other wire as a wall rather than a cost; if it cannot
+get there at all it draws one straight leg from pin to pin, which joins nothing
+and is plainly waiting to be tidied. What the router cannot prevent — a pin
+landing on a wire as a part turns, or grazing one as it is dragged past — is
+caught afterwards: what was joined to what is compared before and after, and a
+turn or a drop that would change it is put back with a notice saying what it
+would have joined. Dropping a pin onto another pin or a wire's end, the join the
+snap dot announced, goes through as before.
+[#45](https://github.com/Agustin-Delgado/repath/pull/45)
+
+**Deleting a probe takes its wire with it.** A wire that led only to the part
+that is gone goes too, back to the last junction still doing something, so a
+deletion never leaves a wire with an end in mid-air.
+[#45](https://github.com/Agustin-Delgado/repath/pull/45)
+
 ## 18 September 2026 — Dots that stood still
 
 **The current dots on a lamp no longer freeze for the rest of the run.** On a

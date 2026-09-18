@@ -49,6 +49,7 @@ import {
 	snap,
 	SUBCIRCUIT_PREFIX,
 	validateParam,
+	wireSegments,
 	type BlockDef,
 	type PartGroup,
 	type Instance,
@@ -69,7 +70,10 @@ import {
 	probePin,
 	remapProbes,
 	splitAtJunctions,
-	trimOverlaps
+	trimOverlaps,
+	unexpectedJoin,
+	liesWithin,
+	type Connectivity
 } from './schematic/nets';
 
 /**
@@ -173,6 +177,8 @@ export function valueAt(time: Float64Array, samples: Float64Array, t: number): n
 
 /** Everything a drag needs to recompute itself from scratch on each frame. */
 interface MoveOrigin {
+	/** What was joined to what before anything moved. */
+	joined: Connectivity;
 	instances: Map<string, Point>;
 	wires: Map<string, Point[]>;
 	/** Wires left in place, with the end indices riding along with the selection. */
@@ -868,11 +874,22 @@ class AppState {
 	 * three or more pins is left alone: there is no one right answer for which of
 	 * them should be joined to which.
 	 */
-	deleteSelection(route?: RouteBetween): void {
+	deleteSelection(route: RouteBetween = this.router()): void {
 		if (this.selection.length === 0) return;
 		this.trace.record({ op: 'delete', ...this.selectionRef() });
 		this.checkpoint();
 		const doomed = new Set(this.selection);
+
+		// Where the doomed parts' pins were: a wire that reached one of them has
+		// nothing to reach any more.
+		const vacated = new Set<string>();
+		for (const instance of this.schematic.instances) {
+			if (!doomed.has(instance.id)) continue;
+			for (const pin of definitionFor(instance).pins) {
+				const at = pinPosition(instance, pin);
+				vacated.add(pointKey(at.x, at.y));
+			}
+		}
 
 		const survivingWires = this.schematic.wires.filter((w) => !doomed.has(w.id));
 		const wireEnds = new Set<string>();
@@ -902,12 +919,57 @@ class AppState {
 			// Routed after the removal, so the path may run through where the
 			// component used to be — which is exactly where it should go.
 			const id = ids[index];
-			const path = simplifyPath(route ? route(a, b, healing) : elbow(a, b));
+			const path = simplifyPath(route(a, b, healing));
 			if (path.length >= 2) this.schematic.wires.push({ id, points: path });
 		});
 
+		this.dropDangling(vacated);
+
 		// Removing a component can leave two wires meeting at a bare point.
 		this.tidyWires();
+	}
+
+	/**
+	 * Remove the wires that lead to nothing, starting from where pins were.
+	 *
+	 * Deleting a probe took the probe and left the wire that reached it lying
+	 * on the drawing with one end in mid-air — which is exactly the wire the
+	 * editor refuses to draw in the first place. A wire whose end is at one of
+	 * `vacated` and touches nothing else there goes; the point it left at its
+	 * other end is then vacated too, so a chain of wires that existed only to
+	 * reach the part goes with it, back to the last pin or junction that is
+	 * still doing something.
+	 */
+	private dropDangling(vacated: Set<string>): void {
+		const pins = new Set<string>();
+		for (const instance of this.schematic.instances) {
+			for (const pin of definitionFor(instance).pins) {
+				const at = pinPosition(instance, pin);
+				pins.add(pointKey(at.x, at.y));
+			}
+		}
+		const pending = [...vacated];
+		while (pending.length > 0) {
+			const key = pending.pop()!;
+			if (pins.has(key)) continue;
+			const [x, y] = key.split(',').map(Number);
+			const here = { x, y };
+			const touching = this.schematic.wires.filter((w) =>
+				w.points.some((p) => p.x === x && p.y === y) ||
+				wireSegments(w).some((s) => liesWithin(x, y, s.a, s.b))
+			);
+			// One wire ends here and nothing else is here: it dangles.
+			if (touching.length !== 1) continue;
+			const [wire] = touching;
+			const first = wire.points[0];
+			const last = wire.points[wire.points.length - 1];
+			const atStart = first.x === here.x && first.y === here.y;
+			const atEnd = last.x === here.x && last.y === here.y;
+			if (!atStart && !atEnd) continue;
+			this.schematic.wires = this.schematic.wires.filter((w) => w.id !== wire.id);
+			const far = atStart ? last : first;
+			pending.push(pointKey(far.x, far.y));
+		}
 	}
 
 	/**
@@ -923,7 +985,7 @@ class AppState {
 	 * pin moves somewhere different, so the mapping is per pin rather than one
 	 * shared offset.
 	 */
-	rotateSelection(route?: RouteBetween): void {
+	rotateSelection(route: RouteBetween = this.router()): void {
 		if (this.selection.length === 0) return;
 		const chosen = new Set(this.selection);
 		const rotating = this.schematic.instances.filter((i) => chosen.has(i.id));
@@ -931,6 +993,8 @@ class AppState {
 		if (rotating.length === 0 && turning.length === 0) return;
 
 		this.trace.record({ op: 'rotate', ...this.selectionRef() });
+		const was = this.snapshot();
+		const wasJoined = buildConnectivity(this.schematic);
 		this.checkpoint();
 
 		// Snapped, so an odd-sized group still lands on the lattice.
@@ -954,9 +1018,28 @@ class AppState {
 				stationaryPins.add(pointKey(at.x, at.y));
 			}
 		}
+		const stationaryWires = this.schematic.wires.filter((w) => !chosen.has(w.id));
+		const wireEnds = new Set<string>();
+		for (const wire of stationaryWires) {
+			for (const index of [0, wire.points.length - 1]) {
+				wireEnds.add(pointKey(wire.points[index].x, wire.points[index].y));
+			}
+		}
+		// A pin joined to something by touching it alone — another pin, or a
+		// wire it sits on — with no wire of its own to carry along.
+		const bonded = (key: string, p: Point) =>
+			!wireEnds.has(key) &&
+			(stationaryPins.has(key) ||
+				stationaryWires.some(
+					(w) =>
+						w.points.some((q) => q.x === p.x && q.y === p.y) ||
+						wireSegments(w).some((s) => liesWithin(p.x, p.y, s.a, s.b))
+				));
 
 		// Where each pin was, and where it is about to be.
 		const moved = new Map<string, Point>();
+		// Joints that were made by touching become wires, as they do in a drag.
+		const bonds: Array<{ from: Point; to: Point }> = [];
 		for (const instance of rotating) {
 			const before = definitionFor(instance).pins.map((pin) => pinPosition(instance, pin));
 			const at = orbit({ x: instance.x, y: instance.y });
@@ -966,6 +1049,7 @@ class AppState {
 			const after = definitionFor(instance).pins.map((pin) => pinPosition(instance, pin));
 			before.forEach((from, index) => {
 				const key = pointKey(from.x, from.y);
+				if (bonded(key, from)) bonds.push({ from, to: after[index] });
 				// A point also held by something stationary keeps its wire.
 				if (!stationaryPins.has(key)) moved.set(key, after[index]);
 			});
@@ -992,9 +1076,44 @@ class AppState {
 			if (changed) pending.push({ wire, from: points[0], to: points[points.length - 1] });
 		}
 
+		for (const bond of bonds) {
+			const wire: Wire = { id: freshId(), points: [bond.from, bond.to] };
+			this.schematic.wires.push(wire);
+			pending.push({ wire, from: bond.from, to: bond.to });
+		}
+
+		// Routed one at a time, each against the ones already settled: routed all
+		// against a page where the others are still in mid-air, two of them could
+		// be drawn down the same column.
 		const settling = new Set([...turning.map((w) => w.id), ...pending.map((p) => p.wire.id)]);
 		for (const { wire, from, to } of pending) {
-			wire.points = route ? simplifyPath(route(from, to, settling)) : simplifyPath(elbow(from, to));
+			wire.points = simplifyPath(route(from, to, settling, wire.points));
+			settling.delete(wire.id);
+		}
+
+		// Turning a part must not change what is joined to what. The router keeps
+		// its wires clear of everything, but a pin can still come down on a wire
+		// or on another pin, and that is a connection nobody asked for. Checked
+		// rather than trusted, and undone rather than warned about.
+		const rerouted = new Set(pending.map((p) => p.wire.id));
+		const stable = new Set<string>();
+		for (const wire of this.schematic.wires) {
+			if (chosen.has(wire.id) || rerouted.has(wire.id)) continue;
+			for (const p of wire.points) stable.add(pointKey(p.x, p.y));
+		}
+		const joined = unexpectedJoin(wasJoined, buildConnectivity(this.schematic), new Set(), stable);
+		const same = pinPartition(wasJoined) === pinPartition(buildConnectivity(this.schematic));
+		if (joined || !same) {
+			this.schematic = adopt(JSON.parse(was.document) as Schematic);
+			if (this.past[this.past.length - 1]?.document === was.document) {
+				const dropped = this.past.pop();
+				if (dropped) this.historyBytes -= dropped.document.length;
+			}
+			const names = rotating.map((i) => i.name).join(', ');
+			this.notice = joined
+				? `Turning ${names} would put ${joined[0]} on the same net as ${joined[1]}. Move it clear first.`
+				: `Turning ${names} would change what is connected. Move it clear first.`;
+			return;
 		}
 
 		this.tidyWires();
@@ -1071,14 +1190,25 @@ class AppState {
 				wireEnds.add(pointKey(wire.points[index].x, wire.points[index].y));
 			}
 		}
+		// And a pin resting on a wire without a wire end of its own there — a part
+		// that was dropped onto a rail — is joined by touching just the same.
+		const stationaryWires = this.schematic.wires.filter((w) => !chosen.has(w.id));
+		const restingOnWire = (x: number, y: number) =>
+			stationaryWires.some(
+				(w) =>
+					w.points.some((q) => q.x === x && q.y === y) ||
+					wireSegments(w).some((s) => liesWithin(x, y, s.a, s.b))
+			);
 		const bonds: Bond[] = [];
 		for (const key of movingPins) {
-			if (!stationaryPins.has(key) || wireEnds.has(key)) continue;
+			if (wireEnds.has(key)) continue;
 			const [x, y] = key.split(',').map(Number);
+			if (!stationaryPins.has(key) && !restingOnWire(x, y)) continue;
 			bonds.push({ at: { x, y }, wireId: freshId() });
 		}
 
 		this.moveOrigin = {
+			joined: buildConnectivity(this.schematic),
 			instances: new Map(
 				this.schematic.instances
 					.filter((i) => chosen.has(i.id))
@@ -1327,24 +1457,67 @@ class AppState {
 		this.endMove();
 	}
 
-	/** Release the snapshot. The geometry is already final. */
+	/**
+	 * Release the snapshot. The geometry is already final.
+	 *
+	 * Unless it joined something nobody asked it to. A pin dropped onto another
+	 * pin or a wire's end is a join the snap dot announced; a wire's corner
+	 * coming down on a rail, or a pin grazing a wire on the way past, is a
+	 * circuit nobody drew. Measured over random drags the graze is common —
+	 * which is the reason to refuse it, not to allow it: the drawing looks the
+	 * same and the answer is for a different circuit. Everything goes back
+	 * where it was, and the notice says what it would have joined.
+	 */
 	endMove(): void {
+		const origin = this.moveOrigin;
+		if (this.dragStarted && origin) {
+			const allowed = new Set<string>();
+			const stationary = new Set<string>();
+			const stable = new Set<string>();
+			for (const instance of this.schematic.instances) {
+				if (origin.instances.has(instance.id)) continue;
+				for (const pin of definitionFor(instance).pins) {
+					const at = pinPosition(instance, pin);
+					stationary.add(pointKey(at.x, at.y));
+				}
+			}
+			const bonded = new Set(origin.bonds.map((b) => b.wireId));
+			for (const wire of this.schematic.wires) {
+				if (origin.wires.has(wire.id) || bonded.has(wire.id)) continue;
+				for (const p of wire.points) {
+					stationary.add(pointKey(p.x, p.y));
+					stable.add(pointKey(p.x, p.y));
+				}
+			}
+			for (const instance of this.schematic.instances) {
+				if (!origin.instances.has(instance.id)) continue;
+				for (const pin of definitionFor(instance).pins) {
+					const at = pinPosition(instance, pin);
+					const key = pointKey(at.x, at.y);
+					if (stationary.has(key)) allowed.add(key);
+				}
+			}
+			const joined = unexpectedJoin(
+				origin.joined,
+				buildConnectivity(this.schematic),
+				allowed,
+				stable
+			);
+			if (joined) {
+				this.cancelMove();
+				this.notice = `That would put ${joined[0]} on the same net as ${joined[1]}, so nothing moved. Drop it somewhere clear.`;
+				return;
+			}
+		}
 		const changed = this.dragStarted;
 		if (changed && this.gesture) this.trace.record(this.gesture);
 		if (changed && this.moveOrigin) this.leaveGroups(this.moveOrigin.instances);
 		this.gesture = null;
 		this.moveOrigin = null;
 		this.dragStarted = false;
-		// Deliberately *not* opening wires for what was dragged, though dropping a
-		// part onto one means the same thing as placing it there. Measured over a
-		// thousand random drags it tripled the number that came apart: a part
-		// shuffled a few units often ends with a pin grazing some unrelated wire,
-		// and cutting that wire rewires a circuit nobody asked to rewire. Placing
-		// is unambiguous — you chose that spot for a part that was not there before
-		// — and a drag is not. The short-circuit warning covers what is left.
-		//
-		// Merging only ever removes a joint, never moves a point, so nothing on
-		// screen shifts when this runs.
+		// A pin grazing an unrelated wire never gets this far: the check above
+		// refused the drop. What is left to tidy is joints — merging only ever
+		// removes one, never moves a point, so nothing on screen shifts here.
 		if (changed) this.tidyWires();
 	}
 
@@ -1701,15 +1874,13 @@ class AppState {
 	}
 
 	/**
-	 * A router for the edits that have no gesture behind them — a button in
-	 * the inspector, a replayed step. The tools route through the same
-	 * function with a frame deadline on it; here there is no frame to keep.
-	 *
-	 * Not the plain elbow the other button-driven edits fall back on: a wire
-	 * moved from a part to a box's pin has to get *around* the box, and an
-	 * elbow drawn straight through it lands on the pin on the far side.
+	 * The router for every edit that is not a drag: a key, a button in the
+	 * inspector, a replayed step. A drag routes sixty times a second and keeps
+	 * a frame deadline; a one-off edit has no frame to keep, and gets the whole
+	 * cell budget. It was a drag's deadline running out on a long wire that
+	 * used to hand a turned block an elbow through a row of pins.
 	 */
-	private router(): RouteBetween {
+	router(): RouteBetween {
 		return (from, to, settling, prefer) =>
 			routeWire(this.schematic, from, to, { grid: GRID, ignoreWires: settling, prefer });
 	}
