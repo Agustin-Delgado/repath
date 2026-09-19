@@ -73,6 +73,8 @@ export type Step =
 	| { op: 'unbox'; parts: string[] }
 	| { op: 'reblock'; from: string; to: string }
 	| { op: 'port'; block: string; from: string; to: string }
+	| { op: 'portmove'; block: string; port: string; by: 'up' | 'down' }
+	| { op: 'portside'; block: string; port: string; side: 'left' | 'right' }
 	| { op: 'enter'; name: string }
 	| { op: 'leave' }
 	| { op: 'undo' }
@@ -191,6 +193,10 @@ function format(step: Step): string {
 			return `reblock ${step.from} -> ${step.to}`;
 		case 'port':
 			return `port ${step.from} ${step.to} ${step.block}`;
+		case 'portmove':
+			return `portmove ${step.port} ${step.by} ${step.block}`;
+		case 'portside':
+			return `portside ${step.port} ${step.side} ${step.block}`;
 		case 'enter':
 			return `enter ${step.name}`;
 		case 'leave':
@@ -310,6 +316,20 @@ function read(op: string, rest: string[]): Step {
 		}
 		case 'port':
 			return { op, from: rest[0], to: rest[1], block: rest.slice(2).join(' ') };
+		case 'portmove':
+			return {
+				op,
+				port: rest[0],
+				by: rest[1] === 'up' ? 'up' : 'down',
+				block: rest.slice(2).join(' ')
+			};
+		case 'portside':
+			return {
+				op,
+				port: rest[0],
+				side: rest[1] === 'left' ? 'left' : 'right',
+				block: rest.slice(2).join(' ')
+			};
 		case 'enter':
 			return { op, name: rest.join(' ') };
 		case 'leave':

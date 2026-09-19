@@ -399,22 +399,52 @@
 				<h3>Ports</h3>
 				<div class="ports">
 					{#each blockPorts(boxed.block) as port (port.instance)}
-						<label>
-							<span class="field-label">{port.side === 'left' ? 'in' : 'out'}</span>
-							<input
-								class="text"
-								class:rejected={problems[`port:${port.name}`]}
-								value={port.name}
-								onchange={(e) => commitPortName(port.name, e.currentTarget.value, e.currentTarget)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter') e.currentTarget.blur();
-								}}
-								aria-label="Port {port.name}"
-							/>
-							{#if problems[`port:${port.name}`]}
-								<span class="problem" role="alert">{problems[`port:${port.name}`]}</span>
-							{/if}
-						</label>
+						<div class="port">
+							<label>
+								<span class="field-label">{port.side === 'left' ? 'in' : 'out'}</span>
+								<input
+									class="text"
+									class:rejected={problems[`port:${port.name}`]}
+									value={port.name}
+									onchange={(e) => commitPortName(port.name, e.currentTarget.value, e.currentTarget)}
+									onkeydown={(e) => {
+										if (e.key === 'Enter') e.currentTarget.blur();
+									}}
+									aria-label="Port {port.name}"
+								/>
+								{#if problems[`port:${port.name}`]}
+									<span class="problem" role="alert">{problems[`port:${port.name}`]}</span>
+								{/if}
+							</label>
+							<!-- Where the pin goes on the box: a step up or down its column,
+							     or across to the other side. -->
+							<div class="port-tools">
+								<button
+									type="button"
+									title="Move {port.name} up"
+									aria-label="Move {port.name} up"
+									onclick={() => app.movePort(boxed.block.id, port.name, 'up')}>↑</button
+								>
+								<button
+									type="button"
+									title="Move {port.name} down"
+									aria-label="Move {port.name} down"
+									onclick={() => app.movePort(boxed.block.id, port.name, 'down')}>↓</button
+								>
+								<button
+									type="button"
+									title={port.side === 'left'
+										? `Put ${port.name} on the right, as an output`
+										: `Put ${port.name} on the left, as an input`}
+									aria-label={port.side === 'left'
+										? `Put ${port.name} on the right`
+										: `Put ${port.name} on the left`}
+									onclick={() =>
+										app.setPortSide(boxed.block.id, port.name, port.side === 'left' ? 'right' : 'left')}
+									>{port.side === 'left' ? '→' : '←'}</button
+								>
+							</div>
+						</div>
 					{/each}
 				</div>
 				<p class="hint">
@@ -821,8 +851,37 @@
 		gap: 0.35rem 0.5rem;
 	}
 
+	.ports .port {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		min-width: 0;
+	}
+
 	.ports label {
 		min-width: 0;
+	}
+
+	.port-tools {
+		display: flex;
+		gap: 0.2rem;
+	}
+
+	.port-tools button {
+		flex: 1;
+		padding: 0.1rem 0;
+		font-size: 0.72rem;
+		line-height: 1.2;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		background: var(--control-bg);
+		color: var(--label-dim);
+		cursor: pointer;
+	}
+
+	.port-tools button:hover {
+		background: var(--hover);
+		color: var(--text);
 	}
 
 	.ports input {
