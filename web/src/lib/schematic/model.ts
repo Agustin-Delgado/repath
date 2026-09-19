@@ -1550,8 +1550,51 @@ export const BLOCK_PREFIX = 'b:';
 const BLOCK_CHAR = 5;
 /** The same for the block's own name along the bottom, which is set a size larger. */
 const BLOCK_NAME_CHAR = 6;
-/** Space under the lowest port for the block's name. */
+/** Space under the lowest port for each line of the block's name. */
 const BLOCK_NAME_ROOM = 20;
+/** The most of a name that goes on one line along the bottom of the box. */
+export const BLOCK_NAME_WIDTH = 20;
+/** Lines a name may take up before the rest is folded into an ellipsis. */
+export const BLOCK_NAME_LINES = 3;
+/**
+ * The most a port name can be. A pin name is printed inside the edge, on the
+ * pin's own line, where there is no room to wrap it.
+ */
+export const BLOCK_PORT_WIDTH = 20;
+
+/** A name cut to fit a width, with an ellipsis where the rest was. */
+export function clippedName(name: string, width: number): string {
+	return name.length > width ? `${name.slice(0, width - 1)}…` : name;
+}
+
+/**
+ * A block's name as the lines it is printed on: wrapped at the spaces, a
+ * word longer than a line cut where the line ends, and no more lines than
+ * the box makes room for. However long the name, the box stops growing here;
+ * the whole of it is still there to read where the block is listed.
+ */
+export function blockNameLines(name: string): string[] {
+	const lines: string[] = [];
+	let line = '';
+	const flush = () => {
+		if (line) lines.push(line);
+		line = '';
+	};
+	for (let word of name.trim().split(/\s+/).filter(Boolean)) {
+		while (word.length > BLOCK_NAME_WIDTH) {
+			flush();
+			lines.push(word.slice(0, BLOCK_NAME_WIDTH));
+			word = word.slice(BLOCK_NAME_WIDTH);
+		}
+		if (line && line.length + 1 + word.length > BLOCK_NAME_WIDTH) flush();
+		line = line ? `${line} ${word}` : word;
+	}
+	flush();
+	if (lines.length <= BLOCK_NAME_LINES) return lines;
+	const kept = lines.slice(0, BLOCK_NAME_LINES);
+	kept[BLOCK_NAME_LINES - 1] = clippedName(`${kept[BLOCK_NAME_LINES - 1]}…`, BLOCK_NAME_WIDTH);
+	return kept;
+}
 
 /** The ports on one side, top to bottom. */
 export function blockSide(ports: readonly BlockPort[], side: 'left' | 'right'): BlockPort[] {
@@ -1565,13 +1608,16 @@ export function blockSide(ports: readonly BlockPort[], side: 'left' | 'right'): 
  */
 export function blockHalfWidth(ports: readonly BlockPort[], name = ''): number {
 	const longest = (side: 'left' | 'right') =>
-		Math.max(0, ...blockSide(ports, side).map((port) => port.name.length));
+		Math.max(
+			0,
+			...blockSide(ports, side).map((port) => Math.min(port.name.length, BLOCK_PORT_WIDTH))
+		);
 	// Wide enough for the two port names to meet in the middle with a gap, and
-	// for the block's own name along the bottom: "Frequency Divisor" on a box
-	// sized for CLK and OUT ran past both edges.
+	// for the longest line of the block's own name along the bottom:
+	// "Frequency Divisor" on a box sized for CLK and OUT ran past both edges.
 	const wanted = Math.max(
 		(longest('left') + longest('right')) * BLOCK_CHAR + 16,
-		name.length * BLOCK_NAME_CHAR + 12
+		Math.max(0, ...blockNameLines(name).map((line) => line.length)) * BLOCK_NAME_CHAR + 12
 	);
 	let half = SUB_HALF_WIDTH;
 	while (half * 2 < wanted) half += GRID;
@@ -1579,9 +1625,14 @@ export function blockHalfWidth(ports: readonly BlockPort[], name = ''): number {
 }
 
 /** Half the height of the body: the longer column of ports, plus the name. */
-export function blockReach(ports: readonly BlockPort[]): number {
+export function blockReach(ports: readonly BlockPort[], name = ''): number {
 	const rows = Math.max(blockSide(ports, 'left').length, blockSide(ports, 'right').length, 1);
-	return Math.max(22, ((rows - 1) * SUB_PITCH) / 2 + 12 + BLOCK_NAME_ROOM / 2);
+	return Math.max(22, ((rows - 1) * SUB_PITCH) / 2 + 12 + blockNameRoom(name) / 2);
+}
+
+/** The height under the ports that a name takes up, on as many lines as it needs. */
+function blockNameRoom(name: string): number {
+	return BLOCK_NAME_ROOM * Math.max(1, blockNameLines(name).length);
 }
 
 /**
@@ -1590,14 +1641,15 @@ export function blockReach(ports: readonly BlockPort[]): number {
  * so is answered next to it rather than here.
  */
 export function blockDefinition(block: BlockDef, ports: readonly BlockPort[]): ComponentDef {
-	const half = blockReach(ports);
+	const half = blockReach(ports, block.name);
 	const hw = blockHalfWidth(ports, block.name);
 	const x = hw + SUB_LEAD;
 	const left = blockSide(ports, 'left');
 	const right = blockSide(ports, 'right');
 	// The name sits under the ports, so the columns are shifted up to leave it
-	// room without the box growing on both ends.
-	const lift = BLOCK_NAME_ROOM / 2;
+	// room without the box growing on both ends. A whole line at a time, so
+	// the pins stay on the grid.
+	const lift = blockNameRoom(block.name) / 2;
 	const pin = (port: BlockPort, px: number, py: number): PinDef => ({
 		name: port.name,
 		x: px,

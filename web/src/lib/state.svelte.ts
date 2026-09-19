@@ -38,6 +38,7 @@ import {
 	type SymbolStandard
 } from './schematic/symbols';
 import {
+	BLOCK_PORT_WIDTH,
 	BLOCK_PREFIX,
 	blockOf,
 	GRID,
@@ -246,6 +247,8 @@ const HISTORY_BYTES = 8 * 1024 * 1024;
 const DEFAULT_STOP_TIME = 5e-3;
 
 const STANDARD_KEY = 'repath.symbols';
+/** Why a port name that would not fit inside the box's edge is refused. */
+const PORT_TOO_LONG = `A port name is at most ${BLOCK_PORT_WIDTH} characters.`;
 
 /** The standard chosen last time, if the browser kept it. */
 function rememberedStandard(): SymbolStandard {
@@ -1639,8 +1642,10 @@ class AppState {
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return null;
 		if (!trimmed) return 'A component needs a name.';
-		// A port's name is a pin name on the box, and pin names are one word.
+		// A port's name is a pin name on the box, and pin names are one word
+		// that fits inside its edge.
 		if (instance.kind === 'port' && /\s/.test(trimmed)) return 'A port name cannot have spaces in it.';
+		if (instance.kind === 'port' && trimmed.length > BLOCK_PORT_WIDTH) return PORT_TOO_LONG;
 		if (this.schematic.instances.some((i) => i.id !== id && i.name === trimmed)) {
 			return `${trimmed} is already taken.`;
 		}
@@ -2220,6 +2225,7 @@ class AppState {
 		if (!block || !entry) return null;
 		if (!trimmed) return 'A port needs a name.';
 		if (/\s/.test(trimmed)) return 'A port name cannot have spaces in it.';
+		if (trimmed.length > BLOCK_PORT_WIDTH) return PORT_TOO_LONG;
 		if (entry.name === trimmed) return null;
 		if (block.instances.some((i) => i.name === trimmed)) {
 			return `${block.name} already has something called ${trimmed}.`;

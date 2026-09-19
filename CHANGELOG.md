@@ -11,6 +11,17 @@ early entries point at those instead.
 
 ---
 
+## 19 September 2026 — The box stops growing
+
+**A long name goes on more lines, and the box has a widest.** A box grew as
+wide as whatever it was called, so a block with a sentence for a name was a
+box the width of the sheet with its pins a long way from anything. The name
+now wraps at twenty characters, on up to three lines under the ports, with an
+ellipsis where a longer one is cut short; the whole name is still in the
+parts list. A port name is at most twenty characters, since it is printed on
+the pin's own line where there is no room to wrap it.
+[#48](https://github.com/Agustin-Delgado/repath/pull/48)
+
 ## 19 September 2026 — Old drawings meet the wider box
 
 **A drawing saved before the box grew opens with its wires on the pins.** The

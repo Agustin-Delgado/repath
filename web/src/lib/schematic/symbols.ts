@@ -13,6 +13,9 @@
 
 import {
 	BLOCK_PREFIX,
+	BLOCK_PORT_WIDTH,
+	blockNameLines,
+	clippedName,
 	definitionOf,
 	gateInputCount,
 	gatePins,
@@ -59,6 +62,8 @@ const path = (d: string, fill = false): Shape => ({ kind: 'path', d, fill });
 /** The gates drawn from their input count rather than from a fixed shape. */
 const GATES = new Set(['and', 'nand', 'or', 'nor', 'xor', 'xnor']);
 
+/** From one line of a block's name to the next, for the size it is set in. */
+const BLOCK_NAME_LINE = 11;
 /** Lead length on a generated block, matching what the catalog places its pins at. */
 const LEAD = 16;
 
@@ -677,15 +682,20 @@ function block(kind: string, named = false): SymbolGeometry {
 		labels.push({
 			x: (onLeft ? bodyX : bodyX + bodyW) + (onLeft ? 5 : -5),
 			y: pin.y,
-			text: pin.name,
+			text: clippedName(pin.name, BLOCK_PORT_WIDTH),
 			anchor: onLeft ? 'start' : 'end',
 			size: 8
 		});
 	}
 	// A boxed-up circuit is known by the name it was given, which is the one
-	// thing that says what is inside. Along the bottom edge, under the ports.
+	// thing that says what is inside. Along the bottom edge, under the ports,
+	// on as many lines as the box made room for.
 	if (named) {
-		labels.push({ x: 0, y: y + h - 7, text: def.label, size: 9, anchor: 'middle', fine: true });
+		const lines = blockNameLines(def.label);
+		lines.forEach((text, i) => {
+			const baseline = y + h - 7 - (lines.length - 1 - i) * BLOCK_NAME_LINE;
+			labels.push({ x: 0, y: baseline, text, size: 9, anchor: 'middle', fine: true });
+		});
 	}
 	return { shapes, labels, extent: { x: Math.max(DEFAULT_EXTENT, -x), y: Math.max(DEFAULT_EXTENT, -y) } };
 }
