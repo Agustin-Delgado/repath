@@ -11,6 +11,15 @@ early entries point at those instead.
 
 ---
 
+## 19 September 2026 — A box that fits its name
+
+**A block's box grows to fit its name, and its port names stay inside when it
+is turned.** "Frequency Divisor" on a box sized for CLK and OUT ran past both
+edges, and once the box was turned round the port names ran out through the
+edges too — the text stays upright, and its anchor had not turned with it.
+The inspector's port list also no longer runs off the side of the panel.
+[#46](https://github.com/Agustin-Delgado/repath/pull/46)
+
 ## 18 September 2026 — Moving things never rewires them
 
 **Turning or dragging a part cannot join two nets any more.** Turning a boxed

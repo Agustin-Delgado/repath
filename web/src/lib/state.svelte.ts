@@ -2130,9 +2130,44 @@ class AppState {
 		}
 		this.trace.record({ op: 'reblock', from: block.name, to: trimmed });
 		this.checkpoint();
-		block.name = trimmed;
-		registerBlocks(this.schematic);
+		// The box is as wide as its name, so the pins can step outward.
+		this.reshapeBlock(id, () => {
+			block.name = trimmed;
+		});
 		return null;
+	}
+
+	/**
+	 * Apply a change to a block's definition that can move the pins on its
+	 * placed copies — a longer name, a longer port name — and take their wires
+	 * along. Where each pin was is noted first; `rename` maps a pin's name
+	 * afterwards to its name before, for a change that is the name itself.
+	 */
+	private reshapeBlock(
+		id: string,
+		change: () => void,
+		rename: (after: string) => string = (name) => name
+	): void {
+		const kind = BLOCK_PREFIX + id;
+		const copies = this.schematic.instances.filter((i) => i.kind === kind);
+		const before = new Map<string, Point>();
+		for (const placed of copies) {
+			for (const pin of definitionFor(placed).pins) {
+				before.set(`${placed.id}:${pin.name}`, pinPosition(placed, pin));
+			}
+		}
+		change();
+		registerBlocks(this.schematic);
+		const moved = new Map<string, Point>();
+		for (const placed of copies) {
+			for (const pin of definitionFor(placed).pins) {
+				const was = before.get(`${placed.id}:${rename(pin.name)}`);
+				const now = pinPosition(placed, pin);
+				if (was && (was.x !== now.x || was.y !== now.y)) moved.set(pointKey(was.x, was.y), now);
+			}
+		}
+		this.rewire(moved, this.router());
+		if (moved.size > 0) this.tidyWires();
 	}
 
 	/**
@@ -2153,29 +2188,16 @@ class AppState {
 		}
 		this.trace.record({ op: 'port', block: block.name, from: port, to: trimmed });
 		this.checkpoint();
-		// The box is as wide as its longest names, so a longer name can push
-		// every pin a step outward. Where each pin was is noted first, and the
-		// wires on the ones that moved follow them.
 		const kind = BLOCK_PREFIX + id;
-		const copies = this.schematic.instances.filter((i) => i.kind === kind);
-		const before = new Map<string, Point>();
-		for (const placed of copies) {
-			for (const pin of definitionFor(placed).pins) {
-				before.set(`${placed.id}:${pin.name}`, pinPosition(placed, pin));
-			}
-		}
-		entry.name = trimmed;
-		registerBlocks(this.schematic);
-		const moved = new Map<string, Point>();
-		for (const placed of copies) {
-			for (const pin of definitionFor(placed).pins) {
-				const was = before.get(`${placed.id}:${pin.name === trimmed ? port : pin.name}`);
-				const now = pinPosition(placed, pin);
-				if (was && (was.x !== now.x || was.y !== now.y)) moved.set(pointKey(was.x, was.y), now);
-			}
-		}
-		this.rewire(moved, this.router());
-		if (moved.size > 0) this.tidyWires();
+		// The box is as wide as its longest names, so a longer name can push
+		// every pin a step outward.
+		this.reshapeBlock(
+			id,
+			() => {
+				entry.name = trimmed;
+			},
+			(name) => (name === trimmed ? port : name)
+		);
 		// A probe on the pin is a probe on the port, and follows the name.
 		this.probes = this.probes.map((handle) => {
 			const owner = this.schematic.instances.find((i) => handle === probePin(i.id, port));
