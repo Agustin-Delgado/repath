@@ -26,7 +26,9 @@ import { groupFrame, outside } from './schematic/groups';
 import {
 	blockInUse,
 	blockPorts,
+	flatConnectivity,
 	interior,
+	joinedByBoxing,
 	outgrownPins,
 	planBlock,
 	registerBlocks
@@ -1847,6 +1849,8 @@ class AppState {
 			this.selectedGroup?.name ?? nextBlockName(this.schematic.blocks ?? [])
 		);
 		this.trace.record({ op: 'box', parts: members.map((i) => i.name), name });
+		const was = this.snapshot();
+		const wasJoined = flatConnectivity(this.schematic);
 		this.checkpoint();
 
 		const block: BlockDef = {
@@ -1878,6 +1882,10 @@ class AppState {
 		const pinAt = new Map(
 			definitionFor(placed).pins.map((pin) => [pin.name, pinPosition(placed, pin)] as const)
 		);
+		// One at a time, each routed around the ones already settled: routed
+		// all against a page where the others were still in mid-air, the wires
+		// to a column of pins came down the same column, each with a corner
+		// on the last, and every input of the box was one net.
 		const settling = new Set(plan.reattach.map(({ wire }) => wire.id));
 		for (const { wire, end, port } of plan.reattach) {
 			const target = pinAt.get(port);
@@ -1888,10 +1896,37 @@ class AppState {
 			const start = end === 0 ? target : from[0];
 			const finish = end === 0 ? from[last] : target;
 			live.points = simplifyPath(route(start, finish, settling, from));
+			settling.delete(wire.id);
 		}
+
+		// Boxing must not change what is joined to what: the box is the parts,
+		// seen from outside. Checked rather than trusted, and undone rather
+		// than warned about. The parts inside kept their ids under the box's.
+		const prefix = `${placed.id}/`;
+		const joined = joinedByBoxing(wasJoined, this.schematic, (id) =>
+			id === placed.id ? null : id.startsWith(prefix) ? id.slice(prefix.length) : id
+		);
+		if (this.refuseJoin(joined, was, 'Boxing these up')) return null;
 		this.tidyWires();
 		this.selection = [placed.id];
 		return block;
+	}
+
+	/**
+	 * Put the drawing back as it was before an edit that would have joined
+	 * `joined[0]` to `joined[1]`, at no cost in undo steps, and say so.
+	 * Returns whether it did.
+	 */
+	private refuseJoin(joined: [string, string] | null, was: HistoryEntry, what: string): boolean {
+		if (!joined) return false;
+		this.schematic = adopt(JSON.parse(was.document) as Schematic);
+		registerBlocks(this.schematic);
+		if (this.past[this.past.length - 1]?.document === was.document) {
+			const dropped = this.past.pop();
+			if (dropped) this.historyBytes -= dropped.document.length;
+		}
+		this.notice = `${what} would put ${joined[0]} on the same net as ${joined[1]}. Move them clear first.`;
+		return true;
 	}
 
 	/**
@@ -1920,18 +1955,38 @@ class AppState {
 		const boxes = this.selectedInstances.filter((i) => blockOf(this.schematic, i.kind));
 		if (boxes.length === 0) return;
 		this.trace.record({ op: 'unbox', parts: boxes.map((i) => i.name) });
+		const was = this.snapshot();
+		const wasJoined = flatConnectivity(this.schematic);
 		this.checkpoint();
 		const opened: string[] = [];
+		// Each part that comes out, by its new id, under the id it had inside
+		// the box as the engine saw it.
+		const wasCalled = new Map<string, string>();
 		for (const placed of boxes) {
 			const block = blockOf(this.schematic, placed.kind);
 			if (!block) continue;
-			opened.push(...this.open(placed, block, route));
+			opened.push(...this.open(placed, block, route, wasCalled));
 		}
+		// Opening a box must not change what is joined to what either.
+		const joined = joinedByBoxing(wasJoined, this.schematic, (id) => {
+			for (const [now, before] of wasCalled) {
+				if (id === now) return before;
+				if (id.startsWith(`${now}/`)) return `${before}/${id.slice(now.length + 1)}`;
+			}
+			return id;
+		});
+		const what = boxes.length === 1 ? 'Opening the box up' : 'Opening the boxes up';
+		if (this.refuseJoin(joined, was, what)) return;
 		this.tidyWires();
 		this.selection = this.withGroups(opened);
 	}
 
-	private open(placed: Instance, block: BlockDef, route: RouteBetween): string[] {
+	private open(
+		placed: Instance,
+		block: BlockDef,
+		route: RouteBetween,
+		wasCalled: Map<string, string>
+	): string[] {
 		const turn = (p: Point): Point => {
 			const r = rotatePoint(p.x, p.y, placed.rotation);
 			return { x: placed.x + r.x, y: placed.y + r.y };
@@ -1957,6 +2012,7 @@ class AppState {
 			};
 			existing.push(copy);
 			fresh.set(inner.id, copy);
+			wasCalled.set(copy.id, `${placed.id}/${inner.id}`);
 		}
 		const wires: Wire[] = block.wires.map((w) => ({ id: freshId(), points: w.points.map(turn) }));
 
@@ -1971,9 +2027,28 @@ class AppState {
 			moved.set(pointKey(was.x, was.y), turn(inner));
 		}
 
+		// While the parts were boxed up, the wires round the box were drawn
+		// across the space they come back to, and a pin coming down on one
+		// of those would join it. Those wires are routed again, between the
+		// ends they have, with the parts back in their way.
+		const landing = [...fresh.values()].flatMap((copy) =>
+			definitionFor(copy).pins.map((pin) => pinPosition(copy, pin))
+		);
+		const under = new Set(
+			this.schematic.wires
+				.filter((w) =>
+					wireSegments(w).some((s) => landing.some((p) => liesWithin(p.x, p.y, s.a, s.b)))
+				)
+				.map((w) => w.id)
+		);
+
 		this.schematic.instances = [...existing];
 		this.schematic.wires = [...this.schematic.wires, ...wires];
-		this.rewire(moved, route);
+		// The inside wires come back as they were drawn. One of them can end
+		// exactly where a pin of the box stood — the box sat where the parts
+		// were — and that is not a wire that was plugged into the box.
+		const inside = new Set(wires.map((w) => w.id));
+		this.rewire(moved, route, this.schematic, { also: under, keep: inside });
 
 		// Back as one group under the block's name, so boxing them up again
 		// is one keystroke. Groups drawn inside the block are not kept apart:
@@ -2009,16 +2084,20 @@ class AppState {
 	/**
 	 * Every wire with an end at one of `moved`'s keys is re-routed to the
 	 * point that key maps to, keeping its shape where it can. How a pin that
-	 * moved keeps what was plugged into it.
+	 * moved keeps what was plugged into it. The wires in `also` are re-routed
+	 * between the ends they have, for when what moved is under them; the
+	 * wires in `keep` are never re-routed, whatever their ends sit on.
 	 */
 	private rewire(
 		moved: ReadonlyMap<string, Point>,
 		route: RouteBetween,
-		within: Schematic = this.schematic
+		within: Schematic = this.schematic,
+		{ also, keep }: { also?: ReadonlySet<string>; keep?: ReadonlySet<string> } = {}
 	): void {
-		if (moved.size === 0) return;
-		const settling = new Set<string>();
+		if (moved.size === 0 && !also?.size) return;
+		const settling = new Set<string>(also);
 		for (const wire of within.wires) {
+			if (keep?.has(wire.id)) continue;
 			const last = wire.points.length - 1;
 			for (const end of [0, last]) {
 				if (moved.has(pointKey(wire.points[end].x, wire.points[end].y))) settling.add(wire.id);
