@@ -11,6 +11,17 @@ early entries point at those instead.
 
 ---
 
+## 19 September 2026 — Arrange the pins on a box
+
+**A block's pins can be moved from the inspector.** Under each port of a
+selected block there are now three buttons: up and down move the pin a step
+along its side of the box, and the arrow puts it on the other side (which
+is what makes it an input or an output). Until now the only way was to open
+the block and move or reconfigure the port parts inside; that still works,
+and the order set here wins over where they sit. The wires follow the pins,
+and every copy of the block follows.
+[#50](https://github.com/Agustin-Delgado/repath/pull/50)
+
 ## 19 September 2026 — A longer name grows the box downward, and no wire runs under the outline
 
 **A name on more lines grows the box downward only.** The extra lines go

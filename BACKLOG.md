@@ -96,8 +96,10 @@ because each step is what makes the next one worth having:
       `B` boxes the selection up, a port inside is a pin on the box, double-click
       edits the inside on its own canvas for every copy at once, `U` opens it
       back up into the drawing, and the definition lives in the palette and
-      travels with the drawing. *What is left:* ports go on the left and right
-      only, in the order they sit inside; a symbol of one's own for a block.
+      travels with the drawing. Since #50 the inspector moves a pin up or down
+      its column and across to the other side. *What is left:* ports go on the
+      left and right only, never the top or bottom; a symbol of one's own for a
+      block.
 - [ ] **Current-controlled sources** (`F`, `H`), which some vendor macromodels
       need before they will build.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz

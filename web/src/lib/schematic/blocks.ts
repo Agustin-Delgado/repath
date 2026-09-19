@@ -36,6 +36,7 @@ import {
 	pinPosition,
 	pointKey,
 	portFlow,
+	portOrder,
 	registerKind,
 	snap,
 	type BlockDef,
@@ -68,13 +69,18 @@ export function interior(block: BlockDef, of: Schematic): Schematic {
  * drives it. The engine never reads these — it sees the inside — but the
  * drawing does, to know whether a net has become analog and which way a wire
  * should arrive.
+ *
+ * Top to bottom is where the ports sit inside, unless an order was set on
+ * them from the box (`portOrder`): those come first, in that order, and any
+ * port drawn in since goes after them.
  */
 export function blockPorts(block: BlockDef): BlockPort[] {
 	const ports = block.instances.filter((i) => i.kind === 'port');
 	if (ports.length === 0) return [];
 	const connectivity = buildConnectivity({ instances: block.instances, wires: block.wires });
+	const rank = (port: Instance) => portOrder(port) ?? Number.MAX_SAFE_INTEGER;
 	return ports
-		.sort((a, b) => a.y - b.y || a.x - b.x)
+		.sort((a, b) => rank(a) - rank(b) || a.y - b.y || a.x - b.x)
 		.map((port) => {
 			const index = connectivity.netOfPin.get(pinKey(port.id, 'p'));
 			const net = index === undefined ? undefined : connectivity.nets[index];

@@ -51,6 +51,7 @@ import {
 	normaliseWire,
 	pinPosition,
 	pointKey,
+	portFlow,
 	rotatePoint,
 	registerSubcircuits,
 	simplifyPath,
@@ -2251,6 +2252,55 @@ class AppState {
 	}
 
 	/**
+	 * Move one terminal of a block a step up or down its side of the box.
+	 *
+	 * The box reads its order off where the ports sit inside, so the first
+	 * move writes that order onto every port and then swaps the two; from
+	 * then on the order is the ports' own. Every placed copy follows, with its
+	 * wires. Nothing happens at the top or bottom of the column.
+	 */
+	movePort(id: string, port: string, by: 'up' | 'down'): void {
+		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
+		if (!block) return;
+		const ports = blockPorts(block);
+		const here = ports.find((p) => p.name === port);
+		if (!here) return;
+		const column = ports.filter((p) => p.side === here.side);
+		const at = column.indexOf(here);
+		const to = at + (by === 'up' ? -1 : 1);
+		if (to < 0 || to >= column.length) return;
+		this.trace.record({ op: 'portmove', block: block.name, port, by });
+		this.checkpoint();
+		const inside = (instance: string) => block.instances.find((i) => i.id === instance)!;
+		this.reshapeBlock(id, () => {
+			ports.forEach((p, n) => {
+				inside(p.instance).params.order = n;
+			});
+			const a = inside(column[at].instance);
+			const b = inside(column[to].instance);
+			[a.params.order, b.params.order] = [b.params.order, a.params.order];
+		});
+	}
+
+	/**
+	 * Put one terminal of a block on the left or the right of the box. That
+	 * is the port's flow — an input is on the left — so the port inside turns
+	 * to match. Every placed copy follows, with its wires.
+	 */
+	setPortSide(id: string, port: string, side: 'left' | 'right'): void {
+		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
+		const entry = block?.instances.find((i) => i.kind === 'port' && i.name === port);
+		if (!block || !entry) return;
+		const flow = side === 'left' ? 'in' : 'out';
+		if (portFlow(entry) === flow) return;
+		this.trace.record({ op: 'portside', block: block.name, port, side });
+		this.checkpoint();
+		this.reshapeBlock(id, () => {
+			entry.params.flow = flow;
+		});
+	}
+
+	/**
 	 * Forget a block, and delete anything placed from it. Refused while another
 	 * block is built out of it: that one would be left with a hole in it.
 	 */
@@ -2831,12 +2881,17 @@ class AppState {
 				}
 				case 'reblock':
 				case 'port':
+				case 'portmove':
+				case 'portside':
 				case 'enter': {
-					const wanted = step.op === 'reblock' ? step.from : step.op === 'port' ? step.block : step.name;
+					const wanted =
+						step.op === 'reblock' ? step.from : step.op === 'enter' ? step.name : step.block;
 					const block = (this.schematic.blocks ?? []).find((b) => b.name === wanted);
 					if (!block) return stop(`no block called ${wanted}`);
 					if (step.op === 'reblock') this.renameBlock(block.id, step.to);
 					else if (step.op === 'port') this.renamePort(block.id, step.from, step.to);
+					else if (step.op === 'portmove') this.movePort(block.id, step.port, step.by);
+					else if (step.op === 'portside') this.setPortSide(block.id, step.port, step.side);
 					else this.enterBlock(block.id);
 					break;
 				}

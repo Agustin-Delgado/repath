@@ -1327,6 +1327,15 @@ export function portFlow(instance: Instance): PortFlow {
 	return instance.params.flow === 'out' ? 'out' : 'in';
 }
 
+/**
+ * Where a port was put in its column on the box by hand, if it was. Without
+ * one, the box reads the order off where the ports sit inside.
+ */
+export function portOrder(instance: Instance): number | null {
+	const order = instance.params.order;
+	return typeof order === 'number' ? order : null;
+}
+
 // ---------------------------------------------------------------------------
 // Integrated circuits
 // ---------------------------------------------------------------------------
