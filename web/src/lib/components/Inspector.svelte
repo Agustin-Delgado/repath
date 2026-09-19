@@ -814,8 +814,20 @@
 
 	.ports {
 		display: grid;
-		grid-template-columns: 1fr 1fr;
+		/* `minmax(0, …)`, because a text input has a minimum width of its own
+		   and a plain `1fr` column will not shrink below it: two of them side by
+		   side ran past the panel's edge and gave it a scrollbar. */
+		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 0.35rem 0.5rem;
+	}
+
+	.ports label {
+		min-width: 0;
+	}
+
+	.ports input {
+		min-width: 0;
+		width: 100%;
 	}
 
 	.ports .field-label {

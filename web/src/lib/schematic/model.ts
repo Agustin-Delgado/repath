@@ -1548,6 +1548,8 @@ export const BLOCK_PREFIX = 'b:';
 
 /** Room the body needs beyond a name printed inside its edge, per character. */
 const BLOCK_CHAR = 5;
+/** The same for the block's own name along the bottom, which is set a size larger. */
+const BLOCK_NAME_CHAR = 6;
 /** Space under the lowest port for the block's name. */
 const BLOCK_NAME_ROOM = 20;
 
@@ -1561,10 +1563,16 @@ export function blockSide(ports: readonly BlockPort[], side: 'left' | 'right'): 
  * fits inside its edge. Grown in grid steps so the pins, a lead further out,
  * stay on the grid.
  */
-export function blockHalfWidth(ports: readonly BlockPort[]): number {
+export function blockHalfWidth(ports: readonly BlockPort[], name = ''): number {
 	const longest = (side: 'left' | 'right') =>
 		Math.max(0, ...blockSide(ports, side).map((port) => port.name.length));
-	const wanted = (longest('left') + longest('right')) * BLOCK_CHAR + 16;
+	// Wide enough for the two port names to meet in the middle with a gap, and
+	// for the block's own name along the bottom: "Frequency Divisor" on a box
+	// sized for CLK and OUT ran past both edges.
+	const wanted = Math.max(
+		(longest('left') + longest('right')) * BLOCK_CHAR + 16,
+		name.length * BLOCK_NAME_CHAR + 12
+	);
 	let half = SUB_HALF_WIDTH;
 	while (half * 2 < wanted) half += GRID;
 	return half;
@@ -1583,7 +1591,7 @@ export function blockReach(ports: readonly BlockPort[]): number {
  */
 export function blockDefinition(block: BlockDef, ports: readonly BlockPort[]): ComponentDef {
 	const half = blockReach(ports);
-	const hw = blockHalfWidth(ports);
+	const hw = blockHalfWidth(ports, block.name);
 	const x = hw + SUB_LEAD;
 	const left = blockSide(ports, 'left');
 	const right = blockSide(ports, 'right');

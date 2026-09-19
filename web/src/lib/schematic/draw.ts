@@ -27,7 +27,7 @@ import {
 } from './model';
 import { GROUP_LABEL_GAP, groupLabelSize, placeGroups } from './groups';
 import { instancePins } from './scene';
-import { symbolGeometry, symbolVariant, type Shape } from './symbols';
+import { symbolGeometry, symbolVariant, type Shape, type SymbolLabel } from './symbols';
 
 export interface Theme {
 	background: string;
@@ -381,6 +381,27 @@ function drawGroups(painter: Painter, view: SchematicView, region: Rect): void {
 	}
 }
 
+/**
+ * Which way a symbol's label runs once its part is turned.
+ *
+ * The text stays upright whatever the part does, so its anchor has to turn
+ * on its own: a name that runs inward from the left edge of a box runs inward
+ * from the right edge once the box is turned round, and down from the top edge
+ * once it is turned on its side. Anchored the way it was drawn, a turned
+ * block's port names ran out through its edges.
+ */
+export function labelPlacement(
+	anchor: SymbolLabel['anchor'],
+	rotation: Rotation
+): { align: 'left' | 'right' | 'center'; baseline: 'top' | 'bottom' | 'middle' } {
+	const runs = anchor === 'start' ? 1 : anchor === 'end' ? -1 : 0;
+	const along = rotatePoint(runs, 0, rotation);
+	return {
+		align: along.x > 0.5 ? 'left' : along.x < -0.5 ? 'right' : 'center',
+		baseline: along.y > 0.5 ? 'top' : along.y < -0.5 ? 'bottom' : 'middle'
+	};
+}
+
 export function drawSchematic(painter: Painter, view: SchematicView, visible: Rect): void {
 	const { theme } = view;
 	const scale = painter.viewport.scale;
@@ -457,8 +478,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 				{
 					size: Math.min((label.size ?? 11) * scale, 15),
 					color: colour,
-					align: label.anchor === 'start' ? 'left' : label.anchor === 'end' ? 'right' : 'center',
-					baseline: 'middle',
+					...labelPlacement(label.anchor, instance.rotation),
 					minSize: 7
 				}
 			);
