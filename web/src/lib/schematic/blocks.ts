@@ -111,6 +111,39 @@ export function registerBlocks(schematic: Schematic): void {
 	}
 }
 
+/**
+ * Where the wires to a placed block may have been left by a narrower box.
+ *
+ * The body grew to fit the block's name. Before it did, it was sized for the
+ * port names alone, and a drawing saved then has its wires ending where the
+ * narrower box's pins were — inside the box, now, with the pin itself sitting
+ * on the wire further out and the box drawn over the wire's last stretch. For
+ * every placed copy whose pins were somewhere else under the old sizing, the
+ * old position of each is mapped to the new, for the wires with an end there
+ * to be re-routed. A drawing saved since maps nothing: no wire of its ends
+ * where the narrower box's pins were.
+ */
+export function outgrownPins(schematic: Schematic): Map<string, Point> {
+	const moved = new Map<string, Point>();
+	for (const block of schematic.blocks ?? []) {
+		const ports = blockPorts(block);
+		// A block with no name is sized the way every block used to be.
+		const narrow = blockDefinition({ ...block, name: '' }, ports).pins;
+		const wide = blockDefinition(block, ports).pins;
+		for (const placed of schematic.instances) {
+			if (placed.kind !== BLOCK_PREFIX + block.id) continue;
+			for (const pin of wide) {
+				const before = narrow.find((p) => p.name === pin.name);
+				if (!before) continue;
+				const was = pinPosition(placed, before);
+				const now = pinPosition(placed, pin);
+				if (was.x !== now.x || was.y !== now.y) moved.set(pointKey(was.x, was.y), now);
+			}
+		}
+	}
+	return moved;
+}
+
 /** Whether a block's definition is placed anywhere: on the drawing or inside another block. */
 export function blockInUse(schematic: Schematic, id: string): boolean {
 	const kind = BLOCK_PREFIX + id;

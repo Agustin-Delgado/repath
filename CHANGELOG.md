@@ -11,6 +11,22 @@ early entries point at those instead.
 
 ---
 
+## 19 September 2026 — Old drawings meet the wider box
+
+**A drawing saved before the box grew opens with its wires on the pins.** The
+box that fits its name was wider than the one every earlier drawing was drawn
+to, so a link or a file from before opened with each block's wires ending
+inside the box, where its narrower pins had been, and the box drawn over them.
+Those wires are now brought out to the pins as the drawing arrives, blocks
+inside blocks included, and the drawing is the drawing it was.
+[#47](https://github.com/Agustin-Delgado/repath/pull/47)
+
+**A shared link opens on the circuit.** Following a link used to open on an
+empty stretch of sheet, with the circuit wherever its author had left it and
+nothing to say which way to look; the same for a file. The view now goes to
+whatever arrives whole, as it already did for an example.
+[#47](https://github.com/Agustin-Delgado/repath/pull/47)
+
 ## 19 September 2026 — A box that fits its name
 
 **A block's box grows to fit its name, and its port names stay inside when it
