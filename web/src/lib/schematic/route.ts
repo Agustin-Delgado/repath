@@ -253,7 +253,10 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 
 		// Shrink by a whisker: the box includes the pin leads, and a route has to
 		// be able to reach a pin without paying the body penalty to get there.
-		const inset = grid * 0.5;
+		// Only a whisker, though. A block's outline sits a couple of units off
+		// the grid, and with half a step of slack the grid line just inside it
+		// was free to route on — a wire drawn over the outline.
+		const inset = 1;
 		const minX = Math.min(...corners.map((c) => c.x)) + instance.x + inset;
 		const maxX = Math.max(...corners.map((c) => c.x)) + instance.x - inset;
 		const minY = Math.min(...corners.map((c) => c.y)) + instance.y + inset;

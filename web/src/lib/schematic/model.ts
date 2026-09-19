@@ -1624,15 +1624,20 @@ export function blockHalfWidth(ports: readonly BlockPort[], name = ''): number {
 	return half;
 }
 
-/** Half the height of the body: the longer column of ports, plus the name. */
-export function blockReach(ports: readonly BlockPort[], name = ''): number {
+/**
+ * How far the body reaches above the origin: the longer column of ports,
+ * plus one line of the name. It reaches the same below, and further by the
+ * lines the name needs beyond the first (`blockNameDepth`): a longer name
+ * grows the box downward, under the ports, and leaves the pins where they are.
+ */
+export function blockReach(ports: readonly BlockPort[]): number {
 	const rows = Math.max(blockSide(ports, 'left').length, blockSide(ports, 'right').length, 1);
-	return Math.max(22, ((rows - 1) * SUB_PITCH) / 2 + 12 + blockNameRoom(name) / 2);
+	return Math.max(22, ((rows - 1) * SUB_PITCH) / 2 + 12 + BLOCK_NAME_ROOM / 2);
 }
 
-/** The height under the ports that a name takes up, on as many lines as it needs. */
-function blockNameRoom(name: string): number {
-	return BLOCK_NAME_ROOM * Math.max(1, blockNameLines(name).length);
+/** The height the name adds below the box a one-line name gets. */
+export function blockNameDepth(name: string): number {
+	return BLOCK_NAME_ROOM * Math.max(0, blockNameLines(name).length - 1);
 }
 
 /**
@@ -1641,15 +1646,15 @@ function blockNameRoom(name: string): number {
  * so is answered next to it rather than here.
  */
 export function blockDefinition(block: BlockDef, ports: readonly BlockPort[]): ComponentDef {
-	const half = blockReach(ports, block.name);
+	const half = blockReach(ports);
+	const depth = blockNameDepth(block.name);
 	const hw = blockHalfWidth(ports, block.name);
 	const x = hw + SUB_LEAD;
 	const left = blockSide(ports, 'left');
 	const right = blockSide(ports, 'right');
 	// The name sits under the ports, so the columns are shifted up to leave it
-	// room without the box growing on both ends. A whole line at a time, so
-	// the pins stay on the grid.
-	const lift = blockNameRoom(block.name) / 2;
+	// room without the box growing on both ends.
+	const lift = BLOCK_NAME_ROOM / 2;
 	const pin = (port: BlockPort, px: number, py: number): PinDef => ({
 		name: port.name,
 		x: px,
@@ -1662,8 +1667,8 @@ export function blockDefinition(block: BlockDef, ports: readonly BlockPort[]): C
 		label: block.name,
 		group: 'logic',
 		prefix: 'B',
-		box: { x: -x, y: -half, w: x * 2, h: half * 2 },
-		body: { x: -hw, y: -half, w: hw * 2, h: half * 2 },
+		box: { x: -x, y: -half, w: x * 2, h: half * 2 + depth },
+		body: { x: -hw, y: -half, w: hw * 2, h: half * 2 + depth },
 		pins: [
 			...left.map((port, i) => pin(port, -x, portY(i, left.length) - lift)),
 			...right.map((port, i) => pin(port, x, portY(i, right.length) - lift))

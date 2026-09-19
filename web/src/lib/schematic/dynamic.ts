@@ -29,13 +29,12 @@ import {
 	definitionFor,
 	definitionOf,
 	pointKey,
-	rotatePoint,
 	wireSegments,
 	wireStart,
 	type Instance,
 	type Schematic
 } from './model';
-import { instancePins } from './scene';
+import { instanceBounds, instancePins } from './scene';
 
 export interface DynamicView {
 	schematic: Schematic;
@@ -246,16 +245,7 @@ function drawReadings(
 	// very often a pin — which put the reading inside the symbol it belongs to,
 	// overlapping the drawing and, on a source, sitting in the middle of the
 	// circle. A point out on the wiring says the same thing and can be read.
-	const bodies = view.schematic.instances.map((instance) => {
-		const box = definitionFor(instance).box;
-		const half = rotatePoint(box.w / 2, box.h / 2, instance.rotation);
-		return {
-			x: instance.x - Math.abs(half.x),
-			y: instance.y - Math.abs(half.y),
-			w: Math.abs(half.x) * 2,
-			h: Math.abs(half.y) * 2
-		};
-	});
+	const bodies = view.schematic.instances.map(instanceBounds);
 	const clearOfParts = (p: Vec2) =>
 		!bodies.some(
 			(b) => p.x >= b.x - 6 && p.x <= b.x + b.w + 6 && p.y >= b.y - 14 && p.y <= b.y + b.h + 6
