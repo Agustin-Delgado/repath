@@ -285,6 +285,50 @@ export function unfoldBlocks(schematic: Schematic): Unfolded {
 	};
 }
 
+/** What the engine sees: every block unfolded, its ports tied to its pins. */
+export function flatConnectivity(schematic: Schematic): Connectivity {
+	const unfolded = unfoldBlocks(schematic);
+	return buildConnectivity(unfolded.schematic, unfolded.ties);
+}
+
+/**
+ * Two pins that boxing up, or opening a box, put on one net when they were
+ * on two; or null.
+ *
+ * The drawing before is compared with the drawing after as the engine sees
+ * both — every block unfolded, its ports tied to its pins — so a join
+ * anywhere counts: a wire re-routed to the box landing on another, a pin of
+ * the box coming down on a wire, a port planted inside on the wrong net.
+ * The parts are the same parts under new ids; `sameAs` says which id in the
+ * drawing before a pin's owner had, or null for a part that was not there —
+ * a port, or the box itself.
+ */
+export function joinedByBoxing(
+	before: Connectivity,
+	after: Schematic,
+	sameAs: (id: string) => string | null
+): [string, string] | null {
+	for (const net of flatConnectivity(after).nets) {
+		let was: number | undefined;
+		let first = '';
+		for (const ref of net.pins) {
+			if (ref.instance.kind === 'port') continue;
+			const id = sameAs(ref.instance.id);
+			if (id === null) continue;
+			const index = before.netOfPin.get(pinKey(id, ref.pin.name));
+			if (index === undefined) continue;
+			const name = `${ref.instance.name}.${ref.pin.name}`;
+			if (was === undefined) {
+				was = index;
+				first = name;
+			} else if (index !== was) {
+				return [first, name];
+			}
+		}
+	}
+	return null;
+}
+
 /**
  * The currents the engine reports at one pin of an unfolded part. A plain part
  * reports its own; a block inside a block reports whatever its own port was

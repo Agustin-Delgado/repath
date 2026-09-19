@@ -11,6 +11,26 @@ early entries point at those instead.
 
 ---
 
+## 19 September 2026 — Boxing up never rewires the circuit
+
+**Boxing parts up keeps every net apart, and says so if it cannot.** The
+wires to a box's pins were routed against a page where the other wires to
+the box were still in mid-air, so several inputs fed from the same side came
+down the same column beside the box, each with a corner on the last, and
+were one net when the box was done. They are routed one after another now,
+each around the ones already drawn. And boxing up, like turning or dragging,
+is checked afterwards against the circuit it started from: if the box would
+join two nets in any way at all, nothing changes and a notice names them.
+[#51](https://github.com/Agustin-Delgado/repath/pull/51)
+
+**Opening a box up keeps every net apart too.** Two things could join nets
+on the way out: a wire drawn across the box while the parts were away, which
+a returning pin came down on, and a wire inside the box whose end happened
+to sit exactly where a pin of the box had been, which was re-routed as if it
+had been plugged into the box. The first is routed out of the way; the
+second is left as it was drawn; and the same check refuses anything else.
+[#51](https://github.com/Agustin-Delgado/repath/pull/51)
+
 ## 19 September 2026 — Arrange the pins on a box
 
 **A block's pins can be moved from the inspector.** Under each port of a
