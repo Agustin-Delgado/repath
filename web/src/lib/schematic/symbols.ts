@@ -697,7 +697,12 @@ function block(kind: string, named = false): SymbolGeometry {
 			labels.push({ x: 0, y: baseline, text, size: 9, anchor: 'middle', fine: true });
 		});
 	}
-	return { shapes, labels, extent: { x: Math.max(DEFAULT_EXTENT, -x), y: Math.max(DEFAULT_EXTENT, -y) } };
+	// A long name hangs below the origin further than the box reaches above it.
+	return {
+		shapes,
+		labels,
+		extent: { x: Math.max(DEFAULT_EXTENT, -x), y: Math.max(DEFAULT_EXTENT, -y, y + h) }
+	};
 }
 
 /**

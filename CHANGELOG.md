@@ -11,6 +11,19 @@ early entries point at those instead.
 
 ---
 
+## 19 September 2026 — A longer name grows the box downward, and no wire runs under the outline
+
+**A name on more lines grows the box downward only.** The extra lines go
+under the ports, so the top edge and the pins stay where they were: nothing
+above the box is covered, and no wire has to move.
+[#49](https://github.com/Agustin-Delgado/repath/pull/49)
+
+**A wire no longer runs along the inside of a box's outline.** A block's
+outline sits a couple of units off the grid, and the router treated the grid
+line just inside it as open — so a wire routed past the box could run right
+under its edge, drawn over the outline. That line is the box's now.
+[#49](https://github.com/Agustin-Delgado/repath/pull/49)
+
 ## 19 September 2026 — The box stops growing
 
 **A long name goes on more lines, and the box has a widest.** A box grew as
