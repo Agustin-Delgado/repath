@@ -23,7 +23,14 @@ import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import { groupFrame, outside } from './schematic/groups';
-import { blockInUse, blockPorts, interior, planBlock, registerBlocks } from './schematic/blocks';
+import {
+	blockInUse,
+	blockPorts,
+	interior,
+	outgrownPins,
+	planBlock,
+	registerBlocks
+} from './schematic/blocks';
 import {
 	DEFAULT_STANDARD,
 	isSymbolStandard,
@@ -369,6 +376,14 @@ class AppState {
 	envelope = $state<Envelope | null>(null);
 	/** Which example is on screen, or empty for a drawing that is nobody's but yours. */
 	exampleId = $state('');
+	/**
+	 * How many whole drawings have arrived — an example, a link, a file. The
+	 * view goes to each one as it comes: a shared drawing is wherever its
+	 * author left it, nowhere near the origin the view starts at, and it
+	 * arrived under the same empty example id the default drawing already
+	 * had, so nothing said it had changed.
+	 */
+	arrivals = $state(0);
 
 	constructor() {
 		setSymbolStandard(this.symbolStandard);
@@ -1880,9 +1895,9 @@ class AppState {
 	 * cell budget. It was a drag's deadline running out on a long wire that
 	 * used to hand a turned block an elbow through a row of pins.
 	 */
-	router(): RouteBetween {
+	router(within: Schematic = this.schematic): RouteBetween {
 		return (from, to, settling, prefer) =>
-			routeWire(this.schematic, from, to, { grid: GRID, ignoreWires: settling, prefer });
+			routeWire(within, from, to, { grid: GRID, ignoreWires: settling, prefer });
 	}
 
 	/**
@@ -1967,14 +1982,37 @@ class AppState {
 	}
 
 	/**
+	 * Bring the wires on a drawing's blocks to where the pins are now.
+	 *
+	 * The box of a block was sized for its port names alone until it learned
+	 * to fit its own name, and a drawing saved before that has its wires
+	 * ending at the narrower box's pins: inside the box, with the pin sitting
+	 * on the wire further out. Every whole drawing that arrives goes through
+	 * this, so it is drawn to the box it has; a drawing saved since has nothing
+	 * to move.
+	 */
+	private settleBlocks(): void {
+		// The inside of a block can hold a block too, wired to its pins.
+		const blocks = this.schematic.blocks ?? [];
+		for (const drawing of [this.schematic, ...blocks.map((b) => interior(b, this.schematic))]) {
+			const moved = outgrownPins(drawing);
+			if (moved.size > 0) this.rewire(moved, this.router(drawing), drawing);
+		}
+	}
+
+	/**
 	 * Every wire with an end at one of `moved`'s keys is re-routed to the
 	 * point that key maps to, keeping its shape where it can. How a pin that
 	 * moved keeps what was plugged into it.
 	 */
-	private rewire(moved: ReadonlyMap<string, Point>, route: RouteBetween): void {
+	private rewire(
+		moved: ReadonlyMap<string, Point>,
+		route: RouteBetween,
+		within: Schematic = this.schematic
+	): void {
 		if (moved.size === 0) return;
 		const settling = new Set<string>();
-		for (const wire of this.schematic.wires) {
+		for (const wire of within.wires) {
 			const last = wire.points.length - 1;
 			for (const end of [0, last]) {
 				if (moved.has(pointKey(wire.points[end].x, wire.points[end].y))) settling.add(wire.id);
@@ -1983,7 +2021,7 @@ class AppState {
 		// One at a time, each routed around the ones already settled: two
 		// wires bound for neighbouring pins that could not see each other
 		// landed one on the other's end and made a junction nobody drew.
-		for (const wire of this.schematic.wires) {
+		for (const wire of within.wires) {
 			if (!settling.has(wire.id)) continue;
 			const last = wire.points.length - 1;
 			const from = wire.points;
@@ -2500,6 +2538,7 @@ class AppState {
 		this.tidyWires();
 		this.stopTime = example.stopTime;
 		this.exampleId = example.id;
+		this.arrivals++;
 		// Each example arrives in whichever analysis actually shows it off — a
 		// resonant filter has nothing to say in the time domain.
 		this.analysis = example.analysis ?? 'transient';
@@ -2522,9 +2561,11 @@ class AppState {
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = adopt(circuit.schematic);
+		this.settleBlocks();
 		this.tidyWires();
 		this.stopTime = circuit.stopTime;
 		this.exampleId = '';
+		this.arrivals++;
 		this.selection = [];
 		this.discardRun();
 		this.error = null;
@@ -2599,8 +2640,10 @@ class AppState {
 		this.past.length = 0;
 		this.future.length = 0;
 		this.schematic = { instances, wires, subcircuits, blocks, groups };
+		this.settleBlocks();
 		this.tidyWires();
 		this.stopTime = parsed.stopTime ?? 1e-3;
+		this.arrivals++;
 		// Pointed at the ids this load minted, not the ones the file was written
 		// with. The map was being built here and never used, so every probe on a
 		// saved circuit resolved to nothing and vanished on opening it — the

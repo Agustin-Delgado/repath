@@ -374,10 +374,10 @@
 		editor?.invalidate('schematic');
 	});
 
-	// Recentre when a different example is loaded.
+	// Recentre on every drawing that arrives whole: an example, a link, a file.
 	$effect(() => {
 		const active = editor;
-		void app.exampleId;
+		void app.arrivals;
 		queueMicrotask(() => active?.fit());
 	});
 
