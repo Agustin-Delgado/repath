@@ -11,6 +11,17 @@ early entries point at those instead.
 
 ---
 
+## 20 September 2026 — Ctrl-click picks parts one at a time
+
+**`Ctrl`-click adds a part to the selection, and takes it out again.** Only
+`Shift` did that before, and `Ctrl` — the key every file browser uses for
+the same thing — did nothing. Both work now, on a part, on a group's name
+and around a box dragged over things; `Cmd` on a Mac too. A `Ctrl`-click
+on empty space leaves the selection as it is.
+[#52](https://github.com/Agustin-Delgado/repath/pull/52)
+
+---
+
 ## 19 September 2026 — Boxing up never rewires the circuit
 
 **Boxing parts up keeps every net apart, and says so if it cannot.** The

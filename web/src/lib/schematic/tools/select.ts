@@ -66,6 +66,18 @@ const DRAG_EFFORT = 4000;
 /** Milliseconds of routing a single drag frame may spend across all its wires. */
 const FRAME_ROUTING_MS = 8;
 
+/**
+ * Whether a press adds to the selection rather than replacing it.
+ *
+ * Shift is the convention here; Ctrl (Cmd on a Mac) is the one every file
+ * browser and most drawing tools use, and a hand that reaches for it should get
+ * the same thing. Shift alone still means hand-routing while a wire is drawn,
+ * which is why the two are not simply aliases of each other everywhere.
+ */
+function extending(pointer: EditorPointer): boolean {
+	return pointer.shift || pointer.ctrl || pointer.meta;
+}
+
 export function createSelectTool(): Tool {
 	let mode: Mode = 'idle';
 	let marquee: Rect | null = null;
@@ -310,7 +322,7 @@ export function createSelectTool(): Tool {
 					return;
 				}
 				const wasSelected = whole.every((id) => app.selection.includes(id));
-				if (pointer.shift) {
+				if (extending(pointer)) {
 					const leaving = new Set(whole);
 					app.selection = wasSelected
 						? app.selection.filter((id) => !leaving.has(id))
@@ -354,7 +366,7 @@ export function createSelectTool(): Tool {
 				pressedId = item.id;
 				pressedWasSelected = app.selection.includes(item.id);
 
-				if (pointer.shift) {
+				if (extending(pointer)) {
 					app.selection = pressedWasSelected
 						? app.selection.filter((id) => id !== item.id)
 						: [...app.selection, item.id];
@@ -376,7 +388,7 @@ export function createSelectTool(): Tool {
 				ctx.setCursor('grabbing');
 			} else {
 				pressedId = null;
-				if (!pointer.shift) app.selection = [];
+				if (!extending(pointer)) app.selection = [];
 				mode = 'marquee';
 				marquee = rectFromPoints(pointer.world, pointer.world);
 			}
@@ -448,23 +460,23 @@ export function createSelectTool(): Tool {
 				// Nothing to settle: the geometry on screen is already the answer.
 				app.endMove();
 				pendingJoin = null;
-				if (!moved && pressedId && pressedWasSelected && !pointer.shift) {
+				if (!moved && pressedId && pressedWasSelected && !extending(pointer)) {
 					// A click on an already-selected item narrows the selection to it,
 					// so one component can be picked out of a group.
 					app.selection = [pressedId];
 				}
 				// Some parts exist to be operated — a switch, a logic toggle — so
 				// pressing one operates it, a press that went nowhere at least. A drag
-				// is still a drag, and shift-click is still adding to a selection
-				// rather than flipping whatever it lands on.
-				if (!moved && pressedId && !pointer.shift) {
+				// is still a drag, and a shift- or ctrl-click is still adding to a
+				// selection rather than flipping whatever it lands on.
+				if (!moved && pressedId && !extending(pointer)) {
 					const part = app.schematic.instances.find((i) => i.id === pressedId);
 					if (part && OPERABLE.has(part.kind)) app.toggleSwitch(pressedId);
 				}
 			} else if (mode === 'marquee' && marquee) {
 				if (marquee.w > 2 || marquee.h > 2) {
 					const hits = ctx.scene.enclosed(marquee).map((item) => item.id);
-					app.selection = pointer.shift ? [...new Set([...app.selection, ...hits])] : hits;
+					app.selection = extending(pointer) ? [...new Set([...app.selection, ...hits])] : hits;
 				}
 			}
 
