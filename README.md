@@ -301,7 +301,7 @@ would show you.
 | Report something odd | **Steps** copies everything you did, as text, so it can be replayed exactly |
 | Hand-route a wire | hold `Shift` while drawing to bypass the router |
 | Reshape a wire | select it, then drag the leg you want to move |
-| Select | click, `Shift`-click to add, or drag a box around things |
+| Select | click, `Shift`-click or `Ctrl`-click to add or remove one, or drag a box around things |
 | Rotate / delete | `R` / `Del` |
 | Pan | middle-drag, or `Alt`-drag |
 | Zoom | scroll — `Shift`-scroll pans sideways |
