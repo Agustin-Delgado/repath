@@ -447,6 +447,17 @@ export function planBlock(schematic: Schematic, memberIds: ReadonlySet<string>):
 	const taken = new Set(members.map((i) => i.name));
 	const rows = { left: new Set<number>(), right: new Set<number>() };
 	let minted = 0;
+	// The columns the ports go in, clear of every wire coming inside. The
+	// frame is the parts' frame, and a wire between two pins of one part can
+	// swing round the outside of it — a flip-flop's output fed back to its
+	// own clock did — so a port planted a fixed step past the frame landed
+	// on that wire's leg, and every port down that side was on its net.
+	let reach = { left: frame.x, right: frame.x + frame.w };
+	for (const wire of wires) {
+		for (const p of wire.points) {
+			reach = { left: Math.min(reach.left, p.x), right: Math.max(reach.right, p.x) };
+		}
+	}
 	/**
 	 * The wires from ports to pins, routed only once every port is down. A
 	 * wire routed before a later port was planted ran straight through the
@@ -460,8 +471,7 @@ export function planBlock(schematic: Schematic, memberIds: ReadonlySet<string>):
 		for (let n = 2; taken.has(unique); n++) unique = `${name}${n}`;
 		taken.add(unique);
 		const side = flow === 'in' ? 'left' : 'right';
-		const x =
-			side === 'left' ? snap(frame.x) - PORT_STANDOFF : snap(frame.x + frame.w) + PORT_STANDOFF;
+		const x = side === 'left' ? snap(reach.left) - PORT_STANDOFF : snap(reach.right) + PORT_STANDOFF;
 		let y = snap(near.y);
 		while (rows[side].has(y)) y += GRID * 2;
 		rows[side].add(y);

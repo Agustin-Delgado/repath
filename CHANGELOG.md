@@ -11,6 +11,23 @@ early entries point at those instead.
 
 ---
 
+## 20 September 2026 — Boxing up a part wired round its own outside
+
+**A box's pins are planted clear of a wire that loops round the parts.**
+Boxing up three flip-flops of a counter was refused with "would put PWR10.v
+on the same net as PWR11.v": one of them had its inverted output wired to
+its own clock the long way round, past the right of the package, and the
+box's right-hand pins were planted a fixed step outside the parts — exactly
+the column that leg ran down. Five pins on one wire, five nets as one, and
+the check that refuses such a box did its job. The pins now go past
+everything wired inside, not just past the parts.
+[#53](https://github.com/Agustin-Delgado/repath/pull/53)
+
+Opening that box back up is still refused on that drawing — it was before
+this, too — and is written up in the backlog.
+
+---
+
 ## 20 September 2026 — Ctrl-click picks parts one at a time
 
 **`Ctrl`-click adds a part to the selection, and takes it out again.** Only
