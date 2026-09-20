@@ -122,6 +122,22 @@ because each step is what makes the next one worth having:
       highlight that net on the canvas, not just print a name the user never chose.
 - [ ] **Wire editing, the rest of it** — splitting a run in two, and deleting a
       single corner. Dragging a leg to reshape a wire is done; these are not.
+- [ ] **Opening a box on a crowded page.** On the counter drawing
+      (`tests/web/fixtures/counter-with-gates.link`) boxing the three CD4027s
+      up works and opening the box is refused — every one of nine selections
+      tried is, on `main` as well, with a different pair of pins named each
+      time. Two causes, both verified headless. The wires round the box were
+      routed through where the parts stood, and the inside wires come back
+      *as drawn* (`keep` in `open`): a port wire that went round the parts on
+      an empty page now runs over corners of those outside wires, and a
+      corner on a wire is a junction. And a port's own spot can be on an
+      outside wire that runs past — the guard catches that one, but the
+      re-routes then happen in a two-cell gap and come out as diagonal
+      `lastResort` legs (seven of them on one selection). Routing the inside
+      wires again between their own ends, with the outside wires as
+      obstacles, opened four of the nine and left the diagonals; the honest
+      fix is to drop the port wires on the way out and put the outside wires
+      back on the pins the port was wired to, which is where they came from.
 
 ### Product
 
