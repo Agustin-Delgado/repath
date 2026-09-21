@@ -310,7 +310,7 @@ would show you.
 | Copy / cut / paste | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` — paste lands at the cursor |
 | Duplicate | `Ctrl+D` |
 | Group / ungroup | `G` / `U` (also `Ctrl+G` / `Ctrl+Shift+G`), or the buttons in the inspector — the group's name is its handle: click it to select the group, drag it to move the group, double-click it to rename |
-| Box up / open up | `B` boxes the selected parts (or group) up as a block — one part with a pin per net that left them; `U` on a block opens it back up into the drawing. Rename the block and its ports in the inspector; place more copies from the palette |
+| Box up / open up | `B` boxes the selected parts (or group) up as a block — one part with a pin per net that left them; `U` on a block opens it back up into the drawing. Rename the block and its ports in the inspector; place more copies from the palette. A copy is the same block again — to change one copy into something else, **Make its own block** in the inspector first |
 | Edit a block inside | double-click the box, or **Edit inside** in the inspector — the canvas becomes the block, every copy follows; wire a pin to a **Port** to give the box a pin; **Back to the drawing** when done |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Run / stop the sweep | `Space` |
@@ -388,6 +388,12 @@ rename one and every copy follows, wires and all. **Back to the drawing** when
 done. `U` still opens a block up into the drawing itself, as a group under the
 block's name; box them up again and the block is updated. Blocks nest, and travel
 in links and files with the drawing.
+
+A second copy of a box is the same block twice, the way two 7400s are the same
+chip: rename it or edit it inside and both change. To copy a block in order to
+turn the copy into something else — a minute hand drawn from the second hand —
+select that copy and **Make its own block** in the inspector; it gets a definition
+of its own, numbered after the original, and goes its own way from there.
 
 The symbol standard is the reader's, not the drawing's. A resistor is the same
 resistor whether it is drawn as a zigzag or a box, so the choice is not in a share

@@ -379,6 +379,7 @@
 		-->
 		{#if app.selectedBlock}
 			{@const boxed = app.selectedBlock}
+			{@const copies = app.copiesOf(boxed.block.id)}
 			<section class="block">
 				<label>
 					<span class="field-label">Block</span>
@@ -448,14 +449,25 @@
 					{/each}
 				</div>
 				<p class="hint">
-					{boxed.block.instances.filter((i) => i.kind !== 'port').length} components inside. Edit
-					them in there — every copy of the block follows, and a port added or removed is a pin
-					on the box — or open the box up here into its parts. The block stays in the palette
-					either way.
+					{boxed.block.instances.filter((i) => i.kind !== 'port').length} components inside.
+					{#if copies > 1}
+						This is one of {copies} copies of the block: rename it or edit it inside and every
+						copy follows. To change just this one, make it its own block first.
+					{:else}
+						Edit them in there — every copy of the block follows, and a port added or removed
+						is a pin on the box — or open the box up here into its parts. The block stays in
+						the palette either way.
+					{/if}
 				</p>
 				<div class="actions">
 					<button onclick={() => app.enterBlock(boxed.block.id)}>Edit inside</button>
 					<button onclick={() => app.unboxSelection()}>Open up <kbd>U</kbd></button>
+					{#if copies > 1}
+						<button
+							title="Copy the block for this box alone, so it can be renamed and edited without the other copies following"
+							onclick={() => app.detachBlock(boxed.instance.id)}>Make its own block</button
+						>
+					{/if}
 				</div>
 			</section>
 		{/if}
