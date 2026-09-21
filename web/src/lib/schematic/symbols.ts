@@ -44,6 +44,13 @@ export interface SymbolLabel {
 	 * around three pixels tall: unreadable, and paid for on every scrolled frame.
 	 */
 	fine?: boolean;
+	/**
+	 * Where the label goes instead once the part is turned on its side. A name
+	 * along the bottom edge of a box is drawn upright whichever way the box is
+	 * turned, so on a box turned a quarter it straddles a side edge, half of it
+	 * outside: the middle of the body is the one place that is clear either way.
+	 */
+	onSide?: { x: number; y: number };
 }
 
 export interface SymbolGeometry {
@@ -618,7 +625,15 @@ function dip(chip: ChipDef): SymbolGeometry {
 
 	// The part number is fine print too, but only because the palette writes it
 	// under the icon anyway. On the drawing it is the one label that has to stay.
-	labels.push({ x: 0, y: half - 8, text: chipName(chip), size: 11, anchor: 'middle', fine: true });
+	labels.push({
+		x: 0,
+		y: half - 8,
+		text: chipName(chip),
+		size: 11,
+		anchor: 'middle',
+		fine: true,
+		onSide: { x: 0, y: 0 }
+	});
 	return { shapes, labels, extent: { x: Math.abs(places[0].x), y: half } };
 }
 
@@ -694,7 +709,17 @@ function block(kind: string, named = false): SymbolGeometry {
 		const lines = blockNameLines(def.label);
 		lines.forEach((text, i) => {
 			const baseline = y + h - 7 - (lines.length - 1 - i) * BLOCK_NAME_LINE;
-			labels.push({ x: 0, y: baseline, text, size: 9, anchor: 'middle', fine: true });
+			// Stacked about the middle of the body on a box turned on its side.
+			const middle = y + h / 2 + (i - (lines.length - 1) / 2) * BLOCK_NAME_LINE;
+			labels.push({
+				x: 0,
+				y: baseline,
+				text,
+				size: 9,
+				anchor: 'middle',
+				fine: true,
+				onSide: { x: 0, y: middle }
+			});
 		});
 	}
 	// A long name hangs below the origin further than the box reaches above it.
