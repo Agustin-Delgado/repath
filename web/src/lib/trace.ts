@@ -72,6 +72,7 @@ export type Step =
 	| { op: 'box'; parts: string[]; name: string }
 	| { op: 'unbox'; parts: string[] }
 	| { op: 'reblock'; from: string; to: string }
+	| { op: 'detach'; part: string }
 	| { op: 'port'; block: string; from: string; to: string }
 	| { op: 'portmove'; block: string; port: string; by: 'up' | 'down' }
 	| { op: 'portside'; block: string; port: string; side: 'left' | 'right' }
@@ -191,6 +192,8 @@ function format(step: Step): string {
 		// it last; a rename has two, and separates them with an arrow.
 		case 'reblock':
 			return `reblock ${step.from} -> ${step.to}`;
+		case 'detach':
+			return `detach ${step.part}`;
 		case 'port':
 			return `port ${step.from} ${step.to} ${step.block}`;
 		case 'portmove':
@@ -314,6 +317,8 @@ function read(op: string, rest: string[]): Step {
 			const arrow = rest.indexOf('->');
 			return { op, from: rest.slice(0, arrow).join(' '), to: rest.slice(arrow + 1).join(' ') };
 		}
+		case 'detach':
+			return { op, part: rest[0] };
 		case 'port':
 			return { op, from: rest[0], to: rest[1], block: rest.slice(2).join(' ') };
 		case 'portmove':

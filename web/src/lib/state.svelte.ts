@@ -2261,6 +2261,50 @@ class AppState {
 	}
 
 	/**
+	 * Make one placed copy of a block a block of its own, so it can be renamed
+	 * and edited without the other copies following.
+	 *
+	 * A second copy of a box is the same block twice, the way two 7400s are
+	 * the same chip — which is what a copy is for, until it is copied to be
+	 * changed into something else. Duplicating a "Second Hand" to draw the
+	 * minute hand from it, and then renaming it, renamed the second hand too.
+	 * The definition is copied under the next free name after this one, and
+	 * only this box is pointed at it. Returns the new block, or null when the
+	 * box is the only copy there is and is already its own.
+	 */
+	detachBlock(instanceId: string): BlockDef | null {
+		const instance = this.schematic.instances.find((i) => i.id === instanceId);
+		const block = instance ? blockOf(this.schematic, instance.kind) : null;
+		if (!instance || !block) return null;
+		if (this.copiesOf(block.id) < 2) return null;
+		this.trace.record({ op: 'detach', part: instance.name });
+		this.checkpoint();
+		const own: BlockDef = {
+			id: freshId(),
+			name: this.freeBlockName(`${block.name} 2`),
+			instances: block.instances.map((i) => ({ ...i, params: { ...i.params } })),
+			wires: block.wires.map((w) => ({ id: w.id, points: w.points.map((p) => ({ x: p.x, y: p.y })) })),
+			...(block.groups ? { groups: block.groups.map((g) => ({ ...g, members: [...g.members] })) } : {})
+		};
+		// The name is part of the box's width, so the pins can step outward.
+		this.reshape([instance], () => {
+			this.schematic.blocks = [...(this.schematic.blocks ?? []), own];
+			instance.kind = BLOCK_PREFIX + own.id;
+		});
+		return own;
+	}
+
+	/** How many times a block is placed: on the drawing, and inside other blocks. */
+	copiesOf(id: string): number {
+		const kind = BLOCK_PREFIX + id;
+		const placed = (instances: readonly Instance[]) => instances.filter((i) => i.kind === kind).length;
+		return (
+			placed(this.schematic.instances) +
+			(this.schematic.blocks ?? []).reduce((sum, b) => sum + placed(b.instances), 0)
+		);
+	}
+
+	/**
 	 * Apply a change to a block's definition that can move the pins on its
 	 * placed copies — a longer name, a longer port name — and take their wires
 	 * along. Where each pin was is noted first; `rename` maps a pin's name
@@ -2272,7 +2316,19 @@ class AppState {
 		rename: (after: string) => string = (name) => name
 	): void {
 		const kind = BLOCK_PREFIX + id;
-		const copies = this.schematic.instances.filter((i) => i.kind === kind);
+		this.reshape(
+			this.schematic.instances.filter((i) => i.kind === kind),
+			change,
+			rename
+		);
+	}
+
+	/** `reshapeBlock` for the given boxes, which may be about to become another block's. */
+	private reshape(
+		copies: Instance[],
+		change: () => void,
+		rename: (after: string) => string = (name) => name
+	): void {
 		const before = new Map<string, Point>();
 		for (const placed of copies) {
 			for (const pin of definitionFor(placed).pins) {
@@ -2999,6 +3055,12 @@ class AppState {
 					const group = this.groupOf(id);
 					if (!group) return stop(`${step.part} is not in a group`);
 					this.renameGroup(group.id, step.name);
+					break;
+				}
+				case 'detach': {
+					const id = partId(step.part);
+					if (!id) return stop(`no component named ${step.part}`);
+					if (!this.detachBlock(id)) return stop(`${step.part} is not a copy of a block`);
 					break;
 				}
 				case 'param': {

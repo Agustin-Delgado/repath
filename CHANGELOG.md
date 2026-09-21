@@ -11,6 +11,20 @@ early entries point at those instead.
 
 ---
 
+## 21 September 2026 — A copy of a box can be made a block of its own
+
+**Make its own block, in the inspector, gives one copy of a block a definition
+of its own.** A second copy of a box is the same block twice, the way two 7400s
+are the same chip — rename it or edit it inside and both change. That is what
+a copy is for, until it is copied to be turned into something else: a "Second
+Hand" duplicated to draw the minute hand from was renamed, and the second hand
+was renamed with it. The inspector now says how many copies a box is one of,
+and a copy can be made its own block — numbered after the original, to be
+renamed — and edited without the others following.
+[#55](https://github.com/Agustin-Delgado/repath/pull/55)
+
+---
+
 ## 21 September 2026 — A box on its side wears its name in the middle
 
 **A block's name, and a chip's part number, sit in the middle of a body turned
