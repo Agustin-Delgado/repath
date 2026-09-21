@@ -2264,10 +2264,9 @@ class AppState {
 	 * Make one placed copy of a block a block of its own, so it can be renamed
 	 * and edited without the other copies following.
 	 *
-	 * A second copy of a box is the same block twice, the way two 7400s are
-	 * the same chip — which is what a copy is for, until it is copied to be
-	 * changed into something else. Duplicating a "Second Hand" to draw the
-	 * minute hand from it, and then renaming it, renamed the second hand too.
+	 * A box placed from the palette twice is the same block twice, the way
+	 * two 7400s are the same chip. A copy pasted is not (`paste`), but a
+	 * block placed twice from the palette can still be wanted apart later.
 	 * The definition is copied under the next free name after this one, and
 	 * only this box is pointed at it. Returns the new block, or null when the
 	 * box is the only copy there is and is already its own.
@@ -2279,6 +2278,21 @@ class AppState {
 		if (this.copiesOf(block.id) < 2) return null;
 		this.trace.record({ op: 'detach', part: instance.name });
 		this.checkpoint();
+		const own = this.ownBlock(block);
+		// The name is part of the box's width, so the pins can step outward.
+		this.reshape([instance], () => {
+			instance.kind = BLOCK_PREFIX + own.id;
+		});
+		return own;
+	}
+
+	/**
+	 * A block of its own made from `block`: the same inside under the next
+	 * free name after it, added to the drawing's definitions. Blocks inside
+	 * it are still the ones they were — a stage inside two different counters
+	 * is one stage.
+	 */
+	private ownBlock(block: BlockDef): BlockDef {
 		const own: BlockDef = {
 			id: freshId(),
 			name: this.freeBlockName(`${block.name} 2`),
@@ -2286,11 +2300,8 @@ class AppState {
 			wires: block.wires.map((w) => ({ id: w.id, points: w.points.map((p) => ({ x: p.x, y: p.y })) })),
 			...(block.groups ? { groups: block.groups.map((g) => ({ ...g, members: [...g.members] })) } : {})
 		};
-		// The name is part of the box's width, so the pins can step outward.
-		this.reshape([instance], () => {
-			this.schematic.blocks = [...(this.schematic.blocks ?? []), own];
-			instance.kind = BLOCK_PREFIX + own.id;
-		});
+		this.schematic.blocks = [...(this.schematic.blocks ?? []), own];
+		registerBlocks(this.schematic);
 		return own;
 	}
 
@@ -2581,6 +2592,13 @@ class AppState {
 	 * Paste the clipboard. With `at`, the copied group's top-left corner lands
 	 * there; without, it is nudged clear of the original so the two do not sit
 	 * exactly on top of each other and look like one.
+	 *
+	 * A pasted box is a block of its own. Pasting a box used to put down a
+	 * second copy of the same block, which is what a copy is for — until it
+	 * is copied to be turned into something else: a "Second Hand" duplicated
+	 * to draw the minute hand from was renamed, and the second hand was
+	 * renamed with it. A box whose definition is already placed here gets one
+	 * of its own; the palette is where a block is placed twice on purpose.
 	 */
 	paste(at?: { x: number; y: number }): void {
 		if (!this.clipboard) return;
@@ -2603,6 +2621,10 @@ class AppState {
 		}
 		const existing = [...this.schematic.instances];
 		const fresh: string[] = [];
+		// Where a pasted box's pins would have been under the block it was
+		// copied from, mapped to where they are under its own: a longer name
+		// is a wider box, and the wires pasted with it end at the old pins.
+		const moved = new Map<string, Point>();
 
 		const renamed = new Map<string, string>();
 		for (const source of instances) {
@@ -2615,6 +2637,18 @@ class AppState {
 				x: source.x + dx,
 				y: source.y + dy
 			};
+			const block = blockOf(this.schematic, source.kind);
+			if (block && blockInUse(this.schematic, block.id)) {
+				const before = new Map(
+					definitionFor(copy).pins.map((pin) => [pin.name, pinPosition(copy, pin)])
+				);
+				copy.kind = BLOCK_PREFIX + this.ownBlock(block).id;
+				for (const pin of definitionFor(copy).pins) {
+					const was = before.get(pin.name);
+					const now = pinPosition(copy, pin);
+					if (was && (was.x !== now.x || was.y !== now.y)) moved.set(pointKey(was.x, was.y), now);
+				}
+			}
 			existing.push(copy);
 			this.schematic.instances.push(copy);
 			fresh.push(copy.id);
@@ -2642,6 +2676,10 @@ class AppState {
 		}
 
 		this.selection = fresh;
+		if (moved.size > 0) {
+			this.rewire(moved, this.router());
+			this.tidyWires();
+		}
 	}
 
 	duplicateSelection(): void {
