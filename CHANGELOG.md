@@ -11,6 +11,20 @@ early entries point at those instead.
 
 ---
 
+## 21 September 2026 — A pasted box is a block of its own
+
+**Copying a box copies the block.** Pasting or duplicating a box used to put
+down a second copy of the same block, so renaming or editing the copy changed
+the original too — which is what a copy is for, until it is copied to be
+turned into something else. A pasted box now gets a definition of its own,
+numbered after the original ("Second Hand 2") and ready to be renamed, with
+the wires pasted alongside it still on its pins. Placing a block twice from
+the palette is still the same block twice, and **Make its own block** (below)
+parts those.
+[#56](https://github.com/Agustin-Delgado/repath/pull/56)
+
+---
+
 ## 21 September 2026 — A copy of a box can be made a block of its own
 
 **Make its own block, in the inspector, gives one copy of a block a definition
