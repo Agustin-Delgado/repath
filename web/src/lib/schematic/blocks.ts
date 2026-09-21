@@ -39,6 +39,7 @@ import {
 	portOrder,
 	registerKind,
 	snap,
+	wireSegments,
 	type BlockDef,
 	type BlockPort,
 	type Instance,
@@ -46,7 +47,7 @@ import {
 	type Schematic,
 	type Wire
 } from './model';
-import { buildConnectivity, pinKey, type Connectivity } from './nets';
+import { buildConnectivity, liesWithin, pinKey, type Connectivity } from './nets';
 import { routeWire } from './route';
 import type { PortInjection } from '../spice';
 
@@ -373,6 +374,40 @@ export interface BlockPlan {
 const PORT_STANDOFF = 20;
 
 /**
+ * Take out of `wires` every one with an end that, once inside, would touch
+ * nothing.
+ *
+ * A wire from a member's pin that ends on the side of a wire leaving the parts
+ * comes inside — both ends are the parts' own — but the wire it joined stays
+ * out, re-attached to the box, and the end that met it is left in mid-air: a
+ * wire the editor refuses to draw, drawn by boxing. The port wired to that
+ * pin is the join now, so the stub goes, and so does anything that reached
+ * only it.
+ */
+function dropStubs(wires: Wire[], onMember: (p: Point) => boolean): void {
+	for (let dropped = true; dropped; ) {
+		dropped = false;
+		for (const wire of wires) {
+			const ends = [wire.points[0], wire.points[wire.points.length - 1]];
+			const held = ends.every(
+				(end) =>
+					onMember(end) ||
+					wires.some(
+						(other) =>
+							other !== wire &&
+							(other.points.some((p) => p.x === end.x && p.y === end.y) ||
+								wireSegments(other).some((s) => liesWithin(end.x, end.y, s.a, s.b)))
+					)
+			);
+			if (held) continue;
+			wires.splice(wires.indexOf(wire), 1);
+			dropped = true;
+			break;
+		}
+	}
+}
+
+/**
  * Plan a block around some of a drawing's parts.
  *
  * A port is planted for every *net* that reaches one of the parts and
@@ -444,6 +479,7 @@ export function planBlock(schematic: Schematic, memberIds: ReadonlySet<string>):
 	const wires: Wire[] = schematic.wires
 		.filter((w) => inside.has(w.id))
 		.map((w) => ({ id: w.id, points: w.points.map((p) => ({ x: p.x, y: p.y })) }));
+	dropStubs(wires, onMember);
 	const taken = new Set(members.map((i) => i.name));
 	const rows = { left: new Set<number>(), right: new Set<number>() };
 	let minted = 0;

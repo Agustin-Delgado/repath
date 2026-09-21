@@ -11,6 +11,25 @@ early entries point at those instead.
 
 ---
 
+## 21 September 2026 — A box on its side wears its name in the middle
+
+**A block's name, and a chip's part number, sit in the middle of a body turned
+a quarter.** The name runs along the bottom edge, under the ports, and is
+drawn upright whichever way the box is turned — so on a box turned on its
+side it straddled a side edge, half of it outside. The middle of the body is
+the one place clear of the ports either way, and that is where it goes now,
+on a chip too.
+[#54](https://github.com/Agustin-Delgado/repath/pull/54)
+
+**Boxing up leaves no wire inside ending in mid-air.** A wire from a part's
+pin that ended on the side of a wire leaving the parts came inside with them,
+while the wire it met stayed out and was re-attached to the box: a stub
+ending on nothing, which is exactly the wire the editor refuses to draw. The
+port on that pin is the join now, and the stub is dropped.
+[#54](https://github.com/Agustin-Delgado/repath/pull/54)
+
+---
+
 ## 20 September 2026 — Boxing up a part wired round its own outside
 
 **A box's pins are planted clear of a wire that loops round the parts.**

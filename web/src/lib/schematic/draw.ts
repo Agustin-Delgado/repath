@@ -402,6 +402,18 @@ export function labelPlacement(
 	};
 }
 
+/**
+ * Where a symbol's label sits, relative to the part's origin, once the part
+ * is turned: where it was drawn, carried round with the part — or, on a part
+ * turned a quarter, the place the label keeps for that (`onSide`), for the
+ * one whose drawn place only makes sense along the top or bottom edge.
+ */
+export function labelPosition(label: SymbolLabel, rotation: Rotation): Vec2 {
+	const onSide = rotation === 90 || rotation === 270;
+	const place = onSide && label.onSide ? label.onSide : label;
+	return rotatePoint(place.x, place.y, rotation);
+}
+
 export function drawSchematic(painter: Painter, view: SchematicView, visible: Rect): void {
 	const { theme } = view;
 	const scale = painter.viewport.scale;
@@ -471,7 +483,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 		// Symbol text is positioned by the rotation but drawn upright, which stays
 		// legible on a component turned on its side.
 		for (const label of symbolGeometry(instance.kind, instance.params).labels) {
-			const at = rotatePoint(label.x, label.y, instance.rotation);
+			const at = labelPosition(label, instance.rotation);
 			painter.text(
 				label.text,
 				{ x: instance.x + at.x, y: instance.y + at.y },
