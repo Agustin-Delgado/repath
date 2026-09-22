@@ -100,14 +100,21 @@ export function contactControl(
 		level = to;
 	};
 
-	for (const when of moments) {
+	for (const [index, when] of moments.entries()) {
 		const target = 1 - level;
-		if (bounce <= 0) {
+		// The chatter of one operation is over before the next begins. A button
+		// released before its press had settled used to carry on chattering past
+		// the release, and the control points went back in time — which the
+		// engine's PWL reads in order, so it skipped the release altogether.
+		const next = moments[index + 1];
+		const train = Math.min(bounce, next === undefined ? Infinity : next - when - 2 * edge);
+		// Gaps halving each time, scaled so the whole train fits inside it.
+		const span = train / (1 - Math.pow(0.5, CHATTER));
+		if (bounce <= 0 || span * Math.pow(0.5, CHATTER) <= 2 * edge) {
+			// No bounce, or no room for one between this operation and the next.
 			move(when, target);
 			continue;
 		}
-		// Gaps halving each time, scaled so the whole train fits inside `bounce`.
-		const span = bounce / (1 - Math.pow(0.5, CHATTER));
 		move(when, target);
 		let elapsed = 0;
 		for (let k = 0; k < CHATTER; k++) {
