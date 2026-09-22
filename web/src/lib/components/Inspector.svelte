@@ -174,6 +174,36 @@
 		settling.spice = setTimeout(() => app.setParam(id, 'spice', raw), SETTLE_MS);
 	}
 
+	/**
+	 * A name, on the same timer. Typing "output" into a probe used to be six
+	 * undo steps, six trace lines and six recompiles of the whole circuit.
+	 */
+	function typingText(key: string, raw: string) {
+		clearTimeout(settling[key]);
+		const id = instance?.id;
+		if (!id) return;
+		typedFor[key] = id;
+		settling[key] = setTimeout(() => {
+			delete typedFor[key];
+			app.setParam(id, key, raw);
+		}, SETTLE_MS);
+	}
+
+	/**
+	 * Which part a pending name was typed for. Leaving the field by clicking
+	 * another part can move the selection before the field hears about it.
+	 */
+	const typedFor: Record<string, string> = {};
+
+	/** Leaving the field, or Enter: whatever is still waiting goes in now. */
+	function commitText(key: string, raw: string) {
+		const id = typedFor[key];
+		clearTimeout(settling[key]);
+		if (!id) return;
+		delete typedFor[key];
+		app.setParam(id, key, raw);
+	}
+
 	function commit(key: string, raw: string, field: HTMLInputElement) {
 		if (!instance) return;
 
@@ -496,7 +526,8 @@
 							<input
 								class="text"
 								value={String(instance.params[param.key] ?? '')}
-								oninput={(e) => app.setParam(instance.id, param.key, e.currentTarget.value)}
+								oninput={(e) => typingText(param.key, e.currentTarget.value)}
+								onchange={(e) => commitText(param.key, e.currentTarget.value)}
 								onkeydown={(e) => {
 									if (e.key === 'Enter') e.currentTarget.blur();
 								}}
