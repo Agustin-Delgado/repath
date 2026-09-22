@@ -140,9 +140,10 @@
 					app.notice =
 						'This is the circuit from the link with the changes you made since, which were kept. The link as it was sent is one click away.';
 				}
-			} catch {
+			} catch (cause) {
 				// A draft this build cannot read is left where it is, not deleted: a
 				// newer build may well read it. Fall through as though there were none.
+				console.warn('The saved draft could not be restored.', cause);
 			}
 		}
 		let origin = resumed?.origin ?? '';
