@@ -11,6 +11,57 @@ early entries point at those instead.
 
 ---
 
+## 22 September 2026 — An audit, and what it fixed
+
+A read of the whole code base for wrong answers, crashes and what would not
+scale. What changed, from your side:
+
+**Answers that were wrong are right.**
+- Frequency sweeps of diode and LED circuits include the diode's series
+  resistance; the gain was off by up to 2.3×.
+- A chip whose supply or ground leg is missing, or tied to the wrong place,
+  no longer simulates perfect logic: it says it is not powered, and its
+  outputs read as undetermined.
+- An imported `.subckt` keeps its DC values, and a line repath cannot read
+  (a waveform, an expression, `POLY`) is reported instead of misread.
+- Rise time, overshoot and duty cycle read correctly on steep edges and on
+  captures that are not whole cycles.
+- A shared link or saved file opens at the sender's temperature, logic
+  family, tolerance sample and frequency range, not yours.
+- A push-button released while still bouncing registers the release on time,
+  and a logic input toggled during a run takes effect from that moment.
+
+**Things that froze or crashed don't.**
+- A loop of logic gates with no delay shows an error naming the nets instead
+  of freezing the tab. An infinite sweep, a circuit too large for the solver
+  or a model parameter of zero gets a clear message instead of killing the
+  simulator.
+- A broken or newer link is refused with a message instead of leaving the
+  editor stuck. Two probes with the same name, or two imported parts whose
+  names differ only in case, no longer break the scope or the palette.
+- A tolerance sweep no longer freezes the page.
+
+**Editing is safer.**
+- Picking an example can be undone, and so can edits made inside a block
+  after leaving it. Undo can no longer fire in the middle of a drag, and a
+  refused edit no longer wipes redo.
+- A part pasted onto a wire goes in series instead of being shorted, and two
+  wires meeting on a third are never separated by tidying.
+- Fields accept units: `5ms`, `10uF`, `4.7kΩ`. Typing a probe name is one
+  undo step, not one per letter.
+- Keyboard users can press buttons with Space, Ctrl+C copies selected text,
+  and toggle buttons say whether they are pressed.
+
+**Big drawings stay fast.** Routing, tidying and dragging on a page of
+hundreds of chips and thousands of wires went from seconds to tens of
+milliseconds; the scope draws only what it shows, never dropping a spike;
+the animation sleeps when nothing is running. Time labels stay readable at
+any point of a long run, a trackpad zooms the scope smoothly, and a long wire
+crossing a zoomed-in view keeps its live colour.
+[#58](https://github.com/Agustin-Delgado/repath/pull/58)
+
+---
+
 ## 22 September 2026 — Your work is kept as you go
 
 **Nothing is lost to a reload, a closed tab or a power cut.** Every change is
