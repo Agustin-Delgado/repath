@@ -288,7 +288,15 @@ export type SubElement =
 	| { kind: 'isource'; name: string; nodes: string[]; value: number }
 	| { kind: 'diode'; name: string; nodes: string[]; model: string }
 	| { kind: 'bjt'; name: string; nodes: string[]; model: string }
-	| { kind: 'mosfet'; name: string; nodes: string[]; model: string }
+	| {
+			kind: 'mosfet';
+			name: string;
+			nodes: string[];
+			model: string;
+			/** The instance's own width and length, which win over the card's. */
+			w?: number;
+			l?: number;
+	  }
 	| { kind: 'vcvs'; name: string; nodes: string[]; gain: number }
 	| { kind: 'vccs'; name: string; nodes: string[]; gain: number };
 
@@ -320,40 +328,112 @@ const ELEMENTS: Record<string, { nodes: number; kind: SubElement['kind']; value:
 /**
  * Read one element line.
  *
- * The shape is `<designator><name> <nodes…> <value or model>`, and the trouble
- * is that the node count is not fixed even for one designator: a `Q` may or may
- * not name its substrate, and any line may carry trailing `AREA=1`-style
- * parameters this engine has nothing to do with. So the tail is taken from the
- * right — the last plain token is the value or the model — and the nodes are
- * whatever was in between, trimmed to the number the device takes.
+ * The shape is `<designator><name> <nodes…> <value or model> <extras…>`, and a
+ * line is only taken when every part of it that changes the answer is
+ * understood. Anything else — a transient source (`PULSE(…)`, `SIN(…)`), a
+ * behavioural expression, a polynomial source, an area or a multiplier this
+ * engine would have to ignore — comes back as null, which puts the line on the
+ * subcircuit's list of what it could not read, so the part says so. Taking the
+ * last token as the value, as this used to, turned `V1 a 0 DC 5 AC 1` into a
+ * one-volt source and `PULSE(0 5 …)` into two microvolts, without a word.
+ *
+ * Extras that do not change a DC or transient answer here — `IC=`, a MOSFET's
+ * junction areas, `OFF` — are still dropped.
  */
 function readElement(line: string): SubElement | null {
-	const tokens = line.trim().split(/\s+/);
-	if (tokens.length < 3) return null;
+	// Anything bracketed is a waveform, an expression or a polynomial: a
+	// different kind of source from the constant one built below.
+	if (/[({]/.test(line)) return null;
+	if (/\b(pulse|sin|pwl|exp|sffm|am|poly|value|table|laplace|freq)\b/i.test(line)) return null;
 
+	// `W = 1u` and `W=1u` are the same assignment; one token is easier to read.
+	const tokens = line.trim().replace(/\s*=\s*/g, '=').split(/\s+/);
+	if (tokens.length < 3) return null;
 	const spec = ELEMENTS[tokens[0][0].toUpperCase()];
 	if (!spec) return null;
-
 	const name = tokens[0];
-	// A source may spell its value `DC 12`, `DC=12` or just `12`, so an assignment
-	// whose left-hand side is one of those keywords is the value rather than one of
-	// the trailing `AREA=1`-style parameters that get dropped below.
-	const plain = tokens
-		.slice(1)
-		.map((t) => t.replace(/^(dc|ac)\s*=\s*/i, ''))
-		.filter((t) => !t.includes('='));
-	const tail = plain[plain.length - 1];
-	const nodes = plain.slice(0, -1).filter((t) => !/^(dc|ac)$/i.test(t));
-	if (nodes.length < spec.nodes) return null;
-	const used = nodes.slice(0, spec.nodes);
+
+	const assigned = new Map<string, string>();
+	const plain: string[] = [];
+	for (const token of tokens.slice(1)) {
+		const eq = token.indexOf('=');
+		if (eq > 0) assigned.set(token.slice(0, eq).toUpperCase(), token.slice(eq + 1));
+		// `OFF` is an initial guess for a DC solve, not a node or a model.
+		else if (!/^off$/i.test(token)) plain.push(token);
+	}
+
+	// A multiplier is so many copies in parallel. A MOSFET's is folded into its
+	// width below; on anything else it would be a different value.
+	const multiplier = assigned.has('M') ? parseSpiceNumber(assigned.get('M')!) : 1;
+	if (multiplier === null || multiplier <= 0) return null;
+	if (multiplier !== 1 && spec.kind !== 'mosfet') return null;
+	if (assigned.has('AREA')) return null;
+
+	if (spec.kind === 'vsource' || spec.kind === 'isource') {
+		if (plain.length < 2) return null;
+		const nodes = plain.slice(0, 2);
+		// What follows the nodes is `[DC] <value>` and `AC <mag> [<phase>]`, in
+		// either order. The DC value is the constant built here; the AC one drives
+		// a sweep of the whole circuit, not a part inside it.
+		let value: number | null = null;
+		const dc = assigned.get('DC');
+		if (dc !== undefined) {
+			value = parseSpiceNumber(dc);
+			if (value === null) return null;
+		}
+		const rest = plain.slice(2);
+		for (let i = 0; i < rest.length; i++) {
+			if (/^ac$/i.test(rest[i])) {
+				i++;
+				if (i + 1 < rest.length && parseSpiceNumber(rest[i + 1]) !== null) i++;
+				continue;
+			}
+			if (/^dc$/i.test(rest[i])) continue;
+			const number = parseSpiceNumber(rest[i]);
+			if (number === null || value !== null) return null;
+			value = number;
+		}
+		// No DC value at all is a DC value of zero, as in any SPICE.
+		return { kind: spec.kind, name, nodes, value: value ?? 0 };
+	}
 
 	if (spec.value === 'model') {
-		return { kind: spec.kind, name, nodes: used, model: tail } as SubElement;
+		// A `Q` may or may not name its substrate, so the model is the last plain
+		// token and the nodes are what comes before it.
+		if (plain.length < spec.nodes + 1) return null;
+		const model = plain[plain.length - 1];
+		// A number where the model should be is an area after it: `D1 a k DX 2`.
+		if (parseSpiceNumber(model) !== null) return null;
+		const nodes = plain.slice(0, -1);
+		if (nodes.length > spec.nodes + (spec.kind === 'bjt' ? 1 : 0)) return null;
+		const used = nodes.slice(0, spec.nodes);
+		if (spec.kind !== 'mosfet') return { kind: spec.kind, name, nodes: used, model } as SubElement;
+		const size: { w?: number; l?: number } = {};
+		for (const [key, field] of [
+			['W', 'w'],
+			['L', 'l']
+		] as const) {
+			const text = assigned.get(key);
+			if (text === undefined) continue;
+			const number = parseSpiceNumber(text);
+			if (number === null || number <= 0) return null;
+			size[field] = number;
+		}
+		if (multiplier !== 1) {
+			// Copies side by side are one transistor that much wider.
+			if (size.w === undefined) return null;
+			size.w *= multiplier;
+		}
+		return { kind: 'mosfet', name, nodes: used, model, ...size };
 	}
-	const value = parseSpiceNumber(tail);
+
+	// R, C, L, E and G: exactly their nodes, then exactly one value.
+	if (plain.length !== spec.nodes + 1) return null;
+	const value = parseSpiceNumber(plain[spec.nodes]);
 	if (value === null) return null;
+	const nodes = plain.slice(0, spec.nodes);
 	const key = spec.kind === 'vcvs' || spec.kind === 'vccs' ? 'gain' : 'value';
-	return { kind: spec.kind, name, nodes: used, [key]: value } as SubElement;
+	return { kind: spec.kind, name, nodes, [key]: value } as SubElement;
 }
 
 /**
@@ -364,22 +444,37 @@ function readElement(line: string): SubElement | null {
  * transistors once at the top and the subcircuits below refer to them by name.
  */
 /**
- * Last file parsed, and what it came to.
+ * Files parsed lately, and what they came to.
  *
  * A drawing is recompiled whenever it changes, which during a drag is every
- * frame, and every placed instance re-reads the file it came from. Eight copies
+ * frame, and every placed instance re-reads the text it came from. Eight copies
  * of a vendor macromodel cost about a millisecond and a half of each frame that
- * way; one entry is enough to take almost all of it back, because within a
- * single compile the instances of a definition all hand over the same string.
+ * way. One entry used to be kept, which is enough for one library and none for
+ * two: instances of two imported parts alternate within a compile, and each
+ * evicted the other every time. Sixteen covers any drawing a person makes; the
+ * oldest is dropped first.
  */
-let lastSource = '';
-let lastParse: Subcircuit[] = [];
+const PARSE_CACHE = 16;
+
+function remembered<T>(cache: Map<string, T>, key: string, compute: () => T): T {
+	const hit = cache.get(key);
+	if (hit !== undefined) {
+		// Re-inserted, so the map's order is the order of use.
+		cache.delete(key);
+		cache.set(key, hit);
+		return hit;
+	}
+	const value = compute();
+	cache.set(key, value);
+	if (cache.size > PARSE_CACHE) cache.delete(cache.keys().next().value!);
+	return value;
+}
+
+const parsedSubcircuits = new Map<string, Subcircuit[]>();
+const parsedCards = new Map<string, ModelCard[]>();
 
 export function parseSubcircuits(text: string): Subcircuit[] {
-	if (text === lastSource) return lastParse;
-	lastSource = text;
-	lastParse = parseSubcircuitsUncached(text);
-	return lastParse;
+	return remembered(parsedSubcircuits, text, () => parseSubcircuitsUncached(text));
 }
 
 function parseSubcircuitsUncached(text: string): Subcircuit[] {
@@ -421,6 +516,21 @@ function parseSubcircuitsUncached(text: string): Subcircuit[] {
 		else current.unread.push(line.trim());
 	}
 	return out;
+}
+
+/**
+ * A card with an instance's own `W=` and `L=` written over it.
+ *
+ * Through the card rather than onto the finished model, because the overlap
+ * capacitances are per metre of width and have to be multiplied by the width
+ * this transistor actually has.
+ */
+function sized(card: ModelCard, element: { w?: number; l?: number }): ModelCard {
+	if (element.w === undefined && element.l === undefined) return card;
+	const params = new Map(card.params);
+	if (element.w !== undefined) params.set('W', element.w);
+	if (element.l !== undefined) params.set('L', element.l);
+	return { ...card, params };
 }
 
 /**
@@ -544,7 +654,7 @@ export function expandSubcircuit(
 							lambda: 0.02,
 							w: 10,
 							l: 1,
-							...mosfetFromCard(card).model
+							...mosfetFromCard(sized(card, element)).model
 						}
 					});
 				}
@@ -596,7 +706,9 @@ export function kindForCard(card: ModelCard): string | null {
  */
 export function cardFor(text: string, kind: string): ModelCard | null {
 	if (!text.trim()) return null;
-	const cards = parseModelCards(text);
+	// A pasted card can be a whole vendor library, and this runs per instance
+	// per compile.
+	const cards = remembered(parsedCards, text, () => parseModelCards(text));
 	// An LED is a diode with different numbers in it, so a diode card suits one.
 	const wanted = kind === 'led' ? 'diode' : kind;
 	return cards.find((c) => kindForCard(c) === wanted) ?? null;
