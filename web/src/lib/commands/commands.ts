@@ -1,5 +1,5 @@
 import { copyStepsAndReport, openFromFile, saveToFile, shareAndReport } from '$lib/document';
-import { EXAMPLES } from '$lib/examples';
+import { EXAMPLES, exampleDomain } from '$lib/examples';
 import { SYMBOL_STANDARDS } from '$lib/schematic/symbols';
 import type { App } from '$lib/state.svelte';
 
@@ -293,7 +293,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 				id: `example-${example.id}`,
 				label: example.name,
 				group: 'Examples',
-				keywords: ['example', 'demo'],
+				keywords: ['example', 'demo', exampleDomain(example)],
 				description: example.description,
 				run: () => {
 					app.loadExample(example.id);

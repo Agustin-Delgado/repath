@@ -11,6 +11,38 @@ early entries point at those instead.
 
 ---
 
+## 22 September 2026 — Finding things by name
+
+The catalog, the commands and the circuit itself all keep growing, and walking
+through shelves and lists to find something stops working long before they
+stop growing. So everything can now be asked for by name.
+
+**Parts.**
+- Press `/` and type — `7400`, `npn`, `cap`, `zener`, `74hc00` — and `Enter`
+  puts the part in your hand. Parts answer to their number, their family and
+  the words people use when they do not know ours.
+- The parts you placed last wait at the top of the palette, and the shelves
+  fold away; the chips start folded.
+
+**Everything else.**
+- `Ctrl+K` finds any part, any command and any example, with the keyboard
+  shortcut written beside each one. `Ctrl+S` and `Ctrl+O` save and open, and
+  `W` picks up the wire tool.
+- The examples are shelved as analog, logic and mixed signal.
+
+**A calmer screen.**
+- One Run button. The transport under the drawing used to have a Run of its
+  own that carried on instead of starting over; it now says **Resume**, and
+  only when there is a stopped sweep to resume.
+- The scope lists what it plots, with its knobs, and finds any other net by
+  name under **Add a signal**, instead of listing every net in the circuit.
+- The inspector keeps the device-physics values under **More settings**, and
+  with nothing selected it shows what the circuit holds and the keys to know.
+- Confirmations — a link copied, the steps copied — appear for a moment at
+  the bottom instead of relabelling the button that was pressed.
+
+---
+
 ## 22 September 2026 — An audit, and what it fixed
 
 A read of the whole code base for wrong answers, crashes and what would not

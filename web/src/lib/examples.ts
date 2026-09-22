@@ -6,7 +6,7 @@
  */
 
 import type { Schematic } from './schematic/model';
-import { defaultParams } from './schematic/model';
+import { defaultParams, definitionOf } from './schematic/model';
 import { SEGMENTS } from './schematic/led';
 
 export interface Example {
@@ -1443,4 +1443,41 @@ export const EXAMPLES: Example[] = [
 
 export function exampleById(id: string): Example {
 	return EXAMPLES.find((e) => e.id === id) ?? EXAMPLES[0];
+}
+
+export type ExampleDomain = 'Analog' | 'Logic' | 'Mixed signal';
+
+/** Parts that join a circuit without making it analog or digital. */
+const NEUTRAL = new Set(['ground', 'supply', 'probe', 'port']);
+/**
+ * What a logic circuit shows its state with. An adder lighting LEDs through
+ * resistors is a logic example, not a mixed-signal one.
+ */
+const INDICATORS = new Set(['led', 'display7', 'resistor']);
+
+const domains = new Map<string, ExampleDomain>();
+
+/**
+ * Which shelf an example goes on, read off the parts it is built from.
+ *
+ * Read rather than written on each example, so a new one cannot be filed on
+ * the wrong shelf: a part with a digital pin is logic, anything else that is
+ * not a rail, a marker or an indicator is analog, and a circuit with both is the thing
+ * repath is for.
+ */
+export function exampleDomain(example: Example): ExampleDomain {
+	let domain = domains.get(example.id);
+	if (domain) return domain;
+	let digital = false;
+	let analog = false;
+	for (const instance of example.build().instances) {
+		if (NEUTRAL.has(instance.kind)) continue;
+		// A block or an imported part is not in the catalog; its insides decide.
+		if (instance.kind.includes(':') && !instance.kind.startsWith('ic:')) continue;
+		if (definitionOf(instance.kind).pins.some((pin) => pin.domain === 'digital')) digital = true;
+		else if (!INDICATORS.has(instance.kind)) analog = true;
+	}
+	domain = !digital ? 'Analog' : analog ? 'Mixed signal' : 'Logic';
+	domains.set(example.id, domain);
+	return domain;
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { FileDown, FolderOpen, ListOrdered, Redo2, Share2, Undo2 } from '@lucide/svelte';
 	import { Button, Menu, MenuItem, MenuLabel, MenuSeparator, Select, ToolbarSeparator } from '$lib/ui';
-	import { EXAMPLES } from '$lib/examples';
+	import { EXAMPLES, exampleDomain, type ExampleDomain } from '$lib/examples';
 	import { SYMBOL_STANDARDS } from '$lib/schematic/symbols';
 	import { copyStepsAndReport, openFromFile, saveToFile, shareAndReport } from '$lib/document';
 	import { app } from '$lib/state.svelte';
@@ -16,6 +16,8 @@
 	};
 
 	let { share }: Props = $props();
+
+	const SHELVES: ExampleDomain[] = ['Analog', 'Logic', 'Mixed signal'];
 </script>
 
 <Button variant="ghost" size="icon" onclick={() => app.undo()} title="Undo (Ctrl+Z)" aria-label="Undo">
@@ -51,18 +53,21 @@
 	drawing, which is an action rather than a setting.
 -->
 <Menu label="Examples" title="Open a circuit that shows something off">
-	<MenuLabel>Examples</MenuLabel>
-	{#each EXAMPLES as example (example.id)}
-		<MenuItem
-			textValue={example.name}
-			title={example.description}
-			onAction={() => {
-				app.loadExample(example.id);
-				app.run();
-			}}
-		>
-			{example.name}
-		</MenuItem>
+	{#each SHELVES as shelf, i (shelf)}
+		{#if i > 0}<MenuSeparator />{/if}
+		<MenuLabel>{shelf}</MenuLabel>
+		{#each EXAMPLES.filter((example) => exampleDomain(example) === shelf) as example (example.id)}
+			<MenuItem
+				textValue={example.name}
+				title={example.description}
+				onAction={() => {
+					app.loadExample(example.id);
+					app.run();
+				}}
+			>
+				{example.name}
+			</MenuItem>
+		{/each}
 	{/each}
 </Menu>
 
