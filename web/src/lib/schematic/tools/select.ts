@@ -27,7 +27,7 @@ import {
 import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
 import { OPERABLE, wireSegments, type Point } from '../model';
-import { elbow, fallback, lastResort, routeWire } from '../route';
+import { elbow, fallback, lastResort, previewRouter, routeWire } from '../route';
 import { groupLabelAt } from '../groups';
 import { blockOf } from '../model';
 import type { SchematicItem } from '../scene';
@@ -97,6 +97,8 @@ export function createSelectTool(): Tool {
 	let wireFrom: Point | null = null;
 	/** Shift was held: skip the router and draw the plain elbow. */
 	let handRouted = false;
+	/** The new wire's route, kept while its ends stay put; started afresh with each wire. */
+	let routed = previewRouter();
 	let wireTo: SnapTarget | null = null;
 
 	/**
@@ -139,7 +141,7 @@ export function createSelectTool(): Tool {
 	function wirePath(to: Point, ctx: ToolContext): Point[] {
 		if (!wireFrom) return [];
 		if (handRouted) return elbow(wireFrom, to);
-		return routeWire(app.schematic, wireFrom, to, { grid: ctx.gridSize });
+		return routed(app.schematic, wireFrom, to, ctx.gridSize);
 	}
 
 	/**
@@ -296,6 +298,7 @@ export function createSelectTool(): Tool {
 				wireFrom = { x: pin.x, y: pin.y };
 				wireTo = pin;
 				handRouted = pointer.shift;
+				routed = previewRouter();
 				ctx.invalidate('overlay');
 				return;
 			}
