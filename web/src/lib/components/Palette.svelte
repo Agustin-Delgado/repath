@@ -60,7 +60,7 @@
 	let outcome = $state<string | null>(null);
 
 	function runImport() {
-		const { added, error } = app.importSubcircuits(source);
+		const { ids, error } = app.importSubcircuits(source);
 		if (error) {
 			outcome = error;
 			return;
@@ -70,7 +70,8 @@
 		source = '';
 		// Straight into placing it. Importing a part and then having to find it in
 		// the list is a step that exists only because the code was easier that way.
-		if (added.length === 1) select(SUBCIRCUIT_PREFIX + added[0].toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+		// By the id the import gave it, which is not always its name made lowercase.
+		if (ids.length === 1) select(SUBCIRCUIT_PREFIX + ids[0]);
 	}
 </script>
 
