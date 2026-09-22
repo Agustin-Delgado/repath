@@ -78,9 +78,14 @@ export function measure(time: Float64Array, samples: Float64Array): Measurements
 	// midpoint, and every sample of it would otherwise be a cycle.
 	const alive = max - min > 1e-9;
 	const rising: number[] = [];
+	// Time spent above the midpoint so far, as it stood at each rising crossing.
+	// The duty is taken between the first and last of those, over whole cycles:
+	// the part-cycles at either end of the capture depend on where it happened
+	// to start and stop, and counting them read a 50% square captured over two
+	// and a half cycles as 40%.
+	const aboveAtRise: number[] = [];
 	let above = samples[0] > mid;
 	let aboveTime = 0;
-	let lastEdge: number | null = null;
 	for (let i = 1; alive && i < time.length; i++) {
 		const nowAbove = samples[i] > mid;
 		if (nowAbove === above) {
@@ -89,16 +94,21 @@ export function measure(time: Float64Array, samples: Float64Array): Measurements
 		}
 		const at = crossing(time, samples, i, mid);
 		if (above) aboveTime += at - time[i - 1];
-		else if (lastEdge !== null || rising.length === 0) rising.push(at);
-		if (nowAbove) lastEdge = at;
+		else {
+			rising.push(at);
+			aboveAtRise.push(aboveTime);
+		}
 		above = nowAbove;
 		if (above) aboveTime += time[i] - at;
 	}
 
 	const cycles = rising.length - 1;
-	const period = cycles >= 1 ? (rising[rising.length - 1] - rising[0]) / cycles : null;
+	const measured = cycles >= 1 ? rising[rising.length - 1] - rising[0] : 0;
+	const period = cycles >= 1 ? measured / cycles : null;
 	const frequency = period && period > 0 ? 1 / period : null;
-	const duty = span > 0 && frequency ? aboveTime / span : null;
+	const duty = frequency
+		? (aboveAtRise[aboveAtRise.length - 1] - aboveAtRise[0]) / measured
+		: null;
 
 	return {
 		min,
@@ -109,8 +119,26 @@ export function measure(time: Float64Array, samples: Float64Array): Measurements
 		frequency,
 		period: frequency ? period : null,
 		duty,
-		...edge(time, samples, min, max)
+		...edge(time, samples, min, max, settles(time, samples, max - min))
 	};
+}
+
+/**
+ * Whether the trace has come to rest by the end of the capture: over its last
+ * tenth it moves by less than 2% of its whole swing.
+ *
+ * A step that rings and dies away has; a sine, a square or a ring still going
+ * has not, and for those the last sample is only where the capture stopped.
+ */
+function settles(time: Float64Array, samples: Float64Array, swing: number): boolean {
+	const from = time[time.length - 1] - (time[time.length - 1] - time[0]) * 0.1;
+	let low = Infinity;
+	let high = -Infinity;
+	for (let i = time.length - 1; i >= 0 && time[i] >= from; i--) {
+		low = Math.min(low, samples[i]);
+		high = Math.max(high, samples[i]);
+	}
+	return high - low < swing * 0.02;
 }
 
 /** What a logic lane can be asked: how often it goes round, and how much of that it spends high. */
@@ -196,12 +224,20 @@ export function measureLogic(
 	return { frequency: 1 / period, period, duty, cycles };
 }
 
-/** Rise time and overshoot of the first rising edge, if there is one. */
+/**
+ * Rise time of the first rising edge, and its overshoot when the trace settles.
+ *
+ * Overshoot is measured against where the signal settled, which only a trace
+ * that settles has. On anything still moving the last sample is wherever the
+ * capture stopped — a sine read 2.5%, a square cut off mid-edge 100% — so
+ * there it is not given at all.
+ */
 function edge(
 	time: Float64Array,
 	samples: Float64Array,
 	min: number,
-	max: number
+	max: number,
+	settles: boolean
 ): { riseTime: number | null; overshoot: number | null } {
 	const swing = max - min;
 	if (swing < 1e-12) return { riseTime: null, overshoot: null };
@@ -210,9 +246,11 @@ function edge(
 
 	let from: number | null = null;
 	for (let i = 1; i < time.length; i++) {
+		// Both thresholds are tested on the same pair of samples: an edge steeper
+		// than the timestep crosses them together, and skipping the second test
+		// here measured the rise to the *next* edge, a whole period later.
 		if (from === null && samples[i - 1] < low && samples[i] >= low) {
 			from = crossing(time, samples, i, low);
-			continue;
 		}
 		if (from !== null && samples[i - 1] < high && samples[i] >= high) {
 			const to = crossing(time, samples, i, high);
@@ -222,7 +260,7 @@ function edge(
 			const rise = settled - min;
 			return {
 				riseTime: to - from,
-				overshoot: rise > 1e-12 ? Math.max((max - settled) / rise, 0) : null
+				overshoot: settles && rise > 1e-12 ? Math.max((max - settled) / rise, 0) : null
 			};
 		}
 	}
