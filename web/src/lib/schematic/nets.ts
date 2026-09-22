@@ -23,25 +23,87 @@ import {
 	type WireSegment
 } from './model';
 
-class DisjointSet {
-	private parent = new Map<string, string>();
+/**
+ * A number for every distinct grid point, the way `pointKey` tells them apart.
+ *
+ * Points on the drawing are whole numbers well inside a million, and those are
+ * packed into one number with no text involved; anything else falls back to the
+ * text key, so two points are the same number exactly when they have the same key.
+ */
+class PointNumbers {
+	private packed = new Map<number, number>();
+	private other = new Map<string, number>();
+	private keys: string[] = [];
+	private xs: number[] = [];
+	private ys: number[] = [];
 
-	find(key: string): string {
-		const seen: string[] = [];
-		let current = key;
-		while (this.parent.has(current) && this.parent.get(current) !== current) {
-			seen.push(current);
-			current = this.parent.get(current)!;
-		}
-		if (!this.parent.has(current)) this.parent.set(current, current);
-		for (const k of seen) this.parent.set(k, current);
-		return current;
+	get size(): number {
+		return this.keys.length;
 	}
 
-	union(a: string, b: string): void {
-		const ra = this.find(a);
-		const rb = this.find(b);
-		if (ra !== rb) this.parent.set(ra, rb);
+	of(x: number, y: number): number {
+		const rx = Math.round(x);
+		const ry = Math.round(y);
+		const inRange = rx > -PACK_OFFSET && rx < PACK_OFFSET && ry > -PACK_OFFSET && ry < PACK_OFFSET;
+		if (inRange) {
+			const code = (rx + PACK_OFFSET) * PACK_SPAN + (ry + PACK_OFFSET);
+			const known = this.packed.get(code);
+			if (known !== undefined) return known;
+			const n = this.add(rx, ry);
+			this.packed.set(code, n);
+			return n;
+		}
+		const key = pointKey(x, y);
+		const known = this.other.get(key);
+		if (known !== undefined) return known;
+		const n = this.add(rx, ry);
+		this.other.set(key, n);
+		return n;
+	}
+
+	private add(rx: number, ry: number): number {
+		this.xs.push(rx);
+		this.ys.push(ry);
+		this.keys.push('');
+		return this.keys.length - 1;
+	}
+
+	/** The text key of a point, made only when asked for. */
+	key(n: number): string {
+		return (this.keys[n] ||= `${this.xs[n]},${this.ys[n]}`);
+	}
+}
+
+const PACK_OFFSET = 1 << 20;
+const PACK_SPAN = 1 << 21;
+
+/** Union-find over the numbers `0..size-1`, with path halving and union by size. */
+class NumberSets {
+	private parent: Int32Array;
+	private weight: Int32Array;
+
+	constructor(size: number) {
+		this.parent = new Int32Array(size);
+		this.weight = new Int32Array(size).fill(1);
+		for (let i = 0; i < size; i++) this.parent[i] = i;
+	}
+
+	find(n: number): number {
+		const parent = this.parent;
+		while (parent[n] !== n) {
+			parent[n] = parent[parent[n]];
+			n = parent[n];
+		}
+		return n;
+	}
+
+	union(a: number, b: number): void {
+		let ra = this.find(a);
+		let rb = this.find(b);
+		if (ra === rb) return;
+		if (this.weight[ra] > this.weight[rb]) [ra, rb] = [rb, ra];
+		this.parent[ra] = rb;
+		this.weight[rb] += this.weight[ra];
 	}
 }
 
@@ -197,42 +259,51 @@ export function buildConnectivity(
 	schematic: Schematic,
 	ties: ReadonlyArray<readonly [Point, Point]> = []
 ): Connectivity {
-	const set = new DisjointSet();
+	// Every distinct point gets a small integer, and the union-find runs on an
+	// array of those. It ran on the text keys once, through a map, and on a page
+	// of a few hundred chips that was a hundred milliseconds a pass — several
+	// passes a frame while something is being dragged.
+	const points = new PointNumbers();
 	const pins: PinRef[] = [];
+	const pinPoint: number[] = [];
 
 	for (const instance of schematic.instances) {
 		for (const pin of definitionFor(instance).pins) {
 			const { x, y } = pinPosition(instance, pin);
 			pins.push({ instance, pin, x, y });
-			set.find(pointKey(x, y));
+			pinPoint.push(points.of(x, y));
 		}
 	}
+	const wirePoints: Array<Point & { n: number }> = [];
+	for (const wire of schematic.wires) {
+		for (const p of wire.points) wirePoints.push({ x: p.x, y: p.y, n: points.of(p.x, p.y) });
+	}
+	const tied = ties.map(([a, b]) => [points.of(a.x, a.y), points.of(b.x, b.y)] as const);
 
+	const set = new NumberSets(points.size);
 	// A wire is one conductor: every corner along it is the same net.
 	const segments = allSegments(schematic);
 	for (const segment of segments) {
-		set.union(pointKey(segment.a.x, segment.a.y), pointKey(segment.b.x, segment.b.y));
+		set.union(points.of(segment.a.x, segment.a.y), points.of(segment.b.x, segment.b.y));
 	}
-	for (const [a, b] of ties) set.union(pointKey(a.x, a.y), pointKey(b.x, b.y));
+	for (const [a, b] of tied) set.union(a, b);
 
 	// Anything sitting mid-wire joins that wire: pins and other wires' corners.
-	const touchPoints = new LineIndex<Point>([
-		...pins.map((p) => ({ x: p.x, y: p.y })),
-		...schematic.wires.flatMap((w) => w.points.map((p) => ({ x: p.x, y: p.y })))
+	const touchPoints = new LineIndex<Point & { n: number }>([
+		...pins.map((p, i) => ({ x: p.x, y: p.y, n: pinPoint[i] })),
+		...wirePoints
 	]);
 	for (const segment of segments) {
-		const start = pointKey(segment.a.x, segment.a.y);
-		for (const point of touchPoints.inside(segment.a, segment.b)) {
-			set.union(pointKey(point.x, point.y), start);
-		}
+		const start = points.of(segment.a.x, segment.a.y);
+		for (const point of touchPoints.inside(segment.a, segment.b)) set.union(point.n, start);
 	}
 
-	const byRoot = new Map<string, Net>();
+	const byRoot = new Map<number, Net>();
 	const netOfPoint = new Map<string, number>();
 	const netOfPin = new Map<string, number>();
 
-	const ensure = (key: string): Net => {
-		const root = set.find(key);
+	const ensure = (n: number): Net => {
+		const root = set.find(n);
 		let net = byRoot.get(root);
 		if (!net) {
 			net = {
@@ -249,17 +320,18 @@ export function buildConnectivity(
 		return net;
 	};
 
-	const allPoints = new Set<string>([
-		...pins.map((p) => pointKey(p.x, p.y)),
-		...schematic.wires.flatMap((w) => w.points.map((p) => pointKey(p.x, p.y)))
-	]);
-	for (const key of allPoints) {
-		ensure(key).points.push(key);
+	// Pins first and then wire corners, each point once: the order the nets are
+	// numbered in.
+	const seen = new Uint8Array(points.size);
+	for (const n of [...pinPoint, ...wirePoints.map((p) => p.n)]) {
+		if (seen[n]) continue;
+		seen[n] = 1;
+		ensure(n).points.push(points.key(n));
 	}
 
 	const probed = new Set<Net>();
-	for (const ref of pins) {
-		const net = ensure(pointKey(ref.x, ref.y));
+	pins.forEach((ref, i) => {
+		const net = ensure(pinPoint[i]);
 		net.pins.push(ref);
 		if (ref.instance.kind === 'ground') net.isGround = true;
 		// A probe is a name attached to a point, not a part on the net. Deciding
@@ -276,7 +348,7 @@ export function buildConnectivity(
 			else if (ref.instance.kind !== 'port') net.hasAnalog = true;
 		} else if (ref.pin.direction === 'out') net.hasDigitalOutput = true;
 		else net.hasDigitalInput = true;
-	}
+	});
 
 	// Where there is nothing digital to name instead, the probe is measuring a
 	// voltage: a probe on bare wire still has to read something.
@@ -400,6 +472,26 @@ export function mergeWireChains(schematic: Schematic): Wire[] {
 		points: w.points.map((p) => ({ x: p.x, y: p.y }))
 	}));
 
+	// A joint that some other wire passes through — at a corner of its own, or
+	// partway along a straight — is a junction with that wire as well, however
+	// few *ends* meet there. Folding it away took the point out of the path, the
+	// wire passing through became a wire merely crossing, and one net became two.
+	// Merging never moves a point, so this holds for every pass.
+	const through = new Set<string>();
+	for (const wire of wires) {
+		for (let i = 1; i < wire.points.length - 1; i++) {
+			through.add(pointKey(wire.points[i].x, wire.points[i].y));
+		}
+	}
+	const endPoints = new LineIndex(
+		wires.flatMap((w) => [w.points[0], w.points[w.points.length - 1]]).filter((p) => p !== undefined)
+	);
+	for (const wire of wires) {
+		for (const segment of wireSegments(wire)) {
+			for (const p of endPoints.inside(segment.a, segment.b)) through.add(pointKey(p.x, p.y));
+		}
+	}
+
 	// Repeat until nothing more joins: a chain of N pieces takes N-1 passes.
 	//
 	// The bound is the count this started with. Measured against `wires.length` it
@@ -422,7 +514,7 @@ export function mergeWireChains(schematic: Schematic): Wire[] {
 
 		let joined = false;
 		for (const [key, list] of ends) {
-			if (pins.has(key) || list.length !== 2) continue;
+			if (pins.has(key) || through.has(key) || list.length !== 2) continue;
 			const [a, b] = list;
 			// A wire whose own two ends meet is a loop, not a chain.
 			if (a.index === b.index) continue;
@@ -486,26 +578,6 @@ export function junctionDots(schematic: Schematic): Point[] {
 	return dots;
 }
 
-/** Does `b` cover all of `a`? Both are axis-aligned, and collinear or not. */
-function covers(a: WireSegment, b: WireSegment): boolean {
-	const aVertical = a.a.x === a.b.x;
-	const bVertical = b.a.x === b.b.x;
-	if (aVertical !== bVertical) return false;
-
-	if (aVertical) {
-		if (a.a.x !== b.a.x) return false;
-		return (
-			Math.min(a.a.y, a.b.y) >= Math.min(b.a.y, b.b.y) &&
-			Math.max(a.a.y, a.b.y) <= Math.max(b.a.y, b.b.y)
-		);
-	}
-	if (a.a.y !== b.a.y) return false;
-	return (
-		Math.min(a.a.x, a.b.x) >= Math.min(b.a.x, b.b.x) &&
-		Math.max(a.a.x, a.b.x) <= Math.max(b.a.x, b.b.x)
-	);
-}
-
 /**
  * Cut back a wire that runs along another one at either end.
  *
@@ -529,40 +601,81 @@ function covers(a: WireSegment, b: WireSegment): boolean {
  * drawn shape is not what this is for.
  */
 export function trimOverlaps(schematic: Schematic): Wire[] {
-	let wires = schematic.wires;
+	const wires = [...schematic.wires];
 
-	for (let guard = 0; guard < wires.length * 8 + 16; guard++) {
-		const cut = findCut(wires);
-		if (!cut) break;
+	// Every segment, filed under the line it lies on, so a segment only meets the
+	// ones it could be covered by. Asking every wire about every other wire's
+	// segments, afresh after each cut, took over a second on a drawing of two
+	// thousand wires with nothing to cut at all.
+	interface Span {
+		owner: string;
+		lo: number;
+		hi: number;
+		live: boolean;
+	}
+	const lines = new Map<string, Span[]>();
+	const spansOf = new Map<Wire, Span[]>();
+	const lineOf = (segment: WireSegment) =>
+		segment.a.x === segment.b.x ? `v${segment.a.x}` : `h${segment.a.y}`;
+	const file = (wire: Wire) => {
+		const spans = wireSegments(wire).map((segment) => {
+			const vertical = segment.a.x === segment.b.x;
+			const [u, v] = vertical ? [segment.a.y, segment.b.y] : [segment.a.x, segment.b.x];
+			const span: Span = { owner: wire.id, lo: Math.min(u, v), hi: Math.max(u, v), live: true };
+			const line = lineOf(segment);
+			const list = lines.get(line);
+			if (list) list.push(span);
+			else lines.set(line, [span]);
+			return span;
+		});
+		spansOf.set(wire, spans);
+	};
+	for (const wire of wires) file(wire);
 
-		wires = wires
-			.map((wire, index) => (index === cut.index ? { ...wire, points: cut.points } : wire))
-			.filter((wire) => wire.points.length >= 2);
+	const covered = (wire: Wire, segment: WireSegment, own: Span) =>
+		(lines.get(lineOf(segment)) ?? []).some(
+			(other) => other.live && other.owner !== wire.id && other.lo <= own.lo && other.hi >= own.hi
+		);
+
+	// One cut at a time, as the wires stand after the last one — and in order, so
+	// a pass forwards finds each cut the way a search from the start would have:
+	// a cut only ever takes a segment away, so a wire that had nothing to cut
+	// before it still has nothing after, and only the wire just cut can have a new
+	// end worth another look.
+	let cuts = 0;
+	const limit = wires.length * 8 + 16;
+	for (let index = 0; index < wires.length && cuts < limit; ) {
+		const wire = wires[index];
+		if (wire.points.length < 2) {
+			index++;
+			continue;
+		}
+		const segments = wireSegments(wire);
+		const spans = spansOf.get(wire)!;
+		let points: Point[] | null = null;
+		if (covered(wire, segments[segments.length - 1], spans[spans.length - 1])) {
+			points = wire.points.slice(0, -1);
+			spans[spans.length - 1].live = false;
+		} else if (covered(wire, segments[0], spans[0])) {
+			points = wire.points.slice(1);
+			spans[0].live = false;
+		}
+		if (!points) {
+			index++;
+			continue;
+		}
+		cuts++;
+		for (const span of spans) span.live = false;
+		if (points.length < 2) {
+			wires.splice(index, 1);
+			continue;
+		}
+		const trimmed = { ...wire, points };
+		wires[index] = trimmed;
+		file(trimmed);
 	}
 
 	return wires;
-}
-
-/** The next end segment that another wire already covers, if there is one. */
-function findCut(wires: readonly Wire[]): { index: number; points: Point[] } | null {
-	for (let index = 0; index < wires.length; index++) {
-		const wire = wires[index];
-		if (wire.points.length < 2) continue;
-
-		const elsewhere = wires.filter((w) => w.id !== wire.id).flatMap((w) => wireSegments(w));
-		const segments = wireSegments(wire);
-
-		const last = segments[segments.length - 1];
-		if (elsewhere.some((other) => covers(last, other))) {
-			return { index, points: wire.points.slice(0, -1) };
-		}
-
-		const first = segments[0];
-		if (elsewhere.some((other) => covers(first, other))) {
-			return { index, points: wire.points.slice(1) };
-		}
-	}
-	return null;
 }
 
 /**
