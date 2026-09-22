@@ -209,7 +209,39 @@ const DIRECTIONS = [
 /** Pack grid coordinates into one integer key. */
 const cell = (gx: number, gy: number) => ((gx + 0x8000) << 16) | ((gy + 0x8000) & 0xffff);
 
-function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles {
+/** A rectangle of grid cells, inclusive. */
+interface Region {
+	lo: { x: number; y: number };
+	hi: { x: number; y: number };
+}
+
+/** The cells within `margin` cells of every point given. */
+function regionAround(points: readonly Point[], grid: number, margin: number): Region {
+	let loX = Infinity;
+	let loY = Infinity;
+	let hiX = -Infinity;
+	let hiY = -Infinity;
+	for (const p of points) {
+		const x = Math.round(p.x / grid);
+		const y = Math.round(p.y / grid);
+		if (x < loX) loX = x;
+		if (x > hiX) hiX = x;
+		if (y < loY) loY = y;
+		if (y > hiY) hiY = y;
+	}
+	return { lo: { x: loX - margin, y: loY - margin }, hi: { x: hiX + margin, y: hiY + margin } };
+}
+
+/**
+ * The obstacles a route could meet inside `region`, or anywhere without one.
+ *
+ * Only what reaches into the region is looked at in any detail. A search never
+ * leaves its box, so nothing outside it can change the answer — and building
+ * every part's cells for a route across a tenth of the page was what made one
+ * route on a page of a few hundred chips cost a hundred milliseconds before it
+ * had explored a single cell.
+ */
+function buildObstacles(schematic: Schematic, options: RouteOptions, region?: Region): Obstacles {
 	const { grid } = options;
 	const obstacles: Obstacles = {
 		body: new Set(),
@@ -218,29 +250,44 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 		touch: new Set(),
 		leads: new Map()
 	};
-
-	for (const instance of schematic.instances) {
-		for (const pin of definitionFor(instance).pins) {
-			const offset = rotatePoint(pin.x, pin.y, instance.rotation);
-			const lead = leadDirection(pin);
-			const facing = rotatePoint(lead.x, lead.y, instance.rotation);
-			obstacles.leads.set(
-				cell(
-					Math.round((instance.x + offset.x) / grid),
-					Math.round((instance.y + offset.y) / grid)
-				),
-				{ x: Math.round(facing.x), y: Math.round(facing.y) }
-			);
-		}
-	}
+	// In world units, with a cell of slack for rounding.
+	const minX = region ? (region.lo.x - 1) * grid : -Infinity;
+	const maxX = region ? (region.hi.x + 1) * grid : Infinity;
+	const minY = region ? (region.lo.y - 1) * grid : -Infinity;
+	const maxY = region ? (region.hi.y + 1) * grid : Infinity;
 
 	for (const instance of schematic.instances) {
 		const def = definitionFor(instance);
+		if (region) {
+			// The body's farthest reach in any rotation, which contains its pins.
+			const reach = Math.max(
+				Math.abs(def.box.x),
+				Math.abs(def.box.x + def.box.w),
+				Math.abs(def.box.y),
+				Math.abs(def.box.y + def.box.h)
+			);
+			if (
+				instance.x + reach < minX ||
+				instance.x - reach > maxX ||
+				instance.y + reach < minY ||
+				instance.y - reach > maxY
+			) {
+				continue;
+			}
+		}
 		for (const pin of def.pins) {
 			const offset = rotatePoint(pin.x, pin.y, instance.rotation);
-			obstacles.touch.add(
-				cell(Math.round((instance.x + offset.x) / grid), Math.round((instance.y + offset.y) / grid))
+			const at = cell(
+				Math.round((instance.x + offset.x) / grid),
+				Math.round((instance.y + offset.y) / grid)
 			);
+			// Recorded for every instance, including any a drag is ignoring as
+			// obstacles: a part on the move still has leads that point somewhere,
+			// and the wire chasing it should still meet them end on.
+			const lead = leadDirection(pin);
+			const facing = rotatePoint(lead.x, lead.y, instance.rotation);
+			obstacles.leads.set(at, { x: Math.round(facing.x), y: Math.round(facing.y) });
+			obstacles.touch.add(at);
 		}
 		if (options.ignoreInstances?.has(instance.id)) continue;
 
@@ -257,13 +304,18 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 		// the grid, and with half a step of slack the grid line just inside it
 		// was free to route on — a wire drawn over the outline.
 		const inset = 1;
-		const minX = Math.min(...corners.map((c) => c.x)) + instance.x + inset;
-		const maxX = Math.max(...corners.map((c) => c.x)) + instance.x - inset;
-		const minY = Math.min(...corners.map((c) => c.y)) + instance.y + inset;
-		const maxY = Math.max(...corners.map((c) => c.y)) + instance.y - inset;
+		const left = Math.min(...corners.map((c) => c.x)) + instance.x + inset;
+		const right = Math.max(...corners.map((c) => c.x)) + instance.x - inset;
+		const top = Math.min(...corners.map((c) => c.y)) + instance.y + inset;
+		const bottom = Math.max(...corners.map((c) => c.y)) + instance.y - inset;
 
-		for (let x = Math.ceil(minX / grid); x <= Math.floor(maxX / grid); x++) {
-			for (let y = Math.ceil(minY / grid); y <= Math.floor(maxY / grid); y++) {
+		// Only the part of a large body inside the region.
+		const fromX = Math.max(Math.ceil(left / grid), region ? region.lo.x - 1 : -Infinity);
+		const toX = Math.min(Math.floor(right / grid), region ? region.hi.x + 1 : Infinity);
+		const fromY = Math.max(Math.ceil(top / grid), region ? region.lo.y - 1 : -Infinity);
+		const toY = Math.min(Math.floor(bottom / grid), region ? region.hi.y + 1 : Infinity);
+		for (let x = fromX; x <= toX; x++) {
+			for (let y = fromY; y <= toY; y++) {
 				obstacles.body.add(cell(x, y));
 			}
 		}
@@ -271,6 +323,19 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 
 	for (const wire of schematic.wires) {
 		if (options.ignoreWires?.has(wire.id)) continue;
+		if (region) {
+			let left = Infinity;
+			let right = -Infinity;
+			let top = Infinity;
+			let bottom = -Infinity;
+			for (const p of wire.points) {
+				if (p.x < left) left = p.x;
+				if (p.x > right) right = p.x;
+				if (p.y < top) top = p.y;
+				if (p.y > bottom) bottom = p.y;
+			}
+			if (right < minX || left > maxX || bottom < minY || top > maxY) continue;
+		}
 		for (const point of wire.points) {
 			obstacles.touch.add(cell(Math.round(point.x / grid), Math.round(point.y / grid)));
 		}
@@ -280,8 +345,24 @@ function buildObstacles(schematic: Schematic, options: RouteOptions): Obstacles 
 			const to = horizontal ? segment.b.x : segment.b.y;
 			const fixed = horizontal ? segment.a.y : segment.a.x;
 			const step = Math.sign(to - from) || 1;
+			// A long wire across the page only matters where it crosses the region:
+			// the walk starts at the first of its cells inside it and stops at the last.
+			let first = from;
+			let last = to;
+			if (region) {
+				if (horizontal ? fixed < minY || fixed > maxY : fixed < minX || fixed > maxX) continue;
+				const low = horizontal ? minX : minY;
+				const high = horizontal ? maxX : maxY;
+				if (step > 0) {
+					if (from < low) first = from + Math.ceil((low - from) / grid) * grid;
+					last = Math.min(to, high);
+				} else {
+					if (from > high) first = from - Math.ceil((from - high) / grid) * grid;
+					last = Math.max(to, low);
+				}
+			}
 
-			for (let v = from; step > 0 ? v <= to : v >= to; v += step * grid) {
+			for (let v = first; step > 0 ? v <= last : v >= last; v += step * grid) {
 				const key = horizontal
 					? cell(Math.round(v / grid), Math.round(fixed / grid))
 					: cell(Math.round(fixed / grid), Math.round(v / grid));
@@ -317,7 +398,8 @@ export function routeWire(
 		return [{ x: from.x, y: from.y }];
 	}
 
-	const obstacles = buildObstacles(schematic, options);
+	const widest = SEARCH_MARGINS[SEARCH_MARGINS.length - 1];
+	let obstacles = buildObstacles(schematic, options, regionAround([from, to], grid, widest));
 	const effort = options.effort ?? 20_000;
 	const kept = keptCells(options.prefer, grid);
 
@@ -373,7 +455,12 @@ export function routeWire(
 	// page. Anything else is only taken if it joins nothing.
 	const settled = fallback(schematic, from, to, options);
 	if (settled) return settled;
-	const wide = search(SEARCH_MARGINS[SEARCH_MARGINS.length - 1] * 3, effort * 4);
+	// One last, wider look. With four times the budget only when nobody set one:
+	// a caller that capped the effort — a drag, routing every frame — has said
+	// how long it can wait, and a route that blows through that cap is the frame
+	// it was protecting.
+	obstacles = buildObstacles(schematic, options, regionAround([from, to], grid, widest * 3));
+	const wide = search(widest * 3, options.effort === undefined ? effort * 4 : effort);
 	return wide.path ?? lastResort(from, to);
 
 	interface Node {
@@ -403,29 +490,25 @@ export function routeWire(
 		const hi = { x: Math.max(start.x, goal.x) + margin, y: Math.max(start.y, goal.y) + margin };
 		let clipped = false;
 
-		const open: Node[] = [
-			{
-				x: start.x,
-				y: start.y,
-				axis: -1,
-				cost: 0,
-				estimate: heuristic(start.x, start.y, goal.x, goal.y) * GREED,
-				parent: null
-			}
-		];
+		const open = new OpenList<Node>();
+		open.push({
+			x: start.x,
+			y: start.y,
+			axis: -1,
+			cost: 0,
+			estimate: heuristic(start.x, start.y, goal.x, goal.y) * GREED,
+			parent: null
+		});
 		const best = new Map<number, number>();
 		const key = (x: number, y: number, axis: number) => cell(x, y) * 4 + (axis + 1);
 		best.set(key(start.x, start.y, -1), 0);
 
 		let explored = 0;
-		while (open.length > 0 && explored < budget) {
-			// A linear scan is fine at this size — a schematic route explores hundreds
-			// of cells, and a heap would cost more in bookkeeping than it saves.
-			let bestIndex = 0;
-			for (let i = 1; i < open.length; i++) {
-				if (open[i].estimate < open[bestIndex].estimate) bestIndex = i;
-			}
-			const node = open.splice(bestIndex, 1)[0];
+		while (open.size > 0 && explored < budget) {
+			const node = open.pop()!;
+			// Superseded by a cheaper way to the same cell and heading, found after
+			// this one was queued. Expanding it could only offer dearer neighbours.
+			if (node.cost > best.get(key(node.x, node.y, node.axis))!) continue;
 			explored++;
 
 			if (node.x === goal.x && node.y === goal.y) {
@@ -514,6 +597,88 @@ export function routeWire(
 }
 
 /**
+ * `routeWire` for a preview, which asks the same question over and over.
+ *
+ * A wire being drawn is routed on every pointer move and every repaint of the
+ * overlay, and most of those are the same two ends over the same drawing: the
+ * pointer snaps to the grid, so it only lands somewhere new a cell at a time.
+ * The answer is kept until either end or the drawing changes.
+ */
+export function previewRouter(): (schematic: Schematic, from: Point, to: Point, grid: number) => Point[] {
+	let last: {
+		instances: unknown;
+		wires: unknown;
+		key: string;
+		path: Point[];
+	} | null = null;
+	return (schematic, from, to, grid) => {
+		const key = `${from.x},${from.y},${to.x},${to.y},${grid}`;
+		if (last && last.key === key && last.instances === schematic.instances && last.wires === schematic.wires) {
+			return last.path;
+		}
+		const path = routeWire(schematic, from, to, { grid });
+		last = { instances: schematic.instances, wires: schematic.wires, key, path };
+		return path;
+	};
+}
+
+/**
+ * The open list of the search: a binary heap on the estimate.
+ *
+ * Ties go to whichever node was queued first, which is what the linear scan it
+ * replaced did — a route between two points has many equally short answers, and
+ * which one comes out is part of what the drawing looks like. A scan was fine
+ * for the hundreds of cells a route across a small drawing explores and was
+ * quadratic in them, which is what made a route that could not be found take
+ * a second and a half.
+ */
+class OpenList<T extends { estimate: number }> {
+	private items: Array<{ node: T; order: number }> = [];
+	private queued = 0;
+
+	get size(): number {
+		return this.items.length;
+	}
+
+	private before(a: { node: T; order: number }, b: { node: T; order: number }): boolean {
+		return a.node.estimate < b.node.estimate || (a.node.estimate === b.node.estimate && a.order < b.order);
+	}
+
+	push(node: T): void {
+		const items = this.items;
+		const entry = { node, order: this.queued++ };
+		let i = items.length;
+		items.push(entry);
+		while (i > 0) {
+			const parent = (i - 1) >> 1;
+			if (!this.before(entry, items[parent])) break;
+			items[i] = items[parent];
+			i = parent;
+		}
+		items[i] = entry;
+	}
+
+	pop(): T | undefined {
+		const items = this.items;
+		const top = items[0];
+		const last = items.pop();
+		if (!top || !last || items.length === 0) return top?.node;
+		let i = 0;
+		for (;;) {
+			const left = 2 * i + 1;
+			if (left >= items.length) break;
+			const right = left + 1;
+			const child = right < items.length && this.before(items[right], items[left]) ? right : left;
+			if (!this.before(items[child], last)) break;
+			items[i] = items[child];
+			i = child;
+		}
+		items[i] = last;
+		return top.node;
+	}
+}
+
+/**
  * Would this path join something it was not asked to?
  *
  * The three ways a wire connects by geometry alone: it passes through a pin, it
@@ -529,8 +694,11 @@ export function joinsSomething(
 	options: RouteOptions
 ): boolean {
 	if (path.length < 2) return false;
-	const { grid } = options;
-	const obstacles = buildObstacles(schematic, options);
+	return joins(buildObstacles(schematic, options, regionAround(path, options.grid, 1)), path, options.grid);
+}
+
+function joins(obstacles: Obstacles, path: readonly Point[], grid: number): boolean {
+	if (path.length < 2) return false;
 	const at = (p: Point) => cell(Math.round(p.x / grid), Math.round(p.y / grid));
 
 	for (let i = 1; i < path.length - 1; i++) {
@@ -617,7 +785,21 @@ export function fallback(
 	const { prefer } = options;
 	const candidates = [elbow(from, to), elbow(from, to, true)];
 	if (prefer && prefer.length >= 2) candidates.unshift(stretched(prefer, from, to));
-	return candidates.find((path) => !joinsSomething(schematic, path, options)) ?? null;
+	// One set of obstacles for all of them, over the ground any of them covers.
+	const obstacles = buildObstacles(schematic, options, regionAround(candidates.flat(), options.grid, 1));
+	// A leg off the axes is only ever `lastResort`'s to draw: it is exempt from
+	// the join check, so a stretched shape that came out slanted would pass it
+	// while being nothing anybody drew.
+	return (
+		candidates.find((path) => orthogonal(path) && !joins(obstacles, path, options.grid)) ?? null
+	);
+}
+
+function orthogonal(path: readonly Point[]): boolean {
+	for (let i = 0; i + 1 < path.length; i++) {
+		if (path[i].x !== path[i + 1].x && path[i].y !== path[i + 1].y) return false;
+	}
+	return true;
 }
 
 /**
@@ -659,8 +841,13 @@ export function stretched(path: readonly Point[], from: Point, to: Point): Point
 
 /** `points` with its first point moved to `at`, the first leg sliding to follow. */
 function slideEnd(points: Point[], at: Point): Point[] {
-	const [end, corner] = points;
-	const vertical = corner.x === end.x;
+	const [end, corner, next] = points;
+	// A first leg that has shrunk to nothing has no axis of its own to read off.
+	// It runs across the leg after it, whatever that one's is: reading it as
+	// vertical because a point has the same x as itself slid the end sideways
+	// and left a diagonal leg behind.
+	const vertical =
+		end.x === corner.x && end.y === corner.y && next ? next.y === corner.y : corner.x === end.x;
 	if (points.length === 2) {
 		// One straight leg with the other end fixed: bend at the fixed end,
 		// still arriving along the leg's own axis.
@@ -692,7 +879,7 @@ export function onGrid(p: Vec2, grid: number): Point {
 export function crossesBody(schematic: Schematic, path: readonly Point[], options: RouteOptions): boolean {
 	if (path.length < 2) return false;
 	const { grid } = options;
-	const obstacles = buildObstacles(schematic, options);
+	const obstacles = buildObstacles(schematic, options, regionAround(path, grid, 1));
 
 	for (let i = 0; i < path.length - 1; i++) {
 		const a = path[i];
