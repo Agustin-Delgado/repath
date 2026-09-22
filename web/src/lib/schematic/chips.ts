@@ -686,7 +686,12 @@ export function chipById(id: string): ChipDef | undefined {
  * family is what the first digit already says.
  */
 export function chipName(chip: ChipDef): string {
-	return (chip.id.startsWith('4') ? 'CD' : 'SN') + chip.id;
+	// Read off the whole number rather than its first digit: a 4N25 starts with
+	// a 4 and is an optocoupler, and a part from neither family keeps the name
+	// it came with rather than borrowing one.
+	if (/^4[05]\d{2,3}$/.test(chip.id)) return 'CD' + chip.id;
+	if (/^74\d{2,4}$/.test(chip.id)) return 'SN' + chip.id;
+	return chip.id;
 }
 
 /**

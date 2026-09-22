@@ -233,6 +233,96 @@ function drawn(instance: Instance, key: string, nominal: number, seed: number): 
 	return nominal * (1 + (percent / 100) * (unit * 2 - 1));
 }
 
+/**
+ * Why a chip has no supply, or null when it has one.
+ *
+ * Its positive leg has to reach a source — a supply terminal or a voltage
+ * source — and its negative leg the reference, each directly or through parts
+ * that conduct at DC: a regulator's zener and resistor are a supply as far as
+ * the chip can tell. Another chip is not a way through, or two unpowered chips
+ * would vouch for each other. Deliberately forgiving past that: this is for
+ * the leg left off, tied to the wrong rail or to its partner, not for judging
+ * how good a supply is.
+ */
+function chipUnpowered(chip: Instance, schematic: Schematic, connectivity: Connectivity): string | null {
+	const legs = definitionFor(chip).pins.map((pin) => pin.name);
+	const positive = legs.find((pin) => pin === 'VCC' || pin === 'VDD');
+	const negative = legs.find((pin) => pin === 'GND' || pin === 'VSS');
+	if (!positive || !negative) return null;
+	const netOf = (instance: Instance, pin: string) =>
+		connectivity.netOfPin.get(pinKey(instance.id, pin));
+	const high = netOf(chip, positive);
+	const low = netOf(chip, negative);
+	if (high === undefined) return `its ${positive} leg is not connected to anything.`;
+	if (low === undefined) return `its ${negative} leg is not connected to anything.`;
+	if (high === low) return `its ${positive} and ${negative} legs are on the same net.`;
+	if (connectivity.nets[high].isGround) return `its ${positive} leg is on the ground net.`;
+
+	const { through, sourced } = dcGraph(schematic, connectivity);
+	const reaches = (from: number, found: (index: number) => boolean) => {
+		const seen = new Set([from]);
+		const queue = [from];
+		while (queue.length > 0) {
+			const at = queue.pop()!;
+			if (found(at)) return true;
+			for (const next of through.get(at) ?? []) {
+				if (!seen.has(next)) {
+					seen.add(next);
+					queue.push(next);
+				}
+			}
+		}
+		return false;
+	};
+	if (!reaches(high, (index) => sourced.has(index) && !connectivity.nets[index].isGround)) {
+		return `its ${positive} leg reaches no supply.`;
+	}
+	if (!reaches(low, (index) => connectivity.nets[index].isGround)) {
+		return `its ${negative} leg does not reach ground.`;
+	}
+	return null;
+}
+
+/**
+ * Nets joined through parts that conduct at DC, and the nets a source sits on.
+ *
+ * Once per compile, however many chips ask: a page of a few hundred of them
+ * rebuilding it each was a few hundred walks over every part.
+ */
+const dcGraphs = new WeakMap<Connectivity, { through: Map<number, number[]>; sourced: Set<number> }>();
+
+function dcGraph(schematic: Schematic, connectivity: Connectivity) {
+	const known = dcGraphs.get(connectivity);
+	if (known) return known;
+	const through = new Map<number, number[]>();
+	const sourced = new Set<number>();
+	const link = (a: number, b: number) => {
+		const list = through.get(a);
+		if (list) list.push(b);
+		else through.set(a, [b]);
+	};
+	for (const instance of schematic.instances) {
+		if (chipOf(instance.kind) || NO_DC_PATH.has(instance.kind)) continue;
+		const on = definitionFor(instance)
+			.pins.filter((pin) => pin.domain === 'analog')
+			.map((pin) => connectivity.netOfPin.get(pinKey(instance.id, pin.name)))
+			.filter((index): index is number => index !== undefined);
+		if (instance.kind === 'supply' || instance.kind === 'vsource') {
+			for (const index of on) sourced.add(index);
+		}
+		for (let i = 1; i < on.length; i++) {
+			link(on[0], on[i]);
+			link(on[i], on[0]);
+		}
+	}
+	const graph = { through, sourced };
+	dcGraphs.set(connectivity, graph);
+	return graph;
+}
+
+/** Parts that carry no current at DC, the same list the floating-input check uses. */
+const NO_DC_PATH = new Set(['capacitor', 'isource', 'probe', 'port']);
+
 /** The last compile, and what it was a compile of. */
 let lastCompile: { signature: string; result: CompileResult } | null = null;
 
@@ -406,6 +496,7 @@ function compileFresh(
 	const components: unknown[] = [];
 	const devices: unknown[] = [];
 	const portFlow = new Map<string, PortInjection[]>(unfolded.portFlow);
+	let unpoweredChips = 0;
 	/** Nets already held at a voltage by a supply symbol, by net index. */
 	const railed = new Map<number, { name: string; volts: number }>();
 
@@ -426,6 +517,19 @@ function compileFresh(
 
 		const chip = chipOf(instance.kind);
 		if (chip) {
+			// A chip does nothing without its supply, and simulating the gates
+			// inside one whose VCC goes nowhere — or to ground, or to its own GND —
+			// is a confident answer about a part that is dead on the bench. Its
+			// gates are left out instead, so what it drives reads as undetermined,
+			// which is what an unpowered output is.
+			const unpowered = chipUnpowered(instance, schematic, connectivity);
+			if (unpowered) {
+				unpoweredChips++;
+				warnings.push(
+					`${name} is not powered: ${unpowered} Its outputs are left undetermined rather than given levels a chip with no supply could not produce.`
+				);
+				continue;
+			}
 			const legs = new Set(chip.layout);
 			const net = (pin: string) =>
 				legs.has(pin) ? digitalOf(instance, pin) : `${instance.id}_in_${pin}`;
@@ -918,7 +1022,9 @@ function compileFresh(
 	// first thing anybody sees is not twice as helpful. This is for the drawing
 	// that has parts on it and still builds nothing — a lone ground symbol, or a
 	// probe waiting for a circuit.
-	if (components.length === 0 && devices.length === 0 && schematic.instances.length > 0) {
+	// A chip set aside for want of a supply has been told why already, and is not
+	// a drawing with nothing on it.
+	if (components.length === 0 && devices.length === 0 && schematic.instances.length > 0 && !unpoweredChips) {
 		errors.push('Nothing to simulate: place at least one component.');
 	}
 
