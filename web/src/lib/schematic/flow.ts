@@ -229,21 +229,25 @@ export function prepareFlow(
 		}
 	}
 
+	// By name, once: looking each net up in the run's lists was a scan per net,
+	// which is quadratic in the size of the circuit.
+	const unknownIndex = new Map(run.unknownNames.map((name, index) => [name, index] as const));
+	const netNameIndex = new Map(run.netNames.map((name, index) => [name, index] as const));
 	const netSignal = new Map<number, number>();
 	const netLogic = new Map<number, number>();
 	for (const [netIndex, entry] of names) {
 		if (entry.analog) {
 			netSignal.set(
 				netIndex,
-				entry.analog === 'gnd' ? -1 : run.unknownNames.indexOf(`v(${entry.analog})`)
+				entry.analog === 'gnd' ? -1 : (unknownIndex.get(`v(${entry.analog})`) ?? -1)
 			);
 			// A bridged net has both, and the node is the better answer: it is what
 			// the wire is really at, including a driver sagging under load.
 			continue;
 		}
 		if (!entry.digital) continue;
-		const index = run.netNames.indexOf(entry.digital);
-		if (index >= 0) netLogic.set(netIndex, index);
+		const index = netNameIndex.get(entry.digital);
+		if (index !== undefined) netLogic.set(netIndex, index);
 	}
 
 	// Group wire segments and injections by net.
@@ -307,10 +311,25 @@ export function prepareFlow(
 		}
 	}
 
+	// Where each net meets a ground pin, in the order the parts were placed:
+	// found once for the drawing rather than by every net going through every part.
+	const groundsByNet = new Map<number, string[]>();
+	for (const instance of schematic.instances) {
+		if (instance.kind !== 'ground') continue;
+		for (const { at } of instancePins(instance)) {
+			const key = pointKey(at.x, at.y);
+			const net = connectivity.netOfPoint.get(key);
+			if (net === undefined) continue;
+			const list = groundsByNet.get(net);
+			if (list) list.push(key);
+			else groundsByNet.set(net, [key]);
+		}
+	}
+
 	const plans: NetPlan[] = [];
 	for (const [netIndex, segments] of segmentsByNet) {
 		const injections = injectionsByNet.get(netIndex) ?? new Map();
-		const steps = planNet(segments, injections, netIndex, connectivity, schematic);
+		const steps = planNet(segments, injections, groundsByNet.get(netIndex) ?? []);
 		if (steps.length > 0) plans.push({ steps, injections });
 	}
 
@@ -413,9 +432,8 @@ export function rescale(context: FlowContext, run: TransientRun, from: number, t
 function planNet(
 	segments: NetSegment[],
 	injections: Map<string, Injection[]>,
-	netIndex: number,
-	connectivity: Connectivity,
-	schematic: Schematic
+	/** The net's ground pins, as point keys. */
+	grounds: readonly string[]
 ): PlanStep[] {
 	const adjacency = new Map<string, Array<{ to: string; segmentId: string; forward: boolean }>>();
 	const link = (from: string, to: string, segmentId: string, forward: boolean) => {
@@ -434,18 +452,7 @@ function planNet(
 	}
 	if (adjacency.size === 0) return [];
 
-	let root: string | null = null;
-	for (const instance of schematic.instances) {
-		if (instance.kind !== 'ground') continue;
-		for (const { at } of instancePins(instance)) {
-			const key = pointKey(at.x, at.y);
-			if (connectivity.netOfPoint.get(key) === netIndex && adjacency.has(key)) {
-				root = key;
-				break;
-			}
-		}
-		if (root) break;
-	}
+	let root: string | null = grounds.find((key) => adjacency.has(key)) ?? null;
 	root ??= adjacency.keys().next().value ?? null;
 	if (!root) return [];
 
@@ -453,8 +460,8 @@ function planNet(
 	const seen = new Set<string>([root]);
 	const queue: PlanStep[] = [{ point: root, parent: null, segmentId: null, reversed: false }];
 
-	while (queue.length > 0) {
-		const step = queue.shift()!;
+	for (let next = 0; next < queue.length; next++) {
+		const step = queue[next];
 		order.push(step);
 		for (const edge of adjacency.get(step.point) ?? []) {
 			if (seen.has(edge.to)) continue;
