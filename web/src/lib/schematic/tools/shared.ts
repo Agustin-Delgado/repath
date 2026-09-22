@@ -2,7 +2,14 @@
  * Helpers shared between tools.
  */
 
-import { distance, type Painter, type SnapTarget, type ToolContext, type Vec2 } from '$lib/canvas';
+import {
+	distance,
+	type Painter,
+	type SnapIndex,
+	type SnapTarget,
+	type ToolContext,
+	type Vec2
+} from '$lib/canvas';
 import { app } from '$lib/state.svelte';
 import { definitionFor, pinPosition, pointKey, wireSegments, wireStart } from '../model';
 import type { SchematicItem } from '../scene';
@@ -66,7 +73,12 @@ export function constrainToAxis(from: Vec2, to: Vec2): Vec2 {
  * and older saves have to be able to carry whatever geometry they carry; it is
  * the editor that should decline to make a mess in the first place.
  */
-export function connectsAt(at: Vec2): boolean {
+export function connectsAt(at: Vec2, snap?: SnapIndex): boolean {
+	// Asked on every pointer move and every repaint of the overlay. The snap
+	// index already files every pin, wire corner and segment by where it is,
+	// so with it this is a look in one cell rather than a walk over the drawing.
+	if (snap) return snap.nearestPoint(at, 0.5) !== null || snap.nearestSegment(at, 0.5) !== null;
+
 	for (const instance of app.schematic.instances) {
 		for (const pin of definitionFor(instance).pins) {
 			const p = pinPosition(instance, pin);
