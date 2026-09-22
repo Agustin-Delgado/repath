@@ -175,6 +175,44 @@
 	/** What `operatedAt` said on the previous frame, so a change can be noticed. */
 	let operated: string | null = null;
 
+	/**
+	 * The nets at no particular potential, worked out again only when they can
+	 * have changed.
+	 *
+	 * Which analog nodes float depends on the circuit and on which switches are
+	 * closed, and both of those hold still for thousands of frames at a time; it
+	 * was being searched afresh on every one of them.
+	 */
+	let floating: {
+		compiled: unknown;
+		closed: string;
+		undriven: ReadonlySet<number>;
+		nets: Set<number>;
+	} | null = null;
+	function floatingFor(closed: Set<string>, undriven: ReadonlySet<number>): Set<number> {
+		const compiled = app.compiled;
+		const key = [...closed].sort().join(',');
+		if (
+			floating?.compiled !== compiled ||
+			floating.closed !== key ||
+			!sameMembers(floating.undriven, undriven)
+		) {
+			floating = {
+				compiled,
+				closed: key,
+				undriven: new Set(undriven),
+				nets: new Set([...compiled.floatingAt(closed), ...undriven])
+			};
+		}
+		return floating.nets;
+	}
+
+	function sameMembers(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
+		if (a.size !== b.size) return false;
+		for (const item of a) if (!b.has(item)) return false;
+		return true;
+	}
+
 	function view(): SchematicView {
 		return {
 			schematic: app.schematic,
@@ -419,6 +457,23 @@
 			dynamicView = null;
 			return;
 		}
+		// Only while something is live. The loop used to run from the moment the
+		// page opened, walking every part and allocating on every frame to find
+		// out that there was nothing to draw. With nothing live there is nothing
+		// that moves, so what it did on those frames happens once, here, and the
+		// loop starts again when Run is pressed.
+		if (!app.live) {
+			untrack(() => {
+				operated = null;
+				forget(animation);
+				if (trackSwitches(null)) active.invalidate('schematic');
+				if (dynamicView) {
+					dynamicView = null;
+					active.invalidate('dynamic');
+				}
+			});
+			return;
+		}
 
 		let frame = 0;
 		// Where simulated time was on the previous frame, so the dots are carried
@@ -500,7 +555,7 @@
 					burnouts: burnoutMap,
 					// Two ways of being at no particular potential, drawn the same way:
 					// an analog node nothing holds, and a digital net nothing drives.
-					floating: new Set([...app.compiled.floatingAt(closed), ...frame.netUndriven]),
+					floating: floatingFor(closed, frame.netUndriven),
 					selection: selectionSet,
 					selectionColour: theme!.selection
 				};
@@ -559,9 +614,60 @@
 		editor?.fit();
 	}
 
+	/** Input types that take typing, as opposed to a click (a checkbox, a slider). */
+	const TYPED = /^(text|search|email|url|tel|password|number|date|datetime-local|month|time|week)$/;
+
+	/** Whether keys pressed now are somebody typing into a field. */
+	function typingInto(target: HTMLElement | null): boolean {
+		if (!target) return false;
+		if (target.isContentEditable) return true;
+		if (target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return true;
+		return target.tagName === 'INPUT' && TYPED.test((target as HTMLInputElement).type || 'text');
+	}
+
+	/**
+	 * Whether the focused thing has an activation of its own for Space and Enter.
+	 *
+	 * A button, a link, a checkbox: pressing Space on one of those is pressing
+	 * it, and taking the key for play/pause left keyboard users with no way to
+	 * press a button at all.
+	 *
+	 * Only when the focus got there by keyboard, though. A button clicked with
+	 * the mouse keeps the focus too — the palette part just picked, the Run
+	 * button — and Space there has always meant play, or flip the wire's bend.
+	 * Told apart by what came just before the focus rather than by
+	 * `:focus-visible`, which the browser turns on for a clicked button as soon
+	 * as any key is pressed on it — Space included.
+	 */
+	function pressable(target: HTMLElement | null): boolean {
+		if (!target) return false;
+		// A checkbox or a slider was never the drawing's, however it got focus.
+		if (target.tagName === 'INPUT') return true;
+		if (target === clicked) return false;
+		return !!target.closest(
+			'button, a[href], summary, [role="button"], [role="checkbox"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"]'
+		);
+	}
+
+	/** When a pointer last went down, and the element that took the focus from it. */
+	let pointerAt = -Infinity;
+	let clicked: EventTarget | null = null;
+
+	function onFocusIn(event: FocusEvent) {
+		// A focus that lands within a moment of a press came from the press.
+		clicked = performance.now() - pointerAt < 500 ? event.target : null;
+	}
+
+	/** Whether the page has text selected, which is what Ctrl+C would then be for. */
+	function textSelected(): boolean {
+		const selection = window.getSelection?.();
+		return !!selection && !selection.isCollapsed && selection.toString().length > 0;
+	}
+
 	function onKeyDown(event: KeyboardEvent) {
 		const target = event.target as HTMLElement | null;
-		if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+		if (typingInto(target)) return;
+		if ((event.key === ' ' || event.key === 'Enter') && pressable(target)) return;
 
 		if (event.ctrlKey || event.metaKey) {
 			switch (event.key.toLowerCase()) {
@@ -575,9 +681,13 @@
 					app.redo();
 					return;
 				case 'c':
+					// Text somebody selected on the page is what they meant to copy —
+					// the steps put in the notice to be copied by hand, say.
+					if (textSelected()) return;
 					if (app.copySelection()) event.preventDefault();
 					return;
 				case 'x':
+					if (textSelected()) return;
 					if (app.copySelection()) {
 						app.deleteSelection();
 						event.preventDefault();
@@ -634,7 +744,11 @@
 
 </script>
 
-<svelte:window onkeydown={onKeyDown} />
+<svelte:window
+	onkeydown={onKeyDown}
+	onpointerdowncapture={() => (pointerAt = performance.now())}
+	onfocusin={onFocusIn}
+/>
 
 <div class="stage">
 	<div class="host" bind:this={host} role="application" aria-label="Schematic editor"></div>
