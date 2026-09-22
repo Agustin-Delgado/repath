@@ -6,6 +6,15 @@
 	import Scope from '$lib/components/Scope.svelte';
 	import { ensureEngine, engineVersion } from '$lib/engine';
 	import { EXAMPLES } from '$lib/examples';
+	import {
+		Autosaver,
+		chooseStart,
+		newDraftId,
+		openDraftStore,
+		staleDrafts,
+		type DraftRecord,
+		type DraftStore
+	} from '$lib/draft';
 	import { decodeCircuit, shareUrl } from '$lib/share';
 	import { definitionFor } from '$lib/schematic/model';
 	import { LOGIC_FAMILIES } from '$lib/schematic/logic';
@@ -36,32 +45,193 @@
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let traceState = $state<'idle' | 'copied' | 'failed'>('idle');
 	let shareState = $state<'idle' | 'copied' | 'failed'>('idle');
+	let tempField = $state(String(app.temperature));
 
 	$effect(() => {
-		// Keep the field in sync when an example changes the run length.
+		// Keep the fields in sync when an example, a file or a draft changes them.
 		stopField = formatValue(app.stopTime, 3);
 	});
+	$effect(() => {
+		acStartField = formatValue(app.acStart, 3);
+		acStopField = formatValue(app.acStop, 3);
+	});
+	$effect(() => {
+		tempField = String(app.temperature);
+	});
+
+	/** The name of this tab's draft, kept where a reload of the same tab finds it. */
+	const TAB_DRAFT_KEY = 'repath.draft';
+
+	function tabDraft(): string | null {
+		try {
+			return sessionStorage.getItem(TAB_DRAFT_KEY);
+		} catch {
+			return null;
+		}
+	}
+
+	function setTabDraft(id: string) {
+		try {
+			sessionStorage.setItem(TAB_DRAFT_KEY, id);
+		} catch {
+			// Without it a reload still finds the newest draft, which is usually this one.
+		}
+	}
+
+	/**
+	 * Hold a draft for as long as this tab is open, or say that another tab does.
+	 *
+	 * Two tabs writing one draft would each overwrite the other's work on every
+	 * change, so a tab that finds its draft taken — a duplicated tab, the app
+	 * opened twice — carries on from it under a new name instead.
+	 */
+	function claim(id: string): Promise<boolean> {
+		if (typeof navigator === 'undefined' || !navigator.locks) return Promise.resolve(true);
+		return new Promise((resolve) => {
+			navigator.locks
+				.request(`repath.draft.${id}`, { ifAvailable: true }, (lock) => {
+					resolve(lock !== null);
+					return lock ? new Promise<void>(() => {}) : undefined;
+				})
+				.catch(() => resolve(true));
+		});
+	}
+
+	let saver: Autosaver | null = null;
+	/** Which arrival the draft being written belongs to; a new one starts a new draft. */
+	let draftArrivals = -1;
+	/** Where the next whole circuit to arrive came from, for the draft it starts. */
+	let arrivingFrom = '';
+	/** A link that was followed but set aside for a newer draft of it, to open on request. */
+	let linkBehind = $state<string | null>(null);
+
+	/** Drop a fragment that no longer describes what is on screen, keeping the router's history state. */
+	function forgetLink() {
+		if (location.hash) history.replaceState(history.state, '', location.pathname + location.search);
+	}
+
+	async function openLink(hash: string): Promise<boolean> {
+		try {
+			arrivingFrom = hash;
+			app.loadShared(await decodeCircuit(hash));
+			return true;
+		} catch (cause) {
+			arrivingFrom = '';
+			// A notice, not an error: someone who followed a link needs to be told
+			// that what they are looking at is not what they were sent.
+			const why = cause instanceof Error ? cause.message : String(cause);
+			app.notice = `That link could not be read, so this is not the circuit it holds. ${why}`;
+			return false;
+		}
+	}
+
+	async function start(store: DraftStore | null) {
+		const records: DraftRecord[] = store ? await store.all().catch(() => []) : [];
+		const hash = location.hash.length > 2 ? location.hash : '';
+		const choice = chooseStart(records, tabDraft(), hash);
+
+		let resumed: DraftRecord | null = null;
+		if (choice.kind === 'draft') {
+			try {
+				app.restoreDraft(JSON.parse(choice.record.doc));
+				resumed = choice.record;
+				if (choice.over) {
+					linkBehind = choice.over;
+					app.notice =
+						'This is the circuit from the link with the changes you made since, which were kept. The link as it was sent is one click away.';
+				}
+			} catch {
+				// A draft this build cannot read is left where it is, not deleted: a
+				// newer build may well read it. Fall through as though there were none.
+			}
+		}
+		let origin = resumed?.origin ?? '';
+		if (!resumed && hash) origin = (await openLink(hash)) ? hash : '';
+
+		if (!store) return;
+		const id = resumed && (await claim(resumed.id)) ? resumed.id : newDraftId();
+		if (id !== resumed?.id) await claim(id);
+		setTabDraft(id);
+		draftArrivals = app.arrivals;
+		arrivingFrom = '';
+		saver = new Autosaver(
+			store,
+			{
+				id,
+				origin,
+				edited: resumed?.edited ?? false,
+				doc: id === resumed?.id ? resumed.doc : null
+			},
+			{
+				onError: () => {
+					app.notice =
+						'Your work could not be saved in this browser, so a reload would lose it. Save it to a file to be safe.';
+				},
+				isEmpty: (doc) => {
+					const levels = (doc as ReturnType<typeof app.draft>).levels;
+					return levels.length === 1 && levels[0].schematic.instances.length === 0;
+				}
+			}
+		);
+		for (const stale of staleDrafts(records, new Set([id]))) void store.remove(stale).catch(() => {});
+		saverReady = true;
+	}
 
 	$effect(() => {
 		ensureEngine().then(async () => {
 			version = engineVersion();
-
-			// A circuit in the fragment wins over the default example: someone
-			// following a link wants the circuit in the link.
-			if (location.hash.length > 2) {
-				try {
-					app.loadShared(await decodeCircuit(location.hash));
-				} catch (cause) {
-					// A notice, not an error: the default circuit is about to load and
-					// simulate, and someone who followed a link needs to be told that
-					// what they are looking at is not what they were sent.
-					const why = cause instanceof Error ? cause.message : String(cause);
-					app.notice = `That link could not be read, so this is the default circuit instead. ${why}`;
-				}
-			}
 			// Nothing simulates until it is asked to. Opening on a circuit that is
 			// already running gives no moment to look at it before it moves.
+			await start(await openDraftStore());
 		});
+	});
+
+	/**
+	 * Write the work down as it changes.
+	 *
+	 * A whole circuit arriving — an example, a file, a link — starts a new
+	 * draft rather than overwriting the one on screen, which was somebody's
+	 * work. And it drops the old link from the address bar, which described
+	 * the circuit that just left.
+	 */
+	let saverReady = $state(false);
+	$effect(() => {
+		if (!saverReady || !saver) return;
+		const arrivals = app.arrivals;
+		const doc = app.draft();
+		if (arrivals !== draftArrivals) {
+			draftArrivals = arrivals;
+			const id = newDraftId();
+			void claim(id);
+			setTabDraft(id);
+			saver.fork(id, arrivingFrom, doc);
+			linkBehind = null;
+			if (!arrivingFrom) forgetLink();
+			arrivingFrom = '';
+			return;
+		}
+		saver.schedule(doc);
+	});
+
+	$effect(() => {
+		// The debounce is for drags; leaving the page is not the moment to wait.
+		const flush = () => void saver?.flush();
+		const hidden = () => {
+			if (document.visibilityState === 'hidden') flush();
+		};
+		// A link pasted into this tab's address bar changes only the fragment,
+		// which does not reload the page; it is still a circuit being opened.
+		const followed = () => {
+			if (location.hash.length > 2 && location.hash !== saver?.origin) void openLink(location.hash);
+		};
+		window.addEventListener('pagehide', flush);
+		document.addEventListener('visibilitychange', hidden);
+		window.addEventListener('hashchange', followed);
+		return () => {
+			window.removeEventListener('pagehide', flush);
+			document.removeEventListener('visibilitychange', hidden);
+			window.removeEventListener('hashchange', followed);
+		};
 	});
 
 	/**
@@ -105,7 +275,10 @@
 				{ schematic: app.schematic, stopTime: app.stopTime, probes: app.probes },
 				new URL(location.href)
 			);
-			history.replaceState(null, '', url);
+			history.replaceState(history.state, '', url);
+			// The draft now continues this link: a reload finds the draft, and
+			// the link on its own is what anyone else gets.
+			void saver?.setOrigin(new URL(url).hash, app.draft());
 			await navigator.clipboard.writeText(url);
 			shareState = 'copied';
 		} catch {
@@ -114,8 +287,6 @@
 		}
 		setTimeout(() => (shareState = 'idle'), 2500);
 	}
-
-	let tempField = $state(String(app.temperature));
 
 	/** Whether anything on the drawing has a digital pin to speak of. */
 	const hasDigital = $derived(
@@ -442,7 +613,26 @@
 	{#if app.notice}
 		<div class="banner warn" role="alert">
 			{app.notice}
-			<button class="dismiss" onclick={() => (app.notice = null)} aria-label="Dismiss">×</button>
+			{#if linkBehind}
+				<button
+					class="link-behind"
+					onclick={async () => {
+						const hash = linkBehind!;
+						linkBehind = null;
+						if (await openLink(hash)) app.notice = null;
+					}}
+				>
+					Open the link as sent
+				</button>
+			{/if}
+			<button
+				class="dismiss"
+				onclick={() => {
+					app.notice = null;
+					linkBehind = null;
+				}}
+				aria-label="Dismiss">×</button
+			>
 		</div>
 	{:else if app.error}
 		<div class="banner error" role="alert">
