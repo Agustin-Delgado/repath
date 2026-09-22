@@ -6,7 +6,7 @@
 	import Scope from '$lib/components/Scope.svelte';
 	import Toolbar from '$lib/components/toolbar/Toolbar.svelte';
 	import CommandPalette from '$lib/commands/CommandPalette.svelte';
-	import { Toaster } from '$lib/ui';
+	import { Button, Toaster } from '$lib/ui';
 	import { ensureEngine, engineVersion } from '$lib/engine';
 	import {
 		Autosaver,
@@ -363,42 +363,43 @@
 		scope can be put away so the drawing gets the whole screen.
 	-->
 	<nav class="phone-bar" aria-label="Phone controls">
-		<button
-			class:active={panel === 'parts'}
-			onclick={() => (panel = panel === 'parts' ? null : 'parts')}
-		>
+		<Button size="touch" active={panel === 'parts'} onclick={() => (panel = panel === 'parts' ? null : 'parts')}>
 			Parts
-		</button>
-		<button
-			class:active={panel === 'details'}
+		</Button>
+		<Button
+			size="touch"
+			active={panel === 'details'}
 			onclick={() => (panel = panel === 'details' ? null : 'details')}
 		>
 			Details
-		</button>
-		<span class="gap"></span>
-		<button
+		</Button>
+		<span class="flex-1"></span>
+		<Button
+			size="touch"
 			disabled={app.selection.length === 0}
 			onclick={() => app.rotateSelection()}
 			title="Turn a quarter turn; wires follow"
 		>
 			Rotate
-		</button>
-		<button
-			class="danger"
+		</Button>
+		<Button
+			size="touch"
+			class="text-danger"
 			disabled={app.selection.length === 0}
 			onclick={() => app.deleteSelection()}
 		>
 			Delete
-		</button>
-		<span class="gap"></span>
-		<button onclick={() => schematic?.fitToContent()} title="Fit the drawing on screen">Fit</button>
-		<button
-			class:active={scopeShown}
+		</Button>
+		<span class="flex-1"></span>
+		<Button size="touch" onclick={() => schematic?.fitToContent()} title="Fit the drawing on screen">Fit</Button>
+		<Button
+			size="touch"
+			active={scopeShown}
 			onclick={() => (scopeShown = !scopeShown)}
 			title={scopeShown ? 'Put the scope away' : 'Bring the scope back'}
 		>
 			Scope
-		</button>
+		</Button>
 	</nav>
 
 	<section class="bottom" class:collapsed={!scopeShown}>
@@ -597,35 +598,6 @@
 			border-top: 1px solid var(--border);
 			overflow-x: auto;
 			scrollbar-width: none;
-		}
-
-		.phone-bar .gap {
-			flex: 1;
-		}
-
-		.phone-bar button {
-			flex: none;
-			/* A finger's width, whatever the label says. */
-			min-height: 2.4rem;
-			padding: 0.3rem 0.7rem;
-			font-size: 0.78rem;
-			border: 1px solid var(--border);
-			border-radius: 6px;
-			background: var(--control-bg);
-			color: var(--text);
-		}
-
-		.phone-bar button:disabled {
-			opacity: 0.45;
-		}
-
-		.phone-bar button.active {
-			border-color: var(--accent);
-			background: color-mix(in srgb, var(--accent) 14%, transparent);
-		}
-
-		.phone-bar button.danger:not(:disabled) {
-			color: var(--danger);
 		}
 
 		.scope-host {

@@ -2,13 +2,13 @@
 	import { measure, measureBurst, measureLogic } from '$lib/measure';
 	import { firstAfter, levelAt } from '$lib/transitions';
 	import { DEPTH } from '$lib/capture';
-	import { netLabel } from '$lib/schematic/nets';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
 	import { decimate, extent, ticks, timeLabel, visibleRange, wheelFactor } from '$lib/plot';
 	import type { Burst, DigitalTransition, LogicState } from '$lib/engine';
 	import BodePlot from './BodePlot.svelte';
+	import SignalsPanel from './scope/SignalsPanel.svelte';
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let host = $state<HTMLDivElement | null>(null);
@@ -938,113 +938,8 @@
 	</div>
 	{/if}
 
-	<aside class="signals">
-		<h3>
-			Signals
-			<button
-				class="scale"
-				class:on={measuring}
-				aria-pressed={measuring}
-				onclick={() => (measuring = !measuring)}
-				title="Read off frequency, period, duty, RMS, rise time and overshoot — logic lanes too"
-			>
-				measure
-			</button>
-			{#if traces.length > 1}
-				<button
-					class="scale"
-					class:on={separate}
-					aria-pressed={separate}
-					onclick={() => (separate = !separate)}
-					title={separate
-						? 'One axis for everything'
-						: 'Give each signal its own scale, so a small one is not flattened by a large one'}
-				>
-					{separate ? 'split' : 'shared'}
-				</button>
-			{/if}
-		</h3>
-		<ul>
-			{#each app.compiled.connectivity.nets as net (net.index)}
-				{@const names = app.compiled.names.get(net.index)}
-				{@const signal = names?.analog ?? names?.digital}
-				{@const probe = app.activeProbes.find((p) => p.netIndex === net.index)}
-				{@const label = probe?.label ?? (signal ? netLabel(net, signal) : '')}
-				{#if signal && !net.isGround}
-					<!--
-						Pointing at a name lights that net up on the schematic. A label can
-						only say so much in the width of a sidebar; this says the rest by
-						pointing at the drawing, which is where the answer actually is.
-					-->
-					<li
-						onpointerenter={() => (app.hoverNet = net.index)}
-						onpointerleave={() => (app.hoverNet = null)}
-					>
-						<label>
-							<input
-								type="checkbox"
-								checked={!!probe}
-								onchange={() => app.toggleProbe(net.points[0])}
-							/>
-							<span class="swatch" style:background={probe?.colour ?? 'transparent'}></span>
-							<span class="name">{label}</span>
-							{#if names?.analog && names?.digital}
-								<span class="badge" title="This net is bridged between the analog and digital domains"
-									>mixed</span
-								>
-							{:else if names?.digital}
-								<span class="badge digital">logic</span>
-							{/if}
-						</label>
-
-						<!--
-							The knobs. Automatic is the right default — nobody wants to set up
-							a scope before seeing anything — but a scope you cannot turn is a
-							picture of a scope. Gain expands about the middle of the band, so
-							turning it up shows more of what a trace is doing rather than
-							launching it off the top.
-						-->
-						{#if probe}
-							{@const knob = app.channels[probe.key] ?? { gain: 1, offset: 0 }}
-							<div class="knobs">
-								<!--
-									Gain, only where there is something to turn up. A logic lane is two
-									levels and a label: there is no amplitude to amplify, and a knob
-									that moves a number without moving anything on screen is worse
-									than no knob — it teaches you that the panel lies.
-								-->
-								{#if probe.analog}
-									<span class="knob">
-										<button onclick={() => app.adjustGain(probe.key, -1)} title="Less gain">−</button>
-										<span class="reading">×{knob.gain}</span>
-										<button onclick={() => app.adjustGain(probe.key, 1)} title="More gain">+</button>
-									</span>
-								{/if}
-								<span class="knob">
-									<button onclick={() => app.adjustOffset(probe.key, 1)} title="Move up">↑</button>
-									<button onclick={() => app.adjustOffset(probe.key, -1)} title="Move down">↓</button>
-								</span>
-								{#if (probe.analog && knob.gain !== 1) || knob.offset !== 0}
-									<button
-										class="reset"
-										onclick={() => app.resetChannel(probe.key)}
-										title="Back to automatic">auto</button
-									>
-								{/if}
-							</div>
-						{/if}
-					</li>
-				{/if}
-			{/each}
-		</ul>
-
-		{#if app.analysis === 'frequency' && app.acResult}
-			<footer>
-				{app.acResult.frequencies.length} points ·
-				{app.acResult.elapsedMs.toFixed(0)} ms
-			</footer>
-		{/if}
-
+	<SignalsPanel bind:measuring bind:separate traceCount={traces.length}>
+		{#snippet measures()}
 		{#if measurements.length > 0 || logicMeasurements.length > 0}
 			<!--
 				Each of these is something you could get from two cursors and some
@@ -1119,6 +1014,15 @@
 			</div>
 		{/if}
 
+		{/snippet}
+		{#snippet footer()}
+		{#if app.analysis === 'frequency' && app.acResult}
+			<footer>
+				{app.acResult.frequencies.length} points ·
+				{app.acResult.elapsedMs.toFixed(0)} ms
+			</footer>
+		{/if}
+
 		{#if app.analysis === 'transient' && app.result}
 			<footer>
 				{app.result.stats.accepted_steps} steps ·
@@ -1126,54 +1030,11 @@
 				{app.result.elapsedMs.toFixed(0)} ms
 			</footer>
 		{/if}
-	</aside>
+		{/snippet}
+	</SignalsPanel>
 </div>
 
 <style>
-	.knobs {
-		display: flex;
-		align-items: center;
-		gap: 0.3rem;
-		padding: 0.1rem 0 0.15rem 1.35rem;
-	}
-
-	.knob {
-		display: inline-flex;
-		align-items: center;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		overflow: hidden;
-	}
-
-	.knobs button {
-		border: 0;
-		background: var(--control-bg);
-		color: var(--label-dim);
-		font-size: 0.62rem;
-		line-height: 1;
-		padding: 0.12rem 0.28rem;
-		cursor: pointer;
-	}
-
-	.knobs button:hover {
-		color: var(--text);
-	}
-
-	.knobs .reading {
-		font-family: var(--font-mono);
-		font-size: 0.6rem;
-		color: var(--label-dim);
-		padding: 0 0.25rem;
-		min-width: 2.1rem;
-		text-align: center;
-	}
-
-	.knobs .reset {
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		font-size: 0.58rem;
-	}
-
 	.measures {
 		display: flex;
 		flex-direction: column;
@@ -1229,33 +1090,9 @@
 		font-style: italic;
 	}
 
-	.signals h3 {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.4rem;
-	}
-
-	.signals .scale {
-		font-size: 0.6rem;
-		letter-spacing: 0;
-		text-transform: none;
-		padding: 0.1rem 0.35rem;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		background: var(--control-bg);
-		color: var(--label-dim);
-		cursor: pointer;
-	}
-
-	.signals .scale.on {
-		border-color: var(--accent);
-		color: var(--text);
-	}
-
 	.scope {
 		display: grid;
-		grid-template-columns: 1fr 190px;
+		grid-template-columns: minmax(0, 1fr) 210px;
 		/*
 			Explicit, because the row would otherwise size itself to the canvas —
 			which is sized to the row. Nothing in that loop can ever shrink, so a
@@ -1269,7 +1106,7 @@
 
 	@media (max-width: 900px) {
 		.scope {
-			grid-template-columns: 1fr 150px;
+			grid-template-columns: minmax(0, 1fr) 160px;
 		}
 	}
 
@@ -1332,71 +1169,6 @@
 
 	.readout .time {
 		color: var(--label-dim);
-	}
-
-	.signals {
-		border-left: 1px solid var(--border);
-		display: flex;
-		flex-direction: column;
-		min-height: 0;
-	}
-
-	.signals h3 {
-		margin: 0;
-		padding: 0.6rem 0.75rem 0.4rem;
-		font-size: 0.7rem;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--label-dim);
-		font-weight: 600;
-	}
-
-	.signals ul {
-		list-style: none;
-		margin: 0;
-		padding: 0 0.5rem 0.5rem;
-		overflow-y: auto;
-		flex: 1;
-	}
-
-	.signals label {
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-		padding: 0.2rem 0.25rem;
-		border-radius: 4px;
-		cursor: pointer;
-		font-size: 0.8rem;
-	}
-
-	.signals label:hover {
-		background: var(--hover);
-	}
-
-	.swatch {
-		width: 10px;
-		height: 10px;
-		border-radius: 2px;
-		border: 1px solid var(--border);
-		flex: none;
-	}
-
-	.name {
-		font-family: var(--font-mono);
-	}
-
-	.badge {
-		margin-left: auto;
-		font-size: 0.62rem;
-		padding: 0.05rem 0.3rem;
-		border-radius: 3px;
-		background: var(--badge-mixed);
-		color: var(--badge-mixed-text);
-	}
-
-	.badge.digital {
-		background: var(--badge-logic);
-		color: var(--badge-logic-text);
 	}
 
 	footer {
