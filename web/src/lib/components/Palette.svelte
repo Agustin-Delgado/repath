@@ -85,6 +85,7 @@
 			<button
 				class="part"
 				class:active={app.tool.mode === 'wire'}
+				aria-pressed={app.tool.mode === 'wire'}
 				onclick={wire}
 				title="Draw a wire between two pins, or off an existing wire"
 			>
@@ -111,6 +112,7 @@
 				<button
 					class="part"
 					class:active={app.tool.mode === 'place' && app.tool.kind === 'port'}
+					aria-pressed={app.tool.mode === 'place' && app.tool.kind === 'port'}
 					onclick={() => select('port')}
 					title="A terminal of this block: wire a pin to it and the box gets a pin under its name"
 				>
@@ -132,6 +134,7 @@
 					<button
 						class="part"
 						class:active={app.tool.mode === 'place' && app.tool.kind === def.kind}
+						aria-pressed={app.tool.mode === 'place' && app.tool.kind === def.kind}
 						onclick={() => select(def.kind)}
 						title={def.label}
 					>
@@ -173,6 +176,7 @@
 					<button
 						class="part"
 						class:active={app.tool.mode === 'place' && app.tool.kind === BLOCK_PREFIX + block.id}
+						aria-pressed={app.tool.mode === 'place' && app.tool.kind === BLOCK_PREFIX + block.id}
 						onclick={() => select(BLOCK_PREFIX + block.id)}
 						oncontextmenu={(e) => {
 							e.preventDefault();
@@ -204,10 +208,17 @@
 	<section>
 		<h3>Imported</h3>
 		<div class="grid">
-			{#each imported as sub (sub.id)}
+			<!--
+				Keyed on the ports as well, so re-importing a corrected definition
+				redraws its icon; and framed to the symbol's own extent, which grows
+				with the number of ports, so a wide one is not cut off.
+			-->
+			{#each imported as sub (`${sub.id}(${sub.ports.join(' ')})`)}
+				{@const reach = symbolExtent(SUBCIRCUIT_PREFIX + sub.id)}
 				<button
 					class="part"
 					class:active={app.tool.mode === 'place' && app.tool.kind === SUBCIRCUIT_PREFIX + sub.id}
+					aria-pressed={app.tool.mode === 'place' && app.tool.kind === SUBCIRCUIT_PREFIX + sub.id}
 					onclick={() => select(SUBCIRCUIT_PREFIX + sub.id)}
 					oncontextmenu={(e) => {
 						e.preventDefault();
@@ -215,7 +226,11 @@
 					}}
 					title="{sub.name} ({sub.ports.join(' ')}) — right-click to remove"
 				>
-					<svg viewBox="-40 -40 80 80" aria-hidden="true">
+					<svg
+						viewBox="{-reach.x} {-reach.y} {reach.x * 2} {reach.y * 2}"
+						class:tall={reach.y > reach.x}
+						aria-hidden="true"
+					>
 						<Symbol kind={SUBCIRCUIT_PREFIX + sub.id} />
 					</svg>
 					<span>{sub.name}</span>
