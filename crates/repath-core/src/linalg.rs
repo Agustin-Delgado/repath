@@ -21,6 +21,52 @@ pub enum SolveError {
     /// The matrix is singular to working precision. In circuit terms this almost
     /// always means a floating node or a loop of ideal voltage sources.
     Singular { row: usize },
+    /// The answer came out infinite or not a number. Not a property of the
+    /// circuit's topology but of its values at this iterate — an exponential
+    /// pushed past range, a model parameter that divides by zero — so it is
+    /// kept apart from `Singular`, which blames a node.
+    NonFinite,
+}
+
+/// Label each of `n` unknowns so that two share a label exactly when a chain of
+/// entries `nonzero(row, col)` joins them, leaving `barriers` out of every
+/// chain. The pattern is asked for, not a matrix, so it can be read off
+/// whichever stamp describes the circuit — never off LU factors, where
+/// pivoting and fill-in join rows the circuit does not.
+pub fn coupled_labels(
+    n: usize,
+    barriers: &[usize],
+    nonzero: impl Fn(usize, usize) -> bool,
+) -> Vec<usize> {
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut barrier = vec![false; n];
+    for &b in barriers {
+        if b < n {
+            barrier[b] = true;
+        }
+    }
+    for r in 0..n {
+        if barrier[r] {
+            continue;
+        }
+        for (c, &held) in barrier.iter().enumerate() {
+            if r == c || held || !nonzero(r, c) {
+                continue;
+            }
+            let (a, b) = (find(&mut parent, r), find(&mut parent, c));
+            if a != b {
+                parent[a] = b;
+            }
+        }
+    }
+    (0..n).map(|i| find(&mut parent, i)).collect()
 }
 
 impl LinearSystem {
@@ -62,29 +108,7 @@ impl LinearSystem {
     /// carries no signal from one thing to another.
     pub fn coupled(&self, barriers: &[usize]) -> Vec<usize> {
         let n = self.n;
-        let mut parent: Vec<usize> = (0..n).collect();
-        fn find(parent: &mut [usize], mut i: usize) -> usize {
-            while parent[i] != i {
-                parent[i] = parent[parent[i]];
-                i = parent[i];
-            }
-            i
-        }
-        for r in 0..n {
-            if barriers.contains(&r) {
-                continue;
-            }
-            for c in 0..n {
-                if r == c || barriers.contains(&c) || self.a[r * n + c] == 0.0 {
-                    continue;
-                }
-                let (a, b) = (find(&mut parent, r), find(&mut parent, c));
-                if a != b {
-                    parent[a] = b;
-                }
-            }
-        }
-        (0..n).map(|i| find(&mut parent, i)).collect()
+        coupled_labels(n, barriers, |r, c| self.a[r * n + c] != 0.0)
     }
 
     /// `b[row] += value`, dropping ground.
@@ -200,7 +224,7 @@ impl LinearSystem {
         }
 
         if x.iter().any(|v| !v.is_finite()) {
-            return Err(SolveError::Singular { row: 0 });
+            return Err(SolveError::NonFinite);
         }
         Ok(())
     }

@@ -121,6 +121,17 @@ pub enum SimError {
     StepLimit { time: f64 },
     /// Nothing to solve.
     Empty,
+    /// The solve produced infinities or not-a-number, and every retry did too.
+    NonFinite { time: f64 },
+    /// A loop of logic was still changing at one instant after every delta
+    /// cycle it was allowed: zero-delay gates chasing each other.
+    DigitalLoop { time: f64, nets: Vec<String> },
+    /// More unknowns than the dense solver can hold.
+    TooLarge { unknowns: usize, limit: usize },
+    /// The analysis was asked for something that cannot be done.
+    Invalid { reason: String },
+    /// A single run recorded more than it is allowed to keep in memory.
+    TooMuchData { time: f64 },
 }
 
 impl std::fmt::Display for SimError {
@@ -140,6 +151,24 @@ impl std::fmt::Display for SimError {
                 write!(f, "hit the step limit at t = {time:.6e} s")
             }
             SimError::Empty => write!(f, "the circuit has nothing to solve"),
+            SimError::NonFinite { time } => write!(
+                f,
+                "the solution became infinite at t = {time:.6e} s; check for a part value of zero or one far out of range"
+            ),
+            SimError::DigitalLoop { time, nets } => write!(
+                f,
+                "a loop of logic never settles at t = {time:.6e} s (nets {}); a gate in it needs a delay",
+                nets.join(", ")
+            ),
+            SimError::TooLarge { unknowns, limit } => write!(
+                f,
+                "the circuit has {unknowns} unknowns and the solver holds at most {limit}"
+            ),
+            SimError::Invalid { reason } => write!(f, "{reason}"),
+            SimError::TooMuchData { time } => write!(
+                f,
+                "the run was stopped at t = {time:.6e} s because it had recorded more than can be kept in memory; shorten it or widen the step"
+            ),
         }
     }
 }
@@ -460,20 +489,75 @@ pub struct AcConfig {
 
 impl AcConfig {
     pub fn new(start_hz: f64, stop_hz: f64) -> Self {
-        Self { start_hz: start_hz.max(1e-9), stop_hz: stop_hz.max(1e-9), points_per_decade: 20 }
+        // Anything not a number is kept as it came, for `validate` to refuse:
+        // `max` would quietly turn a NaN into the floor.
+        let floor = |hz: f64| if hz.is_finite() { hz.max(1e-9) } else { hz };
+        Self { start_hz: floor(start_hz), stop_hz: floor(stop_hz), points_per_decade: 20 }
+    }
+
+    /// Whether the sweep can be done: finite, positive ends, and no more
+    /// than [`MAX_AC_POINTS`] frequencies.
+    ///
+    /// An infinite stop frequency was an infinite number of decades, turned
+    /// into a vector of `usize::MAX` points, and the allocation aborted the
+    /// engine rather than failing.
+    pub fn validate(&self) -> Result<(), SimError> {
+        for (what, hz) in [("start", self.start_hz), ("stop", self.stop_hz)] {
+            if !(hz.is_finite() && hz > 0.0) {
+                return Err(SimError::Invalid {
+                    reason: format!(
+                        "the sweep's {what} frequency must be a positive number, not {hz}"
+                    ),
+                });
+            }
+        }
+        if self.points_per_decade == 0 {
+            return Err(SimError::Invalid {
+                reason: "a sweep needs at least one point per decade".to_string(),
+            });
+        }
+        let count = self.point_count();
+        if count > MAX_AC_POINTS {
+            return Err(SimError::Invalid {
+                reason: format!(
+                    "that sweep is {count} frequencies; the most one sweep solves is {MAX_AC_POINTS}"
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn decades(&self) -> f64 {
+        let (lo, hi) = (self.start_hz.min(self.stop_hz), self.start_hz.max(self.stop_hz));
+        (hi / lo).log10()
+    }
+
+    /// How many frequencies the sweep solves, saturating rather than wrapping.
+    fn point_count(&self) -> usize {
+        let decades = self.decades();
+        if decades.is_nan() || decades <= 0.0 {
+            return 1;
+        }
+        let steps = (decades * self.points_per_decade as f64).round();
+        // `as` saturates, and infinity comes out as `usize::MAX`.
+        (steps.max(1.0) as usize).saturating_add(1)
     }
 
     /// The frequencies this configuration sweeps, logarithmically spaced.
+    ///
+    /// Never more than [`MAX_AC_POINTS`], whatever was asked: a configuration
+    /// that would be more is refused by [`Self::validate`], and this does not
+    /// allocate for it in the meantime.
     pub fn frequencies(&self) -> Vec<f64> {
-        let (lo, hi) = (self.start_hz.min(self.stop_hz), self.start_hz.max(self.stop_hz));
-        let decades = (hi / lo).log10();
+        let lo = self.start_hz.min(self.stop_hz);
+        let decades = self.decades();
         // One frequency asked for is one frequency swept. Rounding a span of
         // nothing up to a single step handed back the same point twice, and a
         // plot then drew a segment between a point and itself.
-        if decades.is_nan() || decades <= 0.0 {
+        if !decades.is_finite() || decades <= 0.0 {
             return vec![lo];
         }
-        let steps = ((decades * self.points_per_decade as f64).round() as usize).max(1);
+        let steps = (self.point_count() - 1).min(MAX_AC_POINTS - 1);
         (0..=steps).map(|k| lo * 10f64.powf(decades * k as f64 / steps as f64)).collect()
     }
 }
@@ -515,6 +599,31 @@ pub struct Simulator {
 /// Smallest step the transient loop will attempt, relative to the run length.
 const MIN_STEP_FRACTION: f64 = 1e-11;
 
+/// Most unknowns the dense solver takes on.
+///
+/// The matrix is `n²` doubles, factored in place: four thousand unknowns is
+/// 128 MB and a solve of about twenty billion operations, which is already far
+/// past interactive. Past this a circuit is refused with a reason, rather than
+/// asking a 32-bit address space for gigabytes and having the tab die.
+pub const MAX_UNKNOWNS: usize = 4096;
+
+/// Most values one call to [`Simulator::advance_transient`] records, across
+/// solutions and element currents together: 160 MB of doubles. A live run
+/// hands back a frame at a time and never comes near it; a batch run that
+/// would, was going to exhaust memory before it finished anyway.
+pub const MAX_RECORDED_VALUES: usize = 20_000_000;
+
+/// Most frequencies an AC sweep solves. Ten thousand is five hundred per
+/// decade over twenty decades, far past anything a plot can show.
+pub const MAX_AC_POINTS: usize = 10_000;
+
+/// A floor under the step at time `t`: a step shorter than a few units in the
+/// last place of `t` does not move the clock, and would be accepted as a step
+/// of nothing — forever, since nothing then changes.
+fn step_floor(min_step: f64, t: f64) -> f64 {
+    min_step.max(4.0 * f64::EPSILON * t.abs())
+}
+
 /// Damped steps taken after landing on a corner.
 ///
 /// Two is enough to stop the step itself from ringing, and not enough to cover
@@ -524,6 +633,14 @@ const MIN_STEP_FRACTION: f64 = 1e-11;
 /// covers the tail of an ordinary edge. It costs first-order accuracy on the
 /// part of a transient where the answer is already tiny.
 const CORNER_DAMPING: usize = 8;
+
+/// The loop of logic that failed to settle, if one has, as the error it is.
+fn unsettled(circuit: &mut Circuit) -> Result<(), SimError> {
+    match circuit.digital.take_unsettled() {
+        Some(loop_) => Err(SimError::DigitalLoop { time: loop_.time, nets: loop_.nets }),
+        None => Ok(()),
+    }
+}
 
 impl Default for Simulator {
     fn default() -> Self {
@@ -551,6 +668,9 @@ impl Simulator {
         // legitimate thing to simulate.
         if n == 0 && circuit.digital.net_count() == 0 {
             return Err(SimError::Empty);
+        }
+        if n > MAX_UNKNOWNS {
+            return Err(SimError::TooLarge { unknowns: n, limit: MAX_UNKNOWNS });
         }
         if self.sys.size() != n {
             self.sys = LinearSystem::new(n);
@@ -605,6 +725,7 @@ impl Simulator {
                         .cloned()
                         .unwrap_or_else(|| format!("unknown #{row}")),
                 },
+                SolveError::NonFinite => SimError::NonFinite { time },
             })?;
             stats.newton_iterations += 1;
 
@@ -670,7 +791,9 @@ impl Simulator {
             Ok(_) => return Ok(()),
             // A singular matrix will not be fixed by a better initial guess, but
             // gmin stepping adds real conductance, so it is still worth a try.
-            Err(SimError::NoConvergence { .. }) | Err(SimError::Singular { .. }) => {}
+            Err(SimError::NoConvergence { .. })
+            | Err(SimError::Singular { .. })
+            | Err(SimError::NonFinite { .. }) => {}
             Err(other) => return Err(other),
         }
 
@@ -779,6 +902,7 @@ impl Simulator {
     /// The drive comes from whichever sources were given an AC magnitude; with
     /// none, everything is zero and the answer is uninteresting rather than wrong.
     pub fn ac_sweep(&mut self, circuit: &mut Circuit, cfg: AcConfig) -> Result<AcResult, SimError> {
+        cfg.validate()?;
         let n = self.prepare(circuit)?;
         circuit.reset();
 
@@ -798,8 +922,12 @@ impl Simulator {
             let ctx = AcCtx { omega: std::f64::consts::TAU * hz, gmin: self.config.gmin };
             circuit.ac_stamp_all(&mut sys, &ctx);
 
-            sys.solve_into(&mut x).map_err(|e| SimError::Singular {
-                unknown: unknown_names.get(e.row).cloned().unwrap_or_else(|| format!("#{}", e.row)),
+            sys.solve_into(&mut x).map_err(|e| match e.row {
+                // Not a node's fault: the numbers themselves overflowed.
+                None => SimError::NonFinite { time: 0.0 },
+                Some(row) => SimError::Singular {
+                    unknown: unknown_names.get(row).cloned().unwrap_or_else(|| format!("#{row}")),
+                },
             })?;
 
             for i in 0..n {
@@ -872,6 +1000,7 @@ impl Simulator {
         circuit.digital.watch(bridged);
         circuit.digital.initialize();
         circuit.digital.settle(0.0);
+        unsettled(circuit)?;
         // The starting levels go into the trace below as levels, not as changes.
         circuit.digital.take_log();
         self.force_dac_levels(circuit, 0.0);
@@ -933,6 +1062,7 @@ impl Simulator {
             &mut ledger,
             cfg.max_step,
         );
+        unsettled(circuit)?;
 
         // Measured against the step ceiling rather than the run length, because a
         // run that is advanced piece by piece has no length to measure against —
@@ -970,7 +1100,6 @@ impl Simulator {
         let cfg = run.cfg;
         let min_step = run.min_step;
         let mut stats = std::mem::take(&mut run.stats);
-        let started_at = stats.accepted_steps;
         let work_at_start = stats.work();
         let mut result = TransientResult {
             digital: vec![Vec::new(); circuit.digital.net_count()],
@@ -987,11 +1116,18 @@ impl Simulator {
             run.stats = stats;
         };
 
-        while t < until - min_step {
+        let row = (circuit.unknown_count() + circuit.elements().len()).max(1);
+        while t < until - step_floor(min_step, t) {
             // Counted from where this call started rather than from zero: a run
             // that is advanced forever would otherwise trip the safety valve on
             // nothing worse than having been left running.
-            if stats.accepted_steps - started_at >= cfg.max_steps {
+            //
+            // Counted in work rather than in analog steps, so that digital
+            // events count too. A run with no budget — a batch run, a Monte
+            // Carlo draw — and a fast clock was otherwise bounded by nothing:
+            // a hundred megahertz for a second is two hundred million events
+            // inside a handful of analog steps.
+            if stats.work() - work_at_start >= cfg.max_steps as f64 {
                 restore(run, t, dt, euler_steps, stats);
                 return Err(SimError::StepLimit { time: t });
             }
@@ -1011,12 +1147,25 @@ impl Simulator {
             // this step has to end, so that the bridge starts its ramp from a
             // timepoint the solver has actually been at.
             let proposal = dt.min(cfg.max_step).min(until - t);
-            let events_allowed =
-                (((run.budget as f64 - spent) * EVENTS_PER_STEP).ceil() as usize).max(1);
+            // Whichever runs out first, the frame's share or the safety valve:
+            // without a budget, one step's worth of a fast clock was otherwise
+            // run out in full before the valve was next looked at.
+            let allowed = (run.budget as f64).min(cfg.max_steps as f64) - spent;
+            let events_allowed = ((allowed * EVENTS_PER_STEP).ceil() as usize).max(1);
             let settled = circuit.digital.settle_until(t + proposal, true, events_allowed);
             stats.digital_events += settled.events;
+            if let Err(e) = unsettled(circuit) {
+                restore(run, t, dt, euler_steps, stats);
+                return Err(e);
+            }
             self.absorb_digital(circuit, &mut result, &mut run.ledger, cfg.max_step);
             if settled.halt == Halt::Budget && settled.time <= t {
+                // What ran out was the safety valve, not the frame's share: that
+                // is an error, reported at the top of the loop, and never a run
+                // handed back short as though it had finished.
+                if (cfg.max_steps as f64) < run.budget as f64 {
+                    continue;
+                }
                 // The frame's share went on events that did not get the digital
                 // side past the analog one. Nothing to solve; the next call
                 // carries on.
@@ -1048,7 +1197,7 @@ impl Simulator {
             if settled.halt == Halt::Budget && settled.time < t + step {
                 step = settled.time - t;
             }
-            step = step.max(min_step);
+            step = step.max(step_floor(min_step, t));
 
             // Attempt the step, backing off if Newton refuses to converge.
             let mut attempt = step;
@@ -1076,14 +1225,16 @@ impl Simulator {
                     &mut stats,
                 ) {
                     Ok(_) => break,
-                    Err(SimError::NoConvergence { .. }) => {
+                    // An iterate that overflowed is a step too long for the
+                    // exponentials in it, as much as one that did not settle.
+                    Err(SimError::NoConvergence { .. }) | Err(SimError::NonFinite { .. }) => {
                         stats.rejected_steps += 1;
                         attempt /= 8.0;
                         // Backward Euler is more forgiving; fall back to it while
                         // fighting through whatever is happening here.
                         integration = Integration::BackwardEuler;
                         euler_steps = euler_steps.max(2);
-                        if attempt < min_step {
+                        if attempt < step_floor(min_step, t) {
                             restore(run, t, dt, euler_steps, stats);
                             return Err(SimError::TimestepTooSmall { time: t, step: attempt });
                         }
@@ -1138,6 +1289,14 @@ impl Simulator {
                 &mut run.ledger,
                 cfg.max_step,
             );
+            if let Err(e) = unsettled(circuit) {
+                restore(run, t, dt, euler_steps, stats);
+                return Err(e);
+            }
+            if result.time.len().saturating_mul(row) > MAX_RECORDED_VALUES {
+                restore(run, t, dt, euler_steps, stats);
+                return Err(SimError::TooMuchData { time: t });
+            }
 
             // Grow back gradually. Doubling every step overshoots straight into
             // the next rejection.
@@ -1442,7 +1601,16 @@ impl Simulator {
                 _ => None,
             })
             .collect();
-        let label = self.sys.coupled(&rails);
+        // Read off a fresh small-signal stamp rather than `self.sys`, which at
+        // this point holds the LU factors of the last solve. Pivoting swaps a
+        // rail's row with its source's branch row, and that row reaches every
+        // neighbour of the rail: read from the factors, the barrier never held
+        // and nothing sharing a supply with a read-back net was ever averaged.
+        // The AC stamp is the linearisation at the present bias, capacitors
+        // included, which is exactly the pattern of what can reach what.
+        let mut pattern = ComplexSystem::new(circuit.unknown_count());
+        circuit.ac_stamp_all(&mut pattern, &AcCtx { omega: 1.0, gmin: self.config.gmin });
+        let label = pattern.coupled(&rails);
         let read: Vec<usize> = circuit
             .adcs()
             .iter()

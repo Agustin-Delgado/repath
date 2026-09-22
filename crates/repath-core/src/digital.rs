@@ -647,6 +647,19 @@ impl DigitalDevice for TriStateBuffer {
 /// re-triggering at the same instant would otherwise hang the simulation.
 const MAX_DELTA_CYCLES: usize = 10_000;
 
+/// A loop of logic that was still changing at one instant after every delta
+/// cycle it was allowed — two zero-delay gates chasing each other, most often.
+///
+/// Reported rather than resolved. Whatever level such a loop is left at is an
+/// answer the circuit does not have: real gates have delay, and what the loop
+/// does depends on it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unsettled {
+    pub time: f64,
+    /// A few of the nets that were still moving, by name.
+    pub nets: Vec<String>,
+}
+
 #[derive(Debug)]
 struct Net {
     name: String,
@@ -672,6 +685,14 @@ pub struct DigitalDomain {
     /// Devices to evaluate for the current instant. Kept between instants so
     /// a fast clock does not allocate a list a million times a second.
     touched: Vec<usize>,
+    /// The delta cycle each net was last put on `dirty` in, and each device on
+    /// `touched`. Checking membership by scanning the list made an edge on a
+    /// net read by a thousand flip-flops cost a million comparisons.
+    dirty_mark: Vec<u64>,
+    touched_mark: Vec<u64>,
+    cycle: u64,
+    /// The first instant a loop failed to settle, if one has.
+    unsettled: Option<Unsettled>,
     /// Every change of level since the log was last taken, in the order they
     /// happened: the time of the event that did it, never the instant somebody
     /// got round to asking.
@@ -729,6 +750,7 @@ impl DigitalDomain {
         self.resolved.push(Logic::HighZ);
         self.fanout.push(Vec::new());
         self.watched.push(false);
+        self.dirty_mark.push(0);
         id
     }
 
@@ -766,6 +788,7 @@ impl DigitalDomain {
 
         self.driver_base.push(base);
         self.devices.push(device);
+        self.touched_mark.push(0);
         index
     }
 
@@ -802,7 +825,12 @@ impl DigitalDomain {
         let Some(&net) = self.devices[index].output_nets().first() else {
             return false;
         };
-        self.queue.push(at, DriverId(self.driver_base[index]), net, state);
+        // Never behind what the domain has already run: it goes ahead of the
+        // analog side by up to a step, and an event put before `now` would be
+        // applied after edges already computed and handed out from inputs that
+        // did not yet include it. A hand on a switch lands on the newest instant
+        // there is.
+        self.queue.push(at.max(self.now), DriverId(self.driver_base[index]), net, state);
         true
     }
 
@@ -840,6 +868,11 @@ impl DigitalDomain {
     /// How far the queue has been run out.
     pub fn now(&self) -> f64 {
         self.now
+    }
+
+    /// The loop that failed to settle, once, if one has.
+    pub fn take_unsettled(&mut self) -> Option<Unsettled> {
+        self.unsettled.take()
     }
 
     /// Every level change since this was last called, oldest first.
@@ -908,6 +941,8 @@ impl DigitalDomain {
     fn run_instant(&mut self, instant: f64) -> usize {
         let mut events = 0;
         for _ in 0..MAX_DELTA_CYCLES {
+            self.cycle += 1;
+            let cycle = self.cycle;
             self.dirty.clear();
             let mut applied = false;
             while let Some(event) = self.queue.pop_due(instant) {
@@ -922,7 +957,8 @@ impl DigitalDomain {
                     self.resolved[event.net] = resolved;
                     self.nets[event.net].resolved = resolved;
                     self.log.push(Transition { time: event.time, net: event.net, state: resolved });
-                    if !self.dirty.contains(&event.net) {
+                    if self.dirty_mark[event.net] != cycle {
+                        self.dirty_mark[event.net] = cycle;
                         self.dirty.push(event.net);
                     }
                 }
@@ -930,7 +966,7 @@ impl DigitalDomain {
 
             if self.dirty.is_empty() {
                 if !applied {
-                    break;
+                    return events;
                 }
                 continue;
             }
@@ -939,9 +975,10 @@ impl DigitalDomain {
             let mut touched = std::mem::take(&mut self.touched);
             touched.clear();
             for net in &self.dirty {
-                for d in &self.fanout[*net] {
-                    if !touched.contains(d) {
-                        touched.push(*d);
+                for &d in &self.fanout[*net] {
+                    if self.touched_mark[d] != cycle {
+                        self.touched_mark[d] = cycle;
+                        touched.push(d);
                     }
                 }
             }
@@ -962,9 +999,25 @@ impl DigitalDomain {
             // Anything those devices scheduled with zero delay is due right now,
             // so loop again; anything with real delay waits for its own instant.
             if self.queue.next_time().is_none_or(|t| t > instant) {
-                break;
+                return events;
             }
         }
+
+        // Still moving after every cycle it was allowed. What is left due at
+        // this instant is thrown away, because leaving it was what hung the
+        // tab: the queue's next event stayed at this same instant, and every
+        // caller asked to be run on to it again, forever. Also what a delay too
+        // small to move the clock at this time — a femtosecond at a hundred
+        // seconds — comes to.
+        let mut nets: Vec<String> = Vec::new();
+        while let Some(event) = self.queue.pop_due(instant) {
+            events += 1;
+            let name = &self.nets[event.net].name;
+            if nets.len() < 4 && !nets.contains(name) {
+                nets.push(name.clone());
+            }
+        }
+        self.unsettled.get_or_insert(Unsettled { time: instant, nets });
         events
     }
 
@@ -988,6 +1041,7 @@ impl DigitalDomain {
         self.dirty.clear();
         self.log.clear();
         self.now = 0.0;
+        self.unsettled = None;
     }
 }
 
