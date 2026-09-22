@@ -667,11 +667,15 @@ impl Element for Diode {
         // A forward-biased junction is a small resistance, a reverse-biased one is
         // effectively open, and either way it stores charge. All three fall out of
         // what the operating point already computed.
-        sys.add_admittance(
-            node_index(self.p),
-            node_index(self.m),
-            C64::new(self.gd_op.max(ctx.gmin), ctx.omega * self.charge.c_op),
-        );
+        //
+        // The bulk resistance is in series with all of it, as it is in the large-
+        // signal stamp. Leaving it out made a forward-biased junction look like
+        // its dynamic resistance alone — a tenth of an ohm where the part is a
+        // half — and the gain of anything it loads came out more than twice wrong.
+        let y = C64::new(self.gd_op.max(ctx.gmin), ctx.omega * self.charge.c_op);
+        let rs = self.model.rs.max(0.0);
+        let y = if rs > 0.0 { y / (C64::real(1.0) + y * C64::real(rs)) } else { y };
+        sys.add_admittance(node_index(self.p), node_index(self.m), y);
     }
 
     /// Accumulate the overcurrent this timepoint is worth, and fail if it is enough.
@@ -1491,8 +1495,15 @@ impl Bjt {
         // Clamped away from zero because the factor goes through it in hard
         // saturation, where the model has nothing useful to say anyway and an
         // unclamped value would flip the sign of the transport current.
+        //
+        // Where the clamp holds, the factor is flat, and so is its derivative:
+        // handing Newton the slope of the unclamped line there would be a
+        // Jacobian for a function the model is not computing.
         let (early, d_early) = match m.vaf {
-            Some(vaf) if vaf > 0.0 => ((1.0 - vbc / vaf).max(0.01), -1.0 / vaf),
+            Some(vaf) if vaf > 0.0 => {
+                let raw = 1.0 - vbc / vaf;
+                if raw > 0.01 { (raw, -1.0 / vaf) } else { (0.01, 0.0) }
+            }
             _ => (1.0, 0.0),
         };
 

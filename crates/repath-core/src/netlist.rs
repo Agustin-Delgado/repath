@@ -29,6 +29,11 @@ pub enum NetlistError {
         component: String,
         reason: String,
     },
+    /// A value the device equations cannot be evaluated with.
+    BadValue {
+        component: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for NetlistError {
@@ -36,7 +41,8 @@ impl std::fmt::Display for NetlistError {
         match self {
             NetlistError::Empty => write!(f, "the netlist has no components"),
             NetlistError::DuplicateName(n) => write!(f, "two components are both named '{n}'"),
-            NetlistError::BadTerminals { component, reason } => {
+            NetlistError::BadTerminals { component, reason }
+            | NetlistError::BadValue { component, reason } => {
                 write!(f, "{component}: {reason}")
             }
         }
@@ -44,6 +50,48 @@ impl std::fmt::Display for NetlistError {
 }
 
 impl std::error::Error for NetlistError {}
+
+/// Refuse a model the equations cannot be evaluated with.
+///
+/// Each of these is divided by, or has its logarithm taken, and the solve that
+/// followed came back as infinities, which were reported as a singular matrix
+/// at whichever node happened to be first: a confident wrong reason for a
+/// failure that was the parameter's.
+fn check_values(component: &Component) -> Result<(), NetlistError> {
+    let positive = |what: &str, v: f64| -> Option<String> {
+        (!(v.is_finite() && v > 0.0)).then(|| format!("{what} must be a positive number, not {v}"))
+    };
+    let not_negative = |what: &str, v: f64| -> Option<String> {
+        (!(v.is_finite() && v >= 0.0)).then(|| format!("{what} cannot be negative, and is {v}"))
+    };
+    let first = |checks: Vec<Option<String>>| checks.into_iter().flatten().next();
+    let found = match component {
+        Component::Diode { model, .. } => first(vec![
+            positive("the saturation current", model.is),
+            positive("the emission coefficient", model.n),
+            not_negative("the series resistance", model.rs),
+            model.bv.and_then(|bv| positive("the breakdown voltage", bv)),
+        ]),
+        Component::Bjt { model, .. } => first(vec![
+            positive("the saturation current", model.is),
+            positive("the forward gain", model.bf),
+            positive("the reverse gain", model.br),
+        ]),
+        Component::Mosfet { model, .. } => first(vec![
+            positive("the transconductance parameter", model.kp),
+            positive("the channel width", model.w),
+            positive("the channel length", model.l),
+            not_negative("lambda", model.lambda),
+        ]),
+        _ => None,
+    };
+    match found {
+        Some(reason) => {
+            Err(NetlistError::BadValue { component: component.name().to_string(), reason })
+        }
+        None => Ok(()),
+    }
+}
 
 fn default_gate_delay() -> f64 {
     1e-9
@@ -386,6 +434,10 @@ impl Netlist {
             if !seen.insert(name.to_string()) {
                 return Err(NetlistError::DuplicateName(name.to_string()));
             }
+        }
+
+        for component in &self.components {
+            check_values(component)?;
         }
 
         let mut circuit = Circuit::new();

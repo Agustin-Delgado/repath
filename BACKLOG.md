@@ -24,6 +24,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Switch | A click during a sweep lands at the newest instant, never in the past | The run only goes forwards; to see an operation at a particular moment, schedule it and sweep through that moment |
 | Supply | Each symbol is its own ideal source to ground, not a named net | Three on one rail is three currents rather than one, and two wired together build one source and a warning |
+| Logic bridge | A tri-state net switching too fast to resolve is averaged as though it were always driven: its high-impedance intervals count as mid-rail through the bridge's output resistance | An LED or RC fed by a fast tri-state bus sits nearer mid-supply than it should; resolved edge by edge (slower nets, or a narrower window) it is right |
 | Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
 | Temperature | One number for the whole circuit; no self-heating and no per-part rise | A resistor dissipating a watt is at the same temperature as the air around it |
 | Probe | Voltage only; no current probe and no differential pair | Measuring a current means reading it off the component, not putting a probe in the branch |
