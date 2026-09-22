@@ -757,7 +757,11 @@ class AppState {
 		const entry = this.snapshot();
 		// An operation that changed nothing should not cost an undo press.
 		if (this.past[this.past.length - 1]?.document === entry.document) return;
+		this.remember(entry);
+	}
 
+	/** Put a step on the undo stack, keeping the stack within its bounds. */
+	private remember(entry: HistoryEntry): void {
 		this.past.push(entry);
 		this.historyBytes += entry.document.length;
 		// Capped by size as well as by count: a hundred snapshots of a large
@@ -770,7 +774,35 @@ class AppState {
 			if (!dropped) break;
 			this.historyBytes -= dropped.document.length;
 		}
-		this.future.length = 0;
+		this.clearedFuture = this.future;
+		this.future = [];
+	}
+
+	/** The redo stack the latest checkpoint cleared, for an edit that is then refused. */
+	private clearedFuture: HistoryEntry[] = [];
+
+	/**
+	 * Take back the checkpoint an edit took, for an edit that was refused.
+	 *
+	 * The redo stack comes back too: a refused edit changed nothing, and it used
+	 * to cost everything that could have been redone.
+	 */
+	private withdrawCheckpoint(was: HistoryEntry): void {
+		if (this.past[this.past.length - 1]?.document !== was.document) return;
+		const dropped = this.past.pop();
+		if (dropped) this.historyBytes -= dropped.document.length;
+		this.future = this.clearedFuture;
+	}
+
+	/**
+	 * Whether a drag is under way. Anything else that edits the drawing waits
+	 * for it to end: a drag and its release are one computation from one
+	 * snapshot, and an undo or a paste in the middle of it was the snapshot
+	 * changing under the drag — the part landed where no frame had shown it, and
+	 * the move itself never reached the history.
+	 */
+	private get dragging(): boolean {
+		return this.moveOrigin !== null;
 	}
 
 	/** Ids that still exist, so a restored selection cannot point at nothing. */
@@ -783,6 +815,7 @@ class AppState {
 	}
 
 	undo(): void {
+		if (this.dragging) return;
 		this.trace.record({ op: 'undo' });
 		const previous = this.past.pop();
 		if (!previous) return;
@@ -795,6 +828,7 @@ class AppState {
 	}
 
 	redo(): void {
+		if (this.dragging) return;
 		this.trace.record({ op: 'redo' });
 		const next = this.future.pop();
 		if (!next) return;
@@ -927,7 +961,7 @@ class AppState {
 	 * them should be joined to which.
 	 */
 	deleteSelection(route: RouteBetween = this.router()): void {
-		if (this.selection.length === 0) return;
+		if (this.selection.length === 0 || this.dragging) return;
 		this.trace.record({ op: 'delete', ...this.selectionRef() });
 		this.checkpoint();
 		const doomed = new Set(this.selection);
@@ -1038,7 +1072,7 @@ class AppState {
 	 * shared offset.
 	 */
 	rotateSelection(route: RouteBetween = this.router()): void {
-		if (this.selection.length === 0) return;
+		if (this.selection.length === 0 || this.dragging) return;
 		const chosen = new Set(this.selection);
 		const rotating = this.schematic.instances.filter((i) => chosen.has(i.id));
 		const turning = this.schematic.wires.filter((w) => chosen.has(w.id));
@@ -1157,10 +1191,7 @@ class AppState {
 		const same = pinPartition(wasJoined) === pinPartition(buildConnectivity(this.schematic));
 		if (joined || !same) {
 			this.schematic = adopt(JSON.parse(was.document) as Schematic);
-			if (this.past[this.past.length - 1]?.document === was.document) {
-				const dropped = this.past.pop();
-				if (dropped) this.historyBytes -= dropped.document.length;
-			}
+			this.withdrawCheckpoint(was);
 			const names = rotating.map((i) => i.name).join(', ');
 			this.notice = joined
 				? `Turning ${names} would put ${joined[0]} on the same net as ${joined[1]}. Move it clear first.`
@@ -1743,7 +1774,7 @@ class AppState {
 	 */
 	groupSelection(): PartGroup | null {
 		const parts = this.selectedInstances.map((i) => i.id);
-		if (parts.length === 0) return null;
+		if (parts.length === 0 || this.dragging) return null;
 		if (this.selectedGroup) return this.selectedGroup;
 
 		const name = nextGroupName(this.schematic.groups ?? []);
@@ -1758,6 +1789,7 @@ class AppState {
 
 	/** Dissolve every group that has a selected part in it. The parts stay selected. */
 	ungroupSelection(): void {
+		if (this.dragging) return;
 		const parts = this.selectedInstances.map((i) => i.id);
 		const doomed = new Set(parts.map((id) => this.groupOf(id)?.id).filter((id) => id !== undefined));
 		if (doomed.size === 0) return;
@@ -1856,6 +1888,8 @@ class AppState {
 		future: HistoryEntry[];
 		historyBytes: number;
 		editing: BlockDef;
+		/** The drawing as it stood on the way in, to undo the whole visit back to. */
+		entered: HistoryEntry;
 	}> = [];
 
 	/**
@@ -1871,7 +1905,7 @@ class AppState {
 	 */
 	boxSelection(route: RouteBetween = this.router()): BlockDef | null {
 		const members = this.selectedInstances;
-		if (members.length === 0) return null;
+		if (members.length === 0 || this.dragging) return null;
 		const memberIds = new Set(members.map((i) => i.id));
 		const plan = planBlock(this.schematic, memberIds);
 		if (!plan) return null;
@@ -1952,10 +1986,7 @@ class AppState {
 		if (!joined) return false;
 		this.schematic = adopt(JSON.parse(was.document) as Schematic);
 		registerBlocks(this.schematic);
-		if (this.past[this.past.length - 1]?.document === was.document) {
-			const dropped = this.past.pop();
-			if (dropped) this.historyBytes -= dropped.document.length;
-		}
+		this.withdrawCheckpoint(was);
 		this.notice = `${what} would put ${joined[0]} on the same net as ${joined[1]}. Move them clear first.`;
 		return true;
 	}
@@ -1984,7 +2015,7 @@ class AppState {
 	 */
 	unboxSelection(route: RouteBetween = this.router()): void {
 		const boxes = this.selectedInstances.filter((i) => blockOf(this.schematic, i.kind));
-		if (boxes.length === 0) return;
+		if (boxes.length === 0 || this.dragging) return;
 		this.trace.record({ op: 'unbox', parts: boxes.map((i) => i.name) });
 		const was = this.snapshot();
 		const wasJoined = flatConnectivity(this.schematic);
@@ -2174,7 +2205,8 @@ class AppState {
 			past: this.past,
 			future: this.future,
 			historyBytes: this.historyBytes,
-			editing: block
+			editing: block,
+			entered: this.snapshot()
 		});
 		this.past = [];
 		this.future = [];
@@ -2261,6 +2293,13 @@ class AppState {
 		this.past = frame.past;
 		this.future = frame.future;
 		this.historyBytes = frame.historyBytes;
+		// Everything done inside is one step on the drawing's history. Written
+		// back without one, the edits could not be undone once outside, and the
+		// next undo reached past them to whatever came before — taking the
+		// edits with it as part of an unrelated step.
+		if (JSON.stringify($state.snapshot(this.schematic)) !== frame.entered.document) {
+			this.remember(frame.entered);
+		}
 		this.selection = this.stillPresent(frame.selection);
 		this.probes = frame.probes;
 		this.inside = this.outside.length > 0 ? this.outside[this.outside.length - 1].editing : null;
@@ -2521,6 +2560,7 @@ class AppState {
 	}
 
 	clear(): void {
+		if (this.dragging) return;
 		this.trace.record({ op: 'clear' });
 		this.checkpoint();
 		// Imported parts survive clearing the drawing. They are a library rather
@@ -2636,7 +2676,7 @@ class AppState {
 	 * of its own; the palette is where a block is placed twice on purpose.
 	 */
 	paste(at?: { x: number; y: number }): void {
-		if (!this.clipboard) return;
+		if (!this.clipboard || this.dragging) return;
 		const { instances, wires } = this.clipboard;
 		if (instances.length === 0 && wires.length === 0) return;
 
@@ -2710,7 +2750,15 @@ class AppState {
 			];
 		}
 
-		this.selection = fresh;
+		// A part pasted onto a wire goes in series, as one placed there does.
+		// Without this the wire ran straight past both pins and shorted the part —
+		// invisible, since a symbol on a line looks the same either way.
+		for (const id of renamed.values()) {
+			const copy = this.schematic.instances.find((i) => i.id === id);
+			if (copy) this.makeRoomFor(copy);
+		}
+
+		this.selection = this.stillPresent(fresh);
 		if (moved.size > 0) {
 			this.rewire(moved, this.router());
 			this.tidyWires();
@@ -2718,7 +2766,7 @@ class AppState {
 	}
 
 	duplicateSelection(): void {
-		if (!this.copySelection()) return;
+		if (this.dragging || !this.copySelection()) return;
 		this.paste();
 	}
 
