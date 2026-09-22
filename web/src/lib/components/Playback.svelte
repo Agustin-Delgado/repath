@@ -110,6 +110,7 @@
 		{#each SPEEDS as speed (speed)}
 			<button
 				class:active={app.playbackSpeed === speed}
+				aria-pressed={app.playbackSpeed === speed}
 				onclick={() => (app.playbackSpeed = speed)}
 				title={describe(speed)}>{speed === 'real' ? '1:1' : `${speed}×`}</button
 			>
@@ -119,6 +120,7 @@
 	<div class="layers" role="group" aria-label="Live overlay">
 		<button
 			class:active={app.showVoltage}
+			aria-pressed={app.showVoltage}
 			onclick={() => (app.showVoltage = !app.showVoltage)}
 			title="Colour wires by voltage"
 		>
@@ -130,6 +132,7 @@
 		</button>
 		<button
 			class:active={app.showCurrent}
+			aria-pressed={app.showCurrent}
 			onclick={() => (app.showCurrent = !app.showCurrent)}
 			title="Animate current along the wires"
 		>
@@ -138,6 +141,7 @@
 		</button>
 		<button
 			class:active={app.showValues}
+			aria-pressed={app.showValues}
 			onclick={() => (app.showValues = !app.showValues)}
 			title="Print the voltage on each net and the current through each part"
 		>
@@ -146,6 +150,7 @@
 		</button>
 		<button
 			class:active={app.showLight}
+			aria-pressed={app.showLight}
 			onclick={() => (app.showLight = !app.showLight)}
 			title="Light the LEDs from the current through them"
 		>
