@@ -233,6 +233,46 @@ function drawn(instance: Instance, key: string, nominal: number, seed: number): 
 	return nominal * (1 + (percent / 100) * (unit * 2 - 1));
 }
 
+/** The last compile, and what it was a compile of. */
+let lastCompile: { signature: string; result: CompileResult } | null = null;
+
+/**
+ * Everything a compile reads, apart from where things are drawn.
+ *
+ * Dragging a part changes the drawing on every frame and the circuit on
+ * almost none of them: the same parts, the same values, the same pins on the
+ * same nets. Everything the compile decides — names, netlist, warnings —
+ * follows from these, so when they have not changed its answer has not either.
+ * Only the connectivity, which says where each net runs on the page, is new.
+ *
+ * Each net contributes the flags the compile reads off it, its pins in order,
+ * and the two geometric facts it asks: whether it runs through more than one
+ * point, and whether any wire of the drawing itself reaches it.
+ */
+function compileSignature(
+	sheet: Schematic,
+	schematic: Schematic,
+	connectivity: Connectivity,
+	temperature: number,
+	seed: number,
+	family: string
+): string {
+	const drawn = new Set(sheet.wires.flatMap((w) => w.points.map((p) => pointKey(p.x, p.y))));
+	const parts: string[] = [`${temperature}|${seed}|${family}`];
+	for (const s of sheet.subcircuits ?? []) parts.push(`x${s.id}|${s.name}|${s.ports.join()}|${s.source}`);
+	for (const i of schematic.instances) {
+		parts.push(`i${i.id}|${i.kind}|${i.name}|${i.rotation}|${JSON.stringify(i.params)}`);
+	}
+	for (const net of connectivity.nets) {
+		parts.push(
+			`n${+net.isGround}${+net.hasAnalog}${+net.hasDigitalInput}${+net.hasDigitalOutput}` +
+				`${+(net.points.length >= 2)}${+net.points.some((key) => drawn.has(key))}|` +
+				net.pins.map((ref) => `${ref.instance.id}:${ref.pin.name}`).join(',')
+		);
+	}
+	return parts.join('\n');
+}
+
 export function compileSchematic(
 	sheet: Schematic,
 	temperature = 300.15,
@@ -243,8 +283,23 @@ export function compileSchematic(
 	// is flat, with the insides of every block in it under `B1.` names and the
 	// boxes themselves still standing where their pins are.
 	const unfolded = unfoldBlocks(sheet);
+	const connectivity = buildConnectivity(unfolded.schematic, unfolded.ties);
+	const signature = compileSignature(sheet, unfolded.schematic, connectivity, temperature, seed, family);
+	if (lastCompile?.signature === signature) return { ...lastCompile.result, connectivity };
+	const result = compileFresh(sheet, temperature, seed, family, unfolded, connectivity);
+	lastCompile = { signature, result };
+	return result;
+}
+
+function compileFresh(
+	sheet: Schematic,
+	temperature: number,
+	seed: number,
+	family: string,
+	unfolded: ReturnType<typeof unfoldBlocks>,
+	connectivity: Connectivity
+): CompileResult {
 	const schematic = unfolded.schematic;
-	const connectivity = buildConnectivity(schematic, unfolded.ties);
 	const errors: string[] = [];
 	const warnings: string[] = [];
 	const names = new Map<number, NetNames>();
