@@ -26,7 +26,7 @@ import {
 	type Wire
 } from './model';
 import { GROUP_LABEL_GAP, groupLabelSize, placeGroups } from './groups';
-import { instancePins } from './scene';
+import { instanceBounds, instancePins } from './scene';
 import { symbolGeometry, symbolVariant, type Shape, type SymbolLabel } from './symbols';
 
 export interface Theme {
@@ -163,6 +163,8 @@ interface SymbolPaths {
 }
 
 const pathCache = new Map<string, SymbolPaths>();
+/** Far more variants than any drawing uses at once. */
+const SYMBOL_CACHE_LIMIT = 2000;
 
 function appendShape(target: Path2D, shape: Shape): void {
 	switch (shape.kind) {
@@ -199,6 +201,10 @@ export function symbolPaths(kind: string, params: Record<string, unknown>): Symb
 	}
 
 	const built = { stroke, fill, hasFill };
+	// Every edit of a block's ports is a new variant, and the old ones are never
+	// asked for again. Starting over past a bound keeps a long session from
+	// holding every shape a block has ever had.
+	if (pathCache.size >= SYMBOL_CACHE_LIMIT) pathCache.clear();
 	pathCache.set(key, built);
 	return built;
 }
@@ -232,14 +238,17 @@ export function drawGrid(painter: Painter, theme: Theme, gridSize: number, visib
 	painter.screen();
 	ctx.fillStyle = theme.gridDot;
 	const radius = scale > 1.5 ? 1.2 : 1;
+	// One path and one fill for every dot. A fill per dot was up to forty
+	// thousand calls into the canvas each time the grid was painted.
+	ctx.beginPath();
 	for (let x = startX; x <= endX; x += step) {
 		for (let y = startY; y <= endY; y += step) {
 			const at = painter.viewport.toScreen({ x, y });
-			ctx.beginPath();
+			ctx.moveTo(at.x + radius, at.y);
 			ctx.arc(at.x, at.y, radius, 0, Math.PI * 2);
-			ctx.fill();
 		}
 	}
+	ctx.fill();
 	painter.world();
 }
 
@@ -283,13 +292,35 @@ const keyOf = (x: number, y: number) => `${Math.round(x)},${Math.round(y)}`;
 
 /** Cheap bounding-box cull for a wire against the visible region. */
 export function wireVisible(wire: Wire, region: Rect): boolean {
-	const xs = wire.points.map((p) => p.x);
-	const ys = wire.points.map((p) => p.y);
+	let left = Infinity;
+	let right = -Infinity;
+	let top = Infinity;
+	let bottom = -Infinity;
+	for (const p of wire.points) {
+		if (p.x < left) left = p.x;
+		if (p.x > right) right = p.x;
+		if (p.y < top) top = p.y;
+		if (p.y > bottom) bottom = p.y;
+	}
+	return !(right < region.x || left > region.x + region.w || bottom < region.y || top > region.y + region.h);
+}
+
+/**
+ * Whether a part could show inside `region`, turned the way it is turned.
+ *
+ * Measured from the box as it is drawn rather than as it is defined: a tall
+ * block turned on its side reaches much further left and right than its
+ * definition says, and culled by the unturned box it vanished at the edge of
+ * the view while half of it was still on screen. The slack is for the name and
+ * value printed beside it.
+ */
+export function instanceVisible(instance: Instance, region: Rect, slack = 40): boolean {
+	const b = instanceBounds(instance);
 	return !(
-		Math.max(...xs) < region.x ||
-		Math.min(...xs) > region.x + region.w ||
-		Math.max(...ys) < region.y ||
-		Math.min(...ys) > region.y + region.h
+		b.x - slack > region.x + region.w ||
+		b.x + b.w + slack < region.x ||
+		b.y - slack > region.y + region.h ||
+		b.y + b.h + slack < region.y
 	);
 }
 
@@ -446,15 +477,8 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 	const showLabels = scale > 0.35;
 
 	for (const instance of view.schematic.instances) {
+		if (!instanceVisible(instance, region)) continue;
 		const def = definitionFor(instance);
-		if (
-			instance.x + def.box.x - 40 > region.x + region.w ||
-			instance.x + def.box.x + def.box.w + 40 < region.x ||
-			instance.y + def.box.y - 40 > region.y + region.h ||
-			instance.y + def.box.y + def.box.h + 40 < region.y
-		) {
-			continue;
-		}
 
 		const selected = view.selection.has(instance.id);
 		const colour = selected

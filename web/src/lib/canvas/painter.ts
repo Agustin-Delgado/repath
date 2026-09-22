@@ -53,6 +53,8 @@ export class Painter {
 	readonly ctx: CanvasRenderingContext2D;
 	readonly viewport: Viewport;
 	private dpr = 1;
+	/** Whether the context was left with a dash that the next solid stroke has to clear. */
+	private dashed = false;
 
 	constructor(ctx: CanvasRenderingContext2D, viewport: Viewport) {
 		this.ctx = ctx;
@@ -92,7 +94,15 @@ export class Painter {
 		ctx.lineWidth = (style.width ?? 1) * this.unit;
 		ctx.lineCap = style.cap ?? 'round';
 		ctx.lineJoin = style.join ?? 'round';
-		ctx.setLineDash(style.dash ? style.dash.map((d) => d * this.unit) : []);
+		// Only touched when there is a dash to set or one to clear: the canvas
+		// takes a new array on every call, and most strokes are solid.
+		if (style.dash) {
+			ctx.setLineDash(style.dash.map((d) => d * this.unit));
+			this.dashed = true;
+		} else if (this.dashed) {
+			ctx.setLineDash([]);
+			this.dashed = false;
+		}
 	}
 
 	private applyFill(style: FillStyle): void {
@@ -102,7 +112,10 @@ export class Painter {
 
 	private reset(): void {
 		this.ctx.globalAlpha = 1;
-		this.ctx.setLineDash([]);
+		if (this.dashed) {
+			this.ctx.setLineDash([]);
+			this.dashed = false;
+		}
 	}
 
 	strokePath(path: Path2D, style: StrokeStyle): void {
