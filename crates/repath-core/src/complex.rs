@@ -142,7 +142,9 @@ pub struct ComplexSystem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SingularMatrix {
-    pub row: usize,
+    /// The row with no pivot, or `None` when the matrix had one but the
+    /// answer overflowed — which is the numbers' fault, not a node's.
+    pub row: Option<usize>,
 }
 
 impl ComplexSystem {
@@ -153,6 +155,15 @@ impl ComplexSystem {
     #[inline]
     pub fn size(&self) -> usize {
         self.n
+    }
+
+    /// Which unknowns can affect which; see [`crate::linalg::coupled_labels`].
+    pub fn coupled(&self, barriers: &[usize]) -> Vec<usize> {
+        let n = self.n;
+        crate::linalg::coupled_labels(n, barriers, |r, c| {
+            let v = self.a[r * n + c];
+            v.re != 0.0 || v.im != 0.0
+        })
     }
 
     pub fn clear(&mut self) {
@@ -207,7 +218,7 @@ impl ComplexSystem {
         for (r, s) in scale.iter_mut().enumerate() {
             let largest = self.a[r * n..r * n + n].iter().fold(0.0f64, |acc, v| acc.max(v.abs()));
             if largest == 0.0 {
-                return Err(SingularMatrix { row: r });
+                return Err(SingularMatrix { row: Some(r) });
             }
             *s = 1.0 / largest;
         }
@@ -222,7 +233,7 @@ impl ComplexSystem {
                 }
             }
             if pivot_mag < 1e-14 {
-                return Err(SingularMatrix { row: k });
+                return Err(SingularMatrix { row: Some(k) });
             }
             if pivot_row != k {
                 for c in 0..n {
@@ -254,7 +265,7 @@ impl ComplexSystem {
         }
 
         if x.iter().any(|v| !v.is_finite()) {
-            return Err(SingularMatrix { row: 0 });
+            return Err(SingularMatrix { row: None });
         }
         Ok(())
     }
