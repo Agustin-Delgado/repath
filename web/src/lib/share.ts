@@ -11,6 +11,9 @@
  */
 
 import {
+	BLOCK_PREFIX,
+	SUBCIRCUIT_PREFIX,
+	isKnownKind,
 	migrateInstance,
 	registerSubcircuits,
 	type BlockDef,
@@ -21,10 +24,30 @@ import {
 import { registerBlocks } from './schematic/blocks';
 import { probePin } from './schematic/nets';
 
+/**
+ * How the circuit is run, as opposed to what it is.
+ *
+ * Travels with it because it changes the answer: the same drawing at 85 °C, in
+ * another logic family or on another sample of its tolerances is a different
+ * result, and a link that dropped these showed the person receiving it the
+ * sender's circuit under their own settings. Every field is optional so a link
+ * or file from before they travelled still reads — as the defaults.
+ */
+export interface CircuitSettings {
+	temperature?: number;
+	logicFamily?: string;
+	sample?: number;
+	sweepCount?: number;
+	analysis?: 'transient' | 'frequency';
+	acStart?: number;
+	acStop?: number;
+}
+
 export interface SharedCircuit {
 	schematic: Schematic;
 	stopTime: number;
 	probes?: string[];
+	settings?: CircuitSettings;
 }
 
 /** Bumped if the payload shape ever changes incompatibly. */
@@ -155,11 +178,118 @@ function compact(circuit: SharedCircuit): unknown {
 			const cut = rest.indexOf(':');
 			const index = cut < 0 ? undefined : at.get(rest.slice(0, cut));
 			return index === undefined ? [] : [[index, rest.slice(cut + 1)]];
-		})
+		}),
+		// The settings, added the way probes were: absent in an older link, and
+		// ignored by an older build.
+		s: circuit.settings
 	};
 }
 
+/** Why a link is refused, in terms of the link rather than of the code. */
+class Damaged extends Error {
+	constructor(what: string) {
+		super(`That link is damaged (${what}), so nothing in it was opened.`);
+	}
+}
+
+const isFiniteNumber = (value: unknown): value is number =>
+	typeof value === 'number' && Number.isFinite(value);
+
+function checkInstance(packed: unknown, where: string): void {
+	if (!Array.isArray(packed) || packed.length < 5) throw new Damaged(`a part in ${where}`);
+	const [kind, name, x, y, rotation, params] = packed;
+	if (typeof kind !== 'string' || typeof name !== 'string') throw new Damaged(`a part in ${where}`);
+	if (!isFiniteNumber(x) || !isFiniteNumber(y)) throw new Damaged(`where ${name} is`);
+	if (![0, 90, 180, 270].includes(rotation)) throw new Damaged(`how ${name} is turned`);
+	if (params !== undefined && params !== null) {
+		if (typeof params !== 'object' || Array.isArray(params)) throw new Damaged(`${name}'s values`);
+		for (const value of Object.values(params)) {
+			if (typeof value !== 'string' && !isFiniteNumber(value)) throw new Damaged(`${name}'s values`);
+		}
+	}
+}
+
+function checkWires(wires: unknown, where: string): void {
+	if (wires === undefined) return;
+	if (!Array.isArray(wires)) throw new Damaged(`the wires in ${where}`);
+	for (const wire of wires) {
+		if (!Array.isArray(wire) || !wire.every(isFiniteNumber)) throw new Damaged(`a wire in ${where}`);
+	}
+}
+
+/**
+ * Check a decoded link from end to end before any of it is used.
+ *
+ * A link is text anyone can edit, or one from a newer build, and a part the
+ * catalog does not know used to reach the editor: the drawing then threw on
+ * every read, and nothing short of a reload got the editor back. So the shape
+ * of everything is checked here, and every part is asked of the catalog once
+ * the definitions the link carries have been registered.
+ */
+function check(data: Record<string, unknown>): void {
+	for (const key of ['i', 'w', 'x', 'b', 'p', 'g'] as const) {
+		if (data[key] !== undefined && !Array.isArray(data[key])) throw new Damaged(`its ${key} list`);
+	}
+	if (data.t !== undefined && !(isFiniteNumber(data.t) && data.t > 0)) throw new Damaged('the run length');
+	for (const sub of (data.x as unknown[]) ?? []) {
+		if (
+			!Array.isArray(sub) ||
+			typeof sub[0] !== 'string' ||
+			typeof sub[1] !== 'string' ||
+			!Array.isArray(sub[2]) ||
+			!sub[2].every((p: unknown) => typeof p === 'string') ||
+			typeof sub[3] !== 'string'
+		) {
+			throw new Damaged('an imported part');
+		}
+	}
+	for (const block of (data.b as unknown[]) ?? []) {
+		if (!Array.isArray(block) || typeof block[0] !== 'string' || typeof block[1] !== 'string') {
+			throw new Damaged('a block');
+		}
+		if (!Array.isArray(block[2])) throw new Damaged(`block ${block[1]}`);
+		for (const packed of block[2]) checkInstance(packed, `block ${block[1]}`);
+		checkWires(block[3], `block ${block[1]}`);
+	}
+	for (const packed of (data.i as unknown[]) ?? []) checkInstance(packed, 'the drawing');
+	checkWires(data.w, 'the drawing');
+	for (const probe of (data.p as unknown[]) ?? []) {
+		const ok =
+			typeof probe === 'string' ||
+			(Array.isArray(probe) && Number.isInteger(probe[0]) && typeof probe[1] === 'string');
+		if (!ok) throw new Damaged('what was being watched');
+	}
+	for (const group of (data.g as unknown[]) ?? []) {
+		if (
+			!Array.isArray(group) ||
+			typeof group[0] !== 'string' ||
+			!Array.isArray(group[1]) ||
+			!group[1].every((m: unknown) => Number.isInteger(m))
+		) {
+			throw new Damaged('a group');
+		}
+	}
+	if (data.s !== undefined && (typeof data.s !== 'object' || data.s === null || Array.isArray(data.s))) {
+		throw new Damaged('its settings');
+	}
+}
+
+/** Settings as they arrived, each kept only if it is the kind of thing it says it is. */
+function readSettings(raw: unknown): CircuitSettings {
+	const s = (raw ?? {}) as Record<string, unknown>;
+	const out: CircuitSettings = {};
+	if (isFiniteNumber(s.temperature)) out.temperature = s.temperature;
+	if (typeof s.logicFamily === 'string') out.logicFamily = s.logicFamily;
+	if (isFiniteNumber(s.sample)) out.sample = s.sample;
+	if (isFiniteNumber(s.sweepCount)) out.sweepCount = s.sweepCount;
+	if (s.analysis === 'transient' || s.analysis === 'frequency') out.analysis = s.analysis;
+	if (isFiniteNumber(s.acStart) && s.acStart > 0) out.acStart = s.acStart;
+	if (isFiniteNumber(s.acStop) && s.acStop > 0) out.acStop = s.acStop;
+	return out;
+}
+
 function expand(raw: unknown): SharedCircuit {
+	if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Damaged('not a circuit');
 	const data = raw as {
 		v?: number;
 		t?: number;
@@ -169,8 +299,25 @@ function expand(raw: unknown): SharedCircuit {
 		b?: TravellingBlock[];
 		p?: Array<string | [number, string]>;
 		g?: Array<[string, number[]]>;
+		s?: unknown;
 	};
 	if (data.v !== VERSION) throw new Error('That link was made by a different version of repath.');
+	check(data as Record<string, unknown>);
+
+	// Every part is one the catalog knows or one the link defines, checked before
+	// anything is registered: registering first would put the link's definitions
+	// over the open drawing's own even for a link that is then refused.
+	const defined = new Set([
+		...(data.x ?? []).map(([sid]) => SUBCIRCUIT_PREFIX + sid),
+		...(data.b ?? []).map(([bid]) => BLOCK_PREFIX + bid)
+	]);
+	const known = (kind: string) =>
+		kind.startsWith(SUBCIRCUIT_PREFIX) || kind.startsWith(BLOCK_PREFIX)
+			? defined.has(kind)
+			: isKnownKind(migrateInstance({ id: '', kind, name: '', x: 0, y: 0, rotation: 0, params: {} }).kind);
+	for (const [kind] of [...(data.i ?? []), ...(data.b ?? []).flatMap((block) => block[2])]) {
+		if (!known(kind)) throw new Error(`That link has a part this version of repath does not know (${kind}).`);
+	}
 
 	let counter = 0;
 	const id = () => `s${++counter}`;
@@ -192,6 +339,7 @@ function expand(raw: unknown): SharedCircuit {
 
 	return {
 		stopTime: data.t ?? 1e-3,
+		settings: readSettings(data.s),
 		// A pin probe travelled as the position of its part, so it is pointed back
 		// at whatever id that part has just been given. A probe on bare wire
 		// travelled as the grid point it sits on, which did not move.

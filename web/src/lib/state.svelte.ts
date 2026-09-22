@@ -19,6 +19,7 @@ import { contactControl, isHighAt } from './schematic/contacts';
 import { Acquisition } from './acquire';
 import type { Capture } from './capture';
 import { Trace, wireRef, type Step } from './trace';
+import type { CircuitSettings, SharedCircuit } from './share';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
@@ -273,6 +274,12 @@ const HISTORY_BYTES = 8 * 1024 * 1024;
  */
 const DEFAULT_STOP_TIME = 5e-3;
 
+/** Degrees Celsius: the temperature every datasheet quotes at. */
+const DEFAULT_TEMPERATURE = 27;
+/** The frequency sweep a circuit gets until somebody chooses one: 1 Hz to 1 MHz. */
+const DEFAULT_AC_START = 1;
+const DEFAULT_AC_STOP = 1e6;
+
 const STANDARD_KEY = 'repath.symbols';
 /** Why a port name that would not fit inside the box's edge is refused. */
 const PORT_TOO_LONG = `A port name is at most ${BLOCK_PORT_WIDTH} characters.`;
@@ -359,7 +366,7 @@ class AppState {
 	 * question people ask of it: does this still work in a cold car, or inside a
 	 * hot enclosure. Twenty-seven is the temperature every datasheet quotes at.
 	 */
-	temperature = $state(27);
+	temperature = $state(DEFAULT_TEMPERATURE);
 	/**
 	 * Which logic family the digital parts belong to.
 	 *
@@ -503,8 +510,8 @@ class AppState {
 		if (mode === 'frequency') this.playing = false;
 		this.analysis = mode;
 	}
-	acStart = $state(1);
-	acStop = $state(1e6);
+	acStart = $state(DEFAULT_AC_START);
+	acStop = $state(DEFAULT_AC_STOP);
 	acResult = $state<FrequencyRun | null>(null);
 
 	/** Whether any source is set up to drive the frequency sweep. */
@@ -2785,61 +2792,169 @@ class AppState {
 
 	// -- examples ---------------------------------------------------------
 
+	/**
+	 * Load an example over whatever is on screen, as one step that can be undone.
+	 *
+	 * Picking an example used to empty the history along with the drawing, and a
+	 * closed dropdown changes its value on an arrow key — so tabbing past the
+	 * Examples menu and pressing Down could wipe a circuit for good. Now the
+	 * drawing that was there is one undo away. Any block open for editing is
+	 * left first, so the step being undone is the drawing's and not a block's.
+	 */
 	loadExample(id: string): void {
 		const example = exampleById(id);
 		this.trace.record({ op: 'example', id: example.id });
-		this.leaveEverything();
-		this.past.length = 0;
-		this.future.length = 0;
-		this.schematic = example.build();
-		this.tidyWires();
-		this.stopTime = example.stopTime;
-		this.exampleId = example.id;
-		this.arrivals++;
-		// Each example arrives in whichever analysis actually shows it off — a
-		// resonant filter has nothing to say in the time domain.
-		this.analysis = example.analysis ?? 'transient';
-		if (example.frequencyRange) {
-			this.acStart = example.frequencyRange.start;
-			this.acStop = example.frequencyRange.stop;
-		}
-		this.selection = [];
-		this.discardRun();
-		this.acResult = null;
-		this.error = null;
-		this.notice = null;
-		this.live = false;
-		this.autoProbe();
+		while (this.depth > 0) this.leaveBlock();
+		this.replaceDocument(() => {
+			const schematic = example.build();
+			this.checkpoint();
+			this.schematic = schematic;
+			this.tidyWires();
+			this.stopTime = example.stopTime;
+			this.exampleId = example.id;
+			// Each example arrives in whichever analysis actually shows it off — a
+			// resonant filter has nothing to say in the time domain.
+			this.applySettings({
+				analysis: example.analysis,
+				acStart: example.frequencyRange?.start,
+				acStop: example.frequencyRange?.stop
+			});
+			this.selection = [];
+			this.discardRun();
+			this.acResult = null;
+			this.error = null;
+			this.notice = null;
+			this.live = false;
+			this.autoProbe();
+		});
 	}
 
 	/** Adopt a circuit that arrived in a link. */
-	loadShared(circuit: { schematic: Schematic; stopTime: number; probes?: string[] }): void {
-		this.leaveEverything();
-		this.past.length = 0;
-		this.future.length = 0;
-		this.schematic = adopt(circuit.schematic);
-		this.settleBlocks();
-		this.tidyWires();
-		this.stopTime = circuit.stopTime;
-		this.exampleId = '';
+	loadShared(circuit: SharedCircuit): void {
+		this.replaceDocument(() => {
+			this.leaveEverything();
+			this.past = [];
+			this.future = [];
+			this.historyBytes = 0;
+			this.schematic = adopt(circuit.schematic);
+			this.settleBlocks();
+			this.tidyWires();
+			// Asked once here, so a part the catalog does not know throws now,
+			// with the editor put back, rather than on every read from then on.
+			void this.compiled;
+			this.stopTime = circuit.stopTime;
+			this.exampleId = '';
+			this.applySettings(circuit.settings);
+			this.selection = [];
+			this.discardRun();
+			this.acResult = null;
+			this.error = null;
+			this.notice = null;
+			this.live = false;
+			// What the sender was watching, where the link carried it. Falling back to
+			// picking a few nets is for a link written before probes travelled, and for
+			// one sent with nothing probed.
+			this.probes = circuit.probes ?? [];
+			if (this.probes.length === 0) this.autoProbe();
+		});
+	}
+
+	/**
+	 * Put a whole new document in place, or leave the editor exactly as it was.
+	 *
+	 * Tidying and settling a document only work on the one in the editor, so a
+	 * load has to install it before it can find out whether it holds together. A
+	 * link or a file that threw halfway used to leave its broken drawing behind,
+	 * and then every read of the circuit threw. The one arrival is counted only
+	 * once the document is in.
+	 */
+	private replaceDocument(install: () => void): void {
+		const before = {
+			schematic: this.schematic,
+			probes: this.probes,
+			selection: this.selection,
+			past: [...this.past],
+			future: [...this.future],
+			historyBytes: this.historyBytes,
+			outside: this.outside,
+			inside: this.inside,
+			depth: this.depth,
+			stopTime: this.stopTime,
+			exampleId: this.exampleId,
+			settings: this.settings(),
+			notice: this.notice
+		};
+		try {
+			install();
+		} catch (cause) {
+			this.past = before.past;
+			this.future = before.future;
+			this.historyBytes = before.historyBytes;
+			this.outside = before.outside;
+			this.inside = before.inside;
+			this.depth = before.depth;
+			for (const frame of this.outside) adopt(frame.schematic);
+			this.schematic = adopt(before.schematic);
+			this.probes = before.probes;
+			this.selection = before.selection;
+			this.stopTime = before.stopTime;
+			this.exampleId = before.exampleId;
+			this.applySettings(before.settings);
+			this.notice = before.notice;
+			throw cause;
+		}
 		this.arrivals++;
-		this.selection = [];
-		this.discardRun();
-		this.error = null;
-		this.notice = null;
-		this.live = false;
-		// What the sender was watching, where the link carried it. Falling back to
-		// picking a few nets is for a link written before probes travelled, and for
-		// one sent with nothing probed.
-		this.probes = circuit.probes ?? [];
-		if (this.probes.length === 0) this.autoProbe();
+	}
+
+	/** How the circuit is run, as a link or a file carries it. */
+	settings(): CircuitSettings {
+		return {
+			temperature: this.temperature,
+			logicFamily: this.logicFamily,
+			sample: this.sample,
+			sweepCount: this.sweepCount,
+			analysis: this.analysis,
+			acStart: this.acStart,
+			acStop: this.acStop
+		};
+	}
+
+	/**
+	 * Take on the settings a document arrived with, and the defaults for the rest.
+	 *
+	 * Every arrival resets them. Carrying the last circuit's over — its 85 °C, its
+	 * logic family, its sample — ran the new one under settings nobody chose for
+	 * it and nothing on screen said so.
+	 */
+	private applySettings(settings: CircuitSettings = {}): void {
+		const finite = (value: unknown, fallback: number) =>
+			typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+		const positive = (value: unknown, fallback: number) =>
+			finite(value, fallback) > 0 ? finite(value, fallback) : fallback;
+		this.temperature = Math.min(Math.max(finite(settings.temperature, DEFAULT_TEMPERATURE), -273), 1000);
+		this.logicFamily =
+			typeof settings.logicFamily === 'string' && isLogicFamily(settings.logicFamily)
+				? settings.logicFamily
+				: DEFAULT_FAMILY;
+		this.sample = Math.max(0, Math.round(finite(settings.sample, 0)));
+		this.sweepCount = Math.min(Math.max(0, Math.round(finite(settings.sweepCount, 0))), 200);
+		this.analysis = settings.analysis === 'frequency' ? 'frequency' : 'transient';
+		this.acStart = positive(settings.acStart, DEFAULT_AC_START);
+		this.acStop = positive(settings.acStop, DEFAULT_AC_STOP);
+		this.envelope = null;
 	}
 
 	// -- persistence ------------------------------------------------------
 
 	toJSON(): string {
 		return JSON.stringify(
-			{ version: 1, schematic: this.schematic, stopTime: this.stopTime, probes: this.probes },
+			{
+				version: 1,
+				schematic: this.schematic,
+				stopTime: this.stopTime,
+				probes: this.probes,
+				settings: this.settings()
+			},
 			null,
 			2
 		);
@@ -2850,15 +2965,28 @@ class AppState {
 			schematic?: Schematic;
 			stopTime?: number;
 			probes?: string[];
+			settings?: CircuitSettings;
 		};
-		if (!parsed.schematic?.instances) throw new Error('That file is not a repath schematic.');
+		if (!Array.isArray(parsed?.schematic?.instances)) {
+			throw new Error('That file is not a repath schematic.');
+		}
+		const schematic = parsed.schematic;
+		// Inside `replaceDocument` from the first registration on: a file refused
+		// halfway must not leave its definitions over the open drawing's own.
+		this.replaceDocument(() => this.openParsed(schematic, parsed));
+	}
+
+	private openParsed(
+		schematic: Schematic,
+		parsed: { stopTime?: number; probes?: string[]; settings?: CircuitSettings }
+	): void {
 		// Definitions before instances, because the loop below asks the catalog what
 		// every part is and an imported one would not be there yet.
-		const subcircuits = parsed.schematic.subcircuits ?? [];
+		const subcircuits = schematic.subcircuits ?? [];
 		registerSubcircuits({ instances: [], wires: [], subcircuits });
 		// A block's insides keep their own ids: they name nothing outside the
 		// definition, and the ports inside it refer to them.
-		const blocks: BlockDef[] = (parsed.schematic.blocks ?? []).map((block) => ({
+		const blocks: BlockDef[] = (schematic.blocks ?? []).map((block) => ({
 			id: String(block.id),
 			name: String(block.name ?? ''),
 			instances: (block.instances ?? []).map((i) => migrateInstance(i)),
@@ -2868,9 +2996,12 @@ class AppState {
 			groups: block.groups
 		}));
 		registerBlocks({ instances: [], wires: [], blocks });
+		// The parts inside a block are asked of the catalog as well as the drawing's:
+		// one it does not know would otherwise surface later, on every compile.
+		for (const block of blocks) for (const inner of block.instances) definitionOf(inner.kind);
 		// Re-key everything so a pasted circuit cannot collide with what is open.
 		const remap = new Map<string, string>();
-		const instances = parsed.schematic.instances.map((instance) => {
+		const instances = schematic.instances.map((instance) => {
 			const id = freshId();
 			remap.set(instance.id, id);
 			const migrated = migrateInstance({ ...instance, id });
@@ -2879,13 +3010,13 @@ class AppState {
 		});
 		// Files written before wires became polylines still load: the two-point
 		// form is upgraded rather than rejected.
-		const wires = (parsed.schematic.wires ?? [])
+		const wires = (schematic.wires ?? [])
 			.map((wire) => normaliseWire(wire, freshId()))
 			.filter((wire): wire is Wire => wire !== null);
 
 		// Groups follow their parts to the new ids; one whose parts are all gone
 		// from the file is nothing and is not kept.
-		const groups: PartGroup[] = (parsed.schematic.groups ?? [])
+		const groups: PartGroup[] = (schematic.groups ?? [])
 			.map((group) => ({
 				id: freshId(),
 				name: String(group.name ?? ''),
@@ -2894,13 +3025,17 @@ class AppState {
 			.filter((group) => group.members.length > 0);
 
 		this.leaveEverything();
-		this.past.length = 0;
-		this.future.length = 0;
+		this.past = [];
+		this.future = [];
+		this.historyBytes = 0;
 		this.schematic = { instances, wires, subcircuits, blocks, groups };
 		this.settleBlocks();
 		this.tidyWires();
-		this.stopTime = parsed.stopTime ?? 1e-3;
-		this.arrivals++;
+		const stopTime = parsed.stopTime;
+		this.stopTime = typeof stopTime === 'number' && stopTime > 0 && Number.isFinite(stopTime) ? stopTime : 1e-3;
+		this.exampleId = '';
+		this.applySettings(parsed.settings);
+		this.acResult = null;
 		// Pointed at the ids this load minted, not the ones the file was written
 		// with. The map was being built here and never used, so every probe on a
 		// saved circuit resolved to nothing and vanished on opening it — the
@@ -2968,28 +3103,19 @@ class AppState {
 		if (doc?.version !== DRAFT_VERSION || !Array.isArray(root?.schematic?.instances)) {
 			throw new Error('That saved draft is not one this version of repath can read.');
 		}
-		const finite = (value: unknown, fallback: number) =>
-			typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-
 		this.leaveEverything();
-		this.past.length = 0;
-		this.future.length = 0;
+		this.past = [];
+		this.future = [];
 		this.historyBytes = 0;
 		this.schematic = adopt(root.schematic);
 		this.probes = root.probes ?? [];
 		this.exampleId = typeof doc.exampleId === 'string' ? doc.exampleId : '';
-		const stopTime = finite(doc.stopTime, DEFAULT_STOP_TIME);
-		this.stopTime = stopTime > 0 ? stopTime : DEFAULT_STOP_TIME;
-		this.analysis = doc.analysis === 'frequency' ? 'frequency' : 'transient';
-		this.acStart = finite(doc.acStart, 1);
-		this.acStop = finite(doc.acStop, 1e6);
-		this.temperature = Math.min(Math.max(finite(doc.temperature, 27), -273), 1000);
-		this.logicFamily =
-			typeof doc.logicFamily === 'string' && isLogicFamily(doc.logicFamily)
-				? doc.logicFamily
-				: DEFAULT_FAMILY;
-		this.sample = Math.max(0, Math.round(finite(doc.sample, 0)));
-		this.sweepCount = Math.min(Math.max(0, Math.round(finite(doc.sweepCount, 0))), 200);
+		const stopTime = doc.stopTime;
+		this.stopTime =
+			typeof stopTime === 'number' && Number.isFinite(stopTime) && stopTime > 0
+				? stopTime
+				: DEFAULT_STOP_TIME;
+		this.applySettings(doc);
 		this.channels = doc.channels && typeof doc.channels === 'object' ? doc.channels : {};
 		this.selection = [];
 		this.discardRun();
