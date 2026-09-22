@@ -6,6 +6,7 @@
 	import { logicFamily } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
+	import { decimate, extent, ticks, timeLabel, visibleRange, wheelFactor } from '$lib/plot';
 	import type { Burst, DigitalTransition, LogicState } from '$lib/engine';
 	import BodePlot from './BodePlot.svelte';
 
@@ -84,6 +85,7 @@
 		const run = app.result;
 		if (!run) return [];
 		const out: Array<{
+			key: string;
 			label: string;
 			colour: string;
 			/** Which net, in the run's numbering. */
@@ -102,6 +104,7 @@
 			// Bridged nets are drawn as an analog trace as well, and that trace is
 			// what the gain knob is for; the lane only ever has a position.
 			out.push({
+				key: probe.key,
 				label: probe.label,
 				colour: probe.colour,
 				index,
@@ -223,18 +226,30 @@
 		return { lo: lo - pad, hi: hi + pad };
 	}
 
-	/** Range of one trace on its own, padded so nothing touches its band edge. */
+	/**
+	 * Which samples the window covers.
+	 *
+	 * Found by bisection, and everything drawn or scaled works from it: the
+	 * memory holds up to two depths of samples per signal, and walking all of
+	 * them on every chunk to draw a sliver of them was most of what a frame
+	 * cost.
+	 */
+	const visible = $derived.by(() => {
+		const time = app.result?.time;
+		return time ? visibleRange(time, span.from, span.to) : { start: 0, end: 0 };
+	});
+
+	/**
+	 * Range of one trace on its own, padded so nothing touches its band edge.
+	 *
+	 * Of what is on screen, not of everything in memory: a scope's autoset
+	 * scales what it is showing, and a spike that has scrolled off the left
+	 * should not keep the trace squashed.
+	 */
 	function spanOf(series: Array<Float64Array | undefined>) {
-		let lo = Infinity;
-		let hi = -Infinity;
-		for (const s of series) {
-			if (!s) continue;
-			for (const v of s) {
-				if (v < lo) lo = v;
-				if (v > hi) hi = v;
-			}
-		}
-		return windowFor(lo, hi);
+		const into = { lo: Infinity, hi: -Infinity };
+		for (const s of series) extent(s, visible.start, visible.end, into);
+		return windowFor(into.lo, into.hi);
 	}
 
 	/**
@@ -251,6 +266,7 @@
 		if (!run || !measuring) return [];
 		return traces
 			.map((t) => ({
+				key: t.key,
 				label: t.label,
 				colour: t.colour,
 				averaged: t.averaged,
@@ -282,7 +298,7 @@
 				burst && (!newest || burst.to >= newest.time)
 					? measureBurst(burst)
 					: measureLogic(events, opening);
-			return { label: t.label, colour: t.colour, m };
+			return { key: t.key, label: t.label, colour: t.colour, m };
 		});
 	});
 
@@ -291,21 +307,16 @@
 
 	/** Vertical range of the analog traces, padded so nothing touches the frame. */
 	const range = $derived.by(() => {
-		let lo = Infinity;
-		let hi = -Infinity;
+		const into = { lo: Infinity, hi: -Infinity };
 		for (const trace of traces) {
 			// The band too, or a sweep whose corners leave the nominal window would
 			// be drawn flat against the frame — which reads as "it stays inside"
 			// when what happened is that the plot ran out of room.
 			for (const series of [trace.samples, trace.low, trace.high]) {
-				if (!series) continue;
-				for (const v of series) {
-					if (v < lo) lo = v;
-					if (v > hi) hi = v;
-				}
+				extent(series, visible.start, visible.end, into);
 			}
 		}
-		return windowFor(lo, hi);
+		return windowFor(into.lo, into.hi);
 	});
 
 	function niceStep(span: number, target: number): number {
@@ -317,17 +328,56 @@
 		return power * 10;
 	}
 
-	function draw() {
-		if (!canvas || size.width === 0) return;
-		const dpr = window.devicePixelRatio || 1;
+	/**
+	 * The theme's colours, read once rather than on every frame.
+	 *
+	 * `getComputedStyle` forces style to be worked out, and the scope used to
+	 * ask for it on every chunk of a running sweep. Read again after the canvas
+	 * is resized and when the system theme changes, which is when they can.
+	 */
+	let colours = new Map<string, string>();
+	function colour(name: string): string {
+		let value = colours.get(name);
+		if (value === undefined && canvas) {
+			value = getComputedStyle(canvas).getPropertyValue(name).trim();
+			colours.set(name, value);
+		}
+		return value ?? '';
+	}
+
+	/** Device pixels per CSS pixel, as of the last resize. */
+	let dpr = 1;
+
+	/**
+	 * Size the backing store, and only when the size changes.
+	 *
+	 * Assigning a canvas's width reallocates it even when the number is the same,
+	 * and that used to happen on every repaint.
+	 */
+	$effect(() => {
+		if (!canvas) return;
+		dpr = window.devicePixelRatio || 1;
 		canvas.width = Math.round(size.width * dpr);
 		canvas.height = Math.round(size.height * dpr);
+		colours = new Map();
+	});
+
+	$effect(() => {
+		const scheme = window.matchMedia?.('(prefers-color-scheme: dark)');
+		if (!scheme) return;
+		const forget = () => {
+			colours = new Map();
+			draw();
+		};
+		scheme.addEventListener('change', forget);
+		return () => scheme.removeEventListener('change', forget);
+	});
+
+	function draw() {
+		if (!canvas || size.width === 0) return;
 		const ctx = canvas.getContext('2d');
 		if (!ctx) return;
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-		const style = getComputedStyle(canvas);
-		const colour = (name: string) => style.getPropertyValue(name).trim();
 
 		const w = size.width;
 		const h = size.height;
@@ -382,13 +432,12 @@
 		const vStep = niceStep(range.hi - range.lo, 5);
 		ctx.textAlign = 'right';
 		ctx.textBaseline = 'middle';
-		const gridFrom = hasAnalog && !separate ? Math.ceil(range.lo / vStep) * vStep : Infinity;
-		for (let v = gridFrom; v <= range.hi; v += vStep) {
+		for (const v of hasAnalog && !separate ? ticks(range.lo, range.hi, vStep) : []) {
 			const y = toY(v);
 			ctx.beginPath();
 			ctx.moveTo(plot.x, y);
 			ctx.lineTo(plot.x + plot.w, y);
-			ctx.strokeStyle = Math.abs(v) < vStep / 1000 ? colour('--scope-axis') : colour('--scope-grid');
+			ctx.strokeStyle = v === 0 ? colour('--scope-axis') : colour('--scope-grid');
 			ctx.stroke();
 			ctx.fillStyle = colour('--label-dim');
 			ctx.fillText(`${formatValue(v, 3)}V`, plot.x - 8, y);
@@ -397,7 +446,7 @@
 		const tStep = niceStep(width, 6);
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'top';
-		for (let t = Math.ceil(from / tStep) * tStep; t <= to + tStep / 2; t += tStep) {
+		for (const t of ticks(from, to, tStep, tStep / 2)) {
 			const x = toX(t);
 			ctx.beginPath();
 			ctx.moveTo(x, plot.y);
@@ -405,7 +454,7 @@
 			ctx.strokeStyle = colour('--scope-grid');
 			ctx.stroke();
 			ctx.fillStyle = colour('--label-dim');
-			ctx.fillText(`${formatValue(t, 3)}s`, x, h - PADDING.bottom + 6);
+			ctx.fillText(timeLabel(t, tStep), x, h - PADDING.bottom + 6);
 		}
 
 		if (!run) return;
@@ -424,17 +473,19 @@
 		// traces that some particular circuit followed. No sample followed either
 		// of them — each edge is the worst any sample managed at that instant.
 		ctx.lineJoin = 'round';
+		const { start, end } = visible;
 		traces.forEach((trace, index) => {
 			if (!trace.low || !trace.high) return;
 			ctx.beginPath();
-			for (let i = 0; i < run.time.length; i++) {
-				const x = toX(run.time[i]);
-				const y = mapY(index, trace.high[i]);
-				if (i === 0) ctx.moveTo(x, y);
-				else ctx.lineTo(x, y);
+			const top = decimate(run.time, trace.high, start, end, toX);
+			for (let i = 0; i < top.length; i += 2) {
+				const y = mapY(index, top[i + 1]);
+				if (i === 0) ctx.moveTo(top[i], y);
+				else ctx.lineTo(top[i], y);
 			}
-			for (let i = run.time.length - 1; i >= 0; i--) {
-				ctx.lineTo(toX(run.time[i]), mapY(index, trace.low[i]));
+			const bottom = decimate(run.time, trace.low, start, end, toX);
+			for (let i = bottom.length - 2; i >= 0; i -= 2) {
+				ctx.lineTo(bottom[i], mapY(index, bottom[i + 1]));
 			}
 			ctx.closePath();
 			ctx.globalAlpha = 0.22;
@@ -448,11 +499,11 @@
 		traces.forEach((trace, index) => {
 			ctx.strokeStyle = trace.colour;
 			ctx.beginPath();
-			for (let i = 0; i < run.time.length; i++) {
-				const x = toX(run.time[i]);
-				const y = mapY(index, trace.samples[i]);
-				if (i === 0) ctx.moveTo(x, y);
-				else ctx.lineTo(x, y);
+			const line = decimate(run.time, trace.samples, start, end, toX);
+			for (let i = 0; i < line.length; i += 2) {
+				const y = mapY(index, line[i + 1]);
+				if (i === 0) ctx.moveTo(line[i], y);
+				else ctx.lineTo(line[i], y);
 			}
 			ctx.stroke();
 
@@ -678,6 +729,7 @@
 			// skipped.
 			rate: delta !== null && Math.abs(delta) > 1e-15 ? 1 / Math.abs(delta) : null,
 			values: traces.map((t) => ({
+				key: t.key,
 				label: t.label,
 				colour: t.colour,
 				text: `${formatValue(t.samples[here], 4)}V`,
@@ -694,6 +746,7 @@
 				const volts =
 					state === 'high' ? family.v_high : state === 'low' ? family.v_low : null;
 				return {
+					key: t.key,
 					label: t.label,
 					colour: t.colour,
 					text:
@@ -714,9 +767,12 @@
 	let pinchSpread: number | null = null;
 
 	function onDown(event: PointerEvent) {
+		// Every pointer, not only a finger: a mouse drag that left the canvas
+		// stopped panning at its edge, and one let go outside it left the drag
+		// behind.
+		canvas?.setPointerCapture(event.pointerId);
 		if (event.pointerType === 'touch') {
 			touches.set(event.pointerId, event.clientX);
-			canvas?.setPointerCapture(event.pointerId);
 			if (touches.size === 2) {
 				// Two fingers: the timebase, and neither of them is a seek or a drag.
 				dragging = null;
@@ -742,6 +798,7 @@
 	}
 
 	function onUp(event: PointerEvent) {
+		if (canvas?.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
 		touches.delete(event.pointerId);
 		if (touches.size < 2) pinchSpread = null;
 		dragging = null;
@@ -784,8 +841,10 @@
 
 	function onWheel(event: WheelEvent) {
 		if (!app.result) return;
+		const factor = wheelFactor(event);
+		if (factor === null) return;
 		event.preventDefault();
-		turn(event.deltaY > 0 ? 1.25 : 0.8, timeAt(event.clientX));
+		turn(factor, timeAt(event.clientX));
 	}
 
 	$effect(() => {
@@ -805,6 +864,7 @@
 			digitalTraces,
 			range,
 			lanes,
+			visible,
 			separate,
 			marker,
 			size,
@@ -859,7 +919,7 @@
 						{/if}
 					{/if}
 				</span>
-				{#each readout.values as entry (entry.label)}
+				{#each readout.values as entry (entry.key)}
 					<span class="value" style:color={entry.colour}>
 						{entry.label} = {entry.text}
 						{#if entry.delta !== null}
@@ -867,7 +927,7 @@
 						{/if}
 					</span>
 				{/each}
-				{#each readout.logic as entry (entry.label)}
+				{#each readout.logic as entry (entry.key)}
 					<span class="value" style:color={entry.colour}>{entry.label} = {entry.text}</span>
 				{/each}
 				{#if marker === null}
@@ -884,6 +944,7 @@
 			<button
 				class="scale"
 				class:on={measuring}
+				aria-pressed={measuring}
 				onclick={() => (measuring = !measuring)}
 				title="Read off frequency, period, duty, RMS, rise time and overshoot — logic lanes too"
 			>
@@ -893,6 +954,7 @@
 				<button
 					class="scale"
 					class:on={separate}
+					aria-pressed={separate}
 					onclick={() => (separate = !separate)}
 					title={separate
 						? 'One axis for everything'
@@ -990,7 +1052,7 @@
 				nobody checks.
 			-->
 			<div class="measures">
-				{#each measurements as row (row.label)}
+				{#each measurements as row (row.key)}
 					{@const m = row.m!}
 					<div class="measure">
 						<span class="who" style:color={row.colour}>{row.label}</span>
@@ -1026,7 +1088,7 @@
 						</dl>
 					</div>
 				{/each}
-				{#each logicMeasurements as row (row.label)}
+				{#each logicMeasurements as row (row.key)}
 					<div class="measure">
 						<span class="who" style:color={row.colour}>{row.label}</span>
 						{#if row.m}
