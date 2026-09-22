@@ -51,7 +51,15 @@ const SCALE: Array<[number, string]> = [
  * value rather than silently substituting a zero.
  */
 export function parseValue(input: string): number | null {
-	const text = input.trim().replace(/\s+/g, '');
+	// The unit after the prefix is read past: `5ms`, `10uF` and `4.7kΩ` are what
+	// people type into a field labelled in seconds, farads or ohms, and refusing
+	// them made the field quietly snap back. Case matters where a unit and a
+	// prefix share a letter — `F` is a farad and `f` is femto — so only spellings
+	// that cannot be a prefix are taken.
+	const text = input
+		.trim()
+		.replace(/\s+/g, '')
+		.replace(/(?<=[\d.fpnuµμmkKMGTg])(Hz|hz|Ω|[oO]hms?|s|V|v|A|F|H|h|W)$/, '');
 	if (text === '') return null;
 
 	// `meg` before the single-letter table, or `1meg` parses as 1 milli.
