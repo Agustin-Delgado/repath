@@ -452,7 +452,7 @@ export function createSelectTool(): Tool {
 					// Dragged from a pin, so the far end is the one that can be adrift.
 					// Refused in silence: the preview has been red the whole way, which
 					// says it better than a banner that then has to be dismissed.
-					if (connectsAt({ x: to.x, y: to.y })) {
+					if (connectsAt({ x: to.x, y: to.y }, ctx.snap)) {
 						app.addWirePath(wirePath({ x: to.x, y: to.y }, ctx));
 					}
 				}
@@ -598,7 +598,7 @@ export function createSelectTool(): Tool {
 			if (mode === 'wire' && wireFrom && wireTo) {
 				// Same feedback as the wire tool: a run that would end on nothing is
 				// shown as one that will not be accepted.
-				const adrift = !connectsAt({ x: wireTo.x, y: wireTo.y });
+				const adrift = !connectsAt({ x: wireTo.x, y: wireTo.y }, ctx.snap);
 				const colour = adrift ? theme.danger : theme.accent;
 				painter.polyline(wirePath({ x: wireTo.x, y: wireTo.y }, ctx), {
 					color: colour,
