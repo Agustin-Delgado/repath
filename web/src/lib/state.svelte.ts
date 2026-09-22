@@ -2591,9 +2591,11 @@ class AppState {
 	 * file, so splitting them would leave a part referring to something that no
 	 * longer exists.
 	 */
-	importSubcircuits(source: string): { added: string[]; error?: string } {
+	importSubcircuits(source: string): { added: string[]; ids: string[]; error?: string } {
 		const found = parseSubcircuits(source);
-		if (found.length === 0) return { added: [], error: 'No .subckt definition found in that text.' };
+		if (found.length === 0) {
+			return { added: [], ids: [], error: 'No .subckt definition found in that text.' };
+		}
 
 		const existing = this.schematic.subcircuits ?? [];
 		const added: SubcircuitDef[] = [];
@@ -2604,23 +2606,45 @@ class AppState {
 			// and the circuit would be quietly wrong rather than refused.
 			const seen = new Set(sub.ports);
 			if (seen.size !== sub.ports.length) {
-				return { added: [], error: `${sub.name} names the same terminal twice.` };
+				return { added: [], ids: [], error: `${sub.name} names the same terminal twice.` };
 			}
 			// Re-importing under the same name replaces the definition rather than
 			// adding a second part with an identical label, so a corrected file can
 			// be pasted over the one it corrects and the parts already placed pick
-			// up the change.
-			const id = sub.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+			// up the change. The same name twice in one file is the later one.
+			const same = (s: SubcircuitDef) => s.name === sub.name;
+			const earlier = added.findIndex(same);
+			if (earlier >= 0) added.splice(earlier, 1);
+			const id = existing.find(same)?.id ?? this.freeSubcircuitId(sub.name, existing, added);
 			added.push({ id, name: sub.name, ports: sub.ports, source });
 		}
-		if (added.length === 0) return { added: [], error: 'That definition has no terminals.' };
+		if (added.length === 0) {
+			return { added: [], ids: [], error: 'That definition has no terminals.' };
+		}
 
 		this.checkpoint();
 		const kept = existing.filter((s) => !added.some((a) => a.id === s.id));
 		this.schematic.subcircuits = [...kept, ...added];
 		registerSubcircuits(this.schematic);
 		this.trace.record({ op: 'import', source });
-		return { added: added.map((s) => s.name) };
+		return { added: added.map((s) => s.name), ids: added.map((s) => s.id) };
+	}
+
+	/**
+	 * An id for a newly imported part, from its name, that no other part has.
+	 *
+	 * Names that differ only in case or punctuation — `OP_AMP` and `op-amp` —
+	 * come down to the same id, and two parts under one id were one part in the
+	 * catalog and a crash in the palette, which keys its list by it.
+	 */
+	private freeSubcircuitId(
+		name: string,
+		...taken: ReadonlyArray<readonly SubcircuitDef[]>
+	): string {
+		const used = new Set(taken.flatMap((list) => list.map((s) => s.id)));
+		const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+		if (!used.has(base)) return base;
+		for (let n = 2; ; n++) if (!used.has(`${base}-${n}`)) return `${base}-${n}`;
 	}
 
 	/** Forget an imported part, and delete anything placed from it. */
