@@ -14,3 +14,5 @@ export { default as MenuSeparator } from './menu/MenuSeparator.svelte';
 export { default as UnitField } from './field/UnitField.svelte';
 export { default as ToolbarSeparator } from './toolbar/ToolbarSeparator.svelte';
 export { floatingItem, floatingSurface } from './surface';
+export { default as Toaster } from './toast/Toaster.svelte';
+export { toasts } from './toast/toasts.svelte';

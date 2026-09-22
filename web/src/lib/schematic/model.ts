@@ -65,6 +65,11 @@ export interface ParamDef {
 	plain?: boolean;
 	/** How far one arrow-key press moves a `plain` value. */
 	step?: number;
+	/**
+	 * Kept under "More settings" rather than with the values everyone sets.
+	 * Left out, `isAdvanced` decides from the key; see there.
+	 */
+	advanced?: boolean;
 }
 
 /** Why a value was refused, or null when it is fine. */
@@ -1751,6 +1756,25 @@ export function defaultParams(kind: string): Record<string, number | string> {
 	const params: Record<string, number | string> = {};
 	for (const p of definitionOf(kind).params) params[p.key] = p.default;
 	return params;
+}
+
+/**
+ * The device-physics knobs: a saturation current, a junction capacitance, a
+ * gate delay. They are what makes the model honest, and what almost nobody
+ * changes; with them all in one column, the resistance of a resistor or the
+ * gain of an op-amp is one field among eight. Keyed by name because the same
+ * name means the same kind of thing on every part that has it.
+ */
+const ADVANCED_KEYS = new Set([
+	'tolerance', 'tc1', 'bounce', 'r_on', 'r_off', 'phase',
+	'is', 'n', 'rs', 'breakdown', 'cj0', 'tt',
+	'lambda', 'cgd', 'cgs', 'vaf', 'cjc', 'tf',
+	'slew', 'r_out', 'v_os', 'i_bias', 'delay'
+]);
+
+/** Whether a parameter belongs under "More settings". */
+export function isAdvanced(param: ParamDef): boolean {
+	return param.advanced ?? ADVANCED_KEYS.has(param.key);
 }
 
 /** Whether a parameter should be shown, given the rest of the instance's values. */

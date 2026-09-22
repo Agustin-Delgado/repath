@@ -8,6 +8,7 @@
  */
 
 import { snapPoint, type Painter, type Tool, type ToolContext, type Vec2 } from '$lib/canvas';
+import { recentParts } from '$lib/parts/recent.svelte';
 import { app } from '$lib/state.svelte';
 import { currentTheme, symbolPaths } from '../draw';
 import { definitionOf, rotatePoint, type Rotation } from '../model';
@@ -55,6 +56,7 @@ export function createPlaceTool(kind: string): Tool {
 			if (pointer.button !== 0) return;
 			const where = snapPoint(pointer.world, ctx.gridSize);
 			app.place(kind, where.x, where.y, rotation);
+			recentParts.remember(kind);
 			at = where;
 			// Back to the cursor, because one part is what was asked for. Staying
 			// armed meant dismissing the tool after every single component, which is

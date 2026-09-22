@@ -1,10 +1,12 @@
 <script lang="ts">
-	import Inspector from '$lib/components/Inspector.svelte';
-	import Palette from '$lib/components/Palette.svelte';
+	import Inspector from '$lib/components/inspector/Inspector.svelte';
+	import Palette from '$lib/components/palette/Palette.svelte';
 	import Playback from '$lib/components/Playback.svelte';
 	import Schematic from '$lib/components/Schematic.svelte';
 	import Scope from '$lib/components/Scope.svelte';
 	import Toolbar from '$lib/components/toolbar/Toolbar.svelte';
+	import CommandPalette from '$lib/commands/CommandPalette.svelte';
+	import { Toaster } from '$lib/ui';
 	import { ensureEngine, engineVersion } from '$lib/engine';
 	import {
 		Autosaver,
@@ -31,6 +33,8 @@
 	let panel = $state<'parts' | 'details' | null>(null);
 	/** Whether the scope has its share of a small screen, or the drawing has it all. */
 	let scopeShown = $state(true);
+	/** Whether the command palette is open. */
+	let finding = $state(false);
 
 	$effect(() => {
 		if (app.tool.mode !== 'select') panel = null;
@@ -309,7 +313,7 @@
 </svelte:head>
 
 <div class="app">
-	<div class="top"><Toolbar {version} {share} /></div>
+	<div class="top"><Toolbar {version} {share} onFind={() => (finding = true)} /></div>
 
 	{#if app.notice}
 		<div class="banner warn" role="alert">
@@ -405,6 +409,12 @@
 	</section>
 </div>
 
+<CommandPalette
+	bind:open={finding}
+	context={{ share, fitToContent: () => schematic?.fitToContent() }}
+/>
+<Toaster />
+
 <style>
 	.app {
 		display: grid;
@@ -472,7 +482,7 @@
 
 	main {
 		display: grid;
-		grid-template-columns: 200px minmax(0, 1fr) 250px;
+		grid-template-columns: 224px minmax(0, 1fr) 260px;
 		min-height: 0;
 		position: relative;
 	}
@@ -493,6 +503,7 @@
 		overflow: hidden;
 		display: grid;
 		grid-template-rows: minmax(0, 1fr);
+		grid-template-columns: minmax(0, 1fr);
 	}
 
 	.left {

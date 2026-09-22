@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ToolbarSeparator } from '$lib/ui';
+	import { Search } from '@lucide/svelte';
+	import { Button, ToolbarSeparator } from '$lib/ui';
 	import AnalysisControls from './AnalysisControls.svelte';
 	import DocumentControls from './DocumentControls.svelte';
 	import RunButton from './RunButton.svelte';
@@ -8,9 +9,11 @@
 		/** The engine's version, once it has loaded. */
 		version: string;
 		share: () => Promise<void>;
+		/** Open the command palette. */
+		onFind: () => void;
 	};
 
-	let { version, share }: Props = $props();
+	let { version, share, onFind }: Props = $props();
 </script>
 
 <!--
@@ -36,6 +39,16 @@
 		<AnalysisControls />
 
 		<span class="flex-1"></span>
+		<!-- Where everything else is: every part, every command, by name. -->
+		<Button
+			class="w-44 justify-start text-muted max-[1200px]:w-auto"
+			onclick={onFind}
+			title="Find a part or a command (Ctrl+K)"
+		>
+			<Search />
+			<span class="max-[1200px]:hidden">Find anything…</span>
+			<kbd class="ml-auto font-mono text-[0.6rem] max-[1200px]:hidden">Ctrl K</kbd>
+		</Button>
 		<ToolbarSeparator />
 
 		<DocumentControls {share} />

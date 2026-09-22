@@ -743,6 +743,12 @@
 			case 'F':
 				editor?.fit();
 				break;
+			case 'w':
+			case 'W':
+				// The wire tool is for a branch off the middle of a wire; from a pin, a
+				// drag already draws one.
+				app.tool = app.tool.mode === 'wire' ? { mode: 'select' } : { mode: 'wire' };
+				break;
 		}
 	}
 

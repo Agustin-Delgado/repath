@@ -13,7 +13,10 @@
  * scope and the Bode plot pull them out of the computed style to draw with, so
  * a rename here is a rename there too.
  */
+/* Dark native chrome too: scrollbars, date pickers, the checkbox tick. */
 :root {
+	color-scheme: dark;
+
 	--font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
 
 	--bg: #12151c;

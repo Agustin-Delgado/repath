@@ -3673,6 +3673,9 @@ class AppState {
 }
 
 export const app = new AppState();
+
+/** The shape of `app`, for code that takes it rather than importing it. */
+export type App = AppState;
 export { pointKey };
 
 // The whole editor hangs off this one object, so a hot reload that swaps the
