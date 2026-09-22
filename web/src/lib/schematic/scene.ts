@@ -84,9 +84,17 @@ export function hitInstance(instance: Instance, point: Vec2, tolerance: number):
 }
 
 export function wireBounds(wire: Wire): Rect {
-	const xs = wire.points.map((p) => p.x);
-	const ys = wire.points.map((p) => p.y);
-	return rectFromBounds(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys));
+	let left = Infinity;
+	let right = -Infinity;
+	let top = Infinity;
+	let bottom = -Infinity;
+	for (const p of wire.points) {
+		if (p.x < left) left = p.x;
+		if (p.x > right) right = p.x;
+		if (p.y < top) top = p.y;
+		if (p.y > bottom) bottom = p.y;
+	}
+	return rectFromBounds(left, top, right, bottom);
 }
 
 /** Distance from a point to the nearest part of a wire. */
@@ -134,7 +142,11 @@ export interface SnapTargets {
 	segments: SnapSegment[];
 }
 
-export function buildSnapTargets(schematic: Schematic): SnapTargets {
+/** `junctions` are the drawing's junction dots, when the caller already has them. */
+export function buildSnapTargets(
+	schematic: Schematic,
+	junctions: readonly Vec2[] = junctionDots(schematic)
+): SnapTargets {
 	const points: SnapPoint[] = [];
 
 	for (const instance of schematic.instances) {
@@ -160,7 +172,7 @@ export function buildSnapTargets(schematic: Schematic): SnapTargets {
 
 	// Junctions rank above plain wire ends, so a three-way meeting point wins
 	// over whichever wire happened to be drawn first.
-	for (const dot of junctionDots(schematic)) {
+	for (const dot of junctions) {
 		points.push({ x: dot.x, y: dot.y, kind: 'junction' });
 	}
 
