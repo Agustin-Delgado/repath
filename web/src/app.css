@@ -1,0 +1,108 @@
+/*
+ * Tailwind without its preflight, for now. Every component older than `$lib/ui`
+ * styles itself in a scoped <style> that leans on the browser defaults, and a
+ * reset under all of them at once would break them all at once. Preflight comes
+ * in when the last of them has moved over.
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+/*
+ * The palette. These names are read by more than CSS: the schematic painter, the
+ * scope and the Bode plot pull them out of the computed style to draw with, so
+ * a rename here is a rename there too.
+ */
+:root {
+	--font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+	--bg: #12151c;
+	--panel-bg: #171b24;
+	--canvas-bg: #0e1116;
+	--border: #262c38;
+	--hover: #1f2531;
+	--control-bg: #1b202a;
+
+	--text: #e3e8f0;
+	--label-strong: #cdd5e2;
+	--label-dim: #7c8496;
+
+	--symbol: #cfd7e4;
+	--wire: #8b96aa;
+	--pin: #6d7a8f;
+	--pin-digital: #d09b4a;
+	--grid-dot: #232936;
+	--grid-line: #1e2430;
+
+	--accent: #4ea8ff;
+	--accent-text: #08111c;
+	--selection: #ffd400;
+	--danger: #ff6b7a;
+
+	--scope-axis: #39414f;
+	--scope-cursor: #7c8496;
+
+	--badge-mixed: #3a2d4d;
+	--badge-mixed-text: #c58bff;
+	--badge-logic: #3a3221;
+	--badge-logic-text: #ffb454;
+}
+
+/* The same palette as utilities: `bg-panel`, `text-muted`, `border-border`… */
+@theme inline {
+	--color-bg: var(--bg);
+	--color-panel: var(--panel-bg);
+	--color-canvas: var(--canvas-bg);
+	--color-border: var(--border);
+	--color-hover: var(--hover);
+	--color-control: var(--control-bg);
+
+	--color-fg: var(--text);
+	--color-strong: var(--label-strong);
+	--color-muted: var(--label-dim);
+
+	--color-accent: var(--accent);
+	--color-accent-fg: var(--accent-text);
+	--color-selection: var(--selection);
+	--color-danger: var(--danger);
+
+	--radius-control: 5px;
+	--text-2xs: 0.68rem;
+	--text-ui: 0.78rem;
+}
+
+/* In a layer, so the utilities on a component win over these defaults. */
+@layer base {
+	html,
+	body {
+		margin: 0;
+		height: 100%;
+		background: var(--bg);
+		color: var(--text);
+		font-family:
+			system-ui,
+			-apple-system,
+			'Segoe UI',
+			sans-serif;
+		font-size: 14px;
+		overscroll-behavior: none;
+	}
+
+	*,
+	::before,
+	::after {
+		box-sizing: border-box;
+	}
+
+	button {
+		font: inherit;
+	}
+
+	/* A tap is a tap: no waiting to see whether it was the first half of a zoom. */
+	button,
+	select,
+	input,
+	label {
+		touch-action: manipulation;
+	}
+}
