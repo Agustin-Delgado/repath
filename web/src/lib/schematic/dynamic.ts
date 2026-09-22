@@ -14,7 +14,15 @@
 
 import { rectExpand, type Painter, type Rect, type Vec2 } from '$lib/canvas';
 import { advance, drawFlow, voltageColour, type AnimationState } from './animate';
-import { drawnReach, JUNCTION_RADIUS, LABEL_GAP, leadAxis, symbolPaths } from './draw';
+import {
+	drawnReach,
+	instanceVisible,
+	JUNCTION_RADIUS,
+	LABEL_GAP,
+	leadAxis,
+	symbolPaths,
+	wireVisible
+} from './draw';
 import type { FlowContext, FlowFrame } from './flow';
 import {
 	brightness,
@@ -32,7 +40,9 @@ import {
 	wireSegments,
 	wireStart,
 	type Instance,
-	type Schematic
+	type Schematic,
+	type Wire,
+	type WireSegment
 } from './model';
 import { instanceBounds, instancePins } from './scene';
 
@@ -104,7 +114,9 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 			// Left in the plain wire colour: colouring it by a voltage nothing
 			// decided would be the loudest claim on the drawing.
 			if (view.floating.has(net)) continue;
-			if (!wire.points.some((p) => inside(p.x, p.y))) continue;
+			// By the box the wire spans, not by its corners: a long wire crossing
+			// the view with both ends off it is on screen all the same.
+			if (!wireVisible(wire, region)) continue;
 			// Painted opaquely over the static wire, so a selected one would stop
 			// looking selected the moment anything was running — which is exactly
 			// when you are most likely to be picking wires out to look at. What it is
@@ -131,9 +143,10 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 
 	if (view.showCurrent) {
 		for (const wire of schematic.wires) {
-			for (const segment of wireSegments(wire)) {
-				if (!inside(segment.a.x, segment.a.y) && !inside(segment.b.x, segment.b.y)) continue;
-				const id = `${wire.id}#${segment.index}`;
+			const { segments, ids } = segmentsOf(wire);
+			for (const [index, segment] of segments.entries()) {
+				if (!segmentVisible(segment.a, segment.b, region)) continue;
+				const id = ids[index];
 				const current = frame.wireCurrent.get(id);
 				if (current === undefined) continue;
 				drawFlow(
@@ -159,11 +172,11 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 			if (!path) continue;
 			const current = frame.instanceCurrent.get(instance.id);
 			if (current === undefined) continue;
-			if (!inside(instance.x, instance.y)) continue;
+			if (!instanceVisible(instance, region, 0)) continue;
 
-			const pins = new Map(instancePins(instance).map(({ pin, at }) => [pin.name, at] as const));
-			const from = pins.get(path.from);
-			const to = pins.get(path.to);
+			const pins = instancePins(instance);
+			const from = pins.find(({ pin }) => pin.name === path.from)?.at;
+			const to = pins.find(({ pin }) => pin.name === path.to)?.at;
 			if (!from || !to) continue;
 
 			// `from` is the terminal the engine reports current *into*, so a positive
@@ -189,15 +202,100 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 	// burnt LED looking burnt, or the drawing contradicts both the panel and the
 	// scope trace that steps at the moment it failed.
 	for (const instance of schematic.instances) {
-		if (!inside(instance.x, instance.y)) continue;
+		if (instance.kind !== 'led' && instance.kind !== 'display7') continue;
+		if (!instanceVisible(instance, region, 0)) continue;
 		if (instance.kind === 'led') drawLed(painter, view, instance);
 		else if (instance.kind === 'display7') drawDigit(painter, view, instance);
 	}
 }
 
+/** Whether any of the segment from `a` to `b` can be inside `region`. */
+function segmentVisible(a: Vec2, b: Vec2, region: Rect): boolean {
+	return !(
+		Math.max(a.x, b.x) < region.x ||
+		Math.min(a.x, b.x) > region.x + region.w ||
+		Math.max(a.y, b.y) < region.y ||
+		Math.min(a.y, b.y) > region.y + region.h
+	);
+}
+
+/**
+ * A wire's segments and their ids, worked out once per shape of the wire.
+ *
+ * Asked for every wire on every frame; spelling the ids out afresh each time
+ * was a string per segment per frame for something that only changes when the
+ * wire does. Keyed by the list of points, which is replaced whenever the wire
+ * is re-shaped.
+ */
+const segmentCache = new WeakMap<readonly Vec2[], { segments: WireSegment[]; ids: string[] }>();
+
+function segmentsOf(wire: Wire): { segments: WireSegment[]; ids: string[] } {
+	const known = segmentCache.get(wire.points);
+	if (known && known.segments.length === Math.max(wire.points.length - 1, 0)) return known;
+	const segments = wireSegments(wire);
+	const entry = { segments, ids: segments.map((segment) => `${wire.id}#${segment.index}`) };
+	segmentCache.set(wire.points, entry);
+	return entry;
+}
+
 // ---------------------------------------------------------------------------
 // Readings
 // ---------------------------------------------------------------------------
+
+type Anchors = Map<number, { at: Vec2; clear: boolean }>;
+
+/**
+ * Where each net's voltage is written, for one state of the drawing.
+ *
+ * It depends on the geometry and the nets and on nothing that moves during a
+ * run, so it is worked out when those change and not on every frame — which
+ * was every wire point checked against every part, sixty times a second.
+ */
+const anchorCache = new WeakMap<
+	ReadonlyMap<string, number>,
+	{ wires: unknown; instances: unknown; anchors: Anchors }
+>();
+
+function readingAnchors(view: DynamicView): Anchors {
+	const { schematic, netOfPoint } = view;
+	const known = anchorCache.get(netOfPoint);
+	if (known && known.wires === schematic.wires && known.instances === schematic.instances) {
+		return known.anchors;
+	}
+
+	// Where each part is, so a reading is not written across one.
+	//
+	// The label sits just above its anchor, and the topmost point of a net is
+	// very often a pin — which put the reading inside the symbol it belongs to,
+	// overlapping the drawing and, on a source, sitting in the middle of the
+	// circle. A point out on the wiring says the same thing and can be read.
+	const bodies = schematic.instances.map(instanceBounds);
+	const clearOfParts = (p: Vec2) =>
+		!bodies.some(
+			(b) => p.x >= b.x - 6 && p.x <= b.x + b.w + 6 && p.y >= b.y - 14 && p.y <= b.y + b.h + 6
+		);
+
+	const anchor: Anchors = new Map();
+	for (const wire of schematic.wires) {
+		for (const point of wire.points) {
+			const net = netOfPoint.get(pointKey(point.x, point.y));
+			if (net === undefined) continue;
+			const clear = clearOfParts(point);
+			const best = anchor.get(net);
+			// Clear of every symbol first, and only then highest and leftmost. A net
+			// whose every point is under something keeps the old placement rather
+			// than losing its reading altogether.
+			const better =
+				!best ||
+				(clear && !best.clear) ||
+				(clear === best.clear &&
+					(point.y < best.at.y || (point.y === best.at.y && point.x < best.at.x)));
+			if (better) anchor.set(net, { at: { x: point.x, y: point.y }, clear });
+		}
+	}
+	anchorCache.set(netOfPoint, { wires: schematic.wires, instances: schematic.instances, anchors: anchor });
+	return anchor;
+}
 
 /** Volts. Green, the way a meter's leads are, and clear of the two voltage poles. */
 const VOLTS_INK = '#7fe3a0';
@@ -239,36 +337,7 @@ function drawReadings(
 	const size = Math.min(11 * painter.viewport.scale, 14);
 	if (size < 7) return;
 
-	// Where each part is, so a reading is not written across one.
-	//
-	// The label sits just above its anchor, and the topmost point of a net is
-	// very often a pin — which put the reading inside the symbol it belongs to,
-	// overlapping the drawing and, on a source, sitting in the middle of the
-	// circle. A point out on the wiring says the same thing and can be read.
-	const bodies = view.schematic.instances.map(instanceBounds);
-	const clearOfParts = (p: Vec2) =>
-		!bodies.some(
-			(b) => p.x >= b.x - 6 && p.x <= b.x + b.w + 6 && p.y >= b.y - 14 && p.y <= b.y + b.h + 6
-		);
-
-	const anchor = new Map<number, { at: Vec2; clear: boolean }>();
-	for (const wire of view.schematic.wires) {
-		for (const point of wire.points) {
-			const net = view.netOfPoint.get(pointKey(point.x, point.y));
-			if (net === undefined) continue;
-			const clear = clearOfParts(point);
-			const best = anchor.get(net);
-			// Clear of every symbol first, and only then highest and leftmost. A net
-			// whose every point is under something keeps the old placement rather
-			// than losing its reading altogether.
-			const better =
-				!best ||
-				(clear && !best.clear) ||
-				(clear === best.clear &&
-					(point.y < best.at.y || (point.y === best.at.y && point.x < best.at.x)));
-			if (better) anchor.set(net, { at: { x: point.x, y: point.y }, clear });
-		}
-	}
+	const anchor = readingAnchors(view);
 
 	for (const [net, { at }] of anchor) {
 		const volts = view.frame.netVoltage.get(net);

@@ -155,8 +155,15 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 			// both this cache and the one holding the built paths, instead of needing
 			// somebody to remember to clear them.
 			if (kind.startsWith(SUBCIRCUIT_PREFIX) || kind.startsWith(BLOCK_PREFIX)) {
+				// Built once per definition: a definition that changes is a new
+				// object, so it misses this and is spelled out again.
 				const def = definitionOf(kind);
-				return `${kind}(${def.pins.map((p) => `${p.name}@${p.x},${p.y}`).join(',')})${def.label}`;
+				let key = blockVariants.get(def);
+				if (key === undefined) {
+					key = `${kind}(${def.pins.map((p) => `${p.name}@${p.x},${p.y}`).join(',')})${def.label}`;
+					blockVariants.set(def, key);
+				}
+				return key;
 			}
 			return kind;
 	}
@@ -564,6 +571,7 @@ function currentSource(standard: SymbolStandard): SymbolGeometry {
 }
 
 const variantCache = new Map<string, SymbolGeometry>();
+const blockVariants = new WeakMap<object, string>();
 
 /**
  * Which hand-drawn set a standard reads from. GOST shares its box gates and
@@ -663,6 +671,8 @@ export function symbolGeometry(
 	else if (chipOf(kind)) geometry = dip(chipOf(kind)!);
 	else geometry = STATIC[`${kind}@${standardFamily(standard)}`] ?? STATIC[kind] ?? EMPTY;
 
+	// Every edit of a block's ports is a variant nobody asks for again.
+	if (variantCache.size >= 2000) variantCache.clear();
 	variantCache.set(variant, geometry);
 	return geometry;
 }
