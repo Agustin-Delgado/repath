@@ -386,9 +386,13 @@
 					.join()}`
 		);
 		active.scene.replaceAll(buildSceneItems(schematic));
-		const targets = buildSnapTargets(schematic);
+		// The junctions are already worked out for the drawing; finding them a
+		// second time here was most of what building the snap targets cost.
+		const targets = buildSnapTargets(schematic, junctions);
 		active.snap.rebuild(targets.points, targets.segments);
-		active.invalidate();
+		// Everything but the grid, which only moves with the view: repainting
+		// tens of thousands of dots for every frame of a drag changed none of them.
+		active.invalidate('schematic', 'dynamic', 'overlay');
 	});
 
 	$effect(() => {
