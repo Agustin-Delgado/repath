@@ -178,12 +178,26 @@
 	}
 
 	$effect(() => {
-		ensureEngine().then(async () => {
-			version = engineVersion();
-			// Nothing simulates until it is asked to. Opening on a circuit that is
-			// already running gives no moment to look at it before it moves.
-			await start(await openDraftStore());
-		});
+		// The drawing does not wait for the engine. Restoring a draft or opening a
+		// link needs nothing from it, and waiting meant that an engine which failed
+		// to load took the link and the saved work down with it, unexplained.
+		// Nothing simulates until it is asked to, either: opening on a circuit that
+		// is already running gives no moment to look at it before it moves.
+		const started = openDraftStore()
+			.then(start)
+			.catch((cause) => {
+				const why = cause instanceof Error ? cause.message : String(cause);
+				app.notice = `Your saved work could not be opened. ${why}`;
+			});
+		ensureEngine().then(
+			() => (version = engineVersion()),
+			async (cause) => {
+				// After the start, which clears notices as it loads.
+				await started;
+				const why = cause instanceof Error ? cause.message : String(cause);
+				app.notice = `The simulation engine could not be loaded, so nothing can be run. Reloading the page usually fixes it. ${why}`;
+			}
+		);
 	});
 
 	/**
@@ -245,26 +259,43 @@
 	 * per keystroke and the answers would arrive behind the input.
 	 */
 	let lastSignature = '';
+	/** Whether the effect below has seen the results live, so it knows the run they started from. */
+	let wasLive = false;
 	let pending: ReturnType<typeof setTimeout> | undefined;
 
 	$effect(() => {
-		const signature = app.netlistSignature;
+		// `live` first: the signature is the whole netlist as text, and reading it
+		// while nothing is running cost a stringify on every frame of every drag.
 		if (!app.live) {
+			wasLive = false;
+			return;
+		}
+		const signature = app.netlistSignature;
+		// Run was just pressed: that run is of this circuit.
+		if (!wasLive) {
+			wasLive = true;
 			lastSignature = signature;
 			return;
 		}
 		if (signature === lastSignature) return;
 
-		clearTimeout(pending);
-		pending = setTimeout(() => {
-			if (!app.live || app.running) return;
+		const rerun = () => {
+			if (!app.live) return;
+			// A run still starting — the first one waits for the engine to load —
+			// is waited for rather than skipped, or this edit would never be run.
+			if (app.running) {
+				pending = setTimeout(rerun, 120);
+				return;
+			}
 			lastSignature = app.netlistSignature;
 			// A different circuit is a different run: the samples on screen were
 			// solved for the old one, and carrying them over would be a chart of two
 			// circuits spliced together. So this starts again from zero — which is
 			// also why operating a switch deliberately does not come through here.
 			app.run({ quiet: true });
-		}, 120);
+		};
+		clearTimeout(pending);
+		pending = setTimeout(rerun, 120);
 
 		return () => clearTimeout(pending);
 	});
