@@ -3205,7 +3205,11 @@ class AppState {
 		if (next === this.sweepCount) return;
 		this.trace.record({ op: 'sweep', count: next });
 		this.sweepCount = next;
-		if (next === 0) this.envelope = null;
+		if (next === 0) {
+			// And a sweep still going stops, rather than drawing its band later.
+			this.runGeneration++;
+			this.envelope = null;
+		}
 	}
 
 	/** Set the circuit temperature, in degrees Celsius. */
@@ -3488,6 +3492,10 @@ class AppState {
 			this.envelope = null;
 			return;
 		}
+		// Which run this sweep belongs to. Anything that throws the run away
+		// moves it on, and a sweep that finds it moved stops: its band would be
+		// drawn around a circuit that is no longer the one on screen.
+		const generation = this.runGeneration;
 
 		const time = nominal.time;
 		const low = new Map<string, Float64Array>();
@@ -3498,6 +3506,12 @@ class AppState {
 		}
 
 		for (let seed = 1; seed <= this.sweepCount; seed++) {
+			// A turn of the event loop between samples. The engine call is
+			// synchronous underneath, and its promise resolves as a microtask, so
+			// two hundred of them in a row froze the page — no paint, no input, no
+			// way to stop it — until the last one was done.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			if (generation !== this.runGeneration) return;
 			const compiled = compileSchematic(this.schematic, this.temperature + 273.15, seed, this.logicFamily);
 			if (!compiled.netlist) continue;
 			let run;
@@ -3520,8 +3534,12 @@ class AppState {
 				}
 			}
 		}
+		if (generation !== this.runGeneration) return;
 		this.envelope = { time, low, high };
 	}
+
+	/** Moved on by `discardRun`, so work belonging to a discarded run can tell. */
+	private runGeneration = 0;
 
 	/**
 	 * Start simulating.
@@ -3538,9 +3556,8 @@ class AppState {
 		// Only a deliberate press. A restart after an edit follows from the edit
 		// that is already written down, and logging it would double every line.
 		if (!options.quiet) this.trace.record({ op: 'run' });
-		const compiled = this.compiled;
-		if (!compiled.netlist) {
-			this.error = compiled.errors.join(' ');
+		if (!this.compiled.netlist) {
+			this.error = this.compiled.errors.join(' ');
 			this.discardRun();
 			return;
 		}
@@ -3548,6 +3565,12 @@ class AppState {
 		this.error = null;
 		this.live = true;
 		try {
+			// The circuit is read after the engine is ready, not before: the first
+			// run waits for the engine to load, and an edit made meanwhile would
+			// otherwise be left out of the run that follows it.
+			await ensureEngine();
+			const compiled = this.compiled;
+			if (!compiled.netlist) throw new Error(compiled.errors.join(' '));
 			if (this.analysis === 'frequency') {
 				if (!this.hasAcDrive) {
 					throw new Error(
@@ -3557,7 +3580,6 @@ class AppState {
 				this.acResult = await runFrequencySweep(compiled.netlist, this.acStart, this.acStop);
 				if (this.probes.length === 0) this.autoProbe();
 			} else {
-				await ensureEngine();
 				this.discardRun();
 				// At least a couple of hundred points per window, so a flat trace is a
 				// line rather than two dots joined up.
@@ -3614,6 +3636,7 @@ class AppState {
 	}
 
 	private discardRun(): void {
+		this.runGeneration++;
 		this.acquiring?.close();
 		this.acquiring = null;
 		this.capture = null;
