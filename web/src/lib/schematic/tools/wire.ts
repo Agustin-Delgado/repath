@@ -21,7 +21,7 @@
 import { type Painter, type SnapTarget, type Tool, type ToolContext } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
 import { currentTheme } from '../draw';
-import { elbow, routeWire } from '../route';
+import { elbow, previewRouter } from '../route';
 import type { Point } from '../model';
 import { connectsAt, drawSnapHint } from './shared';
 
@@ -36,9 +36,12 @@ export function createWireTool(): Tool {
 	/** Where the cursor is when nothing is being drawn, for the hint. */
 	let hover: SnapTarget | null = null;
 
+	/** Started afresh with each wire, so no answer outlives the drawing it was for. */
+	let routed = previewRouter();
+
 	const path = (end: Point, ctx: ToolContext): Point[] => {
 		if (!from) return [];
-		return handRouted ? elbow(from, end) : routeWire(app.schematic, from, end, { grid: ctx.gridSize });
+		return handRouted ? elbow(from, end) : routed(app.schematic, from, end, ctx.gridSize);
 	};
 
 	const reset = () => {
@@ -78,6 +81,7 @@ export function createWireTool(): Tool {
 			from = { x: at.x, y: at.y };
 			to = at;
 			handRouted = pointer.shift;
+			routed = previewRouter();
 			ctx.invalidate('overlay');
 		},
 
