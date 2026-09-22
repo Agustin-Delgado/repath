@@ -73,7 +73,7 @@ export function createWireTool(): Tool {
 			// here rather than on release: starting from nowhere can only end in a
 			// wire that is refused. Nothing is said about it — the hint marks every
 			// place a wire can start from, so an empty press has already told you.
-			if (!connectsAt({ x: at.x, y: at.y })) {
+			if (!connectsAt({ x: at.x, y: at.y }, ctx.snap)) {
 				ctx.invalidate('overlay');
 				return;
 			}
@@ -91,7 +91,7 @@ export function createWireTool(): Tool {
 				handRouted = pointer.shift;
 				to = at;
 			} else {
-				hover = connectsAt({ x: at.x, y: at.y }) ? at : null;
+				hover = connectsAt({ x: at.x, y: at.y }, ctx.snap) ? at : null;
 			}
 			ctx.invalidate('overlay');
 		},
@@ -110,7 +110,7 @@ export function createWireTool(): Tool {
 
 			// Turned away in silence when it lands on nothing: the preview has been
 			// red for the whole drag, which is the same thing said sooner.
-			if (connectsAt({ x: at.x, y: at.y })) {
+			if (connectsAt({ x: at.x, y: at.y }, ctx.snap)) {
 				app.addWirePath(path({ x: at.x, y: at.y }, ctx));
 			}
 
@@ -135,7 +135,7 @@ export function createWireTool(): Tool {
 			const theme = currentTheme();
 			if (from && to) {
 				painter.polyline(path({ x: to.x, y: to.y }, ctx), {
-					color: connectsAt({ x: to.x, y: to.y }) ? theme.accent : theme.danger,
+					color: connectsAt({ x: to.x, y: to.y }, ctx.snap) ? theme.accent : theme.danger,
 					width: 2,
 					dash: [6, 4]
 				});
