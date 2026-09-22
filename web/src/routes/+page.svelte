@@ -272,7 +272,12 @@
 	async function share() {
 		try {
 			const url = await shareUrl(
-				{ schematic: app.schematic, stopTime: app.stopTime, probes: app.probes },
+				{
+					schematic: app.schematic,
+					stopTime: app.stopTime,
+					probes: app.probes,
+					settings: app.settings()
+				},
 				new URL(location.href)
 			);
 			history.replaceState(history.state, '', url);
