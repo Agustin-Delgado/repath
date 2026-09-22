@@ -228,6 +228,30 @@ interface HistoryEntry {
 	selection: string[];
 }
 
+/**
+ * The editor as a draft keeps it: see `AppState.draft`.
+ *
+ * `levels[0]` is the drawing; each level after it is the inside of the block
+ * named by `block`, entered from the level before it.
+ */
+export interface DraftDocument {
+	version: number;
+	exampleId: string;
+	stopTime: number;
+	analysis: 'transient' | 'frequency';
+	acStart: number;
+	acStop: number;
+	temperature: number;
+	logicFamily: string;
+	sample: number;
+	sweepCount: number;
+	channels: Record<string, { gain: number; offset: number }>;
+	levels: Array<{ block?: string; schematic: Schematic; probes: string[] }>;
+}
+
+/** Bumped if a draft's shape ever changes incompatibly; an older one is then set aside, not misread. */
+const DRAFT_VERSION = 1;
+
 const HISTORY_LIMIT = 100;
 /**
  * Ceiling on the serialized undo stack.
@@ -2131,6 +2155,10 @@ class AppState {
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		if (!block) return;
 		this.trace.record({ op: 'enter', name: block.name });
+		this.descend(block);
+	}
+
+	private descend(block: BlockDef): void {
 		this.discardRun();
 		this.outside.push({
 			schematic: this.schematic,
@@ -2886,7 +2914,103 @@ class AppState {
 		this.live = false;
 	}
 
-	/** Change the length of a run, and write it down. */
+	/**
+	 * Everything a reload should come back to, as plain data.
+	 *
+	 * More than a saved file holds: the settings of the run and the scope's
+	 * knobs, because losing those to a reload is losing work too — and every
+	 * level of block being edited, the drawing underneath included, because an
+	 * edit inside a block only reaches the drawing on the way out, and the power
+	 * does not wait for that.
+	 *
+	 * Reading it reads all of it, so an effect that calls this runs again on any
+	 * change worth keeping.
+	 */
+	draft(): DraftDocument {
+		void this.depth;
+		const frames = this.outside;
+		const levels: DraftDocument['levels'] = frames.map((frame, k) => ({
+			block: k === 0 ? undefined : frames[k - 1].editing.id,
+			schematic: frame.schematic,
+			probes: frame.probes
+		}));
+		levels.push({
+			block: frames.length > 0 ? frames[frames.length - 1].editing.id : undefined,
+			schematic: this.schematic,
+			probes: this.probes
+		});
+		return $state.snapshot({
+			version: DRAFT_VERSION,
+			exampleId: this.exampleId,
+			stopTime: this.stopTime,
+			analysis: this.analysis,
+			acStart: this.acStart,
+			acStop: this.acStop,
+			temperature: this.temperature,
+			logicFamily: this.logicFamily,
+			sample: this.sample,
+			sweepCount: this.sweepCount,
+			channels: this.channels,
+			levels
+		}) as DraftDocument;
+	}
+
+	/**
+	 * Come back to a draft exactly as it was left.
+	 *
+	 * Unlike opening a file nothing is re-keyed or re-routed: the ids are this
+	 * editor's own, and tidying a drawing that was already tidy could only move
+	 * something the person had put where they wanted it.
+	 */
+	restoreDraft(raw: unknown): void {
+		const doc = raw as Partial<DraftDocument> | null;
+		const root = doc?.levels?.[0];
+		if (doc?.version !== DRAFT_VERSION || !Array.isArray(root?.schematic?.instances)) {
+			throw new Error('That saved draft is not one this version of repath can read.');
+		}
+		const finite = (value: unknown, fallback: number) =>
+			typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+		this.leaveEverything();
+		this.past.length = 0;
+		this.future.length = 0;
+		this.historyBytes = 0;
+		this.schematic = adopt(root.schematic);
+		this.probes = root.probes ?? [];
+		this.exampleId = typeof doc.exampleId === 'string' ? doc.exampleId : '';
+		const stopTime = finite(doc.stopTime, DEFAULT_STOP_TIME);
+		this.stopTime = stopTime > 0 ? stopTime : DEFAULT_STOP_TIME;
+		this.analysis = doc.analysis === 'frequency' ? 'frequency' : 'transient';
+		this.acStart = finite(doc.acStart, 1);
+		this.acStop = finite(doc.acStop, 1e6);
+		this.temperature = Math.min(Math.max(finite(doc.temperature, 27), -273), 1000);
+		this.logicFamily =
+			typeof doc.logicFamily === 'string' && isLogicFamily(doc.logicFamily)
+				? doc.logicFamily
+				: DEFAULT_FAMILY;
+		this.sample = Math.max(0, Math.round(finite(doc.sample, 0)));
+		this.sweepCount = Math.min(Math.max(0, Math.round(finite(doc.sweepCount, 0))), 200);
+		this.channels = doc.channels && typeof doc.channels === 'object' ? doc.channels : {};
+		this.selection = [];
+		this.discardRun();
+		this.acResult = null;
+		this.envelope = null;
+		this.error = null;
+		this.notice = null;
+		this.live = false;
+		// Back down into whatever block was open. A level whose block is gone —
+		// a draft from an editor that disagreed about it — is where this stops,
+		// on the last level that still makes sense.
+		for (const level of doc.levels!.slice(1)) {
+			const block = (this.schematic.blocks ?? []).find((b) => b.id === level.block);
+			if (!block || !Array.isArray(level.schematic?.instances)) break;
+			this.descend(block);
+			this.schematic = adopt(level.schematic);
+			this.probes = level.probes ?? [];
+		}
+		this.arrivals++;
+	}
+
 	/**
 	 * Move to another sample of the circuit, or back to nominal.
 	 *

@@ -11,6 +11,22 @@ early entries point at those instead.
 
 ---
 
+## 22 September 2026 — Your work is kept as you go
+
+**Nothing is lost to a reload, a closed tab or a power cut.** Every change is
+written to the browser as it happens, and the app opens where it was left:
+the drawing, the probes, the run's settings, the scope's knobs, even a block
+that was open for editing. After sharing, the changes made since the link
+win over the link on a reload — they are newer, and they are yours — and
+opening that link again elsewhere offers the link as it was sent, one click
+away. Loading an example, a file or a different link starts a fresh draft
+rather than writing over the one on screen, and two tabs never overwrite each
+other. Nothing leaves your machine: the drafts live in the browser, like
+everything else.
+[#57](https://github.com/Agustin-Delgado/repath/pull/57)
+
+---
+
 ## 21 September 2026 — A pasted box is a block of its own
 
 **Copying a box copies the block.** Pasting or duplicating a box used to put
