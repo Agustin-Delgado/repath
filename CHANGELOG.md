@@ -31,6 +31,7 @@ while one held on at that current still dies.
 **Memory.** The 6116 and 62256 static RAMs, and the 28C16 and 28C256 EEPROMs,
 whose contents you type in the inspector as hex. The **EEPROM and a scanned
 display** example uses one as the lookup table for four digits showing 1 2 3 4.
+[#63](https://github.com/Agustin-Delgado/repath/pull/63)
 
 ---
 
