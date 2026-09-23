@@ -119,7 +119,8 @@
 
 	<!--
 		Pointing at a name lights that net up on the schematic: a label can only
-		say so much in the width of a sidebar, and the drawing says the rest.
+		say so much in the width of a sidebar, and the drawing says the rest. And
+		back the other way: pointing at a wire lights its name here.
 	-->
 	<ul class="m-0 flex list-none flex-col gap-0.5 px-1.5 py-0">
 		{#each app.activeProbes as probe (probe.key)}
@@ -127,7 +128,9 @@
 			{@const knob = app.channels[probe.key] ?? { gain: 1, offset: 0 }}
 			{@const turned = (probe.analog && knob.gain !== 1) || knob.offset !== 0}
 			<li
-				class="group rounded-md px-1 py-1 hover:bg-hover"
+				class="group rounded-md px-1 py-1 hover:bg-hover {app.hoverNet === probe.netIndex
+					? 'bg-hover ring-1 ring-accent/60'
+					: ''}"
 				onpointerenter={() => (app.hoverNet = probe.netIndex)}
 				onpointerleave={() => (app.hoverNet = null)}
 			>
@@ -215,7 +218,10 @@
 					<li>
 						<button
 							type="button"
-							class="flex w-full cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-strong hover:bg-hover hover:text-fg"
+							class="flex w-full cursor-pointer items-center gap-1.5 rounded-md border-0 px-1 py-0.5 text-left hover:bg-hover hover:text-fg {app.hoverNet ===
+							c.index
+								? 'bg-hover text-fg ring-1 ring-accent/60'
+								: 'bg-transparent text-strong'}"
 							onpointerenter={() => (app.hoverNet = c.index)}
 							onpointerleave={() => (app.hoverNet = null)}
 							onclick={() => app.toggleProbe(c.point)}

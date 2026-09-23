@@ -1,23 +1,22 @@
 <script lang="ts">
-	import { FileDown, FolderOpen, ListOrdered, Redo2, Share2, Undo2 } from '@lucide/svelte';
-	import { Button, Menu, MenuItem, MenuLabel, MenuSeparator, Select, ToolbarSeparator } from '$lib/ui';
-	import { EXAMPLES, exampleDomain, type ExampleDomain } from '$lib/examples';
+	import { Eraser, FileDown, FolderOpen, ListOrdered, Redo2, Share2, Undo2 } from '@lucide/svelte';
+	import { Button, Menu, MenuItem, MenuSeparator, Select, ToolbarSeparator } from '$lib/ui';
 	import { SYMBOL_STANDARDS } from '$lib/schematic/symbols';
-	import { copyStepsAndReport, openFromFile, saveToFile, shareAndReport } from '$lib/document';
+	import { clearAndReport, copyStepsAndReport, openFromFile, saveToFile, shareAndReport } from '$lib/document';
 	import { app } from '$lib/state.svelte';
 
 	type Props = {
 		/**
-		 * Put the circuit in a link and copy it. The page does this rather than
-		 * the toolbar, because the draft that is being autosaved has to learn
-		 * that it now continues the link. Rejects when the clipboard refuses.
+		 * Put the circuit in a link and resolve to it. The page does this rather
+		 * than the toolbar, because the draft that is being autosaved has to
+		 * learn that it now continues the link.
 		 */
-		share: () => Promise<void>;
+		share: () => Promise<string>;
 	};
 
 	let { share }: Props = $props();
 
-	const SHELVES: ExampleDomain[] = ['Analog', 'Logic', 'Mixed signal'];
+	const empty = $derived(app.schematic.instances.length === 0 && app.schematic.wires.length === 0);
 </script>
 
 <Button variant="ghost" size="icon" onclick={() => app.undo()} title="Undo (Ctrl+Z)" aria-label="Undo">
@@ -31,6 +30,17 @@
 	aria-label="Redo"
 >
 	<Redo2 />
+</Button>
+<!-- No confirmation: it is one undo away, and the toast says so. -->
+<Button
+	variant="ghost"
+	size="icon"
+	disabled={empty}
+	onclick={() => clearAndReport(app)}
+	title="Clear the drawing"
+	aria-label="Clear the drawing"
+>
+	<Eraser />
 </Button>
 
 <ToolbarSeparator />
@@ -47,30 +57,6 @@
 	title="How the parts are drawn: zigzag or box resistors, shaped or boxed gates"
 />
 
-<!--
-	A menu of things to open, not a select: nothing in it is "the current
-	example" once the drawing has been touched, and loading one replaces the
-	drawing, which is an action rather than a setting.
--->
-<Menu label="Examples" title="Open a circuit that shows something off">
-	{#each SHELVES as shelf, i (shelf)}
-		{#if i > 0}<MenuSeparator />{/if}
-		<MenuLabel>{shelf}</MenuLabel>
-		{#each EXAMPLES.filter((example) => exampleDomain(example) === shelf) as example (example.id)}
-			<MenuItem
-				textValue={example.name}
-				title={example.description}
-				onAction={() => {
-					app.loadExample(example.id);
-					app.run();
-				}}
-			>
-				{example.name}
-			</MenuItem>
-		{/each}
-	{/each}
-</Menu>
-
 <Menu label="File" title="Save, open, or hand over this circuit">
 	<MenuItem onAction={() => saveToFile(app)} shortcut="Ctrl+S"><FileDown /> Save to a file</MenuItem>
 	<MenuItem onAction={() => openFromFile(app)} shortcut="Ctrl+O"><FolderOpen /> Open a file…</MenuItem>
@@ -83,6 +69,6 @@
 	</MenuItem>
 </Menu>
 
-<Button onclick={() => shareAndReport(share)} title="Copy a link that contains this circuit">
+<Button onclick={() => shareAndReport(app, share)} title="Copy a link that contains this circuit">
 	<Share2 /> Share
 </Button>

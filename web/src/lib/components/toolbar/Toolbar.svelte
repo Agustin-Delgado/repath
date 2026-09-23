@@ -8,7 +8,7 @@
 	type Props = {
 		/** The engine's version, once it has loaded. */
 		version: string;
-		share: () => Promise<void>;
+		share: () => Promise<string>;
 		/** Open the command palette. */
 		onFind: () => void;
 	};

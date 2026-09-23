@@ -1,4 +1,4 @@
-import { copyStepsAndReport, openFromFile, saveToFile, shareAndReport } from '$lib/document';
+import { clearAndReport, copyStepsAndReport, openFromFile, saveToFile, shareAndReport } from '$lib/document';
 import { EXAMPLES, exampleDomain } from '$lib/examples';
 import { SYMBOL_STANDARDS } from '$lib/schematic/symbols';
 import type { App } from '$lib/state.svelte';
@@ -27,7 +27,7 @@ export interface Command {
 
 /** What only the page can do, handed in by it. */
 export interface CommandContext {
-	share: () => Promise<void>;
+	share: () => Promise<string>;
 	fitToContent: () => void;
 }
 
@@ -176,7 +176,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 			group: 'Edit',
 			keywords: ['new', 'empty', 'blank', 'start over'],
 			available: () => app.schematic.instances.length > 0 || app.schematic.wires.length > 0,
-			run: () => app.clear()
+			run: () => clearAndReport(app)
 		},
 		{
 			id: 'probe-all',
@@ -277,7 +277,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 			label: 'Copy a link to this circuit',
 			group: 'File',
 			keywords: ['share', 'url', 'send'],
-			run: () => void shareAndReport(context.share)
+			run: () => void shareAndReport(app, context.share)
 		},
 		{
 			id: 'steps',

@@ -1666,7 +1666,7 @@ const NEUTRAL = new Set(['ground', 'supply', 'probe', 'port']);
  * What a logic circuit shows its state with. An adder lighting LEDs through
  * resistors is a logic example, not a mixed-signal one.
  */
-const INDICATORS = new Set(['led', 'display7', 'resistor']);
+const INDICATORS = new Set(['led', 'display7', 'display7x4', 'resistor']);
 
 const domains = new Map<string, ExampleDomain>();
 

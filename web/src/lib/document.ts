@@ -77,14 +77,28 @@ export async function copySteps(app: App): Promise<number | null> {
  * draft that it now continues the link; this is the part everyone who offers
  * Share has in common.
  */
-export async function shareAndReport(share: () => Promise<void>): Promise<void> {
+export async function shareAndReport(app: App, share: () => Promise<string>): Promise<void> {
+	let url: string;
 	try {
-		await share();
+		url = await share();
+	} catch (cause) {
+		app.notice = `The link could not be made. ${cause instanceof Error ? cause.message : String(cause)}`;
+		return;
+	}
+	try {
+		await navigator.clipboard.writeText(url);
 		toasts.show('Link copied — it holds the whole circuit');
 	} catch {
-		// Clipboard access can be refused; the URL bar still holds the link.
-		toasts.show('The link is in the address bar');
+		// Clipboard access can be refused. The link goes where it can be copied
+		// by hand, since it is no longer put in the address bar.
+		app.notice = url;
 	}
+}
+
+/** Empty the drawing, and say how to get it back. */
+export function clearAndReport(app: App): void {
+	app.clear();
+	toasts.show('Drawing cleared — Ctrl+Z brings it back');
 }
 
 export async function copyStepsAndReport(app: App): Promise<void> {
