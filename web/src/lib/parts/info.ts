@@ -115,7 +115,7 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 	},
 	regulator: {
 		description: 'Linear voltage regulator: 7805, 7812, LM317 and friends',
-		keywords: ['7805', '7809', '7812', '7815', 'lm317', 'lm7805', 'ldo', 'linear', 'power supply', 'vreg']
+		keywords: ['7805', '7809', '7812', '7815', '7905', '7912', '7915', 'lm317', 'lm7805', 'negative', 'linear', 'power supply', 'vreg']
 	},
 	and: { description: 'Output high only when every input is high', keywords: ['gate', '&'] },
 	nand: { description: 'Output low only when every input is high', keywords: ['gate', 'not and'] },

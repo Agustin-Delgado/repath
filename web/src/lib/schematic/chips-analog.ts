@@ -7,12 +7,10 @@
  * as four gates; see `AnalogBlock` in `chips.ts` for the pieces and for how
  * they cross between the two halves of the simulator.
  *
- * What the analog pieces cannot do is know their supply the way the silicon
- * does. An op-amp's output here stops short of fixed voltages rather than of
- * whatever its supply leg is doing, so those limits are read off the drawing
- * once, at compile time, from what the supply legs are wired to. A supply that
- * moves during the run moves the part's rails in the drawing and not in the
- * model; each part says so in its caveat.
+ * The supply is a node like any other. An amplifier's output stops short of
+ * whatever its supply legs are at, moment by moment, and a Schmitt input's
+ * thresholds are shares of the supply across its legs — so a 5 V part run
+ * from a sagging battery sags with it.
  */
 
 import type { AnalogBlock, ChipBlock, ChipDef, OpAmpSpec } from './chips';
@@ -160,7 +158,7 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 			{ kind: 'switch', a: 'DIS', b: 'GND', control: 'down', reference: EARTH, on: 2.4, off: 1, ron: 10 }
 		],
 		caveat:
-			'The output swings all the way to the supply through 10 Ω; a bipolar 555 stops about 1.7 V short of it. The thresholds follow the supply as it was wired when the run started.'
+			'The output swings all the way to the supply through 10 Ω; a bipolar 555 stops about 1.7 V short of it.'
 	},
 
 	// Op-amps. The pin names are the datasheets', and so is the shape: one
@@ -173,8 +171,6 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 		layout: DUAL,
 		blocks: [],
 		analog: [amplifier(1, LM358), amplifier(2, LM358)],
-		caveat:
-			'The output limits are read off the supply once, when the run starts: a supply that changes during it does not move them.'
 	},
 	{
 		id: 'LM324',
@@ -184,8 +180,6 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 		layout: QUAD,
 		blocks: [],
 		analog: [1, 2, 3, 4].map((n) => amplifier(n, LM358)),
-		caveat:
-			'The output limits are read off the supply once, when the run starts: a supply that changes during it does not move them.'
 	},
 	{
 		id: 'TL072',
@@ -195,8 +189,6 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 		layout: withNegative(DUAL),
 		blocks: [],
 		analog: [amplifier(1, TL072), amplifier(2, TL072)],
-		caveat:
-			'The output limits are read off the supply once, when the run starts: a supply that changes during it does not move them.'
 	},
 	{
 		id: 'TL074',
@@ -206,8 +198,6 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 		layout: withNegative(QUAD),
 		blocks: [],
 		analog: [1, 2, 3, 4].map((n) => amplifier(n, TL072)),
-		caveat:
-			'The output limits are read off the supply once, when the run starts: a supply that changes during it does not move them.'
 	},
 	{
 		id: 'LM741',
@@ -220,8 +210,7 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 		layout: ['NC1', 'IN-', 'IN+', 'VEE', 'NC2', 'OUT', 'VCC', 'NC3'],
 		blocks: [],
 		analog: [{ kind: 'opamp', plus: 'IN+', minus: 'IN-', out: 'OUT', spec: LM741 }],
-		caveat:
-			'The offset-null pins (1 and 5) are not modelled. The output limits are read off the supply once, when the run starts.'
+		caveat: 'The offset-null pins (1 and 5) are not modelled.'
 	},
 
 	// Comparators: open collector, so the output needs a pull-up to go high.
@@ -331,7 +320,46 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 			})
 		),
 		caveat:
-			'The on-resistance is a fixed 125 Ω; on the real part it rises as the signal nears either supply, and more so at low supply voltages.'
+			'The on-resistance is a fixed 125 Ω; on the real part it rises as the signal nears either supply, and more so at low supply voltages. The control thresholds are read off the supply once, when the run starts.'
+	},
+	{
+		id: 'L293D',
+		role: 'analog',
+		description: 'Quadruple half-H driver with clamp diodes, for motors and relays',
+		aliases: ['l293', 'h-bridge', 'h bridge', 'motor driver', 'sn754410'],
+		// Two supplies: VCC for the logic on pin 16 and VCC2 for the load on pin 8.
+		// The four ground legs in the middle are the heat sink as well as the
+		// ground, and are one node inside.
+		layout: [
+			'12EN', '1A', '1Y', 'GND', 'GND2', '2Y', '2A', 'VCC2',
+			'34EN', '3A', '3Y', 'GND3', 'GND4', '4Y', '4A', 'VCC'
+		],
+		blocks: [1, 2, 3, 4].flatMap((n): ChipBlock[] => {
+			const enable = n <= 2 ? '12EN' : '34EN';
+			return [
+				// Enabled, each output follows its input to one supply or the other;
+				// disabled, it lets go of both.
+				{ kind: 'and', inputs: [`${n}A`, enable], output: `${n}high` },
+				{ kind: 'not', inputs: [`${n}A`], output: `${n}an` },
+				{ kind: 'and', inputs: [`${n}an`, enable], output: `${n}low` }
+			];
+		}),
+		analog: [
+			{ kind: 'resistor', a: 'GND2', b: 'GND', ohms: 0.01 },
+			{ kind: 'resistor', a: 'GND3', b: 'GND', ohms: 0.01 },
+			{ kind: 'resistor', a: 'GND4', b: 'GND', ohms: 0.01 },
+			...[1, 2, 3, 4].flatMap((n): AnalogBlock[] => [
+				{ kind: 'drive', net: `${n}high`, node: `${n}up` },
+				{ kind: 'drive', net: `${n}low`, node: `${n}down` },
+				{ kind: 'switch', a: 'VCC2', b: `${n}Y`, control: `${n}up`, reference: EARTH, on: 2.4, off: 1, ron: 1.5 },
+				{ kind: 'switch', a: `${n}Y`, b: 'GND', control: `${n}down`, reference: EARTH, on: 2.4, off: 1, ron: 1.5 },
+				// The clamps that make it the D: a motor's back-EMF has somewhere to go.
+				{ kind: 'diode', anode: `${n}Y`, cathode: 'VCC2' },
+				{ kind: 'diode', anode: 'GND', cathode: `${n}Y` }
+			])
+		],
+		caveat:
+			'Each output switches through 1.5 Ω; the real part drops about 1.4 V on the high side and 1.2 V on the low at an amp, so a motor gets rather less than VCC2.'
 	},
 	{
 		id: 'ULN2003',

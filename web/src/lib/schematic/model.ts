@@ -387,6 +387,9 @@ export const REGULATOR_PRESETS: Record<string, Record<string, number>> = {
 	'7809': { voltage: 9, dropout: 2, quiescent: 5e-3 },
 	'7812': { voltage: 12, dropout: 2, quiescent: 5e-3 },
 	'7815': { voltage: 15, dropout: 2, quiescent: 5e-3 },
+	'7905': { voltage: 5, dropout: 1.1, quiescent: 3e-3 },
+	'7912': { voltage: 12, dropout: 1.1, quiescent: 3e-3 },
+	'7915': { voltage: 15, dropout: 1.1, quiescent: 3e-3 },
 	LM317: { voltage: 1.25, dropout: 1.7, quiescent: 50e-6 }
 };
 
@@ -1466,7 +1469,8 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		/**
-		 * A three-terminal linear regulator: the 78xx family and the LM317.
+		 * A three-terminal linear regulator: the 78xx and 79xx families and the
+		 * LM317.
 		 *
 		 * One part for both because they are one circuit — an error amplifier
 		 * holding the output a fixed voltage above the third leg, through a pass
@@ -1491,18 +1495,21 @@ export const CATALOG: ComponentDef[] = [
 					{ value: '7809', label: '7809 (9 V)' },
 					{ value: '7812', label: '7812 (12 V)' },
 					{ value: '7815', label: '7815 (15 V)' },
+					{ value: '7905', label: '7905 (−5 V)' },
+					{ value: '7912', label: '7912 (−12 V)' },
+					{ value: '7915', label: '7915 (−15 V)' },
 					{ value: 'LM317', label: 'LM317 (adjustable)' }
 				]
 			},
 			{
 				key: 'voltage',
-				label: 'Output above COM',
+				label: 'Output from COM',
 				unit: 'V',
 				default: 5,
 				min: 0,
 				nonZero: true,
 				description:
-					'What it holds between OUT and its third leg: the output itself on a 78xx, whose third leg is ground, and 1.25 V on an LM317, set up to any output by a divider on ADJ.'
+					'What it holds between OUT and its third leg: the output itself on a 78xx, whose third leg is ground, the same below ground on a 79xx, and 1.25 V on an LM317, set up to any output by a divider on ADJ.'
 			},
 			{
 				key: 'dropout',
@@ -1521,6 +1528,16 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				description:
 					'What it draws for itself, out of the third leg: 5 mA on a 78xx, 50 µA from the ADJ pin of an LM317.'
+			},
+			{
+				key: 'limit',
+				label: 'Current limit',
+				unit: 'A',
+				default: 1.5,
+				min: 0,
+				nonZero: true,
+				description:
+					'Past this the output stops being a voltage and becomes a current: short it and this is what flows, which is what keeps the part alive.'
 			}
 		]
 	},

@@ -561,11 +561,11 @@ function compileFresh(
 		const negative = negativeSupply(chip);
 		let high = restingVolts(legNet(positive));
 		const low = restingVolts(legNet(negative)) ?? 0;
+		// Amplifier rails and Schmitt thresholds follow the supply legs as the run
+		// goes. Only a switch's thresholds are still read off the drawing once.
 		const needsSupply = chip.analog!.some(
 			(block) =>
-				(block.kind === 'opamp' && Array.isArray(block.spec.swing)) ||
-				(block.kind === 'switch' && (typeof block.on !== 'number' || typeof block.off !== 'number')) ||
-				(block.kind === 'sense' && (typeof block.rising === 'object' || typeof block.falling === 'object'))
+				block.kind === 'switch' && (typeof block.on !== 'number' || typeof block.off !== 'number')
 		);
 		if (high === undefined) {
 			high = low + 5;
@@ -625,6 +625,17 @@ function compileFresh(
 					const [bottom, top] = Array.isArray(swing)
 						? [low + swing[0], high - swing[1]]
 						: (swing as { fixed: readonly [number, number] }).fixed;
+					// A package's amplifiers stop short of its supply legs, wherever
+					// those are at the moment; the fixed pair is only a fallback.
+					const rails =
+						Array.isArray(swing) && positive && negative
+							? {
+									supply_plus: node(positive),
+									supply_minus: node(negative),
+									headroom_high: swing[1],
+									headroom_low: swing[0]
+								}
+							: {};
 					components.push({
 						type: 'op_amp',
 						name: part,
@@ -638,7 +649,8 @@ function compileFresh(
 						slew: block.spec.slew,
 						r_out: block.spec.rOut,
 						v_os: block.spec.vOs,
-						i_bias: block.spec.iBias
+						i_bias: block.spec.iBias,
+						...rails
 					});
 					break;
 				}
@@ -669,18 +681,32 @@ function compileFresh(
 						ac_phase: 0
 					});
 					break;
-				case 'sense':
+				case 'sense': {
+					const { rising, falling } = block;
+					// Thresholds given as shares of the supply are measured against the
+					// supply legs by the engine, so they move with it; ones given in
+					// volts are volts.
+					const relative =
+						typeof rising === 'object' && typeof falling === 'object' && positive && negative;
+					const thresholds =
+						rising === undefined || falling === undefined
+							? {}
+							: relative
+								? {
+										family: { ...base, v_ih: rising.supply, v_il: falling.supply },
+										reference: [node(positive!), node(negative!)]
+									}
+								: { family: { ...base, v_ih: volts(rising), v_il: volts(falling) } };
 					chipBridges.push({
 						direction: 'to_digital',
 						name: part,
 						node: node(block.node),
 						net: logicNet(block.net),
 						delay: 0,
-						...(block.rising !== undefined && block.falling !== undefined
-							? { family: { ...base, v_ih: volts(block.rising), v_il: volts(block.falling) } }
-							: {})
+						...thresholds
 					});
 					break;
+				}
 				case 'drive':
 					chipBridges.push({
 						direction: 'to_analog',
@@ -1190,10 +1216,18 @@ function compileFresh(
 				});
 				break;
 			// The error amplifier drives the pass transistor's base and watches the
-			// output against a reference sitting on the third leg. The source in
-			// the collector is the dropout: the transistor cannot pull its emitter
-			// closer to the input than that, so neither can the part.
+			// output against a reference sitting on the third leg. The source in the
+			// collector is the dropout: the transistor cannot pull its emitter closer
+			// to the input than that, so neither can the part. The current limit is
+			// the classic one — a small resistor after the pass transistor, and a
+			// second transistor across it that steals the base drive once the drop
+			// reaches a junction's worth.
+			//
+			// A 79xx is the same circuit upside down: a PNP pass transistor, the
+			// reference below the third leg, and current flowing from the output
+			// towards an input more negative than it.
 			case 'regulator': {
+				const negative = /^79/.test(str(instance, 'part', '7805'));
 				const input = analogOf(instance, 'in');
 				const output = analogOf(instance, 'out');
 				const common = analogOf(instance, 'com');
@@ -1201,13 +1235,38 @@ function compileFresh(
 				const drive = `${name}__drive`;
 				const base = `${name}__base`;
 				const collector = `${name}__c`;
+				const emitter = `${name}__e`;
+				const volts = num(instance, 'voltage', 5);
+				const headroom = Math.max(num(instance, 'dropout', 2) - 0.2, 0);
+				const limit = Math.max(num(instance, 'limit', 1.5), 1e-3);
+				// The pass device is a Darlington on the real parts, so it is one here:
+				// a gain in the thousands, which a few milliamps of drive can turn fully
+				// on — and which the limiter can take away again without a fight.
+				const transistor = (id: string, c: string, b: string, e: string, bf: number) => ({
+					type: 'bjt',
+					name: id,
+					collector: c,
+					base: b,
+					emitter: e,
+					model: {
+						polarity: negative ? 'pnp' : 'npn',
+						is: 6.73e-15,
+						bf,
+						br: 4,
+						vaf: 100,
+						cjc: 3.6e-12,
+						tf: 301e-12,
+						temp: 300.15
+					}
+				});
+				const dc = (value: number) => ({ type: 'dc', value });
 				components.push(
 					{
 						type: 'voltage_source',
 						name: `${name}:ref`,
-						plus: reference,
-						minus: common,
-						waveform: { type: 'dc', value: num(instance, 'voltage', 5) },
+						plus: negative ? common : reference,
+						minus: negative ? reference : common,
+						waveform: dc(volts),
 						ac_magnitude: 0,
 						ac_phase: 0
 					},
@@ -1218,47 +1277,36 @@ function compileFresh(
 						input_plus: reference,
 						input_minus: output,
 						gain: 1e4,
-						v_max: 60,
-						v_min: -1,
+						// Towards the input only: an amplifier free to drive the base far
+						// the other way reverse-biases the pass device until nothing
+						// conducts into its collector at all.
+						v_max: negative ? 1 : 60,
+						v_min: negative ? -60 : -1,
 						gbw: 1e6,
 						slew: 1e6,
 						r_out: 75,
 						v_os: 0,
 						i_bias: 0
 					},
-					{ type: 'resistor', name: `${name}:rb`, a: drive, b: base, resistance: 100 },
+					{ type: 'resistor', name: `${name}:rb`, a: drive, b: base, resistance: 10e3 },
 					{
 						type: 'voltage_source',
 						name: `${name}:drop`,
-						plus: input,
-						minus: collector,
-						waveform: { type: 'dc', value: Math.max(num(instance, 'dropout', 2) - 0.2, 0) },
+						plus: negative ? collector : input,
+						minus: negative ? input : collector,
+						waveform: dc(headroom),
 						ac_magnitude: 0,
 						ac_phase: 0
 					},
-					{
-						type: 'bjt',
-						name,
-						collector,
-						base,
-						emitter: output,
-						model: {
-							polarity: 'npn',
-							is: 6.73e-15,
-							bf: 100,
-							br: 4,
-							vaf: 100,
-							cjc: 3.6e-12,
-							tf: 301e-12,
-							temp: 300.15
-						}
-					},
+					transistor(name, collector, base, emitter, 1000),
+					{ type: 'resistor', name: `${name}:rs`, a: emitter, b: output, resistance: 0.7 / limit },
+					transistor(`${name}:lim`, base, emitter, output, 100),
 					{
 						type: 'current_source',
 						name: `${name}:q`,
-						plus: input,
-						minus: common,
-						waveform: { type: 'dc', value: num(instance, 'quiescent', 5e-3) },
+						plus: negative ? common : input,
+						minus: negative ? input : common,
+						waveform: dc(num(instance, 'quiescent', 5e-3)),
 						ac_magnitude: 0,
 						ac_phase: 0
 					}
