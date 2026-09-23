@@ -184,10 +184,10 @@ because each step is what makes the next one worth having:
       mislead.
 - [x] Chips with analog insides: the 555, op-amp packages (LM358, LM324,
       TL072, TL074, LM741), comparators (LM393, LM339), the 4066 switch and the
-      ULN2003, plus a 78xx/LM317 regulator part. *What is left:* rails that
-      follow a moving supply (an op-amp's output limits are read off the supply
-      once, at compile time), current limiting on the regulator, negative
-      regulators, the L293D.
+      ULN2003 and L293D, plus a 78xx/79xx/LM317 regulator part with its current
+      limit. Amplifier rails and Schmitt thresholds follow the supply legs
+      during the run. *What is left:* the 4066's control thresholds are still
+      read off the supply once; the regulator has no thermal shutdown.
 - [x] Schmitt-trigger inputs (7414, 74132, 40106, 4093), as inputs read against
       two thresholds by the bridge rather than hysteresis in the gate.
 - [ ] Ideal transmission line.

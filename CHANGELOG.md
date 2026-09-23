@@ -11,6 +11,21 @@ early entries point at those instead.
 
 ---
 
+## 23 September 2026 — Parts that follow their supply
+
+**A sagging supply sags the parts on it.** An op-amp package's output stops
+short of its supply as it is at that moment, not as it was when the run
+started, and a Schmitt trigger switches at its share of the supply it has now.
+Run an LM358 from a battery going flat and watch its ceiling come down with it.
+
+**Regulators that protect themselves, and ones that go below ground.** Short
+a 7805 and about an amp and a half flows rather than as much as the input can
+give; the limit is a field of its own. The 7905, 7912 and 7915 hold their
+output that far below ground.
+
+**The L293D**, for driving a motor either way round from two logic pins, with
+the clamp diodes that give its back-EMF somewhere to go.
+
 ## 23 September 2026 — Chips that are not all logic
 
 **The 555.** Wire it astable and it blinks at the rate the datasheet formula
