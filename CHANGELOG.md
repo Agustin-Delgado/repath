@@ -25,6 +25,9 @@ output that far below ground.
 
 **The L293D**, for driving a motor either way round from two logic pins, with
 the clamp diodes that give its back-EMF somewhere to go.
+[#62](https://github.com/Agustin-Delgado/repath/pull/62)
+
+---
 
 ## 23 September 2026 — Chips that are not all logic
 
