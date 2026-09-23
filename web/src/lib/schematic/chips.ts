@@ -62,6 +62,13 @@ export interface ChipBlock {
 	write?: string;
 	/** From an address or a write to the outputs following it, seconds. */
 	delay?: number;
+	/**
+	 * How an EEPROM writes: address latched as `write` rises and data as it
+	 * falls, then `writeTime` putting it in the array. With `page` above one,
+	 * words of one page loaded within `loadWindow` of each other go in together.
+	 * Absent for a RAM, which stores while `write` is high.
+	 */
+	programming?: { writeTime: number; page?: number; loadWindow?: number };
 }
 
 /**

@@ -178,13 +178,14 @@ because each step is what makes the next one worth having:
 - [x] Counters, shift registers, decoders, encoders, multiplexers, adders,
       comparators and three-state bus parts, as 74xx and 4000-series chips,
       and byte-wide memory: the 6116 and 62256 RAMs, and the 28C16 and 28C256
-      EEPROMs programmed as hex in the inspector. *What is left:* an EEPROM
-      write that takes its millisecond, and data polling.
+      EEPROMs programmed as hex in the inspector, which a circuit can also write
+      at the part's own pace: page loads, write time, data polling on I/O7.
+      *What is left:* the toggle bit and software data protection.
 - [x] 7-segment display, a four-digit multiplexed one, and a bar graph, built
       on the LED that already lights.
-- [x] A fuse that blows on its `I²t` and stays open, and cools below its
-      rating. *What is left:* a thermal time constant, for either a fuse or an
-      LED.
+- [x] A fuse that blows on its `I²t` and stays open. It and the LEDs heat as
+      two thermal masses, so a short kills fast, a small overload slowly, and a
+      pulse rating from a datasheet is survived.
 - [x] Chips with analog insides: the 555, op-amp packages (LM358, LM324,
       TL072, TL074, LM741), comparators (LM393, LM339), the 4066 switch and the
       ULN2003 and L293D, plus a 78xx/79xx/LM317 regulator part with its current
