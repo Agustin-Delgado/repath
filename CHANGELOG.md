@@ -11,6 +11,32 @@ early entries point at those instead.
 
 ---
 
+## 23 September 2026 — Chips that are not all logic
+
+**The 555.** Wire it astable and it blinks at the rate the datasheet formula
+gives; tie RESET low and it stops. There is a **555 blinker** example to start
+from.
+
+**Op-amps and comparators as the parts you buy.** The LM358 and LM324 for a
+single supply, the TL072 and TL074 for a split one, and the LM741. Each one
+clips where its supply says: a 5 V LM358 will not give you 5 V out. The LM393
+and LM339 comparators pull their output down and need a pull-up, as the real
+ones do.
+
+**Schmitt triggers.** The 7414, 74132, 40106 and 4093 switch at two
+thresholds, so a slow or noisy input gives one clean edge — and one gate with a
+resistor and a capacitor is an oscillator.
+
+**Switches, drivers and regulators.** The 4066 analog switch, the ULN2003 for
+relays and motors, and a regulator part that is a 7805, 7809, 7812, 7815 or an
+LM317 you set with two resistors. It drops out when the input gets too close
+to the output, and draws its own few milliamps.
+
+**An op-amp that settled nowhere now settles.** A follower on a single supply —
+an op-amp whose lowest output is at ground, with its output wired straight
+back to its input — could fail to find its starting point at all. It now gets
+there.
+
 ## 23 September 2026 — Sixty chips, and the parts around them
 
 **Chips.** Twenty-seven more, which makes sixty, each on the legs its
