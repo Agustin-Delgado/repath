@@ -890,7 +890,7 @@ export function netLabel(net: Net, fallback: string): string {
 	// A pin that drives says more about a net than one that merely sits on it.
 	const rank = (ref: PinRef) => {
 		const kind = ref.instance.kind;
-		if (kind === 'vsource' || kind === 'isource') return 0;
+		if (kind === 'vsource' || kind === 'isource' || kind === 'battery') return 0;
 		if (kind === 'clock') return 1;
 		if (ref.pin.direction === 'out') return 1;
 		return 2;
@@ -941,7 +941,7 @@ function short(pin: string): string {
  * it is an open circuit when it is open and a piece of wire when it is closed,
  * which is a fact about the moment rather than about the drawing.
  */
-const NO_DC_PATH = new Set(['capacitor', 'isource', 'probe', 'port']);
+const NO_DC_PATH = new Set(['capacitor', 'crystal', 'isource', 'probe', 'port']);
 
 /** One conductive route between two nets. `via` is a switch that has to be closed. */
 interface DcEdge {

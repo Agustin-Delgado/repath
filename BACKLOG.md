@@ -167,16 +167,25 @@ because each step is what makes the next one worth having:
 
 ### Components
 
-- [ ] Potentiometer, trimmer, variable capacitor.
+- [x] Potentiometer and trimmer (the wiper is an inspector value, not yet
+      dragged live). *What is left:* a variable capacitor.
 - [ ] Transformer and coupled inductors.
-- [ ] Relay, and an SPDT switch. The SPST toggle and the push-button are in,
-      with contact bounce; a changeover needs two contacts driven the opposite
-      way round, which the engine can already do.
-- [ ] Crystal / resonator.
+- [x] Relay, and an SPDT switch. The relay reads its coil current and has no
+      armature delay or contact bounce.
+- [x] Crystal / resonator, as the Butterworth–Van Dyke model.
 - [ ] Voltage-controlled oscillator, comparator with hysteresis.
-- [ ] Counters, shift registers, decoders, multiplexers, RAM/ROM. The gates,
-      the flip-flop and the tri-state buffer they are built from are in.
-- [ ] 7-segment display and bar graph, built on the LED that already lights.
+- [x] Counters, shift registers, decoders, encoders, multiplexers, adders,
+      comparators and three-state bus parts, as 74xx and 4000-series chips.
+      *What is left:* RAM/ROM.
+- [x] 7-segment display and bar graph, built on the LED that already lights.
+      *What is left:* a multiplexed multi-digit display.
+- [ ] A fuse that opens when overloaded. It needs the engine to open a
+      resistor the way it already burns out an LED; one that never blows would
+      mislead.
+- [ ] Chips with analog insides: the 555, op-amp packages (LM358, TL072),
+      comparators (LM393), regulators (7805, LM317), the 4066 switch. A chip
+      is gates and flip-flops only for now.
+- [ ] Schmitt-trigger inputs (7414, 40106), which need hysteresis in the gate.
 - [ ] Ideal transmission line.
 
 ### Editor

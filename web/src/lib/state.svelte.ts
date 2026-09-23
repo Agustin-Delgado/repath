@@ -48,9 +48,11 @@ import {
 	defaultParams,
 	definitionFor,
 	definitionOf,
+	CONTACTS,
 	DIODE_PRESETS,
 	migrateInstance,
 	nextName,
+	OPERABLE,
 	normaliseWire,
 	pinPosition,
 	pointKey,
@@ -1664,7 +1666,7 @@ class AppState {
 	toggleSwitch(id: string): void {
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return;
-		if (instance.kind !== 'switch' && instance.kind !== 'toggle') return;
+		if (!OPERABLE.has(instance.kind)) return;
 
 		// With a simulation going, this is a hand on the part: the engine is told to
 		// move it at the instant the sweep has reached, and everything already
@@ -1676,7 +1678,7 @@ class AppState {
 			const at = acquiring.time;
 			const flips = [...(this.operations.get(id) ?? []), at];
 			this.operations = new Map(this.operations).set(id, flips);
-			if (instance.kind === 'switch') {
+			if (CONTACTS.has(instance.kind)) {
 				acquiring.setWaveform(`${instance.name}__actuator`, {
 					type: 'pwl',
 					points: contactControl(instance, flips)
@@ -1689,7 +1691,7 @@ class AppState {
 
 		// Nothing running: the click sets where the part starts, which is a property
 		// of the circuit and belongs in the drawing.
-		if (instance.kind === 'switch') {
+		if (CONTACTS.has(instance.kind)) {
 			this.setParam(id, 'start', instance.params.start === 'closed' ? 'open' : 'closed');
 		} else {
 			this.setParam(id, 'state', instance.params.state === 'high' ? 'low' : 'high');

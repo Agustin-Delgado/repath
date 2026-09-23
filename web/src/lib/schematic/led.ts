@@ -63,6 +63,14 @@ export const SEGMENTS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'] as const;
 
 export type Segment = (typeof SEGMENTS)[number];
 
+/**
+ * The bars of a bar graph, numbered from one the way its pins are.
+ *
+ * Numbers rather than letters, because a bar graph is read as a quantity: bar
+ * seven is the seventh step up the scale, and the pin that lights it says so.
+ */
+export const BARS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+
 export const LED_COLOURS: readonly LedColour[] = [
 	{ value: 'red', label: 'Red', vf: 1.9, rgb: [255, 78, 62] },
 	{ value: 'amber', label: 'Amber', vf: 2.05, rgb: [255, 168, 48] },

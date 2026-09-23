@@ -22,7 +22,7 @@ import type { TransientRun } from '$lib/engine';
 import { levelAt } from '$lib/transitions';
 import { definitionOf, pointKey, wireSegments, type Point, type Schematic } from './model';
 import { DEFAULT_FAMILY, logicFamily, type LogicFamily } from './logic';
-import { SEGMENTS } from './led';
+import { BARS, SEGMENTS } from './led';
 import { CURRENT_FLOOR } from './animate';
 import type { Connectivity } from './nets';
 import type { NetNames } from './netlist';
@@ -52,6 +52,30 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 	// because a net whose only part is unknown to the planner has nothing to
 	// accumulate. Half a working circuit animated and the other half looked dead.
 	switch: [['a', -1], ['b', 1]],
+	// Two resistors meeting at the wiper, so the wiper is fed by one and drains
+	// into the other: what leaves it along its own wire is the difference.
+	potentiometer: [['a', -1], ['wiper', 1], ['wiper', -1, ':b'], ['b', 1, ':b']],
+	// The motional arm and the holder side by side between the same two pins.
+	crystal: [['a', -1], ['b', 1, ':c1'], ['a', -1, ':c0'], ['b', 1, ':c0']],
+	lamp: [['a', -1], ['b', 1]],
+	// Common to NO first, so a thrown changeover animates along the side it is on.
+	spdt: [['com', -1], ['no', 1], ['com', -1, ':nc'], ['nc', 1, ':nc']],
+	relay: [
+		['a', -1],
+		['b', 1, ':l'],
+		['com', -1, ':no'],
+		['no', 1, ':no'],
+		['com', -1, ':nc'],
+		['nc', 1, ':nc']
+	],
+	battery: [['plus', -1], ['minus', 1]],
+	bargraph: BARS.flatMap((bar, index) => {
+		const element = index === 0 ? undefined : `:${bar}`;
+		return [
+			[`a${bar}`, -1, element],
+			[`k${bar}`, 1, element]
+		] as Array<[pin: string, sign: number, series?: string]>;
+	}),
 	vsource: [['plus', -1], ['minus', 1]],
 	// One pin, like an op-amp output: the return is the ground the symbol means
 	// rather than a terminal on the drawing.
@@ -185,10 +209,17 @@ export interface FlowFrame {
 	segmentCurrent: Map<string, number>;
 }
 
-/** Which reported current arrives at one pin of a part, if any does. */
-export function pinFlow(kind: string, pin: string): { sign: number; series?: string } | null {
-	const entry = PIN_FLOW[kind]?.find(([name]) => name === pin);
-	return entry ? { sign: entry[1], series: entry[2] } : null;
+/**
+ * Which reported currents arrive at one pin of a part.
+ *
+ * Usually one. A pin shared by several devices inside the part — a digit's
+ * common, a wiper — gets one for each of them, and what leaves it along its
+ * wire is their sum.
+ */
+export function pinFlows(kind: string, pin: string): Array<{ sign: number; series?: string }> {
+	return (PIN_FLOW[kind] ?? [])
+		.filter(([name]) => name === pin)
+		.map(([, sign, series]) => ({ sign, series }));
 }
 
 /** Plan the accumulation for every net. Call once per run, not per frame. */
@@ -210,6 +241,12 @@ export function prepareFlow(
 	const segmentElement = new Map<string, number>();
 	const instanceFlow = new Map<string, { from: string; to: string }>();
 	for (const instance of schematic.instances) {
+		if (instance.kind === 'bargraph') {
+			for (const [i, bar] of BARS.entries()) {
+				const at = elementByName.get(i === 0 ? instance.name : `${instance.name}:${bar}`);
+				if (at !== undefined) segmentElement.set(`${instance.id}:${bar}`, at);
+			}
+		}
 		if (instance.kind === 'display7') {
 			// The first segment carries the plain instance name, the way a MOSFET's
 			// drain does, so it is looked up under both.
@@ -302,12 +339,13 @@ export function prepareFlow(
 		if (!flow) continue;
 
 		for (const { pin, at } of instancePins(instance)) {
-			const entry = flow.find(([name]) => name === pin.name);
-			if (!entry) continue;
-			// A terminal with a series of its own, or the element's own current.
-			const source = entry[2] ? elementByName.get(`${instance.name}${entry[2]}`) : element;
-			if (source === undefined) continue;
-			inject(at, source, entry[1]);
+			for (const entry of flow) {
+				if (entry[0] !== pin.name) continue;
+				// A terminal with a series of its own, or the element's own current.
+				const source = entry[2] ? elementByName.get(`${instance.name}${entry[2]}`) : element;
+				if (source === undefined) continue;
+				inject(at, source, entry[1]);
+			}
 		}
 	}
 

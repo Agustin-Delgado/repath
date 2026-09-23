@@ -25,6 +25,7 @@ import {
 } from './draw';
 import type { FlowContext, FlowFrame } from './flow';
 import {
+	BARS,
 	brightness,
 	ledColour,
 	ledRating,
@@ -202,10 +203,12 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 	// burnt LED looking burnt, or the drawing contradicts both the panel and the
 	// scope trace that steps at the moment it failed.
 	for (const instance of schematic.instances) {
-		if (instance.kind !== 'led' && instance.kind !== 'display7') continue;
+		if (!LIT.has(instance.kind)) continue;
 		if (!instanceVisible(instance, region, 0)) continue;
 		if (instance.kind === 'led') drawLed(painter, view, instance);
 		else if (instance.kind === 'display7') drawDigit(painter, view, instance);
+		else if (instance.kind === 'bargraph') drawBars(painter, view, instance);
+		else if (instance.kind === 'lamp') drawLamp(painter, view, instance);
 	}
 }
 
@@ -442,6 +445,57 @@ function drawDigit(painter: Painter, view: DynamicView, instance: Instance): voi
 			});
 		}
 	});
+}
+
+/** Parts that give off light, and so are drawn again once something flows. */
+const LIT = new Set(['led', 'display7', 'bargraph', 'lamp']);
+
+/** A bar graph: the digit's lighting, one bar at a time. */
+function drawBars(painter: Painter, view: DynamicView, instance: Instance): void {
+	if (!view.showLight) return;
+	const rated = ledRating(instance);
+	const { rgb } = ledColour(instance.params.colour);
+	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		for (const [i, bar] of BARS.entries()) {
+			const current = view.frame.segmentCurrent.get(`${instance.id}:${bar}`) ?? 0;
+			const lit = brightness(current, rated);
+			if (lit < 0.05) continue;
+			const y = (i - 5) * 10;
+			const from = { x: -14, y };
+			const to = { x: 14, y };
+			painter.polyline([from, to], { color: ink, width: 9, alpha: 0.18 + 0.22 * lit });
+			painter.polyline([from, to], {
+				color: whiteHot(rgb, Math.max(lit - 0.7, 0) * 0.6),
+				width: 5,
+				alpha: Math.min(0.5 + lit * 0.5, 1)
+			});
+		}
+	});
+}
+
+/** Warm white, the colour of a filament rather than of a junction. */
+const FILAMENT: readonly [number, number, number] = [255, 204, 120];
+
+/**
+ * A filament lamp, lit by the power in it.
+ *
+ * Measured against the current it draws at its rating, so a bulb run at its
+ * rated voltage is fully lit and one on half of it is visibly dim — the same
+ * brightness curve the LEDs use, which is close enough for a glow.
+ */
+function drawLamp(painter: Painter, view: DynamicView, instance: Instance): void {
+	if (!view.showLight) return;
+	const volts = Number(instance.params.voltage);
+	const watts = Number(instance.params.power);
+	if (!(volts > 0) || !(watts > 0)) return;
+	const current = Math.abs(view.frame.instanceCurrent.get(instance.id) ?? 0);
+	const lit = brightness(current, watts / volts);
+	if (lit < 0.05) return;
+	const at = { x: instance.x, y: instance.y };
+	painter.glow(at, 16 + 36 * lit, FILAMENT, Math.min(0.2 + lit * 0.5, 0.9));
+	painter.glow(at, (16 + 36 * lit) * 0.45, FILAMENT, Math.min(0.25 + lit * 0.55, 1));
 }
 
 function drawLed(painter: Painter, view: DynamicView, instance: Instance): void {

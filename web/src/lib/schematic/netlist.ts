@@ -10,7 +10,7 @@
  */
 
 import { contactControl, restingContact } from './contacts';
-import { ledDiodeModel, ledRating, SEGMENTS } from './led';
+import { BARS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, pointKey } from './model';
 import { unfoldBlocks } from './blocks';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
@@ -307,7 +307,7 @@ function dcGraph(schematic: Schematic, connectivity: Connectivity) {
 			.pins.filter((pin) => pin.domain === 'analog')
 			.map((pin) => connectivity.netOfPin.get(pinKey(instance.id, pin.name)))
 			.filter((index): index is number => index !== undefined);
-		if (instance.kind === 'supply' || instance.kind === 'vsource') {
+		if (instance.kind === 'supply' || instance.kind === 'vsource' || instance.kind === 'battery') {
 			for (const index of on) sourced.add(index);
 		}
 		for (let i = 1; i < on.length; i++) {
@@ -321,7 +321,7 @@ function dcGraph(schematic: Schematic, connectivity: Connectivity) {
 }
 
 /** Parts that carry no current at DC, the same list the floating-input check uses. */
-const NO_DC_PATH = new Set(['capacitor', 'isource', 'probe', 'port']);
+const NO_DC_PATH = new Set(['capacitor', 'crystal', 'isource', 'probe', 'port']);
 
 /** The last compile, and what it was a compile of. */
 let lastCompile: { signature: string; result: CompileResult } | null = null;
@@ -646,6 +646,62 @@ function compileFresh(
 					inductance: drawn(instance, 'inductance', num(instance, 'inductance', 1e-3), seed)
 				});
 				break;
+			// Two resistors meeting at the wiper. Neither half is allowed all the
+			// way to zero: a wiper at the end of its track still has its contact to
+			// get through, and a zero resistance is a short the solver cannot stamp.
+			case 'potentiometer': {
+				const track = drawn(instance, 'resistance', num(instance, 'resistance', 10e3), seed);
+				const position = Math.min(Math.max(num(instance, 'position', 0.5), 0), 1);
+				const END = 1e-3;
+				components.push({
+					type: 'resistor',
+					name,
+					a: analogOf(instance, 'a'),
+					b: analogOf(instance, 'wiper'),
+					resistance: Math.max(track * position, END)
+				});
+				components.push({
+					type: 'resistor',
+					name: `${name}:b`,
+					a: analogOf(instance, 'wiper'),
+					b: analogOf(instance, 'b'),
+					resistance: Math.max(track * (1 - position), END)
+				});
+				break;
+			}
+			// The motional arm from `a` to `b` through two nodes of its own, and the
+			// holder's capacitance straight across. The loss is the element that
+			// keeps the plain name, so the current the drawing animates is the one
+			// through the quartz rather than round the holder.
+			case 'crystal': {
+				const a = analogOf(instance, 'a');
+				const b = analogOf(instance, 'b');
+				const frequency = Math.max(num(instance, 'frequency', 16e6), 1e-3);
+				const c1 = Math.max(num(instance, 'c1', 20e-15), 1e-18);
+				const l1 = 1 / ((2 * Math.PI * frequency) ** 2 * c1);
+				const lossToCoil = `${name}__r`;
+				const coilToCap = `${name}__l`;
+				components.push({ type: 'resistor', name, a, b: lossToCoil, resistance: Math.max(num(instance, 'r1', 30), 1e-6) });
+				components.push({ type: 'inductor', name: `${name}:l`, a: lossToCoil, b: coilToCap, inductance: l1 });
+				components.push({ type: 'capacitor', name: `${name}:c1`, a: coilToCap, b, capacitance: c1 });
+				const c0 = num(instance, 'c0', 5e-12);
+				if (c0 > 0) components.push({ type: 'capacitor', name: `${name}:c0`, a, b, capacitance: c0 });
+				break;
+			}
+			// A resistor at the temperature it glows at. See the catalog for what
+			// that leaves out.
+			case 'lamp': {
+				const volts = Math.max(num(instance, 'voltage', 6), 1e-6);
+				const watts = Math.max(num(instance, 'power', 1.2), 1e-9);
+				components.push({
+					type: 'resistor',
+					name,
+					a: analogOf(instance, 'a'),
+					b: analogOf(instance, 'b'),
+					resistance: (volts * volts) / watts
+				});
+				break;
+			}
 			case 'switch': {
 				// The engine's switch is voltage-controlled, which is the general
 				// case and the one the digital output drivers are built on. A switch
@@ -685,6 +741,89 @@ function compileFresh(
 				});
 				break;
 			}
+			// The single pair twice over, worked by one actuator: the NO side
+			// reads the control the way the plain switch does, and the NC side
+			// reads it upside down — its control terminals swapped, so it is made
+			// exactly when the other is broken.
+			case 'spdt': {
+				const control = `${name}__contact`;
+				const controlPoints = contactControl(instance);
+				components.push({
+					type: 'voltage_source',
+					name: `${name}__actuator`,
+					plus: control,
+					minus: 'gnd',
+					waveform:
+						controlPoints.length > 1
+							? { type: 'pwl', points: controlPoints }
+							: { type: 'dc', value: restingContact(instance) },
+					ac_magnitude: 0,
+					ac_phase: 0
+				});
+				const r_on = num(instance, 'r_on', 0.05);
+				const r_off = num(instance, 'r_off', 1e12);
+				const com = analogOf(instance, 'com');
+				components.push({
+					type: 'switch',
+					name,
+					a: com,
+					b: analogOf(instance, 'no'),
+					control_plus: control,
+					control_minus: 'gnd',
+					model: { v_on: 1, v_off: 0, r_on, r_off }
+				});
+				components.push({
+					type: 'switch',
+					name: `${name}:nc`,
+					a: com,
+					b: analogOf(instance, 'nc'),
+					control_plus: 'gnd',
+					control_minus: control,
+					model: { v_on: 0, v_off: -1, r_on, r_off }
+				});
+				break;
+			}
+			// The coil, and two contacts that read the voltage across its winding
+			// resistance — the coil current, scaled by a number the datasheet already
+			// gives in volts. The NC side reads it negated, as the changeover does.
+			// A coil driven backwards reads as a coil not driven at all, which a DC
+			// relay with a flyback diode never sees and a bare one does.
+			case 'relay': {
+				const a = analogOf(instance, 'a');
+				const mid = `${name}__coil`;
+				const pullIn = Math.max(num(instance, 'pull_in', 3.75), 1e-3);
+				const dropOut = Math.min(Math.max(num(instance, 'drop_out', 0.5), 0), pullIn);
+				const r_on = num(instance, 'r_on', 0.05);
+				const r_off = num(instance, 'r_off', 1e12);
+				const com = analogOf(instance, 'com');
+				components.push({ type: 'resistor', name, a, b: mid, resistance: num(instance, 'coil_r', 70) });
+				components.push({
+					type: 'inductor',
+					name: `${name}:l`,
+					a: mid,
+					b: analogOf(instance, 'b'),
+					inductance: num(instance, 'coil_l', 0.2)
+				});
+				components.push({
+					type: 'switch',
+					name: `${name}:no`,
+					a: com,
+					b: analogOf(instance, 'no'),
+					control_plus: a,
+					control_minus: mid,
+					model: { v_on: pullIn, v_off: dropOut, r_on, r_off }
+				});
+				components.push({
+					type: 'switch',
+					name: `${name}:nc`,
+					a: com,
+					b: analogOf(instance, 'nc'),
+					control_plus: mid,
+					control_minus: a,
+					model: { v_on: -dropOut, v_off: -pullIn, r_on, r_off }
+				});
+				break;
+			}
 			case 'vsource':
 				components.push({
 					type: 'voltage_source',
@@ -696,6 +835,28 @@ function compileFresh(
 					ac_phase: 0
 				});
 				break;
+			// The source reports the current, as a supply's does; the resistance
+			// is inside it, between the EMF and the terminal anyone can touch.
+			case 'battery': {
+				const emf = `${name}__emf`;
+				components.push({
+					type: 'voltage_source',
+					name,
+					plus: emf,
+					minus: analogOf(instance, 'minus'),
+					waveform: { type: 'dc', value: num(instance, 'voltage', 9) },
+					ac_magnitude: 0,
+					ac_phase: 0
+				});
+				components.push({
+					type: 'resistor',
+					name: `${name}:r`,
+					a: emf,
+					b: analogOf(instance, 'plus'),
+					resistance: Math.max(num(instance, 'r_int', 1.5), 1e-6)
+				});
+				break;
+			}
 			case 'isource':
 				components.push({
 					type: 'current_source',
@@ -745,6 +906,24 @@ function compileFresh(
 			// one is named for its segment so the drawing can ask how brightly to
 			// light that bar; the first keeps the plain instance name, the way a
 			// MOSFET's drain does.
+			// Ten LEDs with nothing shared, named for their bar the way a digit's
+			// are named for their segment.
+			case 'bargraph': {
+				const model = ledDiodeModel(
+					instance.params.colour,
+					ledRating(instance)
+				) as Record<string, unknown>;
+				for (const [index, bar] of BARS.entries()) {
+					components.push({
+						type: 'diode',
+						name: index === 0 ? name : `${name}:${bar}`,
+						anode: analogOf(instance, `a${bar}`),
+						cathode: analogOf(instance, `k${bar}`),
+						model
+					});
+				}
+				break;
+			}
 			case 'display7': {
 				const model = ledDiodeModel(
 					instance.params.colour,
