@@ -639,6 +639,124 @@ impl DigitalDevice for TriStateBuffer {
     }
 }
 
+/// A block of memory: words picked by a binary address, read out continuously
+/// and written for as long as `write` is high.
+///
+/// That is all of a static RAM, a ROM, or an EEPROM read like one. Chip selects,
+/// output enables and three-state pins are the package's business, built from
+/// gates and buffers around this the same way the real die has them around its
+/// cell array — so this has one write line, active high, and always drives its
+/// outputs.
+///
+/// The address is read least significant bit first. While any of its bits is
+/// unknown the outputs are unknown, and a write goes nowhere: which cell a real
+/// part would have hit depends on how the decoder settled, and nothing here knows
+/// that.
+#[derive(Debug, Clone)]
+pub struct Memory {
+    pub name: String,
+    pub address: Vec<NetId>,
+    pub data_in: Vec<NetId>,
+    pub data_out: Vec<NetId>,
+    pub write: NetId,
+    /// Access time: from an address or a write to the outputs following it.
+    pub delay: f64,
+    /// Every bit, word by word, least significant first.
+    cells: Vec<Logic>,
+    /// What the cells hold at the start of a run.
+    initial: Vec<Logic>,
+    inputs: Vec<NetId>,
+}
+
+impl Memory {
+    /// Widest address a memory takes: 64 K words.
+    pub const MAX_ADDRESS_BITS: usize = 16;
+
+    /// A memory whose cells start as `initial`, one entry per word, `None` for a
+    /// word nobody put anything in. Words past the end of `initial` are `blank`.
+    pub fn new(
+        name: impl Into<String>,
+        (address, write): (Vec<NetId>, NetId),
+        (data_in, data_out): (Vec<NetId>, Vec<NetId>),
+        initial: &[Option<u64>],
+        blank: Option<u64>,
+        delay: f64,
+    ) -> Self {
+        let width = data_out.len();
+        let words = 1usize << address.len().min(Self::MAX_ADDRESS_BITS);
+        let mut cells = Vec::with_capacity(words * width);
+        for w in 0..words {
+            let word = initial.get(w).copied().unwrap_or(blank);
+            for b in 0..width {
+                cells.push(match word {
+                    Some(value) => Logic::from_bool(value >> b & 1 == 1),
+                    None => Logic::Unknown,
+                });
+            }
+        }
+        let inputs = address.iter().chain(&data_in).chain([&write]).copied().collect();
+        Self {
+            name: name.into(),
+            address,
+            data_in,
+            data_out,
+            write,
+            delay: delay.max(0.0),
+            initial: cells.clone(),
+            cells,
+            inputs,
+        }
+    }
+
+    /// The word the address picks, or `None` while any bit of it is undecided.
+    fn selected(&self, ctx: &EvalCtx) -> Option<usize> {
+        self.address.iter().enumerate().try_fold(0usize, |word, (bit, &net)| {
+            Some(word | usize::from(ctx.read(net).as_bool()?) << bit)
+        })
+    }
+
+    /// What the cell at `word`, `bit` holds right now.
+    pub fn cell(&self, word: usize, bit: usize) -> Logic {
+        self.cells.get(word * self.data_out.len() + bit).copied().unwrap_or(Logic::Unknown)
+    }
+}
+
+impl DigitalDevice for Memory {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn kind(&self) -> &'static str {
+        "memory"
+    }
+    fn input_nets(&self) -> &[NetId] {
+        &self.inputs
+    }
+    fn output_nets(&self) -> &[NetId] {
+        &self.data_out
+    }
+
+    fn evaluate(&mut self, ctx: &mut EvalCtx) {
+        let width = self.data_out.len();
+        let word = self.selected(ctx);
+        if ctx.read(self.write) == Logic::High
+            && let Some(word) = word
+        {
+            for (bit, &net) in self.data_in.iter().enumerate().take(width) {
+                self.cells[word * width + bit] = ctx.read(net).sense();
+            }
+        }
+        for bit in 0..width {
+            let value = word.map_or(Logic::Unknown, |w| self.cells[w * width + bit]);
+            let net = self.data_out[bit];
+            ctx.drive(bit, net, value, self.delay);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.cells.clone_from(&self.initial);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The digital domain
 // ---------------------------------------------------------------------------

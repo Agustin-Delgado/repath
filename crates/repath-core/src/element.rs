@@ -325,6 +325,12 @@ pub trait Element: std::fmt::Debug + Send + AsAny {
         let _ = (x, out);
     }
 
+    /// How this part failed during the run, if it did: an LED burnt out, a fuse
+    /// blown. A failure is not an error — the part stays in the circuit, open.
+    fn failure(&self) -> Option<crate::elements::Failure> {
+        None
+    }
+
     /// Current flowing into the first terminal, for probes. `None` if the element
     /// cannot report it cheaply.
     fn current(&self, x: &[f64]) -> Option<f64> {

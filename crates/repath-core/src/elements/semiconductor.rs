@@ -726,6 +726,10 @@ impl Element for Diode {
         self.v_prev_iter = self.v_accepted;
     }
 
+    fn failure(&self) -> Option<Failure> {
+        Diode::failure(self)
+    }
+
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
         // The step out of a failure crosses a discontinuity: whatever the part was
         // carrying goes to nothing between one timepoint and the next. Take that
