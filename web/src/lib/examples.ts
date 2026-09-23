@@ -488,6 +488,70 @@ export const EXAMPLES: Example[] = [
 	},
 
 	{
+		id: 'ne555-blinker',
+		name: '555 blinker',
+		description:
+			'The most built circuit there is: a 555 wired astable, blinking an LED about twice a second. The capacitor charges through both resistors and discharges through the lower one only, between a third and two thirds of the supply — which is why the rate is 1.44 / ((R1 + 2·R2)·C) whatever the supply is, and why the LED is on a little longer than it is off. RESET is tied high because a 555 with RESET left floating is a 555 that does nothing, and CONT gets its 10 nF so that noise on the supply does not move the thresholds. Probe the capacitor to watch it swing between the two thresholds.',
+		stopTime: 2,
+		build: () =>
+			build(
+				[
+					{ kind: 'ic:NE555', name: 'U1', x: 600, y: 300 },
+					{ kind: 'supply', name: 'PWR1', x: 760, y: 130, params: { voltage: 9 } },
+					{ kind: 'resistor', name: 'R1', x: 760, y: 190, rotation: 90, params: { resistance: 1000 } },
+					{ kind: 'resistor', name: 'R2', x: 760, y: 270, rotation: 90, params: { resistance: 33000 } },
+					{ kind: 'capacitor', name: 'C1', x: 760, y: 360, rotation: 90, params: { capacitance: 10e-6 } },
+					{ kind: 'capacitor', name: 'C2', x: 700, y: 380, rotation: 90, params: { capacitance: 10e-9 } },
+					{ kind: 'resistor', name: 'R3', x: 370, y: 310, params: { resistance: 680 } },
+					{ kind: 'led', name: 'D1', x: 280, y: 310, rotation: 180, params: { colour: 'red' } },
+					{ kind: 'ground', name: 'GND1', x: 480, y: 290 },
+					{ kind: 'ground', name: 'GND2', x: 760, y: 460 },
+					{ kind: 'ground', name: 'GND3', x: 700, y: 440 },
+					{ kind: 'ground', name: 'GND4', x: 250, y: 360 },
+					{ kind: 'probe', name: 'OUT', x: 400, y: 310 },
+					{ kind: 'probe', name: 'CAP', x: 760, y: 330 }
+				],
+				[
+					// The supply, down to VCC on pin 8 and through R1.
+					[760, 140, 760, 160],
+					[700, 150, 760, 150],
+					[660, 270, 700, 270],
+					[700, 150, 700, 270],
+					// DIS, pin 7, between the two resistors.
+					[760, 220, 760, 240],
+					[660, 290, 720, 290],
+					[720, 230, 720, 290],
+					[720, 230, 760, 230],
+					// THR, pin 6, on the capacitor.
+					[760, 300, 760, 330],
+					[660, 310, 760, 310],
+					[760, 390, 760, 450],
+					// TRIG, pin 2, round the bottom to the same capacitor.
+					[540, 290, 515, 290],
+					[515, 290, 515, 480],
+					[515, 480, 820, 480],
+					[820, 315, 820, 480],
+					[760, 315, 820, 315],
+					// CONT, pin 5, decoupled.
+					[660, 330, 700, 330],
+					[700, 330, 700, 350],
+					[700, 410, 700, 430],
+					// GND, pin 1.
+					[480, 270, 540, 270],
+					[480, 270, 480, 280],
+					// RESET, pin 4, held high from the supply.
+					[460, 330, 540, 330],
+					[460, 150, 460, 330],
+					[460, 150, 700, 150],
+					// OUT, pin 3, through the resistor and the LED to ground.
+					[400, 310, 540, 310],
+					[310, 310, 340, 310],
+					[250, 310, 250, 350]
+				]
+			)
+	},
+
+	{
 		id: 'seven-segment',
 		name: 'Seven-segment digit',
 		description:

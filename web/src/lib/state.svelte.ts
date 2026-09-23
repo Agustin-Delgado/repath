@@ -50,6 +50,7 @@ import {
 	definitionOf,
 	CONTACTS,
 	DIODE_PRESETS,
+	REGULATOR_PRESETS,
 	migrateInstance,
 	nextName,
 	OPERABLE,
@@ -1650,6 +1651,10 @@ class AppState {
 		// not what it is allowed to be.
 		if (instance.kind === 'diode' && key === 'model') {
 			const preset = DIODE_PRESETS[String(value)];
+			if (preset) for (const [k, v] of Object.entries(preset)) instance.params[k] = v;
+		}
+		if (instance.kind === 'regulator' && key === 'part') {
+			const preset = REGULATOR_PRESETS[String(value)];
 			if (preset) for (const [k, v] of Object.entries(preset)) instance.params[k] = v;
 		}
 		return null;

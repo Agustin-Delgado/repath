@@ -8,7 +8,7 @@
  */
 
 import { BARS, LED_COLOURS, RATED, SEGMENTS } from './led';
-import { CHIPS, chipById, chipName, isPower, isUnused, type ChipDef } from './chips';
+import { analogTerminals, CHIPS, chipById, chipName, isPower, isUnused, type ChipDef } from './chips';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -381,6 +381,15 @@ const tolerance = (percent: number) => ({
  * one is a starting point — every field stays editable afterwards, and a part
  * that is none of these is a paste of its `.model` card.
  */
+/** What choosing each regulator fills its fields in with. */
+export const REGULATOR_PRESETS: Record<string, Record<string, number>> = {
+	'7805': { voltage: 5, dropout: 2, quiescent: 5e-3 },
+	'7809': { voltage: 9, dropout: 2, quiescent: 5e-3 },
+	'7812': { voltage: 12, dropout: 2, quiescent: 5e-3 },
+	'7815': { voltage: 15, dropout: 2, quiescent: 5e-3 },
+	LM317: { voltage: 1.25, dropout: 1.7, quiescent: 50e-6 }
+};
+
 export const DIODE_PRESETS: Record<string, Record<string, number>> = {
 	// 1N4148. The one everybody has in a drawer.
 	silicon: { is: 2.52e-9, n: 1.752, rs: 0.568, cj0: 4e-12, tt: 5e-9 },
@@ -1456,6 +1465,66 @@ export const CATALOG: ComponentDef[] = [
 		]
 	},
 	{
+		/**
+		 * A three-terminal linear regulator: the 78xx family and the LM317.
+		 *
+		 * One part for both because they are one circuit — an error amplifier
+		 * holding the output a fixed voltage above the third leg, through a pass
+		 * transistor from the input. On a 7805 that leg is ground and the voltage
+		 * is 5 V; on an LM317 it is ADJ and the voltage is 1.25 V, which a
+		 * divider multiplies up to whatever is wanted.
+		 */
+		kind: 'regulator',
+		box: { x: -30, y: -20, w: 60, h: 50 },
+		label: 'Regulator',
+		group: 'analog',
+		prefix: 'U',
+		pins: [analog('in', -30, 0), analog('out', 30, 0), analog('com', 0, 30)],
+		params: [
+			{
+				key: 'part',
+				label: 'Part',
+				unit: '',
+				default: '7805',
+				choices: [
+					{ value: '7805', label: '7805 (5 V)' },
+					{ value: '7809', label: '7809 (9 V)' },
+					{ value: '7812', label: '7812 (12 V)' },
+					{ value: '7815', label: '7815 (15 V)' },
+					{ value: 'LM317', label: 'LM317 (adjustable)' }
+				]
+			},
+			{
+				key: 'voltage',
+				label: 'Output above COM',
+				unit: 'V',
+				default: 5,
+				min: 0,
+				nonZero: true,
+				description:
+					'What it holds between OUT and its third leg: the output itself on a 78xx, whose third leg is ground, and 1.25 V on an LM317, set up to any output by a divider on ADJ.'
+			},
+			{
+				key: 'dropout',
+				label: 'Dropout',
+				unit: 'V',
+				default: 2,
+				min: 0.3,
+				description:
+					'How far above the output the input has to stay for it to regulate. Two volts on a 78xx: a 7805 wants 7 V in.'
+			},
+			{
+				key: 'quiescent',
+				label: 'Quiescent current',
+				unit: 'A',
+				default: 5e-3,
+				min: 0,
+				description:
+					'What it draws for itself, out of the third leg: 5 mA on a 78xx, 50 µA from the ADJ pin of an LM317.'
+			}
+		]
+	},
+	{
 		kind: 'opamp',
 		box: { x: -30, y: -22, w: 60, h: 44 },
 		label: 'Op-amp',
@@ -1696,9 +1765,13 @@ export function chipPinLayout(count: number): Array<{ x: number; y: number; inde
 	);
 }
 
-/** Half the body height, with room above and below the outermost legs. */
+/**
+ * Half the body height, with room above and below the outermost legs — and,
+ * at the bottom, for the part number under the last row of pin names, which
+ * it used to sit on top of.
+ */
 export function chipReach(count: number): number {
-	return ((count / 2 - 1) * CHIP_PITCH) / 2 + 18;
+	return ((count / 2 - 1) * CHIP_PITCH) / 2 + 28;
 }
 
 /**
@@ -1724,13 +1797,17 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 			if (pin) driven.add(pin);
 		}
 	}
+	// A leg anything analog inside reaches is an analog pin, even when logic
+	// inside reads it too: the part crosses between the two domains itself, and
+	// the net outside sees a voltage.
+	const analogLegs = new Set((chip.analog ?? []).flatMap(analogTerminals));
 
 	const places = chipPinLayout(chip.layout.length);
 	const pins: PinDef[] = [];
 	for (const [i, name] of chip.layout.entries()) {
 		if (isUnused(name)) continue;
 		const { x, y } = places[i];
-		if (isPower(name)) pins.push(analog(name, x, y));
+		if (isPower(name) || analogLegs.has(name)) pins.push(analog(name, x, y));
 		else if (driven.has(name)) pins.push(digitalOut(name, x, y));
 		else if (touched.has(name)) pins.push(digitalIn(name, x, y));
 	}

@@ -378,6 +378,18 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
+	regulator: {
+		shapes: [
+			{ kind: 'rect', x: -22, y: -16, w: 44, h: 32 },
+			path('M-30 0 H-22 M22 0 H30 M0 16 V30')
+		],
+		labels: [
+			{ x: -18, y: 3, text: 'IN', anchor: 'start', size: 7 },
+			{ x: 18, y: 3, text: 'OUT', anchor: 'end', size: 7 },
+			{ x: 0, y: 13, text: 'COM', anchor: 'middle', size: 7 }
+		]
+	},
+
 	opamp: {
 		shapes: [
 			path('M-30 -10 H-20 M-30 10 H-20 M24 0 H30'),
@@ -744,7 +756,7 @@ function dip(chip: ChipDef): SymbolGeometry {
 	// under the icon anyway. On the drawing it is the one label that has to stay.
 	labels.push({
 		x: 0,
-		y: half - 8,
+		y: half - 9,
 		text: chipName(chip),
 		size: 11,
 		anchor: 'middle',

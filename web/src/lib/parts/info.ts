@@ -111,7 +111,11 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 	},
 	opamp: {
 		description: 'Operational amplifier with finite gain, bandwidth and slew rate',
-		keywords: ['op amp', 'amplifier', 'comparator', 'lm741', 'lm358', 'tl072', 'integrator']
+		keywords: ['op amp', 'amplifier', 'comparator', 'integrator']
+	},
+	regulator: {
+		description: 'Linear voltage regulator: 7805, 7812, LM317 and friends',
+		keywords: ['7805', '7809', '7812', '7815', 'lm317', 'lm7805', 'ldo', 'linear', 'power supply', 'vreg']
 	},
 	and: { description: 'Output high only when every input is high', keywords: ['gate', '&'] },
 	nand: { description: 'Output low only when every input is high', keywords: ['gate', 'not and'] },

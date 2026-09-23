@@ -12,6 +12,7 @@
 import { contactControl, restingContact } from './contacts';
 import { BARS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, pointKey } from './model';
+import { negativeSupply, positiveSupply, type ChipDef, type ChipVolts } from './chips';
 import { unfoldBlocks } from './blocks';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
@@ -247,7 +248,7 @@ function drawn(instance: Instance, key: string, nominal: number, seed: number): 
 function chipUnpowered(chip: Instance, schematic: Schematic, connectivity: Connectivity): string | null {
 	const legs = definitionFor(chip).pins.map((pin) => pin.name);
 	const positive = legs.find((pin) => pin === 'VCC' || pin === 'VDD');
-	const negative = legs.find((pin) => pin === 'GND' || pin === 'VSS');
+	const negative = legs.find((pin) => pin === 'GND' || pin === 'VSS' || pin === 'VEE');
 	if (!positive || !negative) return null;
 	const netOf = (instance: Instance, pin: string) =>
 		connectivity.netOfPin.get(pinKey(instance.id, pin));
@@ -277,8 +278,14 @@ function chipUnpowered(chip: Instance, schematic: Schematic, connectivity: Conne
 	if (!reaches(high, (index) => sourced.has(index) && !connectivity.nets[index].isGround)) {
 		return `its ${positive} leg reaches no supply.`;
 	}
-	if (!reaches(low, (index) => connectivity.nets[index].isGround)) {
-		return `its ${negative} leg does not reach ground.`;
+	// A negative supply is a rail of its own rather than ground: a split-supply
+	// op-amp's VEE sits on a source, and only reaches ground through it.
+	const settled = (index: number) =>
+		connectivity.nets[index].isGround || (negative === 'VEE' && sourced.has(index));
+	if (!reaches(low, settled)) {
+		return negative === 'VEE'
+			? `its ${negative} leg reaches neither ground nor a supply.`
+			: `its ${negative} leg does not reach ground.`;
 	}
 	return null;
 }
@@ -495,10 +502,196 @@ function compileFresh(
 	// ---- components ------------------------------------------------------
 	const components: unknown[] = [];
 	const devices: unknown[] = [];
+	/** Crossings between the domains inside a chip, joined to the automatic ones below. */
+	const chipBridges: unknown[] = [];
 	const portFlow = new Map<string, PortInjection[]>(unfolded.portFlow);
 	let unpoweredChips = 0;
 	/** Nets already held at a voltage by a supply symbol, by net index. */
 	const railed = new Map<number, { name: string; volts: number }>();
+
+	/**
+	 * What a net sits at before anything runs, when the drawing says so outright:
+	 * ground, a supply terminal, a battery or a DC source with its other end on
+	 * ground. Anything else — a divider, a regulator's output — is not known
+	 * until the circuit is solved, and says so by being undefined.
+	 */
+	const restingVolts = (index: number | undefined): number | undefined => {
+		if (index === undefined) return undefined;
+		const net = connectivity.nets[index];
+		if (net.isGround) return 0;
+		const grounded = (instance: Instance, pin: string) => {
+			const other = connectivity.netOfPin.get(pinKey(instance.id, pin));
+			return other !== undefined && connectivity.nets[other].isGround;
+		};
+		for (const ref of net.pins) {
+			const part = ref.instance;
+			if (part.kind === 'supply') return num(part, 'voltage', 5);
+			if (part.kind === 'battery' && ref.pin.name === 'plus' && grounded(part, 'minus')) {
+				return num(part, 'voltage', 9);
+			}
+			if (part.kind === 'vsource' && str(part, 'waveform', 'dc') === 'dc') {
+				const value = num(part, 'value', 0);
+				if (ref.pin.name === 'plus' && grounded(part, 'minus')) return value;
+				if (ref.pin.name === 'minus' && grounded(part, 'plus')) return -value;
+			}
+		}
+		return undefined;
+	};
+
+	/**
+	 * Build the analog half of a chip: its resistors, amplifiers, switches and
+	 * transistors, and the crossings between them and its logic.
+	 *
+	 * A leg is the net it is wired to. Any other name is a node inside this one
+	 * instance, so two of the same chip never share their insides — the same rule
+	 * as the internal logic nets, in the analog namespace.
+	 */
+	function emitChipAnalog(instance: Instance, chip: ChipDef, logicNet: (pin: string) => string) {
+		const name = instance.name;
+		const legs = new Set(chip.layout);
+		const node = (pin: string) =>
+			pin === '0' ? 'gnd' : legs.has(pin) ? analogOf(instance, pin) : `${instance.id}_an_${pin}`;
+
+		// The supply, as the drawing gives it. A chip powered from something only
+		// a solve can tell — a regulator's output, a divider — is assumed to be on
+		// the usual 5 V and told so, rather than handed limits nobody chose.
+		const legNet = (pin: string | undefined) =>
+			pin === undefined ? undefined : connectivity.netOfPin.get(pinKey(instance.id, pin));
+		const positive = positiveSupply(chip);
+		const negative = negativeSupply(chip);
+		let high = restingVolts(legNet(positive));
+		const low = restingVolts(legNet(negative)) ?? 0;
+		const needsSupply = chip.analog!.some(
+			(block) =>
+				(block.kind === 'opamp' && Array.isArray(block.spec.swing)) ||
+				(block.kind === 'switch' && (typeof block.on !== 'number' || typeof block.off !== 'number')) ||
+				(block.kind === 'sense' && (typeof block.rising === 'object' || typeof block.falling === 'object'))
+		);
+		if (high === undefined) {
+			high = low + 5;
+			if (needsSupply && positive) {
+				warnings.push(
+					`${name}: what its ${positive} leg is at is only known once the circuit is solved, so its thresholds and output limits assume ${high} V. Wire ${positive} to a supply terminal or a source for them to follow it.`
+				);
+			}
+		}
+		const volts = (value: ChipVolts) =>
+			typeof value === 'number' ? value : low + value.supply * (high! - low);
+
+		const base = logicFamily(family);
+		for (const [k, block] of chip.analog!.entries()) {
+			const part = `${name}:a${k + 1}`;
+			switch (block.kind) {
+				case 'resistor':
+					components.push({
+						type: 'resistor',
+						name: part,
+						a: node(block.a),
+						b: node(block.b),
+						resistance: block.ohms
+					});
+					break;
+				case 'diode':
+					components.push({
+						type: 'diode',
+						name: part,
+						anode: node(block.anode),
+						cathode: node(block.cathode),
+						model: { is: 2.52e-9, n: 1.752, rs: 0.568, cj0: 4e-12, tt: 5e-9, bv: null, temp: 300.15 }
+					});
+					break;
+				case 'npn':
+				case 'pnp':
+					components.push({
+						type: 'bjt',
+						name: part,
+						collector: node(block.collector),
+						base: node(block.base),
+						emitter: node(block.emitter),
+						model: {
+							polarity: block.kind,
+							is: 6.73e-15,
+							bf: block.beta ?? 200,
+							br: 4,
+							vaf: 100,
+							cjc: 3.6e-12,
+							tf: 301e-12,
+							temp: 300.15
+						}
+					});
+					break;
+				case 'opamp': {
+					const swing = block.spec.swing;
+					const [bottom, top] = Array.isArray(swing)
+						? [low + swing[0], high - swing[1]]
+						: (swing as { fixed: readonly [number, number] }).fixed;
+					components.push({
+						type: 'op_amp',
+						name: part,
+						output: node(block.out),
+						input_plus: node(block.plus),
+						input_minus: node(block.minus),
+						gain: block.spec.gain,
+						v_max: Math.max(top, bottom + 0.1),
+						v_min: bottom,
+						gbw: block.spec.gbw,
+						slew: block.spec.slew,
+						r_out: block.spec.rOut,
+						v_os: block.spec.vOs,
+						i_bias: block.spec.iBias
+					});
+					break;
+				}
+				case 'switch':
+					components.push({
+						type: 'switch',
+						name: part,
+						a: node(block.a),
+						b: node(block.b),
+						control_plus: node(block.control),
+						control_minus: node(block.reference),
+						model: {
+							v_on: volts(block.on) - (block.reference === '0' ? 0 : low),
+							v_off: volts(block.off) - (block.reference === '0' ? 0 : low),
+							r_on: block.ron,
+							r_off: block.roff ?? 1e9
+						}
+					});
+					break;
+				case 'source':
+					components.push({
+						type: 'voltage_source',
+						name: part,
+						plus: node(block.plus),
+						minus: node(block.minus),
+						waveform: { type: 'dc', value: block.volts },
+						ac_magnitude: 0,
+						ac_phase: 0
+					});
+					break;
+				case 'sense':
+					chipBridges.push({
+						direction: 'to_digital',
+						name: part,
+						node: node(block.node),
+						net: logicNet(block.net),
+						delay: 0,
+						...(block.rising !== undefined && block.falling !== undefined
+							? { family: { ...base, v_ih: volts(block.rising), v_il: volts(block.falling) } }
+							: {})
+					});
+					break;
+				case 'drive':
+					chipBridges.push({
+						direction: 'to_analog',
+						name: part,
+						net: logicNet(block.net),
+						node: node(block.node)
+					});
+					break;
+			}
+		}
+	}
 
 	for (const instance of schematic.instances) {
 		const name = instance.name;
@@ -567,6 +760,7 @@ function compileFresh(
 					});
 				}
 			}
+			if (chip.analog?.length) emitChipAnalog(instance, chip, net);
 			continue;
 		}
 
@@ -995,6 +1189,82 @@ function compileFresh(
 					)
 				});
 				break;
+			// The error amplifier drives the pass transistor's base and watches the
+			// output against a reference sitting on the third leg. The source in
+			// the collector is the dropout: the transistor cannot pull its emitter
+			// closer to the input than that, so neither can the part.
+			case 'regulator': {
+				const input = analogOf(instance, 'in');
+				const output = analogOf(instance, 'out');
+				const common = analogOf(instance, 'com');
+				const reference = `${name}__ref`;
+				const drive = `${name}__drive`;
+				const base = `${name}__base`;
+				const collector = `${name}__c`;
+				components.push(
+					{
+						type: 'voltage_source',
+						name: `${name}:ref`,
+						plus: reference,
+						minus: common,
+						waveform: { type: 'dc', value: num(instance, 'voltage', 5) },
+						ac_magnitude: 0,
+						ac_phase: 0
+					},
+					{
+						type: 'op_amp',
+						name: `${name}:amp`,
+						output: drive,
+						input_plus: reference,
+						input_minus: output,
+						gain: 1e4,
+						v_max: 60,
+						v_min: -1,
+						gbw: 1e6,
+						slew: 1e6,
+						r_out: 75,
+						v_os: 0,
+						i_bias: 0
+					},
+					{ type: 'resistor', name: `${name}:rb`, a: drive, b: base, resistance: 100 },
+					{
+						type: 'voltage_source',
+						name: `${name}:drop`,
+						plus: input,
+						minus: collector,
+						waveform: { type: 'dc', value: Math.max(num(instance, 'dropout', 2) - 0.2, 0) },
+						ac_magnitude: 0,
+						ac_phase: 0
+					},
+					{
+						type: 'bjt',
+						name,
+						collector,
+						base,
+						emitter: output,
+						model: {
+							polarity: 'npn',
+							is: 6.73e-15,
+							bf: 100,
+							br: 4,
+							vaf: 100,
+							cjc: 3.6e-12,
+							tf: 301e-12,
+							temp: 300.15
+						}
+					},
+					{
+						type: 'current_source',
+						name: `${name}:q`,
+						plus: input,
+						minus: common,
+						waveform: { type: 'dc', value: num(instance, 'quiescent', 5e-3) },
+						ac_magnitude: 0,
+						ac_phase: 0
+					}
+				);
+				break;
+			}
 			case 'opamp':
 				components.push({
 					type: 'op_amp',
@@ -1176,7 +1446,7 @@ function compileFresh(
 	}
 
 	// ---- automatic bridges ----------------------------------------------
-	const bridges: unknown[] = [];
+	const bridges: unknown[] = [...chipBridges];
 	for (const net of connectivity.nets) {
 		const entry = names.get(net.index)!;
 		if (!entry.analog || !entry.digital) continue;

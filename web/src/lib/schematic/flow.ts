@@ -91,6 +91,9 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 	npn: [['collector', -1], ['emitter', -1, ':e'], ['base', -1, ':b']],
 	pnp: [['collector', -1], ['emitter', -1, ':e'], ['base', -1, ':b']],
 	opamp: [['out', -1]],
+	// The pass transistor carries input to output; the third leg carries what
+	// the part draws for itself.
+	regulator: [['in', -1], ['out', -1, ':e'], ['com', 1, ':q']],
 	// Eight diodes in one package: every segment drains its own net, and all eight
 	// of them come back through the common pin, which is why it appears once per
 	// segment rather than once.
