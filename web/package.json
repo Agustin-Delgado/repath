@@ -15,6 +15,8 @@
 		"test:watch": "vitest"
 	},
 	"devDependencies": {
+		"@fontsource-variable/geist": "^5.3.0",
+		"@fontsource-variable/geist-mono": "^5.3.0",
 		"@human-kit/ui": "^1.0.0-beta.8",
 		"@lucide/svelte": "^1.47.0",
 		"@sveltejs/adapter-auto": "^7.0.1",

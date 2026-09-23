@@ -100,7 +100,7 @@
 
 		const style = getComputedStyle(canvas);
 		const colour = (name: string) => style.getPropertyValue(name).trim();
-		ctx.font = '11px var(--font-mono, monospace)';
+		ctx.font = `11px ${colour('--font-mono') || 'monospace'}`;
 
 		const plotW = Math.max(size.width - PADDING.left - PADDING.right, 10);
 		const totalH = Math.max(size.height - PADDING.top - PADDING.bottom, 20);

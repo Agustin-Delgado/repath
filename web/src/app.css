@@ -17,7 +17,8 @@
 :root {
 	color-scheme: dark;
 
-	--font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+	--font-sans: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
 	--bg: #12151c;
 	--panel-bg: #171b24;
@@ -82,11 +83,7 @@
 		height: 100%;
 		background: var(--bg);
 		color: var(--text);
-		font-family:
-			system-ui,
-			-apple-system,
-			'Segoe UI',
-			sans-serif;
+		font-family: var(--font-sans);
 		font-size: 14px;
 		overscroll-behavior: none;
 	}

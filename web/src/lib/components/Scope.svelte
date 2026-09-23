@@ -427,7 +427,7 @@
 		ctx.strokeStyle = colour('--scope-grid') || '#2a2f3a';
 		ctx.fillStyle = colour('--label-dim') || '#7c8496';
 		ctx.lineWidth = 1;
-		ctx.font = '11px var(--font-mono, monospace)';
+		ctx.font = `11px ${colour('--font-mono') || 'monospace'}`;
 
 		const vStep = niceStep(range.hi - range.lo, 5);
 		ctx.textAlign = 'right';

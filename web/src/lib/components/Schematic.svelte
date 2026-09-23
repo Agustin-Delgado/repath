@@ -416,6 +416,20 @@
 		editor?.invalidate('schematic');
 	});
 
+	// A canvas draws text in whatever font has loaded by then, and never again
+	// on its own: the labels painted before the webfont arrived keep the fallback.
+	$effect(() => {
+		const active = editor;
+		if (!active || typeof document === 'undefined' || !document.fonts) return;
+		let live = true;
+		// Asked for by name: a face nothing has used yet is not loading, so
+		// `fonts.ready` would resolve before it had even started.
+		void document.fonts.load('12px "Geist Mono Variable"').then(() => {
+			if (live) active.invalidate('schematic', 'dynamic', 'overlay');
+		});
+		return () => (live = false);
+	});
+
 	// Recentre on every drawing that arrives whole: an example, a link, a file.
 	$effect(() => {
 		const active = editor;
