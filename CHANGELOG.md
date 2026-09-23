@@ -40,6 +40,7 @@ stop growing. So everything can now be asked for by name.
   with nothing selected it shows what the circuit holds and the keys to know.
 - Confirmations — a link copied, the steps copied — appear for a moment at
   the bottom instead of relabelling the button that was pressed.
+[#59](https://github.com/Agustin-Delgado/repath/pull/59)
 
 ---
 
