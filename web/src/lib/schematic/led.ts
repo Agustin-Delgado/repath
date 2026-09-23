@@ -110,6 +110,26 @@ export const SEGMENT_SHAPES: Readonly<Record<Segment, readonly [number, number, 
 	dp: [26, 35, 26, 35]
 };
 
+/**
+ * The digits of a four-digit display, numbered from the left the way its
+ * digit pins are.
+ */
+export const DIGITS = [1, 2, 3, 4] as const;
+
+/** Each digit is the single one's, shrunk to this and set this far apart. */
+const DIGIT_SCALE = 0.75;
+const DIGIT_PITCH = 40;
+
+/** One bar of one digit of the four-digit display, in the symbol's coordinates. */
+export function digitSegment(
+	digit: number,
+	segment: Segment
+): readonly [number, number, number, number] {
+	const centre = (digit - (DIGITS.length + 1) / 2) * DIGIT_PITCH;
+	const [x1, y1, x2, y2] = SEGMENT_SHAPES[segment];
+	return [centre + x1 * DIGIT_SCALE, y1 * DIGIT_SCALE, centre + x2 * DIGIT_SCALE, y2 * DIGIT_SCALE];
+}
+
 export function ledColour(value: unknown): LedColour {
 	return BY_VALUE.get(String(value ?? '')) ?? LED_COLOURS[0];
 }
@@ -178,6 +198,8 @@ export function ledInk(value: unknown): string {
 export interface Burnout {
 	instanceId: string;
 	name: string;
+	/** An LED burns out; a fuse blows, and was meant to. */
+	kind: 'led' | 'fuse';
 	/** Simulated time at which the overcurrent finished it off. */
 	time: number;
 	/** Largest forward current reached up to that moment. */
@@ -199,7 +221,9 @@ export interface Burnout {
  */
 export function findBurnouts(schematic: Schematic, run: TransientRun): Burnout[] {
 	const byName = new Map(
-		schematic.instances.filter((i) => i.kind === 'led').map((i) => [i.name, i] as const)
+		schematic.instances
+			.filter((i) => i.kind === 'led' || i.kind === 'fuse')
+			.map((i) => [i.name, i] as const)
 	);
 
 	const out: Burnout[] = [];
@@ -209,6 +233,7 @@ export function findBurnouts(schematic: Schematic, run: TransientRun): Burnout[]
 		out.push({
 			instanceId: instance.id,
 			name: failure.name,
+			kind: instance.kind === 'fuse' ? 'fuse' : 'led',
 			time: failure.time,
 			peak: failure.peak,
 			rated: failure.rated

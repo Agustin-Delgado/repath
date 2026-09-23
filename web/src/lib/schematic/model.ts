@@ -7,7 +7,7 @@
  * gate and it just works, with no explicit converter to place.
  */
 
-import { BARS, LED_COLOURS, RATED, SEGMENTS } from './led';
+import { BARS, DIGITS, LED_COLOURS, RATED, SEGMENTS } from './led';
 import { analogTerminals, CHIPS, chipById, chipName, isPower, isUnused, type ChipDef } from './chips';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
@@ -744,6 +744,158 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		/**
+		 * A capacitor with a knob: a trimmer, or the tuning capacitor of a radio.
+		 *
+		 * The setting is a fraction of the way from the smallest value to the
+		 * largest, like a potentiometer's wiper, and it is set before a run rather
+		 * than turned during one.
+		 */
+		kind: 'varcap',
+		box: { x: -30, y: -15, w: 60, h: 30 },
+		label: 'Variable capacitor',
+		group: 'passive',
+		prefix: 'VC',
+		pins: [analog('a', -30, 0), analog('b', 30, 0)],
+		params: [
+			{ key: 'minimum', label: 'Smallest', unit: 'F', default: 10e-12, min: 0 },
+			{ key: 'maximum', label: 'Largest', unit: 'F', default: 365e-12, min: 0, nonZero: true },
+			{
+				key: 'position',
+				label: 'Setting',
+				unit: '',
+				default: 0.5,
+				min: 0,
+				max: 1,
+				plain: true,
+				step: 0.05,
+				description:
+					'How far the plates are meshed, from 0 at the smallest value to 1 at the largest. A tuning capacitor turns the plates past each other; a trimmer is the same part set once with a screwdriver.'
+			}
+		]
+	},
+	{
+		/**
+		 * Two windings on one core: a transformer, or a pair of coupled inductors.
+		 *
+		 * The primary is an inductance and the secondary is that times the square
+		 * of the turns ratio, coupled by all but a sliver of their flux. The dotted
+		 * ends, P1 and S1, rise together. Nothing saturates: the core is as linear
+		 * at any current as it is at none, so a transformer driven with DC here
+		 * draws the current its copper allows and no more — the one a real one
+		 * would overheat on.
+		 */
+		kind: 'transformer',
+		box: { x: -30, y: -24, w: 60, h: 48 },
+		label: 'Transformer',
+		group: 'passive',
+		prefix: 'T',
+		pins: [analog('p1', -30, -20), analog('p2', -30, 20), analog('s1', 30, -20), analog('s2', 30, 20)],
+		params: [
+			{
+				key: 'ratio',
+				label: 'Turns ratio',
+				unit: '',
+				default: 1,
+				min: 0,
+				nonZero: true,
+				plain: true,
+				step: 0.1,
+				description:
+					'Secondary turns over primary turns: what the voltage is multiplied by on the way across, and the current divided by. 0.1 steps 120 V down to 12.'
+			},
+			{
+				key: 'inductance',
+				label: 'Primary inductance',
+				unit: 'H',
+				default: 10e-3,
+				min: 0,
+				nonZero: true,
+				description:
+					'With the secondary open. It sets the magnetising current the primary draws doing nothing, and how low a frequency still gets across: well below where its reactance falls to the source resistance, very little does.'
+			},
+			{
+				key: 'coupling',
+				label: 'Coupling',
+				unit: '',
+				default: 0.999,
+				min: 0,
+				max: 0.999999,
+				plain: true,
+				step: 0.001,
+				advanced: true,
+				description:
+					'The share of the flux both windings see. Just under 1 for windings on one core; the rest is leakage inductance, which rings with whatever capacitance it meets. Far lower for two coils side by side in air.'
+			},
+			{
+				key: 'r1',
+				label: 'Primary resistance',
+				unit: 'Ω',
+				default: 0.1,
+				min: 0,
+				nonZero: true,
+				advanced: true,
+				description: 'The copper. It is all that stands between a DC source and a short.'
+			},
+			{
+				key: 'r2',
+				label: 'Secondary resistance',
+				unit: 'Ω',
+				default: 0.1,
+				min: 0,
+				nonZero: true,
+				advanced: true
+			}
+		]
+	},
+	{
+		/**
+		 * A fuse: a length of wire meant to be the weakest point in the circuit.
+		 *
+		 * It carries its rating for ever. Past that the extra `i²` heats it, and
+		 * once the heat reaches the melting integral a datasheet prints as `I²t`,
+		 * it opens and stays open for the rest of the run — the same way an LED
+		 * driven too hard does.
+		 */
+		kind: 'fuse',
+		box: { x: -30, y: -9, w: 60, h: 18 },
+		label: 'Fuse',
+		group: 'passive',
+		prefix: 'F',
+		pins: [analog('a', -30, 0), analog('b', 30, 0)],
+		params: [
+			{
+				key: 'rated',
+				label: 'Rated current',
+				unit: 'A',
+				default: 1,
+				min: 0,
+				nonZero: true,
+				description: 'What it carries without ever blowing.'
+			},
+			{
+				key: 'i2t',
+				label: 'Melting I²t',
+				unit: 'A²s',
+				default: 0.5,
+				min: 0,
+				nonZero: true,
+				description:
+					'How much heat above its rating it takes before it goes. A fast-acting 1 A glass fuse is about half an A²s, so ten amps through it lasts five milliseconds; a slow-blow one of the same rating takes several times that, which is what gets it through a motor starting.'
+			},
+			{
+				key: 'resistance',
+				label: 'Cold resistance',
+				unit: 'Ω',
+				default: 0.1,
+				min: 0,
+				nonZero: true,
+				advanced: true,
+				description: 'A tenth of an ohm is typical at 1 A; smaller fuses are more.'
+			}
+		]
+	},
+	{
+		/**
 		 * A resistor with a third terminal that slides along it.
 		 *
 		 * Two resistors in series with the wiper at their junction, which is all
@@ -1333,6 +1485,59 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		/**
+		 * Four seven-segment digits sharing their segment pins.
+		 *
+		 * Every `a` is on one pin, every `b` on another, and each digit has only its
+		 * common pin to itself — twelve pins for thirty-two LEDs, which is the whole
+		 * point of the package. It is lit one digit at a time: put a digit's
+		 * pattern on the segments, turn its common on, move on to the next, fast
+		 * enough that the eye sees all four. Each segment is lit a quarter of the
+		 * time and looks a quarter as bright, which is why these are driven harder
+		 * than a single digit.
+		 */
+		kind: 'display7x4',
+		box: { x: -100, y: -45, w: 200, h: 95 },
+		label: '4-digit 7-segment',
+		group: 'semiconductor',
+		prefix: 'DS',
+		pins: [
+			// On the grid, unlike the single digit's, which sits between rows.
+			...SEGMENTS.map((seg, i) => analog(seg, -100, (i - 4) * 10)),
+			...DIGITS.map((digit) => analog(`d${digit}`, (digit - 2.5) * 40, 50))
+		],
+		params: [
+			{
+				key: 'polarity',
+				label: 'Common pins',
+				unit: '',
+				default: 'cathode',
+				choices: [
+					{ value: 'cathode', label: 'Cathode (lights on a high)' },
+					{ value: 'anode', label: 'Anode (lights on a low)' }
+				],
+				description:
+					'Which end of each digit\'s eight LEDs is tied to its digit pin. Common cathode: segments driven high, the digit being shown pulled low. Common anode: the other way round.'
+			},
+			{
+				key: 'colour',
+				label: 'Colour',
+				unit: '',
+				default: LED_COLOURS[0].value,
+				choices: LED_COLOURS.map(({ value, label }) => ({ value, label }))
+			},
+			{
+				key: 'imax',
+				label: 'Rated current',
+				unit: 'A',
+				default: RATED,
+				min: 0,
+				nonZero: true,
+				description: 'Per segment, averaged. Multiplexed, a segment takes several times this in bursts and survives.'
+			}
+		]
+	},
+	{
+		/**
 		 * Ten LEDs in a row, each with both of its legs brought out.
 		 *
 		 * Nothing is shared inside: anode down one side and cathode down the
@@ -1806,11 +2011,13 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 	const driven = new Set<string>();
 	const touched = new Set<string>();
 	for (const block of chip.blocks) {
-		for (const pin of block.inputs ?? []) touched.add(pin);
-		for (const pin of [block.clock, block.data, block.reset, block.preset, block.enable]) {
+		for (const pin of [...(block.inputs ?? []), ...(block.address ?? []), ...(block.dataIn ?? [])]) {
+			touched.add(pin);
+		}
+		for (const pin of [block.clock, block.data, block.reset, block.preset, block.enable, block.write]) {
 			if (pin) touched.add(pin);
 		}
-		for (const pin of [block.output, block.q, block.qn]) {
+		for (const pin of [block.output, block.q, block.qn, ...(block.dataOut ?? [])]) {
 			if (pin) driven.add(pin);
 		}
 	}
@@ -1838,7 +2045,11 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 		box: { x: -CHIP_HALF_WIDTH, y: -half, w: CHIP_HALF_WIDTH * 2, h: half * 2 },
 		body: { x: -CHIP_BODY_HALF_WIDTH, y: -half, w: CHIP_BODY_HALF_WIDTH * 2, h: half * 2 },
 		pins,
-		params: []
+		// What a programmable memory holds is text, edited in a block of its own
+		// the way a model card is.
+		params: chip.contents
+			? [{ key: 'contents', label: 'Contents', unit: '', default: '', hidden: true }]
+			: []
 	};
 }
 

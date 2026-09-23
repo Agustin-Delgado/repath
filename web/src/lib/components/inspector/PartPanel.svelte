@@ -3,12 +3,19 @@
 	import { Button } from '$lib/ui';
 	import { ledRating } from '$lib/schematic/led';
 	import { pinKey } from '$lib/schematic/nets';
-	import { definitionFor, isAdvanced, isParamVisible, type Instance } from '$lib/schematic/model';
+	import {
+		chipOf,
+		definitionFor,
+		isAdvanced,
+		isParamVisible,
+		type Instance
+	} from '$lib/schematic/model';
 	import { app } from '$lib/state.svelte';
 	import { formatWithUnit } from '$lib/units';
 	import PartIcon from '../palette/PartIcon.svelte';
 	import BlockPanel from './BlockPanel.svelte';
 	import NameField from './NameField.svelte';
+	import MemoryContents from './MemoryContents.svelte';
 	import ParamField from './ParamField.svelte';
 	import SpiceCard from './SpiceCard.svelte';
 	import { hint } from './styles';
@@ -68,6 +75,11 @@
 	});
 
 	const takesCard = $derived(def.params.some((param) => param.key === 'spice'));
+	/** A memory somebody programs, whose contents are edited as text. */
+	const programmable = $derived.by(() => {
+		const chip = chipOf(instance.kind);
+		return chip?.contents ? chip : null;
+	});
 </script>
 
 <div class="flex flex-col gap-3">
@@ -157,6 +169,12 @@
 				taken its forward drop.
 			{/if}
 		</p>
+	{/if}
+
+	{#if programmable}
+		{#key instance.id}
+			<MemoryContents {instance} chip={programmable} />
+		{/key}
 	{/if}
 
 	{#if takesCard}

@@ -24,11 +24,23 @@
  */
 
 import { ANALOG_CHIPS } from './chips-analog';
+import { MEMORY_CHIPS } from './chips-memory';
 
 /** A primitive inside a package, wired to pin names rather than to nets. */
 export interface ChipBlock {
 	/** A kind the netlist already knows how to emit. */
-	kind: 'and' | 'nand' | 'or' | 'nor' | 'xor' | 'xnor' | 'not' | 'buffer' | 'tristate' | 'dff';
+	kind:
+		| 'and'
+		| 'nand'
+		| 'or'
+		| 'nor'
+		| 'xor'
+		| 'xnor'
+		| 'not'
+		| 'buffer'
+		| 'tristate'
+		| 'dff'
+		| 'memory';
 	/** Gate inputs, in order. A tri-state buffer takes one. */
 	inputs?: readonly string[];
 	/** Gate output. */
@@ -42,6 +54,14 @@ export interface ChipBlock {
 	preset?: string;
 	q?: string;
 	qn?: string;
+	/** Memory pins, for `kind: 'memory'`: address least significant first. */
+	address?: readonly string[];
+	dataIn?: readonly string[];
+	dataOut?: readonly string[];
+	/** Stores what is on `dataIn` while high. */
+	write?: string;
+	/** From an address or a write to the outputs following it, seconds. */
+	delay?: number;
 }
 
 /**
@@ -61,6 +81,7 @@ export const CHIP_ROLES = [
 	{ id: 'arithmetic', label: 'Arithmetic' },
 	{ id: 'bus', label: 'Three-state and bus' },
 	{ id: 'timers', label: 'Timers' },
+	{ id: 'memory', label: 'Memory' },
 	{ id: 'amplifiers', label: 'Op-amps and comparators' },
 	{ id: 'analog', label: 'Analog switches and drivers' }
 ] as const;
@@ -92,6 +113,11 @@ export interface ChipDef {
 	 * names, with internal nodes named the same way internal nets are.
 	 */
 	analog?: readonly AnalogBlock[];
+	/**
+	 * For a memory somebody programs: it carries its contents as a parameter,
+	 * and a word nobody wrote reads `erased`.
+	 */
+	contents?: { erased: number };
 	/** Anything about this part the model does not do. */
 	caveat?: string;
 }
@@ -1568,7 +1594,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 	}
 ];
 
-export const CHIPS: readonly ChipDef[] = [...LOGIC_CHIPS, ...ANALOG_CHIPS];
+export const CHIPS: readonly ChipDef[] = [...LOGIC_CHIPS, ...MEMORY_CHIPS, ...ANALOG_CHIPS];
 
 const BY_ID = new Map(CHIPS.map((chip) => [chip.id, chip]));
 

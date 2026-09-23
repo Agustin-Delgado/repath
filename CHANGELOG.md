@@ -11,6 +11,29 @@ early entries point at those instead.
 
 ---
 
+## 23 September 2026 — Fuses, transformers and memory
+
+**A fuse that blows.** It carries its rating for ever; past that it heats by
+the `I²t` its datasheet prints, opens, and stays open for the rest of the run,
+charred on the drawing like a burnt LED.
+
+**Transformers and coupled inductors.** Two windings, a turns ratio and how
+tightly they are coupled. A sine goes across stepped up or down, DC does not.
+
+**A variable capacitor**, set between its smallest and largest value like a
+potentiometer's wiper.
+
+**A four-digit seven-segment display**, twelve pins for thirty-two LEDs, lit
+one digit at a time. LEDs now cool down between bursts, so a segment driven at
+four times its rating a quarter of the time lives, as it does on a real board,
+while one held on at that current still dies.
+
+**Memory.** The 6116 and 62256 static RAMs, and the 28C16 and 28C256 EEPROMs,
+whose contents you type in the inspector as hex. The **EEPROM and a scanned
+display** example uses one as the lookup table for four digits showing 1 2 3 4.
+
+---
+
 ## 23 September 2026 — Parts that follow their supply
 
 **A sagging supply sags the parts on it.** An op-amp package's output stops
