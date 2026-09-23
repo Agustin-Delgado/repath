@@ -25,6 +25,7 @@ a millisecond per byte and the 28C256 loads up to 64 bytes of a page before
 spending ten milliseconds on them; meanwhile I/O7 reads back the complement of
 what is going in, so a program can poll for the end of the write. As on the
 part, a write needs OE high.
+[#64](https://github.com/Agustin-Delgado/repath/pull/64)
 
 ---
 
