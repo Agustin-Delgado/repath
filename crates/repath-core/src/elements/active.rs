@@ -548,6 +548,38 @@ mod tests {
         assert!(far_slope > 0.5 * a.i_slew() / RAIL_KNEE, "and its slope with it: {far_slope}");
     }
 
+    /// A voltage follower whose lower rail sits at the starting guess.
+    fn follower(v_min: f64, input: f64) -> Result<f64, String> {
+        let json = format!(
+            r#"{{"components":[
+                {{"type":"voltage_source","name":"V1","plus":"in","minus":"gnd",
+                  "waveform":{{"type":"dc","value":{input}}}}},
+                {{"type":"op_amp","name":"U1","output":"out","input_plus":"in","input_minus":"out",
+                  "gain":1e5,"v_max":10.5,"v_min":{v_min},"gbw":1e6,"slew":3e5,"r_out":75,
+                  "v_os":2e-3,"i_bias":45e-9}}
+            ]}}"#
+        );
+        let netlist: crate::netlist::Netlist = serde_json::from_str(&json).unwrap();
+        let mut circuit = netlist.compile().map_err(|e| e.to_string())?;
+        let op = crate::solver::Simulator::default()
+            .operating_point(&mut circuit)
+            .map_err(|e| e.to_string())?;
+        let at = op.unknown_names.iter().position(|n| n == "v(out)").unwrap();
+        Ok(op.solution[at])
+    }
+
+    #[test]
+    fn a_follower_settles_whatever_its_rails() {
+        // A single-supply part has its lower rail a few millivolts above ground,
+        // which is exactly where every unknown starts. That start used to be a
+        // point Newton could not leave: the rail clamp at full slope and the input
+        // stage flat out, and the operating point never converged.
+        for v_min in [-15.0, -0.1, 0.0, 0.005, 0.05, 0.5] {
+            let out = follower(v_min, 3.0).unwrap_or_else(|e| panic!("v_min {v_min}: {e}"));
+            assert!((out - 3.0).abs() < 0.01, "v_min {v_min}: follower gave {out}");
+        }
+    }
+
     #[test]
     fn switch_spans_on_and_off() {
         let s = Switch::new("S1", 1, 2, 3, 0, SwitchModel::default());
