@@ -13,26 +13,33 @@
 	const SHOWN = 6;
 	const warnings = $derived(app.compiled.warnings);
 	const burnouts = $derived(app.burnouts);
+	const leds = $derived(burnouts.filter((b) => b.kind === 'led').length);
+	const fuses = $derived(burnouts.length - leds);
 </script>
 
 {#if burnouts.length > 0}
 	<section class="flex flex-col gap-1.5 rounded-md border border-danger/40 bg-danger/10 p-2">
 		<h3 class="m-0 flex items-center gap-1.5 text-[0.7rem] font-semibold text-danger">
-			<Flame class="size-3.5" /> Burnt out
+			<Flame class="size-3.5" />
+			{leds === 0 ? 'Blown' : fuses === 0 ? 'Burnt out' : 'Burnt out and blown'}
 		</h3>
 		<ul class="m-0 flex list-none flex-col gap-1 p-0 text-[0.7rem] leading-snug text-strong">
 			{#each burnouts as burnout (burnout.instanceId)}
 				<li>
 					<strong class="text-fg">{burnout.name}</strong> reached {formatWithUnit(burnout.peak, 'A')}
-					against a {formatWithUnit(burnout.rated, 'A')} rating, and went at
+					against a {formatWithUnit(burnout.rated, 'A')} rating, and {burnout.kind === 'fuse'
+						? 'blew'
+						: 'went'} at
 					{formatWithUnit(burnout.time, 's')}.
 				</li>
 			{/each}
 		</ul>
 		<p class="m-0 text-[0.68rem] text-muted">
 			{burnouts.length === 1 ? 'It is' : 'They are'} open from then on, and the rest of the run is the
-			circuit without {burnouts.length === 1 ? 'it' : 'them'}. Add a series resistor to keep
-			{burnouts.length === 1 ? 'it' : 'them'} alive.
+			circuit without {burnouts.length === 1 ? 'it' : 'them'}.
+			{#if leds > 0}Add a series resistor to keep {leds === 1 ? 'an LED' : 'the LEDs'} alive.{/if}
+			{#if fuses > 0}A fuse blowing is it doing its job: find what drew that much before fitting a
+				bigger one.{/if}
 		</p>
 	</section>
 {/if}

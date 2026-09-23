@@ -345,6 +345,15 @@ function valueLabel(instance: Instance): string | null {
 			return formatWithUnit(Number(p.inductance), 'H');
 		case 'potentiometer':
 			return formatWithUnit(Number(p.resistance), 'Ω');
+		case 'varcap':
+			return formatWithUnit(
+				Number(p.minimum) + (Number(p.maximum) - Number(p.minimum)) * Number(p.position),
+				'F'
+			);
+		case 'transformer':
+			return `1:${Number(p.ratio)}`;
+		case 'fuse':
+			return formatWithUnit(Number(p.rated), 'A');
 		case 'crystal':
 			return formatWithUnit(Number(p.frequency), 'Hz');
 		case 'lamp':

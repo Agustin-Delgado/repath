@@ -47,7 +47,7 @@ use crate::circuit::Circuit;
 use crate::complex::ComplexSystem;
 use crate::digital::{DriverId, Halt, Logic, NetId, Transition};
 use crate::element::{AcCtx, AcceptCtx, Integration, Mode, StampCtx, node_index};
-use crate::elements::{Diode, Failure, VoltageSource};
+use crate::elements::{Failure, VoltageSource};
 use crate::linalg::{LinearSystem, SolveError};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1400,11 +1400,8 @@ impl Simulator {
             }
         }
 
-        let mut failures: Vec<Failure> = circuit
-            .elements()
-            .iter()
-            .filter_map(|e| e.as_any().downcast_ref::<Diode>()?.failure())
-            .collect();
+        let mut failures: Vec<Failure> =
+            circuit.elements().iter().filter_map(|e| e.failure()).collect();
         failures.sort_by(|a, b| a.time.total_cmp(&b.time));
         // Only the ones nobody has been told about yet. A part is destroyed once,
         // and reporting it again in every chunk would have it explode on the
@@ -1471,7 +1468,15 @@ impl Simulator {
         {
             let x = &self.x;
             for adc in circuit.adcs_mut() {
-                let v = crate::element::node_index(adc.node).map_or(0.0, |i| x[i]);
+                let at = |n| crate::element::node_index(n).map_or(0.0, |i| x[i]);
+                let mut v = at(adc.node);
+                // Read as a share of the supply, when the thresholds are one. A
+                // supply that has collapsed reads everything as low rather than
+                // dividing by nothing.
+                if let Some((plus, minus)) = adc.reference {
+                    let span = at(plus) - at(minus);
+                    v = if span > 1e-3 { (v - at(minus)) / span } else { 0.0 };
+                }
                 if let Some((when, state)) = adc.sample(t, v) {
                     // At the instant the bridge worked out, not at the end of the
                     // step. Rounding it up to `t` was the whole interpolation
