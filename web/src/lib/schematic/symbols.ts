@@ -22,7 +22,7 @@ import {
 	gateReach,
 	SUBCIRCUIT_PREFIX
 } from './model';
-import { SEGMENTS, SEGMENT_SHAPES } from './led';
+import { BARS, DIGITS, SEGMENTS, SEGMENT_SHAPES, digitSegment } from './led';
 import { CHIP_BODY_HALF_WIDTH, chipOf, chipPinLayout, chipReach } from './model';
 import { chipName, isUnused, type ChipDef } from './chips';
 
@@ -138,6 +138,8 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 			return `vsource:${String(params.waveform ?? 'dc')}`;
 		case 'switch':
 			return `switch:${String(params.action ?? 'toggle')}:${String(params.start ?? 'open')}`;
+		case 'spdt':
+			return `spdt:${String(params.start ?? 'open')}`;
 		case 'toggle':
 			return `toggle:${String(params.state ?? 'low')}`;
 		case 'port':
@@ -202,6 +204,40 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
+	// A capacitor with an arrow through it, as every standard draws something
+	// you set by hand.
+	varcap: {
+		shapes: [
+			path('M-30 0 H-5 M-5 -12 V12 M5 -12 V12 M5 0 H30'),
+			path('M-13 13 L13 -13'),
+			path('M6 -13 H13 V-6')
+		],
+		labels: []
+	},
+
+	// Two coils either side of a core, the primary's turns facing the
+	// secondary's, and a dot on the end of each that rises with the other.
+	transformer: {
+		shapes: [
+			path('M-30 -20 H-10 V-18'),
+			path('M-10 -18 a4.5 4.5 0 0 1 0 9 a4.5 4.5 0 0 1 0 9 a4.5 4.5 0 0 1 0 9 a4.5 4.5 0 0 1 0 9'),
+			path('M-10 18 V20 H-30'),
+			path('M-2 -20 V20 M2 -20 V20'),
+			path('M30 -20 H10 V-18'),
+			path('M10 -18 a4.5 4.5 0 0 0 0 9 a4.5 4.5 0 0 0 0 9 a4.5 4.5 0 0 0 0 9 a4.5 4.5 0 0 0 0 9'),
+			path('M10 18 V20 H30'),
+			{ kind: 'circle', cx: -19, cy: -13, r: 1.8, fill: true },
+			{ kind: 'circle', cx: 19, cy: -13, r: 1.8, fill: true }
+		],
+		labels: []
+	},
+
+	// The body with the element running through it, the IEC fuse.
+	fuse: {
+		shapes: [path('M-30 0 H30'), { kind: 'rect', x: -16, y: -6, w: 32, h: 12 }],
+		labels: []
+	},
+
 	probe: {
 		// A stalk up from the point being measured, with a ring on top: the shape
 		// of every test point anyone has ever clipped a lead to.
@@ -252,6 +288,111 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
+	// Four of the single digit's bars in one package, the segment pins down the
+	// left and a common pin under each digit.
+	display7x4: {
+		shapes: [
+			{ kind: 'rect', x: -90, y: -45, w: 180, h: 85 },
+			...DIGITS.flatMap((digit) =>
+				SEGMENTS.map((segment) => {
+					const [x1, y1, x2, y2] = digitSegment(digit, segment);
+					return path(`M${x1} ${y1} L${x2} ${y2}`);
+				})
+			),
+			...SEGMENTS.map((_, i) => path(`M-100 ${(i - 4) * 10} H-90`)),
+			...DIGITS.map((digit) => path(`M${(digit - 2.5) * 40} 40 V50`))
+		],
+		labels: DIGITS.map((digit) => ({
+			x: (digit - 2.5) * 40 + 4,
+			y: 37,
+			text: String(digit),
+			anchor: 'start' as const,
+			size: 7,
+			fine: true
+		})),
+		extent: { x: 100, y: 50 }
+	},
+
+	// The resistor with an arrow brought down onto it: the wiper, pressing on
+	// the track somewhere along it.
+	potentiometer: {
+		shapes: [
+			path('M-30 0 H-18'),
+			{ kind: 'rect', x: -18, y: -7, w: 36, h: 14 },
+			path('M18 0 H30'),
+			path('M0 -30 V-13'),
+			path('M-4 -14 L0 -8 L4 -14 Z', true)
+		],
+		labels: []
+	},
+
+	'potentiometer@ansi': {
+		shapes: [
+			path('M-30 0 H-18 L-15 -7 L-9 7 L-3 -7 L3 7 L9 -7 L15 7 L18 0 H30'),
+			path('M0 -30 V-14'),
+			path('M-4 -15 L0 -9 L4 -15 Z', true)
+		],
+		labels: []
+	},
+
+	// The quartz between its two electrodes, drawn the same in every standard.
+	crystal: {
+		shapes: [
+			path('M-30 0 H-11 M-11 -10 V10'),
+			{ kind: 'rect', x: -7, y: -12, w: 14, h: 24 },
+			path('M11 -10 V10 M11 0 H30')
+		],
+		labels: []
+	},
+
+	// A circle with a cross in it: the filament, as every standard draws a lamp.
+	lamp: {
+		shapes: [
+			path('M-30 0 H-10 M10 0 H30'),
+			{ kind: 'circle', cx: 0, cy: 0, r: 10 },
+			path('M-7 -7 L7 7 M-7 7 L7 -7')
+		],
+		labels: []
+	},
+
+	// Two cells, long plate positive. Two rather than one because one cell is
+	// how a single 1.5 V cell is drawn, and a battery is the stack.
+	battery: {
+		shapes: [
+			path('M0 -30 V-8'),
+			path('M-12 -8 H12 M-6 -3 H6 M-12 3 H12 M-6 8 H6'),
+			path('M0 8 V30')
+		],
+		labels: [{ x: 10, y: -16, text: '+', anchor: 'start', size: 10 }]
+	},
+
+	// The coil on the left, the changeover on the right at rest, and the dashed
+	// line that says the one works the other.
+	relay: {
+		shapes: [
+			path('M-20 -30 V-12 M-20 12 V30'),
+			{ kind: 'rect', x: -28, y: -12, w: 16, h: 24 },
+			path('M-12 0 H-8 M-4 0 H0 M4 0 H8 M12 0 H16'),
+			path('M40 0 H30 M10 -30 V-10 M10 30 V10'),
+			{ kind: 'circle', cx: 30, cy: 0, r: 2 },
+			{ kind: 'circle', cx: 10, cy: -10, r: 2 },
+			{ kind: 'circle', cx: 10, cy: 10, r: 2 },
+			path('M29 1 L12 9')
+		],
+		labels: []
+	},
+
+	bargraph: {
+		shapes: [
+			{ kind: 'rect', x: -30, y: -58, w: 60, h: 106 },
+			// The bars unlit, as the digit's are; the live layer lights them.
+			...BARS.map((_, i) => ({ kind: 'rect' as const, x: -16, y: (i - 5) * 10 - 3, w: 32, h: 6 })),
+			...BARS.map((_, i) => path(`M-40 ${(i - 5) * 10} H-30 M30 ${(i - 5) * 10} H40`))
+		],
+		labels: [],
+		extent: { x: 40, y: 58 }
+	},
+
 	nmos: {
 		shapes: [
 			path('M-30 0 H-16 M-16 -14 V14'),
@@ -294,6 +435,18 @@ const STATIC: Record<string, SymbolGeometry> = {
 			path('M-12 7 L-3 9 L-7 16 Z', true)
 		],
 		labels: []
+	},
+
+	regulator: {
+		shapes: [
+			{ kind: 'rect', x: -22, y: -16, w: 44, h: 32 },
+			path('M-30 0 H-22 M22 0 H30 M0 16 V30')
+		],
+		labels: [
+			{ x: -18, y: 3, text: 'IN', anchor: 'start', size: 7 },
+			{ x: 18, y: 3, text: 'OUT', anchor: 'end', size: 7 },
+			{ x: 0, y: 13, text: 'COM', anchor: 'middle', size: 7 }
+		]
 	},
 
 	opamp: {
@@ -524,10 +677,37 @@ function toggleSymbol(state: string): SymbolGeometry {
 	};
 }
 
+/**
+ * A changeover, with the blade on whichever side it is at.
+ *
+ * NO above and NC below, the blade resting down on NC: the part at rest is
+ * what a changeover is drawn in, and "thrown" lifts it onto NO.
+ */
+function changeoverSymbol(start: string): SymbolGeometry {
+	const thrown = start === 'closed';
+	return {
+		shapes: [
+			path('M-30 0 H-14 M14 -10 H30 M14 10 H30'),
+			{ kind: 'circle', cx: -14, cy: 0, r: 2 },
+			{ kind: 'circle', cx: 14, cy: -10, r: 2 },
+			{ kind: 'circle', cx: 14, cy: 10, r: 2 },
+			path(thrown ? 'M-13 -1 L12 -9' : 'M-13 1 L12 9')
+		],
+		labels: []
+	};
+}
+
 function diode(variant: string): SymbolGeometry {
 	const shapes: Shape[] = [path('M-30 0 H-8'), path('M-8 -9 L-8 9 L8 0 Z', true)];
-	// A zener's cathode bar is bent, which is the whole visual distinction.
-	shapes.push(variant === 'zener' ? path('M8 -9 H3 M8 -9 V9 M8 9 H13') : path('M8 -9 V9'));
+	// A zener's cathode bar is bent, which is the whole visual distinction, and a
+	// Schottky's is hooked back at both ends into an S.
+	shapes.push(
+		variant === 'zener'
+			? path('M8 -9 H3 M8 -9 V9 M8 9 H13')
+			: variant === 'schottky'
+				? path('M3 -5 V-9 H8 V9 H13 V5')
+				: path('M8 -9 V9')
+	);
 	shapes.push(path('M8 0 H30'));
 	return { shapes, labels: [] };
 }
@@ -635,7 +815,7 @@ function dip(chip: ChipDef): SymbolGeometry {
 	// under the icon anyway. On the drawing it is the one label that has to stay.
 	labels.push({
 		x: 0,
-		y: half - 8,
+		y: half - 9,
 		text: chipName(chip),
 		size: 11,
 		anchor: 'middle',
@@ -661,6 +841,7 @@ export function symbolGeometry(
 	else if (kind === 'switch') {
 		geometry = switchSymbol(String(params.action ?? 'toggle'), String(params.start ?? 'open'));
 	}
+	else if (kind === 'spdt') geometry = changeoverSymbol(String(params.start ?? 'open'));
 	else if (kind === 'toggle') geometry = toggleSymbol(String(params.state ?? 'low'));
 	else if (kind === 'port') geometry = portSymbol(String(params.flow ?? 'in'));
 	else if (GATES.has(kind)) {

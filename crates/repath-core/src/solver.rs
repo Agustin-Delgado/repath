@@ -13,6 +13,11 @@
 //!    with each solution seeding the next.
 //! 3. **Source stepping** — every independent source is scaled to zero (where the
 //!    answer is all zeros) and ramped back up to full value.
+//! 4. **Damped Newton** — plain Newton again, with every step shortened so that no
+//!    node moves more than half a volt at a time. For the circuit whose Newton
+//!    steps are right about the direction and hopelessly wrong about the
+//!    distance: an op-amp follower whose input stage is flat out, which leaps
+//!    from one rail to the other and back forever when it is let jump.
 //!
 //! # Timestep control
 //!
@@ -42,7 +47,7 @@ use crate::circuit::Circuit;
 use crate::complex::ComplexSystem;
 use crate::digital::{DriverId, Halt, Logic, NetId, Transition};
 use crate::element::{AcCtx, AcceptCtx, Integration, Mode, StampCtx, node_index};
-use crate::elements::{Diode, Failure, VoltageSource};
+use crate::elements::{Failure, VoltageSource};
 use crate::linalg::{LinearSystem, SolveError};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -594,7 +599,16 @@ pub struct Simulator {
     x: Vec<f64>,
     x_next: Vec<f64>,
     x_accepted: Vec<f64>,
+    /// Longest step, in volts on any node, that Newton may take. Only the last
+    /// operating-point fallback sets it.
+    damping: Option<f64>,
+    /// The step Newton took last, while damping, to tell a step that doubles
+    /// back on it.
+    last_step: Vec<f64>,
 }
+
+/// Longest move, in volts on any node, a damped Newton step may make.
+const DAMPED_STEP: f64 = 0.5;
 
 /// Smallest step the transient loop will attempt, relative to the run length.
 const MIN_STEP_FRACTION: f64 = 1e-11;
@@ -656,6 +670,8 @@ impl Simulator {
             x: Vec::new(),
             x_next: Vec::new(),
             x_accepted: Vec::new(),
+            damping: None,
+            last_step: Vec::new(),
         }
     }
 
@@ -729,7 +745,37 @@ impl Simulator {
             })?;
             stats.newton_iterations += 1;
 
-            let settled = self.converged(node_rows);
+            // Shorten the step along its own direction, so the answer walks there
+            // rather than leaping past it.
+            //
+            // The allowance halves every time a step turns back on the one before,
+            // and grows again while they agree: a fixed allowance walks up to the
+            // answer and then steps back and forth across it for good, one
+            // allowance either side.
+            let mut damped = false;
+            if let Some(longest) = self.damping {
+                let step: Vec<f64> =
+                    self.x.iter().zip(&self.x_next).map(|(old, new)| new - old).collect();
+                let turned = self.last_step.len() == step.len()
+                    && self.last_step.iter().zip(&step).map(|(a, b)| a * b).sum::<f64>() < 0.0;
+                let longest = if turned {
+                    (longest * 0.5).max(1e-9)
+                } else {
+                    (longest * 2.0).min(DAMPED_STEP)
+                };
+                self.damping = Some(longest);
+                let reach = step[..node_rows].iter().map(|d| d.abs()).fold(0.0, f64::max);
+                let alpha = if reach > longest { longest / reach } else { 1.0 };
+                if alpha < 1.0 {
+                    for (old, new) in self.x.iter().zip(self.x_next.iter_mut()) {
+                        *new = old + alpha * (*new - old);
+                    }
+                    damped = true;
+                }
+                self.last_step = step.iter().map(|d| d * alpha).collect();
+            }
+
+            let settled = self.converged(node_rows) && !damped;
             std::mem::swap(&mut self.x, &mut self.x_next);
 
             if !nonlinear {
@@ -827,9 +873,10 @@ impl Simulator {
         // 3. Source stepping.
         self.x.fill(0.0);
         circuit.reset();
+        let mut stepped = Ok(0);
         for step in 0..=cfg.source_steps {
             let scale = step as f64 / cfg.source_steps as f64;
-            self.newton(
+            stepped = self.newton(
                 circuit,
                 Mode::OperatingPoint,
                 Integration::BackwardEuler,
@@ -839,9 +886,36 @@ impl Simulator {
                 scale,
                 cfg.dc_max_iterations,
                 stats,
-            )?;
+            );
+            if stepped.is_err() {
+                break;
+            }
         }
-        Ok(())
+        match stepped {
+            Ok(_) => return Ok(()),
+            Err(SimError::NoConvergence { .. }) => {}
+            Err(other) => return Err(other),
+        }
+
+        // 4. Damped Newton. Slow — a node that has ten volts to go takes twenty
+        // iterations to get there — so it is last, and given the room for it.
+        self.x.fill(0.0);
+        circuit.reset();
+        self.damping = Some(DAMPED_STEP);
+        self.last_step.clear();
+        let damped = self.newton(
+            circuit,
+            Mode::OperatingPoint,
+            Integration::BackwardEuler,
+            0.0,
+            0.0,
+            cfg.gmin,
+            1.0,
+            cfg.dc_max_iterations * 10,
+            stats,
+        );
+        self.damping = None;
+        damped.map(|_| ())
     }
 
     /// Sweep a source and record the operating point at each value.
@@ -1326,11 +1400,8 @@ impl Simulator {
             }
         }
 
-        let mut failures: Vec<Failure> = circuit
-            .elements()
-            .iter()
-            .filter_map(|e| e.as_any().downcast_ref::<Diode>()?.failure())
-            .collect();
+        let mut failures: Vec<Failure> =
+            circuit.elements().iter().filter_map(|e| e.failure()).collect();
         failures.sort_by(|a, b| a.time.total_cmp(&b.time));
         // Only the ones nobody has been told about yet. A part is destroyed once,
         // and reporting it again in every chunk would have it explode on the
@@ -1397,7 +1468,15 @@ impl Simulator {
         {
             let x = &self.x;
             for adc in circuit.adcs_mut() {
-                let v = crate::element::node_index(adc.node).map_or(0.0, |i| x[i]);
+                let at = |n| crate::element::node_index(n).map_or(0.0, |i| x[i]);
+                let mut v = at(adc.node);
+                // Read as a share of the supply, when the thresholds are one. A
+                // supply that has collapsed reads everything as low rather than
+                // dividing by nothing.
+                if let Some((plus, minus)) = adc.reference {
+                    let span = at(plus) - at(minus);
+                    v = if span > 1e-3 { (v - at(minus)) / span } else { 0.0 };
+                }
                 if let Some((when, state)) = adc.sample(t, v) {
                     // At the instant the bridge worked out, not at the end of the
                     // step. Rounding it up to `t` was the whole interpolation

@@ -23,7 +23,7 @@
  * hover on the outer drawing still names the right net.
  */
 
-import { pinFlow } from './flow';
+import { pinFlows } from './flow';
 import { groupFrame } from './groups';
 import {
 	BLOCK_PREFIX,
@@ -342,8 +342,10 @@ function pinInjections(
 ): Array<{ element: string; sign: number }> {
 	const nested = portFlow.get(instance.id);
 	if (nested) return nested.filter((entry) => entry.port === pin);
-	const flow = pinFlow(instance.kind, pin);
-	return flow ? [{ element: `${instance.name}${flow.series ?? ''}`, sign: flow.sign }] : [];
+	return pinFlows(instance.kind, pin).map((flow) => ({
+		element: `${instance.name}${flow.series ?? ''}`,
+		sign: flow.sign
+	}));
 }
 
 // ---------------------------------------------------------------------------

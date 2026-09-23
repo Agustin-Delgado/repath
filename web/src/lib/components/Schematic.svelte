@@ -23,7 +23,7 @@
 	import { prepareFlow, rescale, sampleFlow, sampleIndexAt } from '$lib/schematic/flow';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { burnoutsById } from '$lib/schematic/led';
-	import { GRID } from '$lib/schematic/model';
+	import { CONTACTS, GRID, OPERABLE } from '$lib/schematic/model';
 	import { groupLabelBox, groupLabelSize, placeGroups } from '$lib/schematic/groups';
 	import { routeWire } from '$lib/schematic/route';
 	import { parseTrace } from '$lib/trace';
@@ -163,7 +163,7 @@
 		const parts: string[] = [];
 		for (const instance of app.schematic.instances) {
 			const flips = app.operationsOf(instance.id);
-			if (instance.kind === 'switch') {
+			if (CONTACTS.has(instance.kind)) {
 				parts.push(`${instance.id}:${isClosedAt(instance, time, flips) ? 1 : 0}`);
 			} else if (instance.kind === 'toggle') {
 				parts.push(`${instance.id}:${isHighAt(instance, time, flips) ? 1 : 0}`);
@@ -278,7 +278,7 @@
 		let changed = false;
 		const seen = new Set<string>();
 		for (const instance of app.schematic.instances) {
-			const operable = instance.kind === 'switch' || instance.kind === 'toggle';
+			const operable = OPERABLE.has(instance.kind);
 			if (!operable) continue;
 			seen.add(instance.id);
 			if (time === null) continue;
@@ -289,7 +289,7 @@
 			// drawing knows about and the netlist deliberately does not.
 			const flips = app.operationsOf(instance.id);
 			const closed =
-				instance.kind === 'switch'
+				CONTACTS.has(instance.kind)
 					? isActuatedAt(instance, time, flips)
 					: isHighAt(instance, time, flips);
 			if (switchStates.get(instance.id) !== closed) {

@@ -343,6 +343,23 @@ function valueLabel(instance: Instance): string | null {
 			return formatWithUnit(Number(p.capacitance), 'F');
 		case 'inductor':
 			return formatWithUnit(Number(p.inductance), 'H');
+		case 'potentiometer':
+			return formatWithUnit(Number(p.resistance), 'Ω');
+		case 'varcap':
+			return formatWithUnit(
+				Number(p.minimum) + (Number(p.maximum) - Number(p.minimum)) * Number(p.position),
+				'F'
+			);
+		case 'transformer':
+			return `1:${Number(p.ratio)}`;
+		case 'fuse':
+			return formatWithUnit(Number(p.rated), 'A');
+		case 'crystal':
+			return formatWithUnit(Number(p.frequency), 'Hz');
+		case 'lamp':
+			return `${formatWithUnit(Number(p.voltage), 'V')} ${formatWithUnit(Number(p.power), 'W')}`;
+		case 'battery':
+			return formatWithUnit(Number(p.voltage), 'V');
 		case 'vsource':
 			return p.waveform === 'dc'
 				? formatWithUnit(Number(p.value), 'V')
@@ -358,6 +375,7 @@ function valueLabel(instance: Instance): string | null {
 			return formatWithUnit(Number(p.frequency), 'Hz');
 		case 'supply':
 			return formatWithUnit(Number(p.voltage), 'V');
+		case 'spdt':
 		case 'switch': {
 			// What it is going to do, not what it is made of. A switch nobody
 			// scheduled says nothing at all: the blade is drawn open or closed and

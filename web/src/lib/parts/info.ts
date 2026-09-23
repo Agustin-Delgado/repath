@@ -25,9 +25,41 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		description: 'Stores energy in a magnetic field; resists changes in current',
 		keywords: ['l', 'coil', 'henry', 'choke', 'filter']
 	},
+	varcap: {
+		description: 'A capacitor you set between its smallest and largest value',
+		keywords: ['variable capacitor', 'trimmer', 'tuning capacitor', 'varicap', 'air variable', 'radio', 'tank']
+	},
+	transformer: {
+		description: 'Two coupled windings with a turns ratio; steps AC up or down',
+		keywords: ['coupled inductors', 'mutual inductance', 'mains', 'isolation', 'step down', 'step up', 'winding', 'ratio', 'k']
+	},
+	fuse: {
+		description: 'Opens for good once it has carried too much for too long',
+		keywords: ['f', 'protection', 'overcurrent', 'blow', 'i2t', 'slow blow', 'fast acting', 'polyfuse']
+	},
 	switch: {
 		description: 'Contacts you flip by clicking, or on a schedule, with bounce',
 		keywords: ['s', 'spst', 'button', 'push-button', 'momentary', 'contact', 'bounce']
+	},
+	potentiometer: {
+		description: 'Resistance track with a sliding wiper; a divider you can set',
+		keywords: ['pot', 'trimmer', 'trimpot', 'rheostat', 'variable resistor', 'wiper', 'volume', 'divider', 'knob']
+	},
+	crystal: {
+		description: 'Quartz resonator, modelled as its motional arm and holder capacitance',
+		keywords: ['xtal', 'quartz', 'resonator', 'oscillator', 'clock', '16mhz', '32.768khz', 'watch crystal']
+	},
+	spdt: {
+		description: 'Changeover contacts: common to NC at rest, to NO when thrown',
+		keywords: ['switch', 'changeover', 'change-over', 'toggle switch', 'selector', 'no', 'nc', 'two way']
+	},
+	relay: {
+		description: 'Coil and changeover contacts that pull in and drop out on the coil current',
+		keywords: ['coil', 'electromechanical', 'contactor', 'spdt', 'no', 'nc', 'flyback', 'k']
+	},
+	lamp: {
+		description: 'Filament bulb, rated in volts and watts, that glows with the power in it',
+		keywords: ['bulb', 'light', 'incandescent', 'filament', 'indicator', 'torch']
 	},
 	port: {
 		description: 'A terminal of a block: wire a pin to it and the box gets a pin',
@@ -53,9 +85,13 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		description: 'DC, sine, square or pulse current',
 		keywords: ['i', 'current', 'bias', 'constant current', 'generator']
 	},
+	battery: {
+		description: 'A cell or a stack of them: voltage behind an internal resistance',
+		keywords: ['cell', 'bt', '9v', 'aa', 'aaa', 'lipo', 'alkaline', 'coin cell', 'power']
+	},
 	diode: {
 		description: 'Conducts one way; rectifier, Schottky and Zener presets',
-		keywords: ['d', 'rectifier', 'zener', 'schottky', '1n4148', '1n4001', 'clamp']
+		keywords: ['d', 'rectifier', 'zener', 'schottky', '1n4148', '1n4007', '1n5819', '1n4733', 'clamp', 'regulator']
 	},
 	led: {
 		description: 'Lights up with the current through it',
@@ -64,6 +100,14 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 	display7: {
 		description: 'Seven LED segments and a decimal point, common anode or cathode',
 		keywords: ['seven segment', '7seg', 'digit', 'display', 'number', 'readout']
+	},
+	display7x4: {
+		description: 'Four digits sharing their segment pins, lit one at a time',
+		keywords: ['seven segment', '7seg', 'multiplexed', 'multiplex', 'clock', 'four digit', '4 digit', 'display', 'readout']
+	},
+	bargraph: {
+		description: 'Ten LEDs in a row, every anode and cathode brought out',
+		keywords: ['bar graph', 'led bar', 'level meter', 'vu', 'ladder', 'display', 'indicator']
 	},
 	nmos: {
 		description: 'N-channel MOSFET, Shichman-Hodges',
@@ -83,7 +127,11 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 	},
 	opamp: {
 		description: 'Operational amplifier with finite gain, bandwidth and slew rate',
-		keywords: ['op amp', 'amplifier', 'comparator', 'lm741', 'lm358', 'tl072', 'integrator']
+		keywords: ['op amp', 'amplifier', 'comparator', 'integrator']
+	},
+	regulator: {
+		description: 'Linear voltage regulator: 7805, 7812, LM317 and friends',
+		keywords: ['7805', '7809', '7812', '7815', '7905', '7912', '7915', 'lm317', 'lm7805', 'negative', 'linear', 'power supply', 'vreg']
 	},
 	and: { description: 'Output high only when every input is high', keywords: ['gate', '&'] },
 	nand: { description: 'Output low only when every input is high', keywords: ['gate', 'not and'] },
