@@ -39,6 +39,9 @@ datasheet gives it:
   under load, a lamp, and a ten-bar LED bar graph.
 - The diode's Schottky preset has its own symbol, and the diode answers to
   1N4148, 1N4007, 1N4733 and 1N5819.
+[#60](https://github.com/Agustin-Delgado/repath/pull/60)
+
+---
 
 ## 22 September 2026 — Finding things by name
 
