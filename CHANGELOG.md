@@ -11,6 +11,35 @@ early entries point at those instead.
 
 ---
 
+## 23 September 2026 — Sixty chips, and the parts around them
+
+**Chips.** Twenty-seven more, which makes sixty, each on the legs its
+datasheet gives it:
+- Counters: the 74163 (synchronous clear), the 74193 up/down, the 4017 decade
+  counter with ten outputs, and the 4040 twelve-stage ripple counter.
+- Shift registers: the 74164 and 74165, the 74194 that shifts both ways, and
+  the 74595 that every LED project chains.
+- Decoders and friends: the 74139, the 74148 priority encoder, the 4028 and
+  the 74153.
+- Arithmetic: the 74283 four-bit adder and the 7485 comparator, which chains.
+- Parts that let go of a wire, so several can share one: the 74125/74126
+  buffers, the 74244 and 74245 bus drivers, the 74373 latch and the 74374
+  register.
+- Also: JK flip-flops that act on the falling edge (7473, 74107, 74112), the
+  7411 and 7430, and the 4049/4050 buffers.
+- The Chips shelf is filed by job — gates, flip-flops, counters, shift
+  registers and so on — so "a counter" can be found without knowing it is
+  called 4017.
+
+**Parts.**
+- A potentiometer (search "trimmer" too), set by where its wiper sits.
+- A changeover switch that you throw with a click, like the plain one.
+- A relay, whose contacts move when enough current runs through its coil.
+- A crystal that rings at the frequency on its label, a battery that sags
+  under load, a lamp, and a ten-bar LED bar graph.
+- The diode's Schottky preset has its own symbol, and the diode answers to
+  1N4148, 1N4007, 1N4733 and 1N5819.
+
 ## 22 September 2026 — Finding things by name
 
 The catalog, the commands and the circuit itself all keep growing, and walking
