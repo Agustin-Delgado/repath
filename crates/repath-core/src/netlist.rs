@@ -17,7 +17,7 @@ use crate::element::NodeId;
 use crate::elements::semiconductor::TNOM;
 use crate::elements::{
     Bjt, BjtModel, Capacitor, CurrentSource, Diode, DiodeModel, Inductor, Mosfet, MosfetModel,
-    OpAmp, OpAmpModel, Resistor, Switch, SwitchModel, Vccs, Vcvs, VoltageSource, Waveform,
+    OpAmp, OpAmpModel, Resistor, Supply, Switch, SwitchModel, Vccs, Vcvs, VoltageSource, Waveform,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +208,16 @@ pub enum Component {
         v_os: f64,
         #[serde(default = "default_i_bias")]
         i_bias: f64,
+        /// Supply nodes the rails follow, in place of `v_max` and `v_min`.
+        #[serde(default)]
+        supply_plus: Option<String>,
+        #[serde(default)]
+        supply_minus: Option<String>,
+        /// How far short of each supply the output stops.
+        #[serde(default)]
+        headroom_high: f64,
+        #[serde(default)]
+        headroom_low: f64,
     },
     Switch {
         name: String,
@@ -365,6 +375,12 @@ pub enum Bridge {
         family: Option<LogicFamily>,
         #[serde(default)]
         delay: f64,
+        /// Two nodes the thresholds are measured between, as fractions: a
+        /// threshold of 0.5 is halfway from the second to the first. A Schmitt
+        /// input on a CMOS part switches at a share of its supply, so its
+        /// thresholds are this rather than volts.
+        #[serde(default)]
+        reference: Option<[String; 2]>,
     },
     /// Digital net drives an analog node.
     ToAnalog {
@@ -541,6 +557,10 @@ impl Netlist {
                 r_out,
                 v_os,
                 i_bias,
+                supply_plus,
+                supply_minus,
+                headroom_high,
+                headroom_low,
             } => {
                 let (o, p, n) =
                     (self.node(c, output), self.node(c, input_plus), self.node(c, input_minus));
@@ -554,7 +574,16 @@ impl Netlist {
                     v_max: *v_max,
                     v_min: *v_min,
                 };
-                c.add(Box::new(OpAmp::new(name, o, p, n).with_model(model)));
+                let mut amp = OpAmp::new(name, o, p, n).with_model(model);
+                if let (Some(plus), Some(minus)) = (supply_plus, supply_minus) {
+                    amp = amp.with_supply(Supply {
+                        plus: self.node(c, plus),
+                        minus: self.node(c, minus),
+                        headroom_high: *headroom_high,
+                        headroom_low: *headroom_low,
+                    });
+                }
+                c.add(Box::new(amp));
             }
             Component::Switch { name, a, b, control_plus, control_minus, model } => {
                 let (a, b) = (self.node(c, a), self.node(c, b));
@@ -643,12 +672,17 @@ impl Netlist {
 
     fn add_bridge(&self, c: &mut Circuit, bridge: &Bridge) {
         match bridge {
-            Bridge::ToDigital { name, node, net, family, delay } => {
+            Bridge::ToDigital { name, node, net, family, delay, reference } => {
                 let node = self.node(c, node);
                 let net = c.net(net);
                 let family = family.unwrap_or(self.logic_family);
+                let reference = reference
+                    .as_ref()
+                    .map(|[plus, minus]| (self.node(c, plus), self.node(c, minus)));
                 let index = c.bridge_to_digital(name, node, net, family);
-                c.adcs_mut()[index].delay = *delay;
+                let adc = &mut c.adcs_mut()[index];
+                adc.delay = *delay;
+                adc.reference = reference;
             }
             Bridge::ToAnalog { name, net, node, family } => {
                 let node = self.node(c, node);
@@ -743,6 +777,40 @@ mod tests {
     #[test]
     fn empty_netlists_are_rejected() {
         assert_eq!(Netlist::default().compile().unwrap_err(), NetlistError::Empty);
+    }
+
+    #[test]
+    fn a_referenced_bridge_switches_at_a_share_of_its_supply() {
+        // A node at 55 % of a 10 V supply against thresholds of 58 % rising and
+        // 38 % falling: it has not risen far enough. Raise it to 60 % and it has.
+        let read = |node_volts: f64| {
+            let json = format!(
+                r#"{{"components":[
+                    {{"type":"voltage_source","name":"VS","plus":"vdd","minus":"gnd",
+                      "waveform":{{"type":"dc","value":10}}}},
+                    {{"type":"voltage_source","name":"VI","plus":"a","minus":"gnd",
+                      "waveform":{{"type":"dc","value":{node_volts}}}}}
+                  ],
+                  "bridges":[{{"direction":"to_digital","name":"S1","node":"a","net":"y",
+                    "reference":["vdd","gnd"],
+                    "family":{{"v_low":0,"v_high":5,"v_il":0.38,"v_ih":0.58,
+                               "r_out":50,"rise":1e-9,"fall":1e-9}}}}]}}"#
+            );
+            let netlist: Netlist = serde_json::from_str(&json).unwrap();
+            let mut circuit = netlist.compile().unwrap();
+            let run = crate::solver::Simulator::default()
+                .transient(&mut circuit, crate::solver::TransientConfig::new(1e-6))
+                .unwrap();
+            let net = run.net_names.iter().position(|n| n == "y").unwrap();
+            run.digital[net].last().map(|(_, level)| *level)
+        };
+        let undecided = read(5.5);
+        assert!(
+            !matches!(undecided, Some(crate::digital::Logic::High | crate::digital::Logic::Low)),
+            "5.5 V of 10 is inside the band, so nothing is decided: got {undecided:?}"
+        );
+        assert_eq!(read(6.0), Some(crate::digital::Logic::High));
+        assert_eq!(read(3.0), Some(crate::digital::Logic::Low));
     }
 
     #[test]

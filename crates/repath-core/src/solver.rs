@@ -1471,7 +1471,15 @@ impl Simulator {
         {
             let x = &self.x;
             for adc in circuit.adcs_mut() {
-                let v = crate::element::node_index(adc.node).map_or(0.0, |i| x[i]);
+                let at = |n| crate::element::node_index(n).map_or(0.0, |i| x[i]);
+                let mut v = at(adc.node);
+                // Read as a share of the supply, when the thresholds are one. A
+                // supply that has collapsed reads everything as low rather than
+                // dividing by nothing.
+                if let Some((plus, minus)) = adc.reference {
+                    let span = at(plus) - at(minus);
+                    v = if span > 1e-3 { (v - at(minus)) / span } else { 0.0 };
+                }
                 if let Some((when, state)) = adc.sample(t, v) {
                     // At the instant the bridge worked out, not at the end of the
                     // step. Rounding it up to `t` was the whole interpolation
