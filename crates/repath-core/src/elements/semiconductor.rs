@@ -370,9 +370,14 @@ impl Default for DiodeModel {
 /// microseconds, and anything at or below the rating never does.
 ///
 /// The number is chosen so that both of the cases that matter come out right — a
-/// brief pulse well over the rating survives, which is how a multiplexed display
-/// works, while the classic mistake of leaving out the series resistor fails fast
-/// enough to watch happen.
+/// brief pulse well over the rating survives, while the classic mistake of
+/// leaving out the series resistor fails fast enough to watch happen.
+///
+/// Below the rating the dose drains again, at the rate the shortfall says: the
+/// part sheds heat faster than it takes it on. That is what lets a multiplexed
+/// display run — each segment gets four times its rating a quarter of the time,
+/// and what decides whether it lives is the average, as it is on a datasheet,
+/// provided no single burst is long enough to do it in by itself.
 pub const BURN_TIME: f64 = 1e-3;
 
 /// A part that did not survive the run.
@@ -699,9 +704,11 @@ impl Element for Diode {
             && rated > 0.0
         {
             self.peak = self.peak.max(current);
-            let before = (self.i_accepted - rated).max(0.0);
-            let after = (current - rated).max(0.0);
-            self.dose += (before + after) / 2.0 * ctx.dt;
+            // Signed: a step spent under the rating cools the part down again,
+            // though never below where it started.
+            let before = self.i_accepted.max(0.0) - rated;
+            let after = current.max(0.0) - rated;
+            self.dose = (self.dose + (before + after) / 2.0 * ctx.dt).max(0.0);
             if self.dose >= rated * BURN_TIME {
                 self.blown_at = Some(ctx.time);
             }

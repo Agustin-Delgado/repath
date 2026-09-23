@@ -433,8 +433,9 @@ impl Element for VariableResistor {
 /// rating through a 1 A fuse with an `I²t` of 0.5 A²s opens it in about five
 /// milliseconds.
 ///
-/// Nothing cools it down between overloads. A real element sheds heat, so a
-/// burst that is followed by a long rest is gentler on it than this counts.
+/// Under the rating it cools again, as fast as the shortfall in `i²` says, so a
+/// surge followed by a long rest is survived the way it is on a real board —
+/// the rest of the heat curve, with its time constants, is not modelled.
 #[derive(Debug, Clone)]
 pub struct Fuse {
     pub name: String,
@@ -511,9 +512,9 @@ impl Element for Fuse {
         if self.blown_at.is_none() && ctx.mode == Mode::Transient && ctx.dt > 0.0 {
             self.peak = self.peak.max(current);
             let rated = self.rated * self.rated;
-            let before = (self.i_accepted * self.i_accepted - rated).max(0.0);
-            let after = (current * current - rated).max(0.0);
-            self.heat += (before + after) / 2.0 * ctx.dt;
+            let before = self.i_accepted * self.i_accepted - rated;
+            let after = current * current - rated;
+            self.heat = (self.heat + (before + after) / 2.0 * ctx.dt).max(0.0);
             if self.heat >= self.i2t {
                 self.blown_at = Some(ctx.time);
             }
