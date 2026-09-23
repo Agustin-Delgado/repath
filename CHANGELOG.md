@@ -36,6 +36,9 @@ to the output, and draws its own few milliamps.
 an op-amp whose lowest output is at ground, with its output wired straight
 back to its input — could fail to find its starting point at all. It now gets
 there.
+[#61](https://github.com/Agustin-Delgado/repath/pull/61)
+
+---
 
 ## 23 September 2026 — Sixty chips, and the parts around them
 
