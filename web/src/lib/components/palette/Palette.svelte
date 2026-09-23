@@ -314,7 +314,13 @@
 							{@render shelfHeading(section.id, section.label, shelf.length)}
 							{#if !folded.has(section.id)}
 								<div class="grid grid-cols-[repeat(auto-fill,minmax(58px,1fr))] gap-1">
-									{#each shelf as part (part.kind + ':' + part.label + ':' + part.description)}
+									{#each shelf as part, i (part.kind + ':' + part.label + ':' + part.description)}
+										<!-- A long shelf is filed under headings of its own: chips by what they do. -->
+										{#if part.shelf && part.shelf !== shelf[i - 1]?.shelf}
+											<h4 class="col-span-full m-0 mt-1 px-0.5 text-[0.62rem] font-medium text-muted first:mt-0">
+												{part.shelf}
+											</h4>
+										{/if}
 										{@render tile(part)}
 									{/each}
 									{#if section.id === 'imported'}

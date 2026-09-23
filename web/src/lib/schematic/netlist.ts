@@ -547,6 +547,15 @@ function compileFresh(
 						q_not: net(block.qn!),
 						delay: 1e-9
 					});
+				} else if (block.kind === 'tristate') {
+					devices.push({
+						type: 'tri_state',
+						name: blockName,
+						input: net(block.inputs![0]),
+						enable: net(block.enable!),
+						output: net(block.output!),
+						delay: 1e-9
+					});
 				} else {
 					devices.push({
 						type: 'gate',

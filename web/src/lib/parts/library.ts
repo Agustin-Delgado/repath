@@ -1,5 +1,5 @@
 import { CATALOG, chipDefinition, type Group } from '$lib/schematic/model';
-import { CHIPS } from '$lib/schematic/chips';
+import { CHIP_ROLES, CHIPS } from '$lib/schematic/chips';
 import { search } from '$lib/search';
 import { PART_INFO } from './info';
 
@@ -19,6 +19,8 @@ export interface PartEntry {
 	keywords: readonly string[];
 	/** Something the model leaves out, shown where the part is chosen. */
 	caveat?: string;
+	/** A heading inside its section, for a section too long to read as one grid. */
+	shelf?: string;
 }
 
 export type SectionId = Group | 'blocks' | 'imported';
@@ -53,8 +55,10 @@ export const BUILT_IN: readonly PartEntry[] = [
 		description: PART_INFO[def.kind]?.description ?? '',
 		keywords: PART_INFO[def.kind]?.keywords ?? []
 	})),
-	...CHIPS.map((chip) => {
+	// Filed by job, in the order the roles are listed, and by number within one.
+	...CHIP_ROLES.flatMap((role) => CHIPS.filter((chip) => chip.role === role.id)).map((chip) => {
 		const def = chipDefinition(chip);
+		const role = CHIP_ROLES.find((r) => r.id === chip.role)!;
 		return {
 			kind: def.kind,
 			label: def.label,
@@ -62,8 +66,17 @@ export const BUILT_IN: readonly PartEntry[] = [
 			description: chip.description,
 			// The bare number is how these are spoken of, and the family is how they
 			// are bought: "7400" and "74HC00" should both land on the SN7400.
-			keywords: [chip.id, chip.id.replace(/^74/, '74hc'), chip.id.replace(/^74/, '74ls'), 'ic', 'chip', 'dip'],
-			caveat: chip.caveat
+			keywords: [
+				chip.id,
+				chip.id.replace(/^74/, '74hc'),
+				chip.id.replace(/^74/, '74ls'),
+				role.label,
+				'ic',
+				'chip',
+				'dip'
+			],
+			caveat: chip.caveat,
+			shelf: role.label
 		};
 	})
 ];

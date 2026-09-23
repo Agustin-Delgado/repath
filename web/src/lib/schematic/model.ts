@@ -1394,7 +1394,7 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 	const touched = new Set<string>();
 	for (const block of chip.blocks) {
 		for (const pin of block.inputs ?? []) touched.add(pin);
-		for (const pin of [block.clock, block.data, block.reset, block.preset]) {
+		for (const pin of [block.clock, block.data, block.reset, block.preset, block.enable]) {
 			if (pin) touched.add(pin);
 		}
 		for (const pin of [block.output, block.q, block.qn]) {
