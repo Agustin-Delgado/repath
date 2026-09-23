@@ -11,6 +11,27 @@ early entries point at those instead.
 
 ---
 
+## 23 September 2026 — A workspace you can arrange
+
+**Examples live in the sidebar.** The left panel has two tabs, Components and
+Examples. The examples are filed as analog, logic and mixed signal, each says
+in a line or two what it shows, and typing finds them by name or description.
+
+**The panels resize, and the scope folds away.** Drag the edge of either side
+panel, or the top of the scope, to give the drawing more or less room;
+double-click an edge to put it back. The chevron at the end of the transport
+bar folds the scope down to that bar. The arrangement is remembered in this
+browser.
+
+**Share leaves the address bar alone.** It copies the link and nothing else;
+if the clipboard refuses, the link is shown so it can be copied by hand.
+
+**Also:** a button to clear the drawing (one undo brings it back); pointing at
+a wire lights its signal in the scope's list, as pointing at the signal already
+lit the wire; the interface is set in Geist and Geist Mono.
+
+---
+
 ## 23 September 2026 — Heat that takes time, and EEPROMs that write like one
 
 **Parts heat up and cool down the way real ones do.** An LED and a fuse each

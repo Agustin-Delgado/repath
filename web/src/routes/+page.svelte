@@ -1,12 +1,12 @@
 <script lang="ts">
 	import Inspector from '$lib/components/inspector/Inspector.svelte';
-	import Palette from '$lib/components/palette/Palette.svelte';
+	import Sidebar from '$lib/components/palette/Sidebar.svelte';
 	import Playback from '$lib/components/Playback.svelte';
 	import Schematic from '$lib/components/Schematic.svelte';
 	import Scope from '$lib/components/Scope.svelte';
 	import Toolbar from '$lib/components/toolbar/Toolbar.svelte';
 	import CommandPalette from '$lib/commands/CommandPalette.svelte';
-	import { Button, Toaster } from '$lib/ui';
+	import { Button, Splitter, Toaster } from '$lib/ui';
 	import { ensureEngine, engineVersion } from '$lib/engine';
 	import {
 		Autosaver,
@@ -17,6 +17,7 @@
 		type DraftRecord,
 		type DraftStore
 	} from '$lib/draft';
+	import { PANEL_LIMITS, layout, type Panel } from '$lib/layout.svelte';
 	import { decodeCircuit, shareUrl } from '$lib/share';
 	import { app } from '$lib/state.svelte';
 
@@ -31,13 +32,16 @@
 	 * would be covering it.
 	 */
 	let panel = $state<'parts' | 'details' | null>(null);
-	/** Whether the scope has its share of a small screen, or the drawing has it all. */
-	let scopeShown = $state(true);
 	/** Whether the command palette is open. */
 	let finding = $state(false);
 
 	$effect(() => {
 		if (app.tool.mode !== 'select') panel = null;
+	});
+	// An example opened from the drawer is there to be looked at.
+	$effect(() => {
+		void app.arrivals;
+		panel = null;
 	});
 
 	/** The name of this tab's draft, kept where a reload of the same tab finds it. */
@@ -283,10 +287,13 @@
 	});
 
 	/**
-	 * Put the circuit in a link, copy it, and make the draft continue that link.
-	 * Rejects when the clipboard refuses; the URL bar holds the link either way.
+	 * Put the circuit in a link and make the draft continue that link.
+	 *
+	 * The address bar is left alone: sharing is handing a copy to somebody
+	 * else, and rewriting the page's own URL under the user's hands for it was
+	 * a side effect nobody asked for.
 	 */
-	async function share() {
+	async function share(): Promise<string> {
 		const url = await shareUrl(
 			{
 				schematic: app.schematic,
@@ -296,11 +303,10 @@
 			},
 			new URL(location.href)
 		);
-		history.replaceState(history.state, '', url);
-		// The draft now continues this link: a reload finds the draft, and
-		// the link on its own is what anyone else gets.
+		// The draft now continues this link, so opening the link again in this
+		// browser finds the draft with whatever was changed since.
 		void saver?.setOrigin(new URL(url).hash, app.draft());
-		await navigator.clipboard.writeText(url);
+		return url;
 	}
 </script>
 
@@ -312,7 +318,29 @@
 	/>
 </svelte:head>
 
-<div class="app">
+{#snippet splitter(which: Panel, grow: 'right' | 'left' | 'up', label: string)}
+	<Splitter
+		size={layout[which]}
+		{grow}
+		min={PANEL_LIMITS[which].min}
+		max={PANEL_LIMITS[which].max}
+		initial={PANEL_LIMITS[which].initial}
+		{label}
+		onResize={(size) =>
+			// The scope may not take the whole window, however tall the limit says.
+			layout.resize(which, which === 'scope' ? Math.min(size, window.innerHeight * 0.7) : size)}
+		onCommit={() => layout.save()}
+		class="max-[900px]:hidden"
+	/>
+{/snippet}
+
+<div
+	class="app"
+	class:scope-folded={!layout.scopeOpen}
+	style:--left-width="{layout.left}px"
+	style:--right-width="{layout.right}px"
+	style:--scope-height="{layout.scope}px"
+>
 	<div class="top"><Toolbar {version} {share} onFind={() => (finding = true)} /></div>
 
 	{#if app.notice}
@@ -349,9 +377,15 @@
 	{/if}
 
 	<main>
-		<aside class="left" class:open={panel === 'parts'}><Palette /></aside>
+		<aside class="left" class:open={panel === 'parts'}>
+			<Sidebar />
+			{@render splitter('left', 'right', 'Resize the parts panel')}
+		</aside>
 		<section class="canvas"><Schematic bind:this={schematic} /></section>
-		<aside class="right" class:open={panel === 'details'}><Inspector /></aside>
+		<aside class="right" class:open={panel === 'details'}>
+			<Inspector />
+			{@render splitter('right', 'left', 'Resize the details panel')}
+		</aside>
 		{#if panel}
 			<button class="backdrop" aria-label="Close the panel" onclick={() => (panel = null)}></button>
 		{/if}
@@ -394,18 +428,19 @@
 		<Button size="touch" onclick={() => schematic?.fitToContent()} title="Fit the drawing on screen">Fit</Button>
 		<Button
 			size="touch"
-			active={scopeShown}
-			onclick={() => (scopeShown = !scopeShown)}
-			title={scopeShown ? 'Put the scope away' : 'Bring the scope back'}
+			active={layout.scopeOpen}
+			onclick={() => layout.toggleScope()}
+			title={layout.scopeOpen ? 'Put the scope away' : 'Bring the scope back'}
 		>
 			Scope
 		</Button>
 	</nav>
 
-	<section class="bottom" class:collapsed={!scopeShown}>
-		{#if app.analysis === 'transient'}
-			<Playback />
+	<section class="bottom">
+		{#if layout.scopeOpen}
+			{@render splitter('scope', 'up', 'Resize the scope')}
 		{/if}
+		<Playback />
 		<div class="scope-host"><Scope /></div>
 	</section>
 </div>
@@ -421,9 +456,18 @@
 		display: grid;
 		/* The one column is sized by the window, not by the widest row in it. */
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: auto auto minmax(0, 1fr) auto 300px;
+		grid-template-rows: auto auto minmax(0, 1fr) auto var(--scope-height);
 		height: 100vh;
 		height: 100dvh;
+	}
+
+	/* Folded, the scope keeps its title bar and gives the rest to the drawing. */
+	.app.scope-folded {
+		grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+	}
+
+	.scope-folded .scope-host {
+		display: none;
 	}
 
 	/* Rows are assigned explicitly. The banner is conditional, and with automatic
@@ -483,7 +527,7 @@
 
 	main {
 		display: grid;
-		grid-template-columns: 224px minmax(0, 1fr) 260px;
+		grid-template-columns: var(--left-width) minmax(0, 1fr) var(--right-width);
 		min-height: 0;
 		position: relative;
 	}
@@ -502,6 +546,8 @@
 		background: var(--panel-bg);
 		min-height: 0;
 		overflow: hidden;
+		/* For the splitter on its edge. */
+		position: relative;
 		display: grid;
 		grid-template-rows: minmax(0, 1fr);
 		grid-template-columns: minmax(0, 1fr);
@@ -528,6 +574,10 @@
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
+		position: relative;
+		/* The transport bar scrolls sideways on a phone, but its buttons still
+		   pushed the page wider than the screen without this. */
+		overflow: hidden;
 	}
 
 	.scope-host {
@@ -605,8 +655,8 @@
 			height: 200px;
 		}
 
-		.bottom.collapsed .scope-host {
-			display: none;
+		.app.scope-folded {
+			grid-template-rows: auto auto minmax(0, 1fr) auto auto;
 		}
 	}
 </style>

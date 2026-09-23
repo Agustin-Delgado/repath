@@ -16,3 +16,4 @@ export { default as ToolbarSeparator } from './toolbar/ToolbarSeparator.svelte';
 export { floatingItem, floatingSurface } from './surface';
 export { default as Toaster } from './toast/Toaster.svelte';
 export { toasts } from './toast/toasts.svelte';
+export { default as Splitter } from './splitter/Splitter.svelte';
