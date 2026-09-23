@@ -587,8 +587,11 @@
 				// its dots, because those are measured afresh every frame.
 				if (changed) forget(animation);
 				// In seconds of wall clock, so a given current draws the dots along at
-				// the same speed however fast the run is being played.
-				tick(dynamicView, moved / Math.max(app.playbackRate, 1e-9));
+				// the same speed whatever the window, scaled by the speed setting: they
+				// are the most visible thing that moves, and with them held still, 4×
+				// looked no faster than 1×.
+				const multiple = typeof app.playbackSpeed === 'number' ? app.playbackSpeed : 1;
+				tick(dynamicView, (moved / Math.max(app.playbackRate, 1e-9)) * multiple);
 				active.invalidate('dynamic');
 				// The blades live on the layer underneath, which is repainted only on
 				// the frames where one of them actually moves.
