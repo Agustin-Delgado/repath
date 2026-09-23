@@ -25,6 +25,18 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		description: 'Stores energy in a magnetic field; resists changes in current',
 		keywords: ['l', 'coil', 'henry', 'choke', 'filter']
 	},
+	varcap: {
+		description: 'A capacitor you set between its smallest and largest value',
+		keywords: ['variable capacitor', 'trimmer', 'tuning capacitor', 'varicap', 'air variable', 'radio', 'tank']
+	},
+	transformer: {
+		description: 'Two coupled windings with a turns ratio; steps AC up or down',
+		keywords: ['coupled inductors', 'mutual inductance', 'mains', 'isolation', 'step down', 'step up', 'winding', 'ratio', 'k']
+	},
+	fuse: {
+		description: 'Opens for good once it has carried too much for too long',
+		keywords: ['f', 'protection', 'overcurrent', 'blow', 'i2t', 'slow blow', 'fast acting', 'polyfuse']
+	},
 	switch: {
 		description: 'Contacts you flip by clicking, or on a schedule, with bounce',
 		keywords: ['s', 'spst', 'button', 'push-button', 'momentary', 'contact', 'bounce']
@@ -88,6 +100,10 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 	display7: {
 		description: 'Seven LED segments and a decimal point, common anode or cathode',
 		keywords: ['seven segment', '7seg', 'digit', 'display', 'number', 'readout']
+	},
+	display7x4: {
+		description: 'Four digits sharing their segment pins, lit one at a time',
+		keywords: ['seven segment', '7seg', 'multiplexed', 'multiplex', 'clock', 'four digit', '4 digit', 'display', 'readout']
 	},
 	bargraph: {
 		description: 'Ten LEDs in a row, every anode and cathode brought out',

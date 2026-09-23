@@ -47,7 +47,7 @@ use crate::circuit::Circuit;
 use crate::complex::ComplexSystem;
 use crate::digital::{DriverId, Halt, Logic, NetId, Transition};
 use crate::element::{AcCtx, AcceptCtx, Integration, Mode, StampCtx, node_index};
-use crate::elements::{Diode, Failure, VoltageSource};
+use crate::elements::{Failure, VoltageSource};
 use crate::linalg::{LinearSystem, SolveError};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1400,11 +1400,8 @@ impl Simulator {
             }
         }
 
-        let mut failures: Vec<Failure> = circuit
-            .elements()
-            .iter()
-            .filter_map(|e| e.as_any().downcast_ref::<Diode>()?.failure())
-            .collect();
+        let mut failures: Vec<Failure> =
+            circuit.elements().iter().filter_map(|e| e.failure()).collect();
         failures.sort_by(|a, b| a.time.total_cmp(&b.time));
         // Only the ones nobody has been told about yet. A part is destroyed once,
         // and reporting it again in every chunk would have it explode on the

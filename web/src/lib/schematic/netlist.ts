@@ -10,10 +10,11 @@
  */
 
 import { contactControl, restingContact } from './contacts';
-import { BARS, ledDiodeModel, ledRating, SEGMENTS } from './led';
+import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, pointKey } from './model';
 import { negativeSupply, positiveSupply, type ChipDef, type ChipVolts } from './chips';
 import { unfoldBlocks } from './blocks';
+import { parseContents } from './memory';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
 import {
@@ -328,7 +329,7 @@ function dcGraph(schematic: Schematic, connectivity: Connectivity) {
 }
 
 /** Parts that carry no current at DC, the same list the floating-input check uses. */
-const NO_DC_PATH = new Set(['capacitor', 'crystal', 'isource', 'probe', 'port']);
+const NO_DC_PATH = new Set(['capacitor', 'varcap', 'crystal', 'isource', 'probe', 'port']);
 
 /** The last compile, and what it was a compile of. */
 let lastCompile: { signature: string; result: CompileResult } | null = null;
@@ -766,6 +767,42 @@ function compileFresh(
 						q_not: net(block.qn!),
 						delay: 1e-9
 					});
+				} else if (block.kind === 'memory') {
+					const address = block.address ?? [];
+					const width = block.dataOut?.length ?? 0;
+					// A RAM starts with nothing known in it; a programmed part with what
+					// the inspector says, and its erased value everywhere else.
+					let contents: Array<number | null> = [];
+					if (chip.contents) {
+						const erased = chip.contents.erased;
+						const text = String(instance.params.contents ?? '');
+						const parsed = parseContents(text, 2 ** address.length, width);
+						if (parsed.problems.length > 0) {
+							warnings.push(`${name}'s contents: ${parsed.problems[0]} That word is left erased.`);
+						}
+						contents = Array.from(parsed.words, (word) => word ?? erased);
+					}
+					devices.push({
+						type: 'memory',
+						name: blockName,
+						address: address.map(net),
+						data_in: (block.dataIn ?? []).map(net),
+						data_out: (block.dataOut ?? []).map(net),
+						write: net(block.write!),
+						contents,
+						blank: chip.contents ? chip.contents.erased : null,
+						delay: block.delay ?? 1e-9,
+						programming: block.programming
+							? {
+									write_time: block.programming.writeTime,
+									page: block.programming.page ?? 1,
+									load_window: block.programming.loadWindow ?? 0,
+									// A net of its own inside the package, that the memory pulses
+									// to wake itself when a write is done.
+									timer: net(`${index}_timer`)
+								}
+							: null
+					});
 				} else if (block.kind === 'tristate') {
 					devices.push({
 						type: 'tri_state',
@@ -864,6 +901,50 @@ function compileFresh(
 					a: analogOf(instance, 'a'),
 					b: analogOf(instance, 'b'),
 					inductance: drawn(instance, 'inductance', num(instance, 'inductance', 1e-3), seed)
+				});
+				break;
+			case 'varcap': {
+				const least = Math.max(num(instance, 'minimum', 10e-12), 0);
+				const most = Math.max(num(instance, 'maximum', 365e-12), least);
+				const position = Math.min(Math.max(num(instance, 'position', 0.5), 0), 1);
+				components.push({
+					type: 'capacitor',
+					name,
+					a: analogOf(instance, 'a'),
+					b: analogOf(instance, 'b'),
+					// A capacitance of nothing is no capacitor at all, and the engine
+					// needs something to stamp.
+					capacitance: Math.max(least + (most - least) * position, 1e-18)
+				});
+				break;
+			}
+			// The secondary is the primary times the turns ratio squared: inductance
+			// goes with the square of the turns.
+			case 'transformer': {
+				const primary = Math.max(num(instance, 'inductance', 10e-3), 1e-12);
+				const ratio = Math.max(num(instance, 'ratio', 1), 1e-6);
+				components.push({
+					type: 'transformer',
+					name,
+					primary: [analogOf(instance, 'p1'), analogOf(instance, 'p2')],
+					secondary: [analogOf(instance, 's1'), analogOf(instance, 's2')],
+					l1: primary,
+					l2: primary * ratio * ratio,
+					coupling: Math.min(Math.max(num(instance, 'coupling', 0.999), 0), 0.999999),
+					r1: Math.max(num(instance, 'r1', 0.1), 1e-6),
+					r2: Math.max(num(instance, 'r2', 0.1), 1e-6)
+				});
+				break;
+			}
+			case 'fuse':
+				components.push({
+					type: 'fuse',
+					name,
+					a: analogOf(instance, 'a'),
+					b: analogOf(instance, 'b'),
+					resistance: Math.max(num(instance, 'resistance', 0.1), 1e-6),
+					rated: Math.max(num(instance, 'rated', 1), 1e-9),
+					i2t: Math.max(num(instance, 'i2t', 0.5), 1e-12)
 				});
 				break;
 			// Two resistors meeting at the wiper. Neither half is allowed all the
@@ -1160,6 +1241,42 @@ function compileFresh(
 						cathode: anodeCommon ? pin : common,
 						model
 					});
+				}
+				break;
+			}
+			// Thirty-two LEDs, the segments of each digit sharing its digit pin and
+			// each segment pin shared by that segment of every digit. Named for the
+			// digit and the segment, `DS1:3g`; the first keeps the plain name.
+			case 'display7x4': {
+				const model = ledDiodeModel(
+					instance.params.colour,
+					ledRating(instance)
+				) as Record<string, unknown>;
+				const anodeCommon = instance.params.polarity === 'anode';
+				for (const digit of DIGITS) {
+					const common = analogOf(instance, `d${digit}`);
+					for (const segment of SEGMENTS) {
+						const pin = analogOf(instance, segment);
+						const first = digit === DIGITS[0] && segment === SEGMENTS[0];
+						components.push({
+							type: 'diode',
+							name: first ? name : `${name}:${digit}${segment}`,
+							anode: anodeCommon ? common : pin,
+							cathode: anodeCommon ? pin : common,
+							model
+						});
+						// A reverse-biased LED leaks a nanoamp or so, and here that matters:
+						// an unused segment pin is a node held only by junctions to four
+						// digits switching under it, and with nothing else to settle it the
+						// solver chased it down to a femtosecond step and gave up.
+						components.push({
+							type: 'resistor',
+							name: `${name}:leak${digit}${segment}`,
+							a: pin,
+							b: common,
+							resistance: 1e9
+						});
+					}
 				}
 				break;
 			}

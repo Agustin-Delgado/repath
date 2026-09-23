@@ -167,21 +167,25 @@ because each step is what makes the next one worth having:
 
 ### Components
 
-- [x] Potentiometer and trimmer (the wiper is an inspector value, not yet
-      dragged live). *What is left:* a variable capacitor.
-- [ ] Transformer and coupled inductors.
+- [x] Potentiometer and trimmer, and a variable capacitor (the setting is an
+      inspector value, not yet dragged live).
+- [x] Transformer and coupled inductors: two windings, a turns ratio and a
+      coupling. The core never saturates.
 - [x] Relay, and an SPDT switch. The relay reads its coil current and has no
       armature delay or contact bounce.
 - [x] Crystal / resonator, as the Butterworth–Van Dyke model.
 - [ ] Voltage-controlled oscillator, comparator with hysteresis.
 - [x] Counters, shift registers, decoders, encoders, multiplexers, adders,
-      comparators and three-state bus parts, as 74xx and 4000-series chips.
-      *What is left:* RAM/ROM.
-- [x] 7-segment display and bar graph, built on the LED that already lights.
-      *What is left:* a multiplexed multi-digit display.
-- [ ] A fuse that opens when overloaded. It needs the engine to open a
-      resistor the way it already burns out an LED; one that never blows would
-      mislead.
+      comparators and three-state bus parts, as 74xx and 4000-series chips,
+      and byte-wide memory: the 6116 and 62256 RAMs, and the 28C16 and 28C256
+      EEPROMs programmed as hex in the inspector, which a circuit can also write
+      at the part's own pace: page loads, write time, data polling on I/O7.
+      *What is left:* the toggle bit and software data protection.
+- [x] 7-segment display, a four-digit multiplexed one, and a bar graph, built
+      on the LED that already lights.
+- [x] A fuse that blows on its `I²t` and stays open. It and the LEDs heat as
+      two thermal masses, so a short kills fast, a small overload slowly, and a
+      pulse rating from a datasheet is survived.
 - [x] Chips with analog insides: the 555, op-amp packages (LM358, LM324,
       TL072, TL074, LM741), comparators (LM393, LM339), the 4066 switch and the
       ULN2003 and L293D, plus a 78xx/79xx/LM317 regulator part with its current

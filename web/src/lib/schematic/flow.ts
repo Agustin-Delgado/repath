@@ -22,7 +22,7 @@ import type { TransientRun } from '$lib/engine';
 import { levelAt } from '$lib/transitions';
 import { definitionOf, pointKey, wireSegments, type Point, type Schematic } from './model';
 import { DEFAULT_FAMILY, logicFamily, type LogicFamily } from './logic';
-import { BARS, SEGMENTS } from './led';
+import { BARS, DIGITS, SEGMENTS } from './led';
 import { CURRENT_FLOOR } from './animate';
 import type { Connectivity } from './nets';
 import type { NetNames } from './netlist';
@@ -46,6 +46,11 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 	resistor: [['a', -1], ['b', 1]],
 	capacitor: [['a', -1], ['b', 1]],
 	inductor: [['a', -1], ['b', 1]],
+	varcap: [['a', -1], ['b', 1]],
+	fuse: [['a', -1], ['b', 1]],
+	// Each winding carries its own current: the primary under the plain name and
+	// the secondary as `:s`, each into its dotted end and out of the other.
+	transformer: [['p1', -1], ['p2', 1], ['s1', -1, ':s'], ['s2', 1, ':s']],
 	// A closed switch is a 50 mΩ resistor and carries every amp the loop does.
 	// Missing from this table it was invisible here, and the effect was not that
 	// the switch drew no current — it was that the *wire feeding it* drew none,
@@ -103,7 +108,17 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 			[segment, -1, element],
 			['common', 1, element]
 		] as Array<[pin: string, sign: number, series?: string]>;
-	})
+	}),
+	// The same, four times over, each digit's LEDs returning through its own pin.
+	display7x4: DIGITS.flatMap((digit, d) =>
+		SEGMENTS.flatMap((segment, index) => {
+			const element = d === 0 && index === 0 ? undefined : `:${digit}${segment}`;
+			return [
+				[segment, -1, element],
+				[`d${digit}`, 1, element]
+			] as Array<[pin: string, sign: number, series?: string]>;
+		})
+	)
 };
 
 /** One leg of one wire, as the flow graph sees it. */
@@ -248,6 +263,15 @@ export function prepareFlow(
 			for (const [i, bar] of BARS.entries()) {
 				const at = elementByName.get(i === 0 ? instance.name : `${instance.name}:${bar}`);
 				if (at !== undefined) segmentElement.set(`${instance.id}:${bar}`, at);
+			}
+		}
+		if (instance.kind === 'display7x4') {
+			for (const [d, digit] of DIGITS.entries()) {
+				for (const [i, segment] of SEGMENTS.entries()) {
+					const first = d === 0 && i === 0;
+					const at = elementByName.get(first ? instance.name : `${instance.name}:${digit}${segment}`);
+					if (at !== undefined) segmentElement.set(`${instance.id}:${digit}${segment}`, at);
+				}
 			}
 		}
 		if (instance.kind === 'display7') {
