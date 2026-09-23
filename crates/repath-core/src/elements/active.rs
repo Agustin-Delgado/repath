@@ -124,6 +124,10 @@ pub struct OpAmp {
     /// saturated op-amp passes no signal, and AC analysis should say so.
     op_gm: f64,
     op_g: f64,
+    /// Supply terminals, and how far short of each the output stops. Without
+    /// them the rails are the fixed `v_max` and `v_min` of the model; with them
+    /// they move with whatever the supply is doing.
+    supply: Option<Supply>,
     /// Gain-node voltage and capacitor current at the last accepted timepoint.
     v_prev: f64,
     i_prev: f64,
@@ -137,6 +141,17 @@ pub struct OpAmp {
     first: usize,
 }
 
+/// Where an op-amp takes its rails from, when it takes them from its supply.
+#[derive(Debug, Clone, Copy)]
+pub struct Supply {
+    pub plus: NodeId,
+    pub minus: NodeId,
+    /// How far below the positive supply the output stops.
+    pub headroom_high: f64,
+    /// How far above the negative one.
+    pub headroom_low: f64,
+}
+
 impl OpAmp {
     pub fn new(name: impl Into<String>, out: NodeId, np: NodeId, nn: NodeId) -> Self {
         Self {
@@ -145,6 +160,7 @@ impl OpAmp {
             np,
             nn,
             model: OpAmpModel::default(),
+            supply: None,
             op_gm: 0.0,
             op_g: 0.0,
             v_prev: 0.0,
@@ -169,6 +185,16 @@ impl OpAmp {
 
     pub fn with_model(mut self, model: OpAmpModel) -> Self {
         self.model = model;
+        self
+    }
+
+    /// Take the rails from two supply nodes rather than from the model.
+    ///
+    /// A packaged op-amp stops short of its supply, not of a number: a 5 V
+    /// LM358 whose supply sags to 4 V swings a volt less, and one whose supply
+    /// is ramping up at power-on follows it up.
+    pub fn with_supply(mut self, supply: Supply) -> Self {
+        self.supply = Some(supply);
         self
     }
 
@@ -214,12 +240,25 @@ impl OpAmp {
     /// should be, and a saturated output stalls at a hundred kilovolts. This grows
     /// linearly instead, and its slope is the slope of what it actually does.
     fn rail(&self, v: f64) -> (f64, f64) {
+        let (i, dv, _, _) = self.rail_between(v, self.model.v_max, self.model.v_min);
+        (i, dv)
+    }
+
+    /// The same clamp between rails given explicitly, with its slope against the
+    /// node and against each rail. That is what lets a rail that is a supply node
+    /// take part in the Newton step rather than lag an iteration behind it.
+    fn rail_between(&self, v: f64, v_max: f64, v_min: f64) -> (f64, f64, f64, f64) {
         let i_max = self.i_slew();
         // Once past the rail: one more slew current for every `RAIL_KNEE` volts.
         let g = i_max / RAIL_KNEE;
-        let hi = (v - self.model.v_max) / RAIL_KNEE;
-        let lo = (self.model.v_min - v) / RAIL_KNEE;
-        (i_max * (softplus(hi) - softplus(lo)), g * (logistic(hi) + logistic(lo)))
+        let hi = (v - v_max) / RAIL_KNEE;
+        let lo = (v_min - v) / RAIL_KNEE;
+        (
+            i_max * (softplus(hi) - softplus(lo)),
+            g * (logistic(hi) + logistic(lo)),
+            -g * logistic(hi),
+            -g * logistic(lo),
+        )
     }
 
     /// Companion conductance and history current for the compensation capacitor.
@@ -277,8 +316,21 @@ impl Element for OpAmp {
 
         // ---- input stage into the gain node ------------------------------
         let (i_drive, gm) = self.drive(vd);
-        let (i_rail, g_rail) = self.rail(vc);
         let g_load = 1.0 / self.r_gain();
+        let (i_rail, g_rail) = match self.supply {
+            None => self.rail(vc),
+            Some(s) => {
+                let (vp, vm) = (ctx.voltage(s.plus), ctx.voltage(s.minus));
+                let (i, dv, d_max, d_min) =
+                    self.rail_between(vc, vp - s.headroom_high, vm + s.headroom_low);
+                // The rails move one for one with their supply nodes, so the
+                // clamp's slope against a rail is its slope against that node.
+                sys.add(gain_node, node_index(s.plus), d_max);
+                sys.add(gain_node, node_index(s.minus), d_min);
+                sys.add_rhs(gain_node, d_max * vp + d_min * vm);
+                (i, dv)
+            }
+        };
         self.op_gm = gm;
         self.op_g = g_load + g_rail;
 
@@ -546,6 +598,73 @@ mod tests {
         let (far, far_slope) = a.rail(1e5);
         assert!(far > 1e3 * a.i_slew(), "the clamp gave up at {far}");
         assert!(far_slope > 0.5 * a.i_slew() / RAIL_KNEE, "and its slope with it: {far_slope}");
+    }
+
+    /// A voltage follower whose lower rail sits at the starting guess.
+    fn follower(v_min: f64, input: f64) -> Result<f64, String> {
+        let json = format!(
+            r#"{{"components":[
+                {{"type":"voltage_source","name":"V1","plus":"in","minus":"gnd",
+                  "waveform":{{"type":"dc","value":{input}}}}},
+                {{"type":"op_amp","name":"U1","output":"out","input_plus":"in","input_minus":"out",
+                  "gain":1e5,"v_max":10.5,"v_min":{v_min},"gbw":1e6,"slew":3e5,"r_out":75,
+                  "v_os":2e-3,"i_bias":45e-9}}
+            ]}}"#
+        );
+        let netlist: crate::netlist::Netlist = serde_json::from_str(&json).unwrap();
+        let mut circuit = netlist.compile().map_err(|e| e.to_string())?;
+        let op = crate::solver::Simulator::default()
+            .operating_point(&mut circuit)
+            .map_err(|e| e.to_string())?;
+        let at = op.unknown_names.iter().position(|n| n == "v(out)").unwrap();
+        Ok(op.solution[at])
+    }
+
+    #[test]
+    fn a_follower_settles_whatever_its_rails() {
+        // A single-supply part has its lower rail a few millivolts above ground,
+        // which is exactly where every unknown starts. That start used to be a
+        // point Newton could not leave: the rail clamp at full slope and the input
+        // stage flat out, and the operating point never converged.
+        for v_min in [-15.0, -0.1, 0.0, 0.005, 0.05, 0.5] {
+            let out = follower(v_min, 3.0).unwrap_or_else(|e| panic!("v_min {v_min}: {e}"));
+            assert!((out - 3.0).abs() < 0.01, "v_min {v_min}: follower gave {out}");
+        }
+    }
+
+    /// An open-loop comparator on a supply that ramps from 4 V to 12 V over the
+    /// run, its input well above the other, so the output sits at its top rail.
+    fn comparator_on_a_ramping_supply() -> crate::solver::TransientResult {
+        let json = r#"{"components":[
+            {"type":"voltage_source","name":"VS","plus":"vcc","minus":"gnd",
+             "waveform":{"type":"pwl","points":[[0,4],[1e-3,12]]}},
+            {"type":"voltage_source","name":"VI","plus":"in","minus":"gnd",
+             "waveform":{"type":"dc","value":1}},
+            {"type":"op_amp","name":"U1","output":"out","input_plus":"in","input_minus":"gnd",
+             "gain":1e5,"gbw":1e6,"slew":1e7,"r_out":75,"v_os":0,"i_bias":0,
+             "supply_plus":"vcc","supply_minus":"gnd","headroom_high":1.5,"headroom_low":0.005},
+            {"type":"resistor","name":"RL","a":"out","b":"gnd","resistance":1e5}
+        ]}"#;
+        let netlist: crate::netlist::Netlist = serde_json::from_str(json).unwrap();
+        let mut circuit = netlist.compile().unwrap();
+        crate::solver::Simulator::default()
+            .transient(&mut circuit, crate::solver::TransientConfig::new(1e-3))
+            .unwrap()
+    }
+
+    #[test]
+    fn rails_taken_from_the_supply_follow_it() {
+        // The output stops 1.5 V under whatever the supply is at that moment:
+        // 2.5 V at the start, 10.5 V at the end, and in proportion between.
+        let run = comparator_on_a_ramping_supply();
+        let out = run.unknown_names.iter().position(|n| n == "v(out)").unwrap();
+        let at = |t: f64| {
+            let k = run.time.iter().position(|&x| x >= t).unwrap();
+            run.solution[k][out]
+        };
+        assert!((at(0.0) - 2.5).abs() < 0.05, "started at {}", at(0.0));
+        assert!((at(0.5e-3) - 6.5).abs() < 0.1, "midway at {}", at(0.5e-3));
+        assert!((run.solution.last().unwrap()[out] - 10.5).abs() < 0.1);
     }
 
     #[test]

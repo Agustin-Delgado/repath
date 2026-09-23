@@ -11,6 +11,95 @@ early entries point at those instead.
 
 ---
 
+## 23 September 2026 — Heat that takes time, and EEPROMs that write like one
+
+**Parts heat up and cool down the way real ones do.** An LED and a fuse each
+have a fast thermal mass and a slow one. A short still kills an LED in a third
+of a millisecond, but thirty percent over its rating now takes milliseconds,
+and the pulse rating an LED datasheet prints — five times the current at a
+tenth duty — is survived. A fuse blows on its `I²t` when shorted and takes
+about a second at half again its rating.
+
+**Writing an EEPROM from a circuit works like the real part.** The 28C16 takes
+a millisecond per byte and the 28C256 loads up to 64 bytes of a page before
+spending ten milliseconds on them; meanwhile I/O7 reads back the complement of
+what is going in, so a program can poll for the end of the write. As on the
+part, a write needs OE high.
+[#64](https://github.com/Agustin-Delgado/repath/pull/64)
+
+---
+
+## 23 September 2026 — Fuses, transformers and memory
+
+**A fuse that blows.** It carries its rating for ever; past that it heats by
+the `I²t` its datasheet prints, opens, and stays open for the rest of the run,
+charred on the drawing like a burnt LED.
+
+**Transformers and coupled inductors.** Two windings, a turns ratio and how
+tightly they are coupled. A sine goes across stepped up or down, DC does not.
+
+**A variable capacitor**, set between its smallest and largest value like a
+potentiometer's wiper.
+
+**A four-digit seven-segment display**, twelve pins for thirty-two LEDs, lit
+one digit at a time. LEDs now cool down between bursts, so a segment driven at
+four times its rating a quarter of the time lives, as it does on a real board,
+while one held on at that current still dies.
+
+**Memory.** The 6116 and 62256 static RAMs, and the 28C16 and 28C256 EEPROMs,
+whose contents you type in the inspector as hex. The **EEPROM and a scanned
+display** example uses one as the lookup table for four digits showing 1 2 3 4.
+[#63](https://github.com/Agustin-Delgado/repath/pull/63)
+
+---
+
+## 23 September 2026 — Parts that follow their supply
+
+**A sagging supply sags the parts on it.** An op-amp package's output stops
+short of its supply as it is at that moment, not as it was when the run
+started, and a Schmitt trigger switches at its share of the supply it has now.
+Run an LM358 from a battery going flat and watch its ceiling come down with it.
+
+**Regulators that protect themselves, and ones that go below ground.** Short
+a 7805 and about an amp and a half flows rather than as much as the input can
+give; the limit is a field of its own. The 7905, 7912 and 7915 hold their
+output that far below ground.
+
+**The L293D**, for driving a motor either way round from two logic pins, with
+the clamp diodes that give its back-EMF somewhere to go.
+[#62](https://github.com/Agustin-Delgado/repath/pull/62)
+
+---
+
+## 23 September 2026 — Chips that are not all logic
+
+**The 555.** Wire it astable and it blinks at the rate the datasheet formula
+gives; tie RESET low and it stops. There is a **555 blinker** example to start
+from.
+
+**Op-amps and comparators as the parts you buy.** The LM358 and LM324 for a
+single supply, the TL072 and TL074 for a split one, and the LM741. Each one
+clips where its supply says: a 5 V LM358 will not give you 5 V out. The LM393
+and LM339 comparators pull their output down and need a pull-up, as the real
+ones do.
+
+**Schmitt triggers.** The 7414, 74132, 40106 and 4093 switch at two
+thresholds, so a slow or noisy input gives one clean edge — and one gate with a
+resistor and a capacitor is an oscillator.
+
+**Switches, drivers and regulators.** The 4066 analog switch, the ULN2003 for
+relays and motors, and a regulator part that is a 7805, 7809, 7812, 7815 or an
+LM317 you set with two resistors. It drops out when the input gets too close
+to the output, and draws its own few milliamps.
+
+**An op-amp that settled nowhere now settles.** A follower on a single supply —
+an op-amp whose lowest output is at ground, with its output wired straight
+back to its input — could fail to find its starting point at all. It now gets
+there.
+[#61](https://github.com/Agustin-Delgado/repath/pull/61)
+
+---
+
 ## 23 September 2026 — Sixty chips, and the parts around them
 
 **Chips.** Twenty-seven more, which makes sixty, each on the legs its

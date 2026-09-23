@@ -22,7 +22,7 @@ import {
 	gateReach,
 	SUBCIRCUIT_PREFIX
 } from './model';
-import { BARS, SEGMENTS, SEGMENT_SHAPES } from './led';
+import { BARS, DIGITS, SEGMENTS, SEGMENT_SHAPES, digitSegment } from './led';
 import { CHIP_BODY_HALF_WIDTH, chipOf, chipPinLayout, chipReach } from './model';
 import { chipName, isUnused, type ChipDef } from './chips';
 
@@ -204,6 +204,40 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
+	// A capacitor with an arrow through it, as every standard draws something
+	// you set by hand.
+	varcap: {
+		shapes: [
+			path('M-30 0 H-5 M-5 -12 V12 M5 -12 V12 M5 0 H30'),
+			path('M-13 13 L13 -13'),
+			path('M6 -13 H13 V-6')
+		],
+		labels: []
+	},
+
+	// Two coils either side of a core, the primary's turns facing the
+	// secondary's, and a dot on the end of each that rises with the other.
+	transformer: {
+		shapes: [
+			path('M-30 -20 H-10 V-18'),
+			path('M-10 -18 a4.5 4.5 0 0 1 0 9 a4.5 4.5 0 0 1 0 9 a4.5 4.5 0 0 1 0 9 a4.5 4.5 0 0 1 0 9'),
+			path('M-10 18 V20 H-30'),
+			path('M-2 -20 V20 M2 -20 V20'),
+			path('M30 -20 H10 V-18'),
+			path('M10 -18 a4.5 4.5 0 0 0 0 9 a4.5 4.5 0 0 0 0 9 a4.5 4.5 0 0 0 0 9 a4.5 4.5 0 0 0 0 9'),
+			path('M10 18 V20 H30'),
+			{ kind: 'circle', cx: -19, cy: -13, r: 1.8, fill: true },
+			{ kind: 'circle', cx: 19, cy: -13, r: 1.8, fill: true }
+		],
+		labels: []
+	},
+
+	// The body with the element running through it, the IEC fuse.
+	fuse: {
+		shapes: [path('M-30 0 H30'), { kind: 'rect', x: -16, y: -6, w: 32, h: 12 }],
+		labels: []
+	},
+
 	probe: {
 		// A stalk up from the point being measured, with a ring on top: the shape
 		// of every test point anyone has ever clipped a lead to.
@@ -252,6 +286,31 @@ const STATIC: Record<string, SymbolGeometry> = {
 			path('M0 46 V62')
 		],
 		labels: []
+	},
+
+	// Four of the single digit's bars in one package, the segment pins down the
+	// left and a common pin under each digit.
+	display7x4: {
+		shapes: [
+			{ kind: 'rect', x: -90, y: -45, w: 180, h: 85 },
+			...DIGITS.flatMap((digit) =>
+				SEGMENTS.map((segment) => {
+					const [x1, y1, x2, y2] = digitSegment(digit, segment);
+					return path(`M${x1} ${y1} L${x2} ${y2}`);
+				})
+			),
+			...SEGMENTS.map((_, i) => path(`M-100 ${(i - 4) * 10} H-90`)),
+			...DIGITS.map((digit) => path(`M${(digit - 2.5) * 40} 40 V50`))
+		],
+		labels: DIGITS.map((digit) => ({
+			x: (digit - 2.5) * 40 + 4,
+			y: 37,
+			text: String(digit),
+			anchor: 'start' as const,
+			size: 7,
+			fine: true
+		})),
+		extent: { x: 100, y: 50 }
 	},
 
 	// The resistor with an arrow brought down onto it: the wiper, pressing on
@@ -376,6 +435,18 @@ const STATIC: Record<string, SymbolGeometry> = {
 			path('M-12 7 L-3 9 L-7 16 Z', true)
 		],
 		labels: []
+	},
+
+	regulator: {
+		shapes: [
+			{ kind: 'rect', x: -22, y: -16, w: 44, h: 32 },
+			path('M-30 0 H-22 M22 0 H30 M0 16 V30')
+		],
+		labels: [
+			{ x: -18, y: 3, text: 'IN', anchor: 'start', size: 7 },
+			{ x: 18, y: 3, text: 'OUT', anchor: 'end', size: 7 },
+			{ x: 0, y: 13, text: 'COM', anchor: 'middle', size: 7 }
+		]
 	},
 
 	opamp: {
@@ -744,7 +815,7 @@ function dip(chip: ChipDef): SymbolGeometry {
 	// under the icon anyway. On the drawing it is the one label that has to stay.
 	labels.push({
 		x: 0,
-		y: half - 8,
+		y: half - 9,
 		text: chipName(chip),
 		size: 11,
 		anchor: 'middle',

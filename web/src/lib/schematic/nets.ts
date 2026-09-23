@@ -941,7 +941,7 @@ function short(pin: string): string {
  * it is an open circuit when it is open and a piece of wire when it is closed,
  * which is a fact about the moment rather than about the drawing.
  */
-const NO_DC_PATH = new Set(['capacitor', 'crystal', 'isource', 'probe', 'port']);
+const NO_DC_PATH = new Set(['capacitor', 'varcap', 'crystal', 'isource', 'probe', 'port']);
 
 /** One conductive route between two nets. `via` is a switch that has to be closed. */
 interface DcEdge {

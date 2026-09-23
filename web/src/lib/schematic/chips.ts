@@ -23,10 +23,24 @@
  * the same chip on one drawing do not share the inside of their gates.
  */
 
+import { ANALOG_CHIPS } from './chips-analog';
+import { MEMORY_CHIPS } from './chips-memory';
+
 /** A primitive inside a package, wired to pin names rather than to nets. */
 export interface ChipBlock {
 	/** A kind the netlist already knows how to emit. */
-	kind: 'and' | 'nand' | 'or' | 'nor' | 'xor' | 'xnor' | 'not' | 'buffer' | 'tristate' | 'dff';
+	kind:
+		| 'and'
+		| 'nand'
+		| 'or'
+		| 'nor'
+		| 'xor'
+		| 'xnor'
+		| 'not'
+		| 'buffer'
+		| 'tristate'
+		| 'dff'
+		| 'memory';
 	/** Gate inputs, in order. A tri-state buffer takes one. */
 	inputs?: readonly string[];
 	/** Gate output. */
@@ -40,6 +54,21 @@ export interface ChipBlock {
 	preset?: string;
 	q?: string;
 	qn?: string;
+	/** Memory pins, for `kind: 'memory'`: address least significant first. */
+	address?: readonly string[];
+	dataIn?: readonly string[];
+	dataOut?: readonly string[];
+	/** Stores what is on `dataIn` while high. */
+	write?: string;
+	/** From an address or a write to the outputs following it, seconds. */
+	delay?: number;
+	/**
+	 * How an EEPROM writes: address latched as `write` rises and data as it
+	 * falls, then `writeTime` putting it in the array. With `page` above one,
+	 * words of one page loaded within `loadWindow` of each other go in together.
+	 * Absent for a RAM, which stores while `write` is high.
+	 */
+	programming?: { writeTime: number; page?: number; loadWindow?: number };
 }
 
 /**
@@ -57,7 +86,11 @@ export const CHIP_ROLES = [
 	{ id: 'decoders', label: 'Decoders, encoders, multiplexers' },
 	{ id: 'display', label: 'Display drivers' },
 	{ id: 'arithmetic', label: 'Arithmetic' },
-	{ id: 'bus', label: 'Three-state and bus' }
+	{ id: 'bus', label: 'Three-state and bus' },
+	{ id: 'timers', label: 'Timers' },
+	{ id: 'memory', label: 'Memory' },
+	{ id: 'amplifiers', label: 'Op-amps and comparators' },
+	{ id: 'analog', label: 'Analog switches and drivers' }
 ] as const;
 
 export type ChipRole = (typeof CHIP_ROLES)[number]['id'];
@@ -69,6 +102,8 @@ export interface ChipDef {
 	role: ChipRole;
 	/** One line, the way a catalogue lists it. */
 	description: string;
+	/** Other numbers and names it is sold or spoken of under: `555` for the NE555. */
+	aliases?: readonly string[];
 	/**
 	 * Every pin of the package in order, starting at pin 1.
 	 *
@@ -79,8 +114,97 @@ export interface ChipDef {
 	layout: readonly string[];
 	/** What is inside, written against the pin names above. */
 	blocks: readonly ChipBlock[];
+	/**
+	 * The analog half of what is inside, for the parts that are not all logic:
+	 * a 555, an op-amp package, an analog switch. Written against the same pin
+	 * names, with internal nodes named the same way internal nets are.
+	 */
+	analog?: readonly AnalogBlock[];
+	/**
+	 * For a memory somebody programs: it carries its contents as a parameter,
+	 * and a word nobody wrote reads `erased`.
+	 */
+	contents?: { erased: number };
 	/** Anything about this part the model does not do. */
 	caveat?: string;
+}
+
+/**
+ * A voltage inside a chip, given outright or as a fraction of its supply.
+ *
+ * `{ supply: 2 / 3 }` is two thirds of the way from the negative supply leg to
+ * the positive one, read off what the drawing powers the chip from. It is how a
+ * 555's thresholds follow its supply, and a Schmitt input's too.
+ */
+export type ChipVolts = number | { supply: number };
+
+/** What an op-amp inside a package is like, from the first page of its datasheet. */
+export interface OpAmpSpec {
+	gain: number;
+	/** Gain-bandwidth product, Hz. */
+	gbw: number;
+	/** Slew rate, V/s. */
+	slew: number;
+	rOut: number;
+	vOs: number;
+	iBias: number;
+	/**
+	 * How far short of each supply the output stops: above the negative one,
+	 * below the positive one. A comparator feeding logic inside the package
+	 * swings between fixed levels instead, which is what `fixed` is for.
+	 */
+	swing: readonly [number, number] | { fixed: readonly [number, number] };
+}
+
+/**
+ * A primitive inside a package that the analog solver builds.
+ *
+ * `sense` and `drive` are the two ways across: a `sense` reads a node against
+ * a pair of thresholds onto a logic net — a pair apart is a Schmitt input — and
+ * a `drive` puts a logic net onto a node at the logic family's levels.
+ */
+export type AnalogBlock =
+	| { kind: 'resistor'; a: string; b: string; ohms: number }
+	| { kind: 'diode'; anode: string; cathode: string }
+	| { kind: 'npn' | 'pnp'; collector: string; base: string; emitter: string; beta?: number }
+	| { kind: 'opamp'; plus: string; minus: string; out: string; spec: OpAmpSpec }
+	| {
+			kind: 'switch';
+			a: string;
+			b: string;
+			/** Closed when `control` is above `reference` by `on`, open below `off`. */
+			control: string;
+			reference: string;
+			on: ChipVolts;
+			off: ChipVolts;
+			ron: number;
+			roff?: number;
+	  }
+	| { kind: 'source'; plus: string; minus: string; volts: number }
+	| { kind: 'sense'; node: string; net: string; rising?: ChipVolts; falling?: ChipVolts }
+	| { kind: 'drive'; net: string; node: string };
+
+/** Every name an analog block connects to, legs and internal nodes alike. */
+export function analogTerminals(block: AnalogBlock): string[] {
+	switch (block.kind) {
+		case 'resistor':
+			return [block.a, block.b];
+		case 'diode':
+			return [block.anode, block.cathode];
+		case 'npn':
+		case 'pnp':
+			return [block.collector, block.base, block.emitter];
+		case 'opamp':
+			return [block.plus, block.minus, block.out];
+		case 'switch':
+			return [block.a, block.b, block.control, block.reference];
+		case 'source':
+			return [block.plus, block.minus];
+		case 'sense':
+			return [block.node];
+		case 'drive':
+			return [block.node];
+	}
 }
 
 /**
@@ -405,7 +529,7 @@ function asyncLoad(tag: string, load: string, data: string, clear?: string): Chi
 	];
 }
 
-export const CHIPS: readonly ChipDef[] = [
+const LOGIC_CHIPS: readonly ChipDef[] = [
 	{ id: '7400', role: 'gates', description: 'Quad 2-input NAND', ...quad2('nand') },
 	{
 		id: '7402',
@@ -1477,6 +1601,8 @@ export const CHIPS: readonly ChipDef[] = [
 	}
 ];
 
+export const CHIPS: readonly ChipDef[] = [...LOGIC_CHIPS, ...MEMORY_CHIPS, ...ANALOG_CHIPS];
+
 const BY_ID = new Map(CHIPS.map((chip) => [chip.id, chip]));
 
 export function chipById(id: string): ChipDef | undefined {
@@ -1508,7 +1634,17 @@ export function chipName(chip: ChipDef): string {
  * name their datasheet uses.
  */
 export function isPower(pin: string): boolean {
-	return pin === 'VCC' || pin === 'GND' || pin === 'VDD' || pin === 'VSS';
+	return pin === 'VCC' || pin === 'GND' || pin === 'VDD' || pin === 'VSS' || pin === 'VEE';
+}
+
+/** The leg a chip takes its positive supply on, if it has one. */
+export function positiveSupply(chip: ChipDef): string | undefined {
+	return chip.layout.find((pin) => pin === 'VCC' || pin === 'VDD');
+}
+
+/** The leg a chip takes its negative supply or ground on. */
+export function negativeSupply(chip: ChipDef): string | undefined {
+	return chip.layout.find((pin) => pin === 'GND' || pin === 'VSS' || pin === 'VEE');
 }
 
 /**

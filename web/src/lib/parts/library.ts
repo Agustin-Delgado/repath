@@ -71,6 +71,7 @@ export const BUILT_IN: readonly PartEntry[] = [
 				chip.id.replace(/^74/, '74hc'),
 				chip.id.replace(/^74/, '74ls'),
 				role.label,
+				...(chip.aliases ?? []),
 				'ic',
 				'chip',
 				'dip'

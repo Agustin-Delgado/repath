@@ -11,13 +11,15 @@ use std::collections::HashSet;
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
 use crate::digital::{
-    AsyncInputs, Clock, DFlipFlop, Gate, GateKind, Logic, LogicSource, TriStateBuffer,
+    AsyncInputs, Clock, DFlipFlop, Gate, GateKind, Logic, LogicSource, Memory, Programming,
+    TriStateBuffer,
 };
 use crate::element::NodeId;
 use crate::elements::semiconductor::TNOM;
 use crate::elements::{
-    Bjt, BjtModel, Capacitor, CurrentSource, Diode, DiodeModel, Inductor, Mosfet, MosfetModel,
-    OpAmp, OpAmpModel, Resistor, Switch, SwitchModel, Vccs, Vcvs, VoltageSource, Waveform,
+    Bjt, BjtModel, Capacitor, CurrentSource, Diode, DiodeModel, Fuse, Inductor, Mosfet,
+    MosfetModel, OpAmp, OpAmpModel, Resistor, Supply, Switch, SwitchModel, Transformer, Vccs, Vcvs,
+    VoltageSource, Waveform,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +139,23 @@ pub enum Component {
         #[serde(default)]
         initial_current: Option<f64>,
     },
+    /// Two coupled windings. See `elements::Transformer`.
+    Transformer {
+        name: String,
+        /// Primary winding, dotted end first.
+        primary: [String; 2],
+        /// Secondary winding, dotted end first.
+        secondary: [String; 2],
+        l1: f64,
+        l2: f64,
+        coupling: f64,
+        #[serde(default)]
+        r1: f64,
+        #[serde(default)]
+        r2: f64,
+    },
+    /// A resistance that opens once `i2t` above its rating has gone through it.
+    Fuse { name: String, a: String, b: String, resistance: f64, rated: f64, i2t: f64 },
     VoltageSource {
         name: String,
         plus: String,
@@ -208,6 +227,16 @@ pub enum Component {
         v_os: f64,
         #[serde(default = "default_i_bias")]
         i_bias: f64,
+        /// Supply nodes the rails follow, in place of `v_max` and `v_min`.
+        #[serde(default)]
+        supply_plus: Option<String>,
+        #[serde(default)]
+        supply_minus: Option<String>,
+        /// How far short of each supply the output stops.
+        #[serde(default)]
+        headroom_high: f64,
+        #[serde(default)]
+        headroom_low: f64,
     },
     Switch {
         name: String,
@@ -276,6 +305,8 @@ impl Component {
             Component::Resistor { name, .. }
             | Component::Capacitor { name, .. }
             | Component::Inductor { name, .. }
+            | Component::Transformer { name, .. }
+            | Component::Fuse { name, .. }
             | Component::VoltageSource { name, .. }
             | Component::CurrentSource { name, .. }
             | Component::Diode { name, .. }
@@ -287,6 +318,22 @@ impl Component {
             | Component::Vccs { name, .. } => name,
         }
     }
+}
+
+/// How an EEPROM writes. See `digital::Programming`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProgrammingSpec {
+    pub write_time: f64,
+    #[serde(default = "one")]
+    pub page: usize,
+    #[serde(default)]
+    pub load_window: f64,
+    /// A net of its own, for the device to wake itself with.
+    pub timer: String,
+}
+
+fn one() -> usize {
+    1
 }
 
 /// A digital device.
@@ -329,6 +376,28 @@ pub enum Device {
         #[serde(default = "default_gate_delay")]
         delay: f64,
     },
+    /// Words of memory. See `digital::Memory`.
+    Memory {
+        name: String,
+        /// Address lines, least significant first.
+        address: Vec<String>,
+        data_in: Vec<String>,
+        data_out: Vec<String>,
+        /// Writes while high.
+        write: String,
+        /// Starting contents from word zero; `null` for a word with nothing in it.
+        #[serde(default)]
+        contents: Vec<Option<u64>>,
+        /// What every word past `contents` holds; absent means nothing known.
+        #[serde(default)]
+        blank: Option<u64>,
+        #[serde(default = "default_gate_delay")]
+        delay: f64,
+        /// How an EEPROM writes; absent for a RAM, which stores while `write` is
+        /// high.
+        #[serde(default)]
+        programming: Option<ProgrammingSpec>,
+    },
     /// A level someone set. See `digital::LogicSource`.
     LogicSource {
         name: String,
@@ -347,6 +416,7 @@ impl Device {
             | Device::Clock { name, .. }
             | Device::DFlipFlop { name, .. }
             | Device::TriState { name, .. }
+            | Device::Memory { name, .. }
             | Device::LogicSource { name, .. } => name,
         }
     }
@@ -365,6 +435,12 @@ pub enum Bridge {
         family: Option<LogicFamily>,
         #[serde(default)]
         delay: f64,
+        /// Two nodes the thresholds are measured between, as fractions: a
+        /// threshold of 0.5 is halfway from the second to the first. A Schmitt
+        /// input on a CMOS part switches at a share of its supply, so its
+        /// thresholds are this rather than volts.
+        #[serde(default)]
+        reference: Option<[String; 2]>,
     },
     /// Digital net drives an analog node.
     ToAnalog {
@@ -484,6 +560,18 @@ impl Netlist {
                 }
                 c.add(Box::new(ind));
             }
+            Component::Transformer { name, primary, secondary, l1, l2, coupling, r1, r2 } => {
+                let primary = (self.node(c, &primary[0]), self.node(c, &primary[1]));
+                let secondary = (self.node(c, &secondary[0]), self.node(c, &secondary[1]));
+                c.add(Box::new(
+                    Transformer::new(name, primary, secondary, (*l1, *l2), *coupling)
+                        .with_resistance(*r1, *r2),
+                ));
+            }
+            Component::Fuse { name, a, b, resistance, rated, i2t } => {
+                let (a, b) = (self.node(c, a), self.node(c, b));
+                c.add(Box::new(Fuse::new(name, a, b, *resistance, *rated, *i2t)));
+            }
             Component::VoltageSource { name, plus, minus, waveform, ac_magnitude, ac_phase } => {
                 let (p, m) = (self.node(c, plus), self.node(c, minus));
                 let mut source = VoltageSource::new(name, p, m, waveform.clone());
@@ -541,6 +629,10 @@ impl Netlist {
                 r_out,
                 v_os,
                 i_bias,
+                supply_plus,
+                supply_minus,
+                headroom_high,
+                headroom_low,
             } => {
                 let (o, p, n) =
                     (self.node(c, output), self.node(c, input_plus), self.node(c, input_minus));
@@ -554,7 +646,16 @@ impl Netlist {
                     v_max: *v_max,
                     v_min: *v_min,
                 };
-                c.add(Box::new(OpAmp::new(name, o, p, n).with_model(model)));
+                let mut amp = OpAmp::new(name, o, p, n).with_model(model);
+                if let (Some(plus), Some(minus)) = (supply_plus, supply_minus) {
+                    amp = amp.with_supply(Supply {
+                        plus: self.node(c, plus),
+                        minus: self.node(c, minus),
+                        headroom_high: *headroom_high,
+                        headroom_low: *headroom_low,
+                    });
+                }
+                c.add(Box::new(amp));
             }
             Component::Switch { name, a, b, control_plus, control_minus, model } => {
                 let (a, b) = (self.node(c, a), self.node(c, b));
@@ -631,6 +732,55 @@ impl Netlist {
                 let (i, e, o) = (c.net(input), c.net(enable), c.net(output));
                 c.add_device(Box::new(TriStateBuffer::new(name, i, e, o, *delay)));
             }
+            Device::Memory {
+                name,
+                address,
+                data_in,
+                data_out,
+                write,
+                contents,
+                blank,
+                delay,
+                programming,
+            } => {
+                if address.len() > Memory::MAX_ADDRESS_BITS {
+                    return Err(NetlistError::BadTerminals {
+                        component: name.clone(),
+                        reason: format!(
+                            "{} address lines is more than the {} a memory takes",
+                            address.len(),
+                            Memory::MAX_ADDRESS_BITS
+                        ),
+                    });
+                }
+                if data_in.len() != data_out.len() || data_out.is_empty() || data_out.len() > 64 {
+                    return Err(NetlistError::BadTerminals {
+                        component: name.clone(),
+                        reason: "a memory needs as many data inputs as outputs, 1 to 64".into(),
+                    });
+                }
+                let address = address.iter().map(|n| c.net(n)).collect();
+                let data_in = data_in.iter().map(|n| c.net(n)).collect();
+                let data_out = data_out.iter().map(|n| c.net(n)).collect();
+                let write = c.net(write);
+                let mut memory = Memory::new(
+                    name,
+                    (address, write),
+                    (data_in, data_out),
+                    contents,
+                    *blank,
+                    *delay,
+                );
+                if let Some(spec) = programming {
+                    memory = memory.programmed(Programming {
+                        write_time: spec.write_time.max(0.0),
+                        page: spec.page.max(1),
+                        load_window: spec.load_window.max(0.0),
+                        timer: c.net(&spec.timer),
+                    });
+                }
+                c.add_device(Box::new(memory));
+            }
             Device::LogicSource { name, output, state, flips } => {
                 let out = c.net(output);
                 c.add_device(Box::new(
@@ -643,12 +793,17 @@ impl Netlist {
 
     fn add_bridge(&self, c: &mut Circuit, bridge: &Bridge) {
         match bridge {
-            Bridge::ToDigital { name, node, net, family, delay } => {
+            Bridge::ToDigital { name, node, net, family, delay, reference } => {
                 let node = self.node(c, node);
                 let net = c.net(net);
                 let family = family.unwrap_or(self.logic_family);
+                let reference = reference
+                    .as_ref()
+                    .map(|[plus, minus]| (self.node(c, plus), self.node(c, minus)));
                 let index = c.bridge_to_digital(name, node, net, family);
-                c.adcs_mut()[index].delay = *delay;
+                let adc = &mut c.adcs_mut()[index];
+                adc.delay = *delay;
+                adc.reference = reference;
             }
             Bridge::ToAnalog { name, net, node, family } => {
                 let node = self.node(c, node);
@@ -743,6 +898,281 @@ mod tests {
     #[test]
     fn empty_netlists_are_rejected() {
         assert_eq!(Netlist::default().compile().unwrap_err(), NetlistError::Empty);
+    }
+
+    #[test]
+    fn a_referenced_bridge_switches_at_a_share_of_its_supply() {
+        // A node at 55 % of a 10 V supply against thresholds of 58 % rising and
+        // 38 % falling: it has not risen far enough. Raise it to 60 % and it has.
+        let read = |node_volts: f64| {
+            let json = format!(
+                r#"{{"components":[
+                    {{"type":"voltage_source","name":"VS","plus":"vdd","minus":"gnd",
+                      "waveform":{{"type":"dc","value":10}}}},
+                    {{"type":"voltage_source","name":"VI","plus":"a","minus":"gnd",
+                      "waveform":{{"type":"dc","value":{node_volts}}}}}
+                  ],
+                  "bridges":[{{"direction":"to_digital","name":"S1","node":"a","net":"y",
+                    "reference":["vdd","gnd"],
+                    "family":{{"v_low":0,"v_high":5,"v_il":0.38,"v_ih":0.58,
+                               "r_out":50,"rise":1e-9,"fall":1e-9}}}}]}}"#
+            );
+            let netlist: Netlist = serde_json::from_str(&json).unwrap();
+            let mut circuit = netlist.compile().unwrap();
+            let run = crate::solver::Simulator::default()
+                .transient(&mut circuit, crate::solver::TransientConfig::new(1e-6))
+                .unwrap();
+            let net = run.net_names.iter().position(|n| n == "y").unwrap();
+            run.digital[net].last().map(|(_, level)| *level)
+        };
+        let undecided = read(5.5);
+        assert!(
+            !matches!(undecided, Some(crate::digital::Logic::High | crate::digital::Logic::Low)),
+            "5.5 V of 10 is inside the band, so nothing is decided: got {undecided:?}"
+        );
+        assert_eq!(read(6.0), Some(crate::digital::Logic::High));
+        assert_eq!(read(3.0), Some(crate::digital::Logic::Low));
+    }
+
+    fn run(json: &str, stop: f64) -> crate::solver::TransientResult {
+        let netlist: Netlist = serde_json::from_str(json).unwrap();
+        let mut circuit = netlist.compile().unwrap();
+        crate::solver::Simulator::default()
+            .transient(&mut circuit, crate::solver::TransientConfig::new(stop))
+            .unwrap()
+    }
+
+    fn fused(volts: f64) -> crate::solver::TransientResult {
+        fused_for(volts, 20e-3)
+    }
+
+    fn fused_for(volts: f64, stop: f64) -> crate::solver::TransientResult {
+        // A 1 A fuse with an I²t of 0.5 A²s feeding a 1 Ω load.
+        run(
+            &format!(
+                r#"{{"components":[
+                    {{"type":"voltage_source","name":"V1","plus":"in","minus":"0",
+                      "waveform":{{"type":"dc","value":{volts}}}}},
+                    {{"type":"fuse","name":"F1","a":"in","b":"out",
+                      "resistance":0.01,"rated":1,"i2t":0.5}},
+                    {{"type":"resistor","name":"RL","a":"out","b":"0","resistance":1}}
+                ]}}"#
+            ),
+            stop,
+        )
+    }
+
+    #[test]
+    fn a_fuse_carries_its_rating_for_ever() {
+        let run = fused(0.99);
+        assert!(run.failures.is_empty(), "{:?}", run.failures);
+    }
+
+    #[test]
+    fn a_fuse_blows_when_its_melting_integral_is_spent() {
+        // Ten amps through a 1 A fuse: 99 A² above the rating, so 0.5 A²s is
+        // spent in about 5 ms, after which the load sees nothing.
+        let run = fused(10.1);
+        let failure = run.failures.first().expect("the fuse should have blown");
+        assert_eq!(failure.name, "F1");
+        assert!((failure.time - 0.5 / 99.0).abs() < 2e-4, "blew at {}", failure.time);
+        assert!((failure.peak - 10.0).abs() < 0.1, "peak {}", failure.peak);
+        let out = run.unknown_names.iter().position(|n| n == "v(out)").unwrap();
+        assert!(run.solution.last().unwrap()[out].abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_small_overload_takes_seconds_to_blow_a_fuse() {
+        // Half as much again through a 1 A fuse: the element alone would never
+        // melt at that, so it waits on the end caps and glass warming behind it —
+        // about a second, where ten amps took five milliseconds.
+        let run = fused_for(1.5, 3.0);
+        let failure = run.failures.first().expect("half again over its rating should blow it");
+        assert!(failure.time > 0.5 && failure.time < 2.0, "blew at {} s", failure.time);
+    }
+
+    fn transformer(load: f64) -> (crate::solver::TransientResult, usize, usize) {
+        // 10 V peak at 1 kHz on a 1:2 transformer, tightly coupled, with a
+        // magnetising inductance large enough to be no load at all.
+        let run = run(
+            &format!(
+                r#"{{"components":[
+                    {{"type":"voltage_source","name":"V1","plus":"p","minus":"0",
+                      "waveform":{{"type":"sine","offset":0,"amplitude":10,"frequency":1000}}}},
+                    {{"type":"transformer","name":"T1","primary":["p","0"],"secondary":["s","sb"],
+                      "l1":1,"l2":4,"coupling":0.9999,"r1":0.01,"r2":0.04}},
+                    {{"type":"resistor","name":"RL","a":"s","b":"sb","resistance":{load}}},
+                    {{"type":"resistor","name":"RG","a":"sb","b":"0","resistance":1e6}}
+                ]}}"#
+            ),
+            5e-3,
+        );
+        let s = run.unknown_names.iter().position(|n| n == "v(s)").unwrap();
+        let sb = run.unknown_names.iter().position(|n| n == "v(sb)").unwrap();
+        (run, s, sb)
+    }
+
+    #[test]
+    fn a_transformer_steps_up_by_its_turns_ratio() {
+        let (run, s, sb) = transformer(1e3);
+        let peak = run
+            .time
+            .iter()
+            .zip(&run.solution)
+            .filter(|(t, _)| **t > 2e-3)
+            .map(|(_, x)| (x[s] - x[sb]).abs())
+            .fold(0.0, f64::max);
+        assert!((peak - 20.0).abs() < 0.3, "secondary peaked at {peak}");
+    }
+
+    #[test]
+    fn a_transformer_carries_power_across_its_windings() {
+        // Loaded with 100 Ω the secondary draws 200 mA peak; the primary has to
+        // supply twice that, and does so in the opposite sense of the dot.
+        let (run, s, sb) = transformer(100.0);
+        let primary = run.unknown_names.iter().position(|n| n == "i(T1.0)").unwrap();
+        let late: Vec<_> = run.time.iter().zip(&run.solution).filter(|(t, _)| **t > 2e-3).collect();
+        let i_primary = late.iter().map(|(_, x)| x[primary].abs()).fold(0.0, f64::max);
+        let v_secondary = late.iter().map(|(_, x)| (x[s] - x[sb]).abs()).fold(0.0, f64::max);
+        assert!((v_secondary - 20.0).abs() < 0.5, "secondary {v_secondary}");
+        assert!((i_primary - 0.4).abs() < 0.03, "primary current {i_primary}");
+    }
+
+    #[test]
+    fn a_transformer_passes_no_dc() {
+        let json = r#"{"components":[
+            {"type":"voltage_source","name":"V1","plus":"p","minus":"0",
+             "waveform":{"type":"dc","value":5}},
+            {"type":"resistor","name":"R1","a":"p","b":"q","resistance":10},
+            {"type":"transformer","name":"T1","primary":["q","0"],"secondary":["s","0"],
+             "l1":1,"l2":1,"coupling":0.99,"r1":1}
+        ]}"#;
+        let netlist: Netlist = serde_json::from_str(json).unwrap();
+        let mut circuit = netlist.compile().unwrap();
+        let op = crate::solver::Simulator::default().operating_point(&mut circuit).unwrap();
+        let v = |n: &str| {
+            let i = op.unknown_names.iter().position(|u| *u == format!("v({n})")).unwrap();
+            op.solution[i]
+        };
+        // The primary is its copper, 1 Ω under 10: a divider, and nothing across.
+        assert!((v("q") - 5.0 / 11.0).abs() < 1e-6, "{}", v("q"));
+        assert!(v("s").abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_memory_keeps_what_was_written_and_starts_from_its_contents() {
+        // Two address lines, four bits. Word 1 starts at 10; word 2 is written
+        // with 5 between 0.5 and 1 µs; the address then goes 2, 1, 2.
+        let json = r#"{
+            "components":[],
+            "devices":[
+                {"type":"logic_source","name":"A0","output":"a0","state":"low","flips":[2e-6,3e-6]},
+                {"type":"logic_source","name":"A1","output":"a1","state":"high","flips":[2e-6,3e-6]},
+                {"type":"logic_source","name":"W","output":"w","state":"low","flips":[0.5e-6,1e-6]},
+                {"type":"logic_source","name":"D0","output":"d0","state":"high"},
+                {"type":"logic_source","name":"D1","output":"d1","state":"low"},
+                {"type":"logic_source","name":"D2","output":"d2","state":"high"},
+                {"type":"logic_source","name":"D3","output":"d3","state":"low"},
+                {"type":"memory","name":"M1","address":["a0","a1"],
+                 "data_in":["d0","d1","d2","d3"],"data_out":["q0","q1","q2","q3"],
+                 "write":"w","contents":[0,10]}
+            ]}"#;
+        let run = run(json, 4e-6);
+        let level_at = |name: &str, t: f64| {
+            let net = run.net_names.iter().position(|n| n == name).unwrap();
+            run.digital[net].iter().take_while(|(when, _)| *when <= t).last().map(|(_, l)| *l)
+        };
+        let word_at = |t: f64| {
+            (0..4).try_fold(0u32, |word, bit| {
+                let high = level_at(&format!("q{bit}"), t)?.as_bool()?;
+                Some(word | u32::from(high) << bit)
+            })
+        };
+        assert_eq!(word_at(0.2e-6), None, "word 2 holds nothing known before the write");
+        assert_eq!(word_at(1.5e-6), Some(5));
+        assert_eq!(word_at(2.5e-6), Some(10));
+        assert_eq!(word_at(3.5e-6), Some(5), "still holding what was written");
+    }
+
+    /// Four bits of every net named `q0`..`q3` at a moment, or `None` while any
+    /// of them is undecided.
+    fn word_at(run: &crate::solver::TransientResult, t: f64) -> Option<u32> {
+        (0..4).try_fold(0u32, |word, bit| {
+            let net = run.net_names.iter().position(|n| *n == format!("q{bit}"))?;
+            let level = run.digital[net]
+                .iter()
+                .take_while(|(when, _)| *when <= t)
+                .last()
+                .map(|(_, l)| *l)?;
+            Some(word | u32::from(level.as_bool()?) << bit)
+        })
+    }
+
+    fn eeprom(
+        sources: &str,
+        contents: &str,
+        programming: &str,
+        stop: f64,
+    ) -> crate::solver::TransientResult {
+        run(
+            &format!(
+                r#"{{"components":[],"devices":[{sources},
+                    {{"type":"logic_source","name":"D0","output":"d0","state":"high"}},
+                    {{"type":"logic_source","name":"D1","output":"d1","state":"low"}},
+                    {{"type":"logic_source","name":"D2","output":"d2","state":"high"}},
+                    {{"type":"logic_source","name":"D3","output":"d3","state":"low"}},
+                    {{"type":"memory","name":"M1","address":["a0","a1"],
+                      "data_in":["d0","d1","d2","d3"],"data_out":["q0","q1","q2","q3"],
+                      "write":"w","contents":{contents},"blank":15,
+                      "programming":{programming}}}]}}"#
+            ),
+            stop,
+        )
+    }
+
+    #[test]
+    fn an_eeprom_takes_its_write_time_and_polls_meanwhile() {
+        // Word 0 holds 15; 5 is written into it by a pulse ending at 2 µs, and
+        // the array takes a millisecond. Until then the top bit reads back as
+        // the complement of what is going in and the rest as nothing.
+        let run = eeprom(
+            r#"{"type":"logic_source","name":"A0","output":"a0","state":"low"},
+               {"type":"logic_source","name":"A1","output":"a1","state":"low"},
+               {"type":"logic_source","name":"W","output":"w","state":"low","flips":[1e-6,2e-6]}"#,
+            "[15]",
+            r#"{"write_time":1e-3,"timer":"m1_timer"}"#,
+            1.5e-3,
+        );
+        assert_eq!(word_at(&run, 0.5e-6), Some(15), "before the write");
+        let polled = |bit: usize| {
+            let net = run.net_names.iter().position(|n| *n == format!("q{bit}")).unwrap();
+            run.digital[net].iter().take_while(|(when, _)| *when <= 0.5e-3).last().map(|(_, l)| *l)
+        };
+        assert_eq!(polled(3), Some(Logic::High), "bit 3 of 5 is low, so it polls high");
+        assert_eq!(polled(0), Some(Logic::Unknown));
+        assert_eq!(word_at(&run, 0.9e-3), None, "still writing");
+        assert_eq!(word_at(&run, 1.1e-3), Some(5), "written");
+    }
+
+    #[test]
+    fn an_eeprom_page_takes_words_from_one_page_only() {
+        // Pages of two words, loaded within 150 µs of each other. Words 0 and 1
+        // go in together; word 3, on the next page, arrives while they are
+        // still loading and is not taken. The address then walks back over all
+        // three once the write is done.
+        let run = eeprom(
+            r#"{"type":"logic_source","name":"A0","output":"a0","state":"low","flips":[20e-6,1.3e-3]},
+               {"type":"logic_source","name":"A1","output":"a1","state":"low","flips":[40e-6,1.25e-3]},
+               {"type":"logic_source","name":"W","output":"w","state":"low",
+                "flips":[10e-6,11e-6,30e-6,31e-6,50e-6,51e-6]}"#,
+            "[0,0,0,9]",
+            r#"{"write_time":1e-3,"page":2,"load_window":150e-6,"timer":"m1_timer"}"#,
+            1.4e-3,
+        );
+        assert_eq!(word_at(&run, 1.2e-3), Some(9), "word 3 was never taken");
+        assert_eq!(word_at(&run, 1.27e-3), Some(5), "word 1 written");
+        assert_eq!(word_at(&run, 1.35e-3), Some(5), "word 0 written");
+        assert_eq!(word_at(&run, 1.0e-3), None, "the page is still being written at 1 ms");
     }
 
     #[test]

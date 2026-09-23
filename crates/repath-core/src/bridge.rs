@@ -240,6 +240,8 @@ pub struct AdcBridge {
     pub family: LogicFamily,
     /// Input-to-output delay of the receiver.
     pub delay: f64,
+    /// Supply nodes the thresholds are fractions of, when they are.
+    pub reference: Option<(NodeId, NodeId)>,
     driver: DriverId,
     state: Logic,
     last_sample: Option<(f64, f64)>,
@@ -259,6 +261,7 @@ impl AdcBridge {
             net,
             family,
             delay: 0.0,
+            reference: None,
             driver,
             state: Logic::Unknown,
             last_sample: None,
