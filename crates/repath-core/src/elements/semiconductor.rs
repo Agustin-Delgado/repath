@@ -362,23 +362,102 @@ impl Default for DiodeModel {
     }
 }
 
-/// How long a steady current of exactly twice the rating takes to destroy a part.
+/// How a part heats up and cools down, as two thermal masses in parallel.
 ///
-/// Everything else follows from it. The dose needed is `rated × BURN_TIME`, so a
-/// current of `k` times the rating gets there in `BURN_TIME / (k − 1)`: ten times
-/// rated kills in about a tenth of a millisecond, a hundred times in ten
-/// microseconds, and anything at or below the rating never does.
+/// A small one that heats in a fraction of a millisecond — the die, the fuse
+/// element — and a large one that takes much longer — the package, the leads,
+/// the fuse's end caps. The part is fed a load normalised to its rating (one
+/// means the rating), each mass settles towards its share of that load with its
+/// own time constant, and the part fails when the two together reach one.
 ///
-/// The number is chosen so that both of the cases that matter come out right — a
-/// brief pulse well over the rating survives, while the classic mistake of
-/// leaving out the series resistor fails fast enough to watch happen.
+/// So a load at the rating never gets there, a load well over it gets there in
+/// the time the small mass takes to fill, and a load a little over it only once
+/// the large one has caught up. Between bursts both cool towards whatever the
+/// load is then: a multiplexed LED lives or dies on its peak and its duty cycle
+/// the way a datasheet's pulse rating says, rather than on one or the other.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThermalModel {
+    /// The fast mass's share of the steady temperature rise.
+    pub share: f64,
+    /// Time constants of the fast and the slow mass, seconds.
+    pub fast: f64,
+    pub slow: f64,
+}
+
+impl ThermalModel {
+    /// Where a load of `load` times the rating takes the part from cold, as a
+    /// time — `None` if it never gets there.
+    pub fn time_to_fail(&self, load: f64) -> Option<f64> {
+        if load <= 1.0 {
+            return None;
+        }
+        // Bisection on the closed form: monotonic, and only asked in tests and
+        // by people reading the numbers off.
+        let level = |t: f64| {
+            load * (self.share * (1.0 - (-t / self.fast).exp())
+                + (1.0 - self.share) * (1.0 - (-t / self.slow).exp()))
+        };
+        let (mut lo, mut hi) = (0.0, self.slow * 100.0);
+        if level(hi) < 1.0 {
+            return None;
+        }
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            if level(mid) >= 1.0 { hi = mid } else { lo = mid }
+        }
+        Some(hi)
+    }
+}
+
+/// The heat a part is carrying, in the terms of its `ThermalModel`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Heat {
+    fast: f64,
+    slow: f64,
+}
+
+impl Heat {
+    /// Carry `load`, the mean over the step, for `dt` seconds. Integrated
+    /// exactly, so a long step at a steady load lands where a hundred short ones
+    /// would.
+    pub fn advance(&mut self, model: &ThermalModel, load: f64, dt: f64) {
+        let settle = |x: f64, share: f64, tau: f64| {
+            let decay = (-dt / tau.max(1e-15)).exp();
+            x * decay + share * load * (1.0 - decay)
+        };
+        self.fast = settle(self.fast, model.share, model.fast);
+        self.slow = settle(self.slow, 1.0 - model.share, model.slow);
+    }
+
+    /// How close to failing, where one is failed.
+    pub fn level(&self) -> f64 {
+        self.fast + self.slow
+    }
+
+    /// A step short enough, at `load`, not to overshoot the failure by much.
+    pub fn max_step(&self, model: &ThermalModel, load: f64) -> f64 {
+        // How fast the level climbs now, fast mass first since it dominates.
+        let rate = (model.share * load - self.fast) / model.fast
+            + ((1.0 - model.share) * load - self.slow) / model.slow;
+        if rate <= 0.0 || load <= 1.0 {
+            return f64::INFINITY;
+        }
+        ((1.0 - self.level()) / rate / 4.0).max(1e-9)
+    }
+}
+
+/// How an LED heats. The fast mass fills in under half a millisecond and carries
+/// two fifths of the rise, the slow one takes twenty.
 ///
-/// Below the rating the dose drains again, at the rate the shortfall says: the
-/// part sheds heat faster than it takes it on. That is what lets a multiplexed
-/// display run — each segment gets four times its rating a quarter of the time,
-/// and what decides whether it lives is the average, as it is on a datasheet,
-/// provided no single burst is long enough to do it in by itself.
-pub const BURN_TIME: f64 = 1e-3;
+/// Chosen against the two cases that matter. Leaving out the series resistor —
+/// four times the rating — kills it in about a third of a millisecond, fast
+/// enough to watch happen. And the pulse rating LED datasheets print, five times
+/// the rated current in tenth-of-a-millisecond pulses at a tenth duty, is just
+/// survived, while four times at a quarter duty is not.
+pub const LED_HEATING: ThermalModel = ThermalModel { share: 0.4, fast: 0.4e-3, slow: 20e-3 };
+
+/// How far short of the moment a part fails the solver aims to land.
+const FAILURE_STEP: f64 = 1e-6;
 
 /// A part that did not survive the run.
 #[derive(Debug, Clone, PartialEq)]
@@ -430,8 +509,8 @@ pub struct Diode {
     gd_op: f64,
     /// The junction's stored charge.
     charge: ChargeBranch,
-    /// Accumulated overcurrent in amp-seconds. Only tracked with a rating.
-    dose: f64,
+    /// Heat taken on from running over the rating. Only tracked with a rating.
+    heat: Heat,
     /// Forward current at the last accepted timepoint, for the trapezoid.
     i_accepted: f64,
     /// Largest forward current reached before failing.
@@ -451,7 +530,7 @@ impl Diode {
             v_accepted: 0.0,
             gd_op: 0.0,
             charge: ChargeBranch::default(),
-            dose: 0.0,
+            heat: Heat::default(),
             i_accepted: 0.0,
             peak: 0.0,
             blown_at: None,
@@ -704,12 +783,11 @@ impl Element for Diode {
             && rated > 0.0
         {
             self.peak = self.peak.max(current);
-            // Signed: a step spent under the rating cools the part down again,
-            // though never below where it started.
-            let before = self.i_accepted.max(0.0) - rated;
-            let after = current.max(0.0) - rated;
-            self.dose = (self.dose + (before + after) / 2.0 * ctx.dt).max(0.0);
-            if self.dose >= rated * BURN_TIME {
+            // The forward voltage hardly moves, so the power is the current: the
+            // load is the mean current over the step against the rated one.
+            let load = (self.i_accepted.max(0.0) + current.max(0.0)) / 2.0 / rated;
+            self.heat.advance(&LED_HEATING, load, ctx.dt);
+            if self.heat.level() >= 1.0 {
                 self.blown_at = Some(ctx.time);
             }
         }
@@ -742,8 +820,11 @@ impl Element for Diode {
         // carrying goes to nothing between one timepoint and the next. Take that
         // one step short so the solver lands on the edge instead of integrating
         // across it and smearing the jump over a wide interval.
-        let failing = match self.blown_at {
-            Some(at) if ctx.time <= at => BURN_TIME * 1e-3,
+        let failing = match (self.blown_at, self.model.rated) {
+            (Some(at), _) if ctx.time <= at => FAILURE_STEP,
+            (None, Some(rated)) if rated > 0.0 => {
+                self.heat.max_step(&LED_HEATING, self.i_accepted.max(0.0) / rated)
+            }
             _ => f64::INFINITY,
         };
         // And the junction's own charge, which is what a reverse recovery is made
@@ -758,7 +839,7 @@ impl Element for Diode {
         self.v_accepted = 0.0;
         self.gd_op = 0.0;
         self.charge.reset();
-        self.dose = 0.0;
+        self.heat = Heat::default();
         self.i_accepted = 0.0;
         self.peak = 0.0;
         self.blown_at = None;
