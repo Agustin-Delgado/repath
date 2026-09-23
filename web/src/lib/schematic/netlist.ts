@@ -791,7 +791,17 @@ function compileFresh(
 						write: net(block.write!),
 						contents,
 						blank: chip.contents ? chip.contents.erased : null,
-						delay: block.delay ?? 1e-9
+						delay: block.delay ?? 1e-9,
+						programming: block.programming
+							? {
+									write_time: block.programming.writeTime,
+									page: block.programming.page ?? 1,
+									load_window: block.programming.loadWindow ?? 0,
+									// A net of its own inside the package, that the memory pulses
+									// to wake itself when a write is done.
+									timer: net(`${index}_timer`)
+								}
+							: null
 					});
 				} else if (block.kind === 'tristate') {
 					devices.push({

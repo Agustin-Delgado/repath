@@ -11,6 +11,24 @@ early entries point at those instead.
 
 ---
 
+## 23 September 2026 — Heat that takes time, and EEPROMs that write like one
+
+**Parts heat up and cool down the way real ones do.** An LED and a fuse each
+have a fast thermal mass and a slow one. A short still kills an LED in a third
+of a millisecond, but thirty percent over its rating now takes milliseconds,
+and the pulse rating an LED datasheet prints — five times the current at a
+tenth duty — is survived. A fuse blows on its `I²t` when shorted and takes
+about a second at half again its rating.
+
+**Writing an EEPROM from a circuit works like the real part.** The 28C16 takes
+a millisecond per byte and the 28C256 loads up to 64 bytes of a page before
+spending ten milliseconds on them; meanwhile I/O7 reads back the complement of
+what is going in, so a program can poll for the end of the write. As on the
+part, a write needs OE high.
+[#64](https://github.com/Agustin-Delgado/repath/pull/64)
+
+---
+
 ## 23 September 2026 — Fuses, transformers and memory
 
 **A fuse that blows.** It carries its rating for ever; past that it heats by

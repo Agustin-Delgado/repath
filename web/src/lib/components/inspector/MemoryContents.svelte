@@ -31,7 +31,8 @@
 <section class="flex flex-col gap-1.5">
 	<h3 class={sectionTitle}>Contents</h3>
 	<p class={hint}>
-		Hex words from address 0; <code>@7F0</code> jumps to an address and <code>;</code> starts a comment.
+		What it holds when a run starts, as hex words from address 0; <code>@7F0</code> jumps to an
+		address and <code>;</code> starts a comment. A write during the run does not change this.
 		{written === 0
 			? `Nothing written yet: every address reads ${erased}.`
 			: `${written} of ${count} words written; the rest read ${erased}.`}

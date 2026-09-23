@@ -639,14 +639,20 @@ impl DigitalDevice for TriStateBuffer {
     }
 }
 
-/// A block of memory: words picked by a binary address, read out continuously
-/// and written for as long as `write` is high.
+/// A block of memory: words picked by a binary address and read out
+/// continuously.
 ///
-/// That is all of a static RAM, a ROM, or an EEPROM read like one. Chip selects,
-/// output enables and three-state pins are the package's business, built from
-/// gates and buffers around this the same way the real die has them around its
-/// cell array — so this has one write line, active high, and always drives its
+/// That is all of a static RAM, a ROM, or an EEPROM. Chip selects, output
+/// enables and three-state pins are the package's business, built from gates
+/// and buffers around this the same way the real die has them around its cell
+/// array — so this has one write line, active high, and always drives its
 /// outputs.
+///
+/// A RAM stores whatever is on its data inputs for as long as `write` is high.
+/// An EEPROM (see `Programming`) does not: it latches the address as `write`
+/// rises and the data as it falls, and then spends milliseconds putting the
+/// byte into the array, reading back as the complement of bit 7 on the top
+/// output until it is done — the data polling a program waits on.
 ///
 /// The address is read least significant bit first. While any of its bits is
 /// unknown the outputs are unknown, and a write goes nowhere: which cell a real
@@ -661,12 +667,50 @@ pub struct Memory {
     pub write: NetId,
     /// Access time: from an address or a write to the outputs following it.
     pub delay: f64,
+    /// How an EEPROM writes, or `None` for a RAM.
+    programming: Option<Programming>,
     /// Every bit, word by word, least significant first.
     cells: Vec<Logic>,
     /// What the cells hold at the start of a run.
     initial: Vec<Logic>,
     inputs: Vec<NetId>,
+    outputs: Vec<NetId>,
+    /// What `write` was at the last evaluation, for finding its edges.
+    write_was: Logic,
+    /// The word the last rising edge of `write` latched.
+    latched: Option<usize>,
+    phase: Phase,
 }
+
+/// How an EEPROM takes a write.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Programming {
+    /// How long the array takes to store what was loaded, seconds.
+    pub write_time: f64,
+    /// Words that can be loaded before a write starts, all in one page. One for
+    /// a part that writes a byte at a time.
+    pub page: usize,
+    /// How long after the last load the write starts, when a page takes more.
+    pub load_window: f64,
+    /// A net nobody else drives, pulsed to wake the device when a wait is up.
+    pub timer: NetId,
+}
+
+/// A word loaded for writing, and the bits it goes in with.
+type Load = (usize, Vec<Logic>);
+
+#[derive(Debug, Clone, Default)]
+enum Phase {
+    #[default]
+    Idle,
+    /// Words in the page buffer, and when the write starts unless more come.
+    Loading { words: Vec<Load>, until: f64 },
+    /// The array being written, and when it is done.
+    Writing { words: Vec<Load>, until: f64 },
+}
+
+/// A wake-up pulse's width. Anything shorter than every real delay will do.
+const TICK: f64 = 1e-12;
 
 impl Memory {
     /// Widest address a memory takes: 64 K words.
@@ -699,13 +743,26 @@ impl Memory {
             name: name.into(),
             address,
             data_in,
+            outputs: data_out.clone(),
             data_out,
             write,
             delay: delay.max(0.0),
+            programming: None,
             initial: cells.clone(),
             cells,
             inputs,
+            write_was: Logic::Unknown,
+            latched: None,
+            phase: Phase::Idle,
         }
+    }
+
+    /// Write the way an EEPROM does rather than the way a RAM does.
+    pub fn programmed(mut self, programming: Programming) -> Self {
+        self.inputs.push(programming.timer);
+        self.outputs.push(programming.timer);
+        self.programming = Some(programming);
+        self
     }
 
     /// The word the address picks, or `None` while any bit of it is undecided.
@@ -718,6 +775,79 @@ impl Memory {
     /// What the cell at `word`, `bit` holds right now.
     pub fn cell(&self, word: usize, bit: usize) -> Logic {
         self.cells.get(word * self.data_out.len() + bit).copied().unwrap_or(Logic::Unknown)
+    }
+
+    /// Wake up at `at`, by pulsing the timer net.
+    fn wake_at(&self, ctx: &mut EvalCtx, at: f64) {
+        if let Some(p) = self.programming {
+            let index = self.data_out.len();
+            let wait = (at - ctx.now).max(0.0);
+            ctx.drive(index, p.timer, Logic::High, wait);
+            ctx.drive(index, p.timer, Logic::Low, wait + TICK);
+        }
+    }
+
+    /// An EEPROM's side of a change on its inputs: edges of `write`, and waits
+    /// running out.
+    fn program(&mut self, ctx: &mut EvalCtx, p: Programming, word: Option<usize>) {
+        let now = ctx.now;
+        // A wait that has run out moves the part on.
+        match &mut self.phase {
+            Phase::Loading { words, until } if now >= *until - TICK => {
+                let words = std::mem::take(words);
+                let until = now + p.write_time;
+                self.phase = Phase::Writing { words, until };
+                self.wake_at(ctx, until);
+            }
+            Phase::Writing { words, until } if now >= *until - TICK => {
+                let width = self.data_out.len();
+                for (w, data) in std::mem::take(words) {
+                    self.cells[w * width..(w + 1) * width].copy_from_slice(&data);
+                }
+                self.phase = Phase::Idle;
+            }
+            _ => {}
+        }
+
+        let level = ctx.read(self.write);
+        let rose = level == Logic::High && self.write_was != Logic::High;
+        let fell = level == Logic::Low && self.write_was == Logic::High;
+        self.write_was = level;
+        if rose {
+            self.latched = word;
+        }
+        if !fell {
+            return;
+        }
+        let Some(w) = self.latched else { return };
+        let data: Vec<Logic> = self.data_in.iter().map(|&net| ctx.read(net).sense()).collect();
+        let page = |w: usize| w / p.page.max(1);
+        match &mut self.phase {
+            // Busy writing the array: nothing is taken until it is done.
+            Phase::Writing { .. } => {}
+            Phase::Loading { words, until } => {
+                // Another word of the same page, which holds the write off again.
+                // A word from another page is not taken.
+                if words.first().is_some_and(|(first, _)| page(*first) == page(w)) {
+                    words.retain(|(other, _)| *other != w);
+                    words.push((w, data));
+                    *until = now + p.load_window;
+                    let until = *until;
+                    self.wake_at(ctx, until);
+                }
+            }
+            Phase::Idle => {
+                let (phase, until) = if p.page > 1 {
+                    let until = now + p.load_window;
+                    (Phase::Loading { words: vec![(w, data)], until }, until)
+                } else {
+                    let until = now + p.write_time;
+                    (Phase::Writing { words: vec![(w, data)], until }, until)
+                };
+                self.phase = phase;
+                self.wake_at(ctx, until);
+            }
+        }
     }
 }
 
@@ -732,21 +862,39 @@ impl DigitalDevice for Memory {
         &self.inputs
     }
     fn output_nets(&self) -> &[NetId] {
-        &self.data_out
+        &self.outputs
     }
 
     fn evaluate(&mut self, ctx: &mut EvalCtx) {
         let width = self.data_out.len();
         let word = self.selected(ctx);
-        if ctx.read(self.write) == Logic::High
-            && let Some(word) = word
-        {
-            for (bit, &net) in self.data_in.iter().enumerate().take(width) {
-                self.cells[word * width + bit] = ctx.read(net).sense();
+        match self.programming {
+            None => {
+                if ctx.read(self.write) == Logic::High
+                    && let Some(word) = word
+                {
+                    for (bit, &net) in self.data_in.iter().enumerate().take(width) {
+                        self.cells[word * width + bit] = ctx.read(net).sense();
+                    }
+                }
             }
+            Some(p) => self.program(ctx, p, word),
         }
+        // While a write is in hand the array cannot be read: the top output is
+        // the complement of what the last word loaded has there, and the rest
+        // say nothing.
+        let polling = match &self.phase {
+            Phase::Idle => None,
+            Phase::Loading { words, .. } | Phase::Writing { words, .. } => {
+                words.last().map(|(_, data)| data[width - 1].invert())
+            }
+        };
         for bit in 0..width {
-            let value = word.map_or(Logic::Unknown, |w| self.cells[w * width + bit]);
+            let value = match polling {
+                Some(top) if bit == width - 1 => top,
+                Some(_) => Logic::Unknown,
+                None => word.map_or(Logic::Unknown, |w| self.cells[w * width + bit]),
+            };
             let net = self.data_out[bit];
             ctx.drive(bit, net, value, self.delay);
         }
@@ -754,6 +902,9 @@ impl DigitalDevice for Memory {
 
     fn reset(&mut self) {
         self.cells.clone_from(&self.initial);
+        self.write_was = Logic::Unknown;
+        self.latched = None;
+        self.phase = Phase::Idle;
     }
 }
 

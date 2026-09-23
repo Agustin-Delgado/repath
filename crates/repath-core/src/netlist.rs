@@ -11,7 +11,8 @@ use std::collections::HashSet;
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
 use crate::digital::{
-    AsyncInputs, Clock, DFlipFlop, Gate, GateKind, Logic, LogicSource, Memory, TriStateBuffer,
+    AsyncInputs, Clock, DFlipFlop, Gate, GateKind, Logic, LogicSource, Memory, Programming,
+    TriStateBuffer,
 };
 use crate::element::NodeId;
 use crate::elements::semiconductor::TNOM;
@@ -319,6 +320,22 @@ impl Component {
     }
 }
 
+/// How an EEPROM writes. See `digital::Programming`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProgrammingSpec {
+    pub write_time: f64,
+    #[serde(default = "one")]
+    pub page: usize,
+    #[serde(default)]
+    pub load_window: f64,
+    /// A net of its own, for the device to wake itself with.
+    pub timer: String,
+}
+
+fn one() -> usize {
+    1
+}
+
 /// A digital device.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -376,6 +393,10 @@ pub enum Device {
         blank: Option<u64>,
         #[serde(default = "default_gate_delay")]
         delay: f64,
+        /// How an EEPROM writes; absent for a RAM, which stores while `write` is
+        /// high.
+        #[serde(default)]
+        programming: Option<ProgrammingSpec>,
     },
     /// A level someone set. See `digital::LogicSource`.
     LogicSource {
@@ -711,7 +732,17 @@ impl Netlist {
                 let (i, e, o) = (c.net(input), c.net(enable), c.net(output));
                 c.add_device(Box::new(TriStateBuffer::new(name, i, e, o, *delay)));
             }
-            Device::Memory { name, address, data_in, data_out, write, contents, blank, delay } => {
+            Device::Memory {
+                name,
+                address,
+                data_in,
+                data_out,
+                write,
+                contents,
+                blank,
+                delay,
+                programming,
+            } => {
                 if address.len() > Memory::MAX_ADDRESS_BITS {
                     return Err(NetlistError::BadTerminals {
                         component: name.clone(),
@@ -732,14 +763,23 @@ impl Netlist {
                 let data_in = data_in.iter().map(|n| c.net(n)).collect();
                 let data_out = data_out.iter().map(|n| c.net(n)).collect();
                 let write = c.net(write);
-                c.add_device(Box::new(Memory::new(
+                let mut memory = Memory::new(
                     name,
                     (address, write),
                     (data_in, data_out),
                     contents,
                     *blank,
                     *delay,
-                )));
+                );
+                if let Some(spec) = programming {
+                    memory = memory.programmed(Programming {
+                        write_time: spec.write_time.max(0.0),
+                        page: spec.page.max(1),
+                        load_window: spec.load_window.max(0.0),
+                        timer: c.net(&spec.timer),
+                    });
+                }
+                c.add_device(Box::new(memory));
             }
             Device::LogicSource { name, output, state, flips } => {
                 let out = c.net(output);
@@ -903,6 +943,10 @@ mod tests {
     }
 
     fn fused(volts: f64) -> crate::solver::TransientResult {
+        fused_for(volts, 20e-3)
+    }
+
+    fn fused_for(volts: f64, stop: f64) -> crate::solver::TransientResult {
         // A 1 A fuse with an I²t of 0.5 A²s feeding a 1 Ω load.
         run(
             &format!(
@@ -914,7 +958,7 @@ mod tests {
                     {{"type":"resistor","name":"RL","a":"out","b":"0","resistance":1}}
                 ]}}"#
             ),
-            20e-3,
+            stop,
         )
     }
 
@@ -935,6 +979,16 @@ mod tests {
         assert!((failure.peak - 10.0).abs() < 0.1, "peak {}", failure.peak);
         let out = run.unknown_names.iter().position(|n| n == "v(out)").unwrap();
         assert!(run.solution.last().unwrap()[out].abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_small_overload_takes_seconds_to_blow_a_fuse() {
+        // Half as much again through a 1 A fuse: the element alone would never
+        // melt at that, so it waits on the end caps and glass warming behind it —
+        // about a second, where ten amps took five milliseconds.
+        let run = fused_for(1.5, 3.0);
+        let failure = run.failures.first().expect("half again over its rating should blow it");
+        assert!(failure.time > 0.5 && failure.time < 2.0, "blew at {} s", failure.time);
     }
 
     fn transformer(load: f64) -> (crate::solver::TransientResult, usize, usize) {
@@ -1038,6 +1092,87 @@ mod tests {
         assert_eq!(word_at(1.5e-6), Some(5));
         assert_eq!(word_at(2.5e-6), Some(10));
         assert_eq!(word_at(3.5e-6), Some(5), "still holding what was written");
+    }
+
+    /// Four bits of every net named `q0`..`q3` at a moment, or `None` while any
+    /// of them is undecided.
+    fn word_at(run: &crate::solver::TransientResult, t: f64) -> Option<u32> {
+        (0..4).try_fold(0u32, |word, bit| {
+            let net = run.net_names.iter().position(|n| *n == format!("q{bit}"))?;
+            let level = run.digital[net]
+                .iter()
+                .take_while(|(when, _)| *when <= t)
+                .last()
+                .map(|(_, l)| *l)?;
+            Some(word | u32::from(level.as_bool()?) << bit)
+        })
+    }
+
+    fn eeprom(
+        sources: &str,
+        contents: &str,
+        programming: &str,
+        stop: f64,
+    ) -> crate::solver::TransientResult {
+        run(
+            &format!(
+                r#"{{"components":[],"devices":[{sources},
+                    {{"type":"logic_source","name":"D0","output":"d0","state":"high"}},
+                    {{"type":"logic_source","name":"D1","output":"d1","state":"low"}},
+                    {{"type":"logic_source","name":"D2","output":"d2","state":"high"}},
+                    {{"type":"logic_source","name":"D3","output":"d3","state":"low"}},
+                    {{"type":"memory","name":"M1","address":["a0","a1"],
+                      "data_in":["d0","d1","d2","d3"],"data_out":["q0","q1","q2","q3"],
+                      "write":"w","contents":{contents},"blank":15,
+                      "programming":{programming}}}]}}"#
+            ),
+            stop,
+        )
+    }
+
+    #[test]
+    fn an_eeprom_takes_its_write_time_and_polls_meanwhile() {
+        // Word 0 holds 15; 5 is written into it by a pulse ending at 2 µs, and
+        // the array takes a millisecond. Until then the top bit reads back as
+        // the complement of what is going in and the rest as nothing.
+        let run = eeprom(
+            r#"{"type":"logic_source","name":"A0","output":"a0","state":"low"},
+               {"type":"logic_source","name":"A1","output":"a1","state":"low"},
+               {"type":"logic_source","name":"W","output":"w","state":"low","flips":[1e-6,2e-6]}"#,
+            "[15]",
+            r#"{"write_time":1e-3,"timer":"m1_timer"}"#,
+            1.5e-3,
+        );
+        assert_eq!(word_at(&run, 0.5e-6), Some(15), "before the write");
+        let polled = |bit: usize| {
+            let net = run.net_names.iter().position(|n| *n == format!("q{bit}")).unwrap();
+            run.digital[net].iter().take_while(|(when, _)| *when <= 0.5e-3).last().map(|(_, l)| *l)
+        };
+        assert_eq!(polled(3), Some(Logic::High), "bit 3 of 5 is low, so it polls high");
+        assert_eq!(polled(0), Some(Logic::Unknown));
+        assert_eq!(word_at(&run, 0.9e-3), None, "still writing");
+        assert_eq!(word_at(&run, 1.1e-3), Some(5), "written");
+    }
+
+    #[test]
+    fn an_eeprom_page_takes_words_from_one_page_only() {
+        // Pages of two words, loaded within 150 µs of each other. Words 0 and 1
+        // go in together; word 3, on the next page, arrives while they are
+        // still loading and is not taken. The address then walks back over all
+        // three once the write is done.
+        let run = eeprom(
+            r#"{"type":"logic_source","name":"A0","output":"a0","state":"low","flips":[20e-6,1.3e-3]},
+               {"type":"logic_source","name":"A1","output":"a1","state":"low","flips":[40e-6,1.25e-3]},
+               {"type":"logic_source","name":"W","output":"w","state":"low",
+                "flips":[10e-6,11e-6,30e-6,31e-6,50e-6,51e-6]}"#,
+            "[0,0,0,9]",
+            r#"{"write_time":1e-3,"page":2,"load_window":150e-6,"timer":"m1_timer"}"#,
+            1.4e-3,
+        );
+        assert_eq!(word_at(&run, 1.2e-3), Some(9), "word 3 was never taken");
+        assert_eq!(word_at(&run, 1.27e-3), Some(5), "word 1 written");
+        assert_eq!(word_at(&run, 1.35e-3), Some(5), "word 0 written");
+        assert_eq!(word_at(&run, 1.0e-3), None, "the page is still being written at 1 ms");
     }
 
     #[test]

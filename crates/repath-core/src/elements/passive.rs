@@ -10,7 +10,7 @@ use crate::element::{
     AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, RingDetector, StampCtx, StampReport,
     node_index,
 };
-use crate::elements::semiconductor::{Failure, TNOM};
+use crate::elements::semiconductor::{Failure, Heat, TNOM, ThermalModel};
 use crate::linalg::LinearSystem;
 use crate::lte::Trace;
 
@@ -426,16 +426,14 @@ impl Element for VariableResistor {
 /// A fuse: a small resistance that opens for good once it has carried too much
 /// for too long.
 ///
-/// What melts the element is heat, and what heats it is `i²` — so the fuse
-/// integrates `i²` above what its rating dissipates and blows when the total
-/// reaches its melting integral, the `I²t` figure every fuse datasheet prints.
-/// At or below the rating it never blows; a short that pushes ten times the
-/// rating through a 1 A fuse with an `I²t` of 0.5 A²s opens it in about five
-/// milliseconds.
-///
-/// Under the rating it cools again, as fast as the shortfall in `i²` says, so a
-/// surge followed by a long rest is survived the way it is on a real board —
-/// the rest of the heat curve, with its time constants, is not modelled.
+/// What melts the element is heat, and what heats it is `i²`. It is the two
+/// thermal masses of `ThermalModel`, loaded with `(i / rated)²`: the element
+/// itself and the end caps and glass around it. The fast one's time constant
+/// comes from the melting integral, the `I²t` every fuse datasheet prints, so a
+/// short blows it once that much `i²t` has gone through — ten times the rating
+/// through a 1 A fuse with 0.5 A²s lasts about five milliseconds. The slow one
+/// is what makes a small overload take seconds, and what lets a fuse ride out a
+/// surge followed by a rest. At or below its rating it never blows.
 #[derive(Debug, Clone)]
 pub struct Fuse {
     pub name: String,
@@ -447,8 +445,9 @@ pub struct Fuse {
     pub rated: f64,
     /// Melting integral, A²s.
     pub i2t: f64,
-    /// Heat accumulated above the rating so far, A²s.
-    heat: f64,
+    /// How it heats, worked out from the rating and the melting integral.
+    thermal: ThermalModel,
+    heat: Heat,
     i_accepted: f64,
     peak: f64,
     blown_at: Option<f64>,
@@ -463,14 +462,22 @@ impl Fuse {
         rated: f64,
         i2t: f64,
     ) -> Self {
+        let rated = rated.abs().max(1e-12);
+        let i2t = i2t.abs().max(1e-12);
+        // Well past the rating the element melts before any heat leaves it, so
+        // what heats it is all of `i²t`: the fast mass's time constant over its
+        // share is the melting integral in units of the rating.
+        let adiabatic = i2t / (rated * rated);
+        let share = 0.4;
         Self {
             name: name.into(),
             p,
             m,
             r: r.abs().max(1e-6),
-            rated: rated.abs(),
-            i2t: i2t.abs().max(1e-12),
-            heat: 0.0,
+            rated,
+            i2t,
+            thermal: ThermalModel { share, fast: share * adiabatic, slow: 25.0 * adiabatic },
+            heat: Heat::default(),
             i_accepted: 0.0,
             peak: 0.0,
             blown_at: None,
@@ -512,10 +519,9 @@ impl Element for Fuse {
         if self.blown_at.is_none() && ctx.mode == Mode::Transient && ctx.dt > 0.0 {
             self.peak = self.peak.max(current);
             let rated = self.rated * self.rated;
-            let before = self.i_accepted * self.i_accepted - rated;
-            let after = current * current - rated;
-            self.heat = (self.heat + (before + after) / 2.0 * ctx.dt).max(0.0);
-            if self.heat >= self.i2t {
+            let load = (self.i_accepted * self.i_accepted + current * current) / 2.0 / rated;
+            self.heat.advance(&self.thermal, load, ctx.dt);
+            if self.heat.level() >= 1.0 {
                 self.blown_at = Some(ctx.time);
             }
         }
@@ -530,18 +536,14 @@ impl Element for Fuse {
             Some(at) if ctx.time <= at => 1e-9,
             Some(_) => f64::INFINITY,
             None => {
-                let excess = self.i_accepted * self.i_accepted - self.rated * self.rated;
-                if excess > 0.0 {
-                    ((self.i2t - self.heat) / excess / 4.0).max(1e-9)
-                } else {
-                    f64::INFINITY
-                }
+                let load = (self.i_accepted / self.rated).powi(2);
+                self.heat.max_step(&self.thermal, load)
             }
         }
     }
 
     fn reset(&mut self) {
-        self.heat = 0.0;
+        self.heat = Heat::default();
         self.i_accepted = 0.0;
         self.peak = 0.0;
         self.blown_at = None;
