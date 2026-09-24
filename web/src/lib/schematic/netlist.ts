@@ -436,7 +436,7 @@ function compileFresh(
 	}
 
 	if (schematic.instances.length === 0) {
-		errors.push('The schematic is empty. Drag a component in from the palette to start.');
+		errors.push('The schematic is empty. Pick a part or open an example from the parts panel to start.');
 	} else if (!grounded && connectivity.nets.some((n) => n.hasAnalog)) {
 		errors.push('No ground. Every analog circuit needs one ground symbol as a voltage reference.');
 	}

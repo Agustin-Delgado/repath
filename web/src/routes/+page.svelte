@@ -602,13 +602,16 @@
 			overflow: hidden;
 		}
 
+		/* The whole height of the screen rather than the drawing's: on a phone
+		   held sideways the drawing can be a hundred pixels tall, and a drawer
+		   that size is no drawer. */
 		.left,
 		.right {
-			position: absolute;
+			position: fixed;
 			top: 0;
 			bottom: 0;
 			width: min(300px, 85%);
-			z-index: 3;
+			z-index: 40;
 			transition: transform 0.18s ease-out;
 			box-shadow: 0 0 24px rgba(0, 0, 0, 0.45);
 		}
@@ -630,9 +633,9 @@
 
 		.backdrop {
 			display: block;
-			position: absolute;
+			position: fixed;
 			inset: 0;
-			z-index: 2;
+			z-index: 39;
 			border: none;
 			padding: 0;
 			background: rgba(0, 0, 0, 0.35);
@@ -650,9 +653,10 @@
 			scrollbar-width: none;
 		}
 
+		/* Never more than a third of a short screen, so the drawing keeps some. */
 		.scope-host {
 			flex: none;
-			height: 200px;
+			height: min(200px, 30dvh);
 		}
 
 		.app.scope-folded {

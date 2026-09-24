@@ -60,7 +60,8 @@
 				<Boxes /> Box up <kbd class="font-mono text-[0.6rem] text-muted">B</kbd>
 			</Button>
 		</div>
-		<p class={hint}>
+		<!-- Keys are no help on a touch screen; the phone bar has Rotate and Delete. -->
+		<p class="{hint} [@media(pointer:coarse)]:hidden">
 			<kbd class={kbd}>R</kbd> rotates them together, <kbd class={kbd}>Del</kbd> removes them, and
 			<kbd class={kbd}>Ctrl</kbd>+<kbd class={kbd}>D</kbd> makes a copy.
 		</p>
