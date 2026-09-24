@@ -30,6 +30,10 @@ if the clipboard refuses, the link is shown so it can be copied by hand.
 a wire lights its signal in the scope's list, as pointing at the signal already
 lit the wire; the interface is set in Geist and Geist Mono.
 
+**On a phone held sideways** the drawing was squeezed to nothing and the
+drawers with it. The drawers now take the whole height of the screen, the
+scope a third at most, and Fit leaves a margin that suits a small screen.
+
 ---
 
 ## 23 September 2026 — Heat that takes time, and EEPROMs that write like one
