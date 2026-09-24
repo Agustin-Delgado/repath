@@ -14,7 +14,14 @@ export const toastManager = createToastManager({ timeout: () => 2400, limit: () 
 
 class Toasts {
 	show(text: string): void {
-		// One at a time is enough to read; a second replaces the first.
+		// The same message again — Share pressed twice — stays where it is and
+		// gets its full time back, rather than leaving and coming straight back.
+		const same = toastManager.toasts.find((t) => t.status === 'open' && t.title === text);
+		if (same) {
+			toastManager.update(same.id, { title: text });
+			return;
+		}
+		// One at a time is enough to read; a different one replaces it.
 		toastManager.close();
 		toastManager.add({ title: text, type: 'success' });
 	}
