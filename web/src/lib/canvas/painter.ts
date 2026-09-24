@@ -47,7 +47,7 @@ export interface TextStyle {
 }
 
 const DEFAULT_FAMILY =
-	'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace';
+	'"Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 
 export class Painter {
 	readonly ctx: CanvasRenderingContext2D;

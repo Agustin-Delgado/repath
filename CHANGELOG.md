@@ -11,6 +11,185 @@ early entries point at those instead.
 
 ---
 
+## 23 September 2026 — A workspace you can arrange
+
+**Examples live in the sidebar.** The left panel has two tabs, Components and
+Examples. The examples are filed as analog, logic and mixed signal, each says
+in a line or two what it shows, and typing finds them by name or description.
+
+**The panels resize, and the scope folds away.** Drag the edge of either side
+panel, or the top of the scope, to give the drawing more or less room;
+double-click an edge to put it back. The chevron at the end of the transport
+bar folds the scope down to that bar. The arrangement is remembered in this
+browser.
+
+**Share leaves the address bar alone.** It copies the link and nothing else;
+if the clipboard refuses, the link is shown so it can be copied by hand.
+
+**Also:** a button to clear the drawing (one undo brings it back); pointing at
+a wire lights its signal in the scope's list, as pointing at the signal already
+lit the wire; the interface is set in Geist and Geist Mono.
+
+**On a phone held sideways** the drawing was squeezed to nothing and the
+drawers with it. The drawers now take the whole height of the screen, the
+scope a third at most, and Fit leaves a margin that suits a small screen.
+
+---
+
+## 23 September 2026 — Heat that takes time, and EEPROMs that write like one
+
+**Parts heat up and cool down the way real ones do.** An LED and a fuse each
+have a fast thermal mass and a slow one. A short still kills an LED in a third
+of a millisecond, but thirty percent over its rating now takes milliseconds,
+and the pulse rating an LED datasheet prints — five times the current at a
+tenth duty — is survived. A fuse blows on its `I²t` when shorted and takes
+about a second at half again its rating.
+
+**Writing an EEPROM from a circuit works like the real part.** The 28C16 takes
+a millisecond per byte and the 28C256 loads up to 64 bytes of a page before
+spending ten milliseconds on them; meanwhile I/O7 reads back the complement of
+what is going in, so a program can poll for the end of the write. As on the
+part, a write needs OE high.
+[#64](https://github.com/Agustin-Delgado/repath/pull/64)
+
+---
+
+## 23 September 2026 — Fuses, transformers and memory
+
+**A fuse that blows.** It carries its rating for ever; past that it heats by
+the `I²t` its datasheet prints, opens, and stays open for the rest of the run,
+charred on the drawing like a burnt LED.
+
+**Transformers and coupled inductors.** Two windings, a turns ratio and how
+tightly they are coupled. A sine goes across stepped up or down, DC does not.
+
+**A variable capacitor**, set between its smallest and largest value like a
+potentiometer's wiper.
+
+**A four-digit seven-segment display**, twelve pins for thirty-two LEDs, lit
+one digit at a time. LEDs now cool down between bursts, so a segment driven at
+four times its rating a quarter of the time lives, as it does on a real board,
+while one held on at that current still dies.
+
+**Memory.** The 6116 and 62256 static RAMs, and the 28C16 and 28C256 EEPROMs,
+whose contents you type in the inspector as hex. The **EEPROM and a scanned
+display** example uses one as the lookup table for four digits showing 1 2 3 4.
+[#63](https://github.com/Agustin-Delgado/repath/pull/63)
+
+---
+
+## 23 September 2026 — Parts that follow their supply
+
+**A sagging supply sags the parts on it.** An op-amp package's output stops
+short of its supply as it is at that moment, not as it was when the run
+started, and a Schmitt trigger switches at its share of the supply it has now.
+Run an LM358 from a battery going flat and watch its ceiling come down with it.
+
+**Regulators that protect themselves, and ones that go below ground.** Short
+a 7805 and about an amp and a half flows rather than as much as the input can
+give; the limit is a field of its own. The 7905, 7912 and 7915 hold their
+output that far below ground.
+
+**The L293D**, for driving a motor either way round from two logic pins, with
+the clamp diodes that give its back-EMF somewhere to go.
+[#62](https://github.com/Agustin-Delgado/repath/pull/62)
+
+---
+
+## 23 September 2026 — Chips that are not all logic
+
+**The 555.** Wire it astable and it blinks at the rate the datasheet formula
+gives; tie RESET low and it stops. There is a **555 blinker** example to start
+from.
+
+**Op-amps and comparators as the parts you buy.** The LM358 and LM324 for a
+single supply, the TL072 and TL074 for a split one, and the LM741. Each one
+clips where its supply says: a 5 V LM358 will not give you 5 V out. The LM393
+and LM339 comparators pull their output down and need a pull-up, as the real
+ones do.
+
+**Schmitt triggers.** The 7414, 74132, 40106 and 4093 switch at two
+thresholds, so a slow or noisy input gives one clean edge — and one gate with a
+resistor and a capacitor is an oscillator.
+
+**Switches, drivers and regulators.** The 4066 analog switch, the ULN2003 for
+relays and motors, and a regulator part that is a 7805, 7809, 7812, 7815 or an
+LM317 you set with two resistors. It drops out when the input gets too close
+to the output, and draws its own few milliamps.
+
+**An op-amp that settled nowhere now settles.** A follower on a single supply —
+an op-amp whose lowest output is at ground, with its output wired straight
+back to its input — could fail to find its starting point at all. It now gets
+there.
+[#61](https://github.com/Agustin-Delgado/repath/pull/61)
+
+---
+
+## 23 September 2026 — Sixty chips, and the parts around them
+
+**Chips.** Twenty-seven more, which makes sixty, each on the legs its
+datasheet gives it:
+- Counters: the 74163 (synchronous clear), the 74193 up/down, the 4017 decade
+  counter with ten outputs, and the 4040 twelve-stage ripple counter.
+- Shift registers: the 74164 and 74165, the 74194 that shifts both ways, and
+  the 74595 that every LED project chains.
+- Decoders and friends: the 74139, the 74148 priority encoder, the 4028 and
+  the 74153.
+- Arithmetic: the 74283 four-bit adder and the 7485 comparator, which chains.
+- Parts that let go of a wire, so several can share one: the 74125/74126
+  buffers, the 74244 and 74245 bus drivers, the 74373 latch and the 74374
+  register.
+- Also: JK flip-flops that act on the falling edge (7473, 74107, 74112), the
+  7411 and 7430, and the 4049/4050 buffers.
+- The Chips shelf is filed by job — gates, flip-flops, counters, shift
+  registers and so on — so "a counter" can be found without knowing it is
+  called 4017.
+
+**Parts.**
+- A potentiometer (search "trimmer" too), set by where its wiper sits.
+- A changeover switch that you throw with a click, like the plain one.
+- A relay, whose contacts move when enough current runs through its coil.
+- A crystal that rings at the frequency on its label, a battery that sags
+  under load, a lamp, and a ten-bar LED bar graph.
+- The diode's Schottky preset has its own symbol, and the diode answers to
+  1N4148, 1N4007, 1N4733 and 1N5819.
+[#60](https://github.com/Agustin-Delgado/repath/pull/60)
+
+---
+
+## 22 September 2026 — Finding things by name
+
+The catalog, the commands and the circuit itself all keep growing, and walking
+through shelves and lists to find something stops working long before they
+stop growing. So everything can now be asked for by name.
+
+**Parts.**
+- Press `/` and type — `7400`, `npn`, `cap`, `zener`, `74hc00` — and `Enter`
+  puts the part in your hand. Parts answer to their number, their family and
+  the words people use when they do not know ours.
+- The parts you placed last wait at the top of the palette, and the shelves
+  fold away; the chips start folded.
+
+**Everything else.**
+- `Ctrl+K` finds any part, any command and any example, with the keyboard
+  shortcut written beside each one. `Ctrl+S` and `Ctrl+O` save and open, and
+  `W` picks up the wire tool.
+- The examples are shelved as analog, logic and mixed signal.
+
+**A calmer screen.**
+- One Run button. The transport under the drawing used to have a Run of its
+  own that carried on instead of starting over; it now says **Resume**, and
+  only when there is a stopped sweep to resume.
+- The scope lists what it plots, with its knobs, and finds any other net by
+  name under **Add a signal**, instead of listing every net in the circuit.
+- The inspector keeps the device-physics values under **More settings**, and
+  with nothing selected it shows what the circuit holds and the keys to know.
+- Confirmations — a link copied, the steps copied — appear for a moment at
+  the bottom instead of relabelling the button that was pressed.
+[#59](https://github.com/Agustin-Delgado/repath/pull/59)
+
+---
+
 ## 22 September 2026 — An audit, and what it fixed
 
 A read of the whole code base for wrong answers, crashes and what would not

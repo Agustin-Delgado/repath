@@ -228,3 +228,82 @@ jobs:
           done
           echo "the alias never came to serve $entry" >&2
           exit 1
+
+  # Every pull request gets its own copy of the site, so a change can be looked
+  # at before it is merged rather than after it is live. Same prebuilt upload as
+  # production and the same artifact the tests ran against, but without
+  # `--prod`: Vercel gives it a URL of its own and the production alias does not
+  # move. Vercel cannot build a preview from the branch by itself, for the same
+  # reason it cannot build production — the engine is not in the repository.
+  #
+  # Only for branches of this repository. A pull request from a fork gets no
+  # secrets, and a job that fails for want of a token it could never have had
+  # is noise on somebody else's contribution.
+  preview:
+    name: Preview
+    needs: [engine, web]
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    environment:
+      name: preview
+      url: ${{ steps.deploy.outputs.url }}
+    # A newer push to the same pull request makes this one's preview stale.
+    concurrency:
+      group: preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: site
+          path: site
+
+      - name: Lay out the prebuilt deployment
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          mkdir -p .vercel/output/static
+          cp -r site/. .vercel/output/static/
+          # See the deploy job for why the link is written by hand.
+          printf '{"projectId":"%s","orgId":"%s"}' "$VERCEL_PROJECT_ID" "$VERCEL_ORG_ID" > .vercel/project.json
+          cat > .vercel/output/config.json <<'JSON'
+          {"version":3,"routes":[{"handle":"filesystem"},{"src":"/.*","dest":"/index.html"}]}
+          JSON
+
+      - name: Deploy a preview
+        id: deploy
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          url=$(npx --yes "vercel@${VERCEL_CLI_VERSION}" deploy --prebuilt --yes --token "$VERCEL_TOKEN")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Preview: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      # One comment per pull request, edited on every push, rather than a new
+      # one each time: the thread is for the review, not for a log of deploys.
+      - name: Put the link on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: ${{ steps.deploy.outputs.url }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          marker='<!-- repath-preview -->'
+          body="$marker
+          **Preview:** $URL
+
+          Built from ${SHA:0:7}, the same build the tests ran against. Production is untouched."
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+            -q ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" -f body="$body" > /dev/null
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -f body="$body" > /dev/null
+          fi

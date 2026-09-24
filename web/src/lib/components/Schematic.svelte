@@ -23,7 +23,7 @@
 	import { prepareFlow, rescale, sampleFlow, sampleIndexAt } from '$lib/schematic/flow';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { burnoutsById } from '$lib/schematic/led';
-	import { GRID } from '$lib/schematic/model';
+	import { CONTACTS, GRID, OPERABLE } from '$lib/schematic/model';
 	import { groupLabelBox, groupLabelSize, placeGroups } from '$lib/schematic/groups';
 	import { routeWire } from '$lib/schematic/route';
 	import { parseTrace } from '$lib/trace';
@@ -163,7 +163,7 @@
 		const parts: string[] = [];
 		for (const instance of app.schematic.instances) {
 			const flips = app.operationsOf(instance.id);
-			if (instance.kind === 'switch') {
+			if (CONTACTS.has(instance.kind)) {
 				parts.push(`${instance.id}:${isClosedAt(instance, time, flips) ? 1 : 0}`);
 			} else if (instance.kind === 'toggle') {
 				parts.push(`${instance.id}:${isHighAt(instance, time, flips) ? 1 : 0}`);
@@ -278,7 +278,7 @@
 		let changed = false;
 		const seen = new Set<string>();
 		for (const instance of app.schematic.instances) {
-			const operable = instance.kind === 'switch' || instance.kind === 'toggle';
+			const operable = OPERABLE.has(instance.kind);
 			if (!operable) continue;
 			seen.add(instance.id);
 			if (time === null) continue;
@@ -289,7 +289,7 @@
 			// drawing knows about and the netlist deliberately does not.
 			const flips = app.operationsOf(instance.id);
 			const closed =
-				instance.kind === 'switch'
+				CONTACTS.has(instance.kind)
 					? isActuatedAt(instance, time, flips)
 					: isHighAt(instance, time, flips);
 			if (switchStates.get(instance.id) !== closed) {
@@ -414,6 +414,20 @@
 		// are theirs to watch; the index does not know they exist.
 		void app.schematic.groups?.map((g) => `${g.name}:${g.members.length}`);
 		editor?.invalidate('schematic');
+	});
+
+	// A canvas draws text in whatever font has loaded by then, and never again
+	// on its own: the labels painted before the webfont arrived keep the fallback.
+	$effect(() => {
+		const active = editor;
+		if (!active || typeof document === 'undefined' || !document.fonts) return;
+		let live = true;
+		// Asked for by name: a face nothing has used yet is not loading, so
+		// `fonts.ready` would resolve before it had even started.
+		void document.fonts.load('12px "Geist Mono Variable"').then(() => {
+			if (live) active.invalidate('schematic', 'dynamic', 'overlay');
+		});
+		return () => (live = false);
 	});
 
 	// Recentre on every drawing that arrives whole: an example, a link, a file.
@@ -573,8 +587,11 @@
 				// its dots, because those are measured afresh every frame.
 				if (changed) forget(animation);
 				// In seconds of wall clock, so a given current draws the dots along at
-				// the same speed however fast the run is being played.
-				tick(dynamicView, moved / Math.max(app.playbackRate, 1e-9));
+				// the same speed whatever the window, scaled by the speed setting: they
+				// are the most visible thing that moves, and with them held still, 4×
+				// looked no faster than 1×.
+				const multiple = typeof app.playbackSpeed === 'number' ? app.playbackSpeed : 1;
+				tick(dynamicView, (moved / Math.max(app.playbackRate, 1e-9)) * multiple);
 				active.invalidate('dynamic');
 				// The blades live on the layer underneath, which is repainted only on
 				// the frames where one of them actually moves.
@@ -742,6 +759,12 @@
 			case 'f':
 			case 'F':
 				editor?.fit();
+				break;
+			case 'w':
+			case 'W':
+				// The wire tool is for a branch off the middle of a wire; from a pin, a
+				// drag already draws one.
+				app.tool = app.tool.mode === 'wire' ? { mode: 'select' } : { mode: 'wire' };
 				break;
 		}
 	}

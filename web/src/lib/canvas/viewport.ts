@@ -105,8 +105,11 @@ export class Viewport {
 	): void {
 		if (size.width <= 0 || size.height <= 0) return;
 
-		const availableW = Math.max(size.width - padding * 2, 1);
-		const availableH = Math.max(size.height - padding * 2, 1);
+		// Never more than a tenth of the shorter side: a fixed margin on a phone
+		// held sideways, with a drawing a hundred pixels tall, left it nothing.
+		const margin = Math.min(padding, Math.min(size.width, size.height) * 0.1);
+		const availableW = Math.max(size.width - margin * 2, 1);
+		const availableH = Math.max(size.height - margin * 2, 1);
 		// A single component has zero extent in one axis; do not divide by it.
 		const scale =
 			bounds.w > 0 && bounds.h > 0

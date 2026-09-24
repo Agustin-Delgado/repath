@@ -6,7 +6,7 @@
  */
 
 import type { Schematic } from './schematic/model';
-import { defaultParams } from './schematic/model';
+import { defaultParams, definitionOf } from './schematic/model';
 import { SEGMENTS } from './schematic/led';
 
 export interface Example {
@@ -485,6 +485,219 @@ export const EXAMPLES: Example[] = [
 					[720, 290, 720, 500]
 				]
 			)
+	},
+
+	{
+		id: 'ne555-blinker',
+		name: '555 blinker',
+		description:
+			'The most built circuit there is: a 555 wired astable, blinking an LED about twice a second. The capacitor charges through both resistors and discharges through the lower one only, between a third and two thirds of the supply — which is why the rate is 1.44 / ((R1 + 2·R2)·C) whatever the supply is, and why the LED is on a little longer than it is off. RESET is tied high because a 555 with RESET left floating is a 555 that does nothing, and CONT gets its 10 nF so that noise on the supply does not move the thresholds. Probe the capacitor to watch it swing between the two thresholds.',
+		stopTime: 2,
+		build: () =>
+			build(
+				[
+					{ kind: 'ic:NE555', name: 'U1', x: 600, y: 300 },
+					{ kind: 'supply', name: 'PWR1', x: 760, y: 130, params: { voltage: 9 } },
+					{ kind: 'resistor', name: 'R1', x: 760, y: 190, rotation: 90, params: { resistance: 1000 } },
+					{ kind: 'resistor', name: 'R2', x: 760, y: 270, rotation: 90, params: { resistance: 33000 } },
+					{ kind: 'capacitor', name: 'C1', x: 760, y: 360, rotation: 90, params: { capacitance: 10e-6 } },
+					{ kind: 'capacitor', name: 'C2', x: 700, y: 380, rotation: 90, params: { capacitance: 10e-9 } },
+					{ kind: 'resistor', name: 'R3', x: 370, y: 310, params: { resistance: 680 } },
+					{ kind: 'led', name: 'D1', x: 280, y: 310, rotation: 180, params: { colour: 'red' } },
+					{ kind: 'ground', name: 'GND1', x: 480, y: 290 },
+					{ kind: 'ground', name: 'GND2', x: 760, y: 460 },
+					{ kind: 'ground', name: 'GND3', x: 700, y: 440 },
+					{ kind: 'ground', name: 'GND4', x: 250, y: 360 },
+					{ kind: 'probe', name: 'OUT', x: 400, y: 310 },
+					{ kind: 'probe', name: 'CAP', x: 760, y: 330 }
+				],
+				[
+					// The supply, down to VCC on pin 8 and through R1.
+					[760, 140, 760, 160],
+					[700, 150, 760, 150],
+					[660, 270, 700, 270],
+					[700, 150, 700, 270],
+					// DIS, pin 7, between the two resistors.
+					[760, 220, 760, 240],
+					[660, 290, 720, 290],
+					[720, 230, 720, 290],
+					[720, 230, 760, 230],
+					// THR, pin 6, on the capacitor.
+					[760, 300, 760, 330],
+					[660, 310, 760, 310],
+					[760, 390, 760, 450],
+					// TRIG, pin 2, round the bottom to the same capacitor.
+					[540, 290, 515, 290],
+					[515, 290, 515, 480],
+					[515, 480, 820, 480],
+					[820, 315, 820, 480],
+					[760, 315, 820, 315],
+					// CONT, pin 5, decoupled.
+					[660, 330, 700, 330],
+					[700, 330, 700, 350],
+					[700, 410, 700, 430],
+					// GND, pin 1.
+					[480, 270, 540, 270],
+					[480, 270, 480, 280],
+					// RESET, pin 4, held high from the supply.
+					[460, 330, 540, 330],
+					[460, 150, 460, 330],
+					[460, 150, 700, 150],
+					// OUT, pin 3, through the resistor and the LED to ground.
+					[400, 310, 540, 310],
+					[310, 310, 340, 310],
+					[250, 310, 250, 350]
+				]
+			)
+	},
+
+	{
+		id: 'eeprom-display',
+		name: 'EEPROM and a scanned display',
+		description:
+			'Four digits on twelve pins, lit one at a time. Two clocks count 0 to 3 over and over; the 74139 turns that count into which digit\'s common pin is pulled low, and the same count is the address of a 28C16 whose first four bytes are the segment patterns for 1, 2, 3 and 4 — the EEPROM is the lookup table a 7447 would otherwise be, and changing the digits is editing its contents in the inspector. Each digit is lit a quarter of the time and looks a quarter as bright. The decoder sinks a whole digit through one output, which is why the resistors are no smaller: at 100 Ω a digit with seven bars lit drops so much inside the 74139 that it goes dim beside a 1, and a board meant to be bright puts a transistor on each digit pin. Slow the playback right down and the digits take turns.',
+		stopTime: 20e-3,
+		build: () => {
+			const parts: Placed[] = [
+				{
+					kind: 'ic:28C16',
+					name: 'U1',
+					x: 500,
+					y: 400,
+					params: { contents: '; the segment patterns for 1, 2, 3 and 4\n06 5B 4F 66' }
+				},
+				{ kind: 'ic:74139', name: 'U2', x: 1000, y: 650 },
+				{ kind: 'display7x4', name: 'DS1', x: 1000, y: 400, params: { colour: 'red' } },
+				{ kind: 'clock', name: 'CLK2', x: 300, y: 350, params: { frequency: 1000 } },
+				{ kind: 'clock', name: 'CLK1', x: 300, y: 470, params: { frequency: 2000 } },
+				{ kind: 'supply', name: 'PWR1', x: 560, y: 280, params: { voltage: 5 } },
+				{ kind: 'supply', name: 'PWR2', x: 1060, y: 570, params: { voltage: 5 } },
+				{ kind: 'ground', name: 'GND1', x: 380, y: 300 },
+				{ kind: 'ground', name: 'GND2', x: 440, y: 520 },
+				{ kind: 'ground', name: 'GND3', x: 620, y: 320 },
+				{ kind: 'ground', name: 'GND4', x: 870, y: 730 },
+				{ kind: 'ground', name: 'GND5', x: 1120, y: 750 },
+				// The spare half's outputs, on probes rather than on nothing.
+				...[0, 1, 2, 3].map(
+					(n): Placed => ({ kind: 'probe', name: `S${n}`, x: 1080, y: 660 + n * 20, rotation: 90 })
+				)
+			];
+			const wires: Array<[number, number, number, number]> = [
+				// A2 to A7 held low: only the bottom two address lines count.
+				[420, 290, 440, 290],
+				[420, 310, 440, 310],
+				[420, 330, 440, 330],
+				[420, 350, 440, 350],
+				[420, 370, 440, 370],
+				[420, 390, 440, 390],
+				[420, 290, 420, 310],
+				[420, 310, 420, 330],
+				[420, 330, 420, 350],
+				[420, 350, 420, 370],
+				[420, 370, 420, 390],
+				[380, 290, 420, 290],
+				// A8 to A10, CE and OE low: selected and always driving.
+				[560, 310, 600, 310],
+				[560, 330, 600, 330],
+				[560, 370, 600, 370],
+				[560, 390, 600, 390],
+				[560, 410, 600, 410],
+				[600, 310, 600, 330],
+				[600, 330, 600, 370],
+				[600, 370, 600, 390],
+				[600, 390, 600, 410],
+				[600, 310, 620, 310],
+				// WE high, so nothing is ever written.
+				[560, 350, 580, 350],
+				[580, 350, 580, 290],
+				[580, 290, 560, 290],
+				// The count: CLK1 is the low bit, CLK2 the high one, into the EEPROM's
+				// address and the decoder's select alike.
+				[330, 350, 340, 350],
+				[340, 350, 340, 410],
+				[340, 410, 440, 410],
+				[330, 470, 350, 470],
+				[350, 470, 350, 430],
+				[350, 430, 440, 430],
+				[350, 470, 350, 640],
+				[350, 640, 860, 640],
+				[860, 640, 860, 600],
+				[860, 600, 940, 600],
+				[340, 410, 340, 660],
+				[340, 660, 850, 660],
+				[850, 660, 850, 620],
+				[850, 620, 940, 620],
+				// I/O0 to I/O2 leave on the left and come round underneath.
+				[440, 450, 400, 450],
+				[400, 450, 400, 560],
+				[400, 560, 670, 560],
+				[440, 470, 390, 470],
+				[390, 470, 390, 580],
+				[390, 580, 670, 580],
+				[440, 490, 380, 490],
+				[380, 490, 380, 600],
+				[380, 600, 670, 600],
+				// I/O3 to I/O7 go straight across.
+				[560, 430, 670, 430],
+				[560, 450, 670, 450],
+				[560, 470, 670, 470],
+				[560, 490, 670, 490],
+				[560, 510, 670, 510],
+				// The decoder's other half, held off; its first half enabled.
+				[1060, 600, 1080, 600],
+				[1080, 600, 1080, 580],
+				[1080, 580, 1060, 580],
+				[1060, 620, 1120, 620],
+				[1060, 640, 1120, 640],
+				[1120, 620, 1120, 640],
+				[1120, 640, 1120, 740],
+				[940, 580, 870, 580],
+				[870, 580, 870, 720],
+				[940, 720, 870, 720],
+				[1060, 660, 1080, 660],
+				[1060, 680, 1080, 680],
+				[1060, 700, 1080, 700],
+				[1060, 720, 1080, 720],
+				// Each of its outputs pulls one digit's common pin low.
+				[940, 640, 910, 640],
+				[910, 640, 910, 520],
+				[910, 520, 940, 520],
+				[940, 520, 940, 450],
+				[940, 660, 900, 660],
+				[900, 660, 900, 510],
+				[900, 510, 980, 510],
+				[980, 510, 980, 450],
+				[940, 680, 890, 680],
+				[890, 680, 890, 500],
+				[890, 500, 1020, 500],
+				[1020, 500, 1020, 450],
+				[940, 700, 880, 700],
+				[880, 700, 880, 490],
+				[880, 490, 1060, 490],
+				[1060, 490, 1060, 450]
+			];
+			// A resistor per segment line, I/O0 on segment a through I/O7 on the
+			// point, each stepping across to its pin in a column of its own.
+			const rows = [560, 580, 600, 510, 490, 470, 450, 430];
+			for (let i = 0; i < SEGMENTS.length; i++) {
+				const y = rows[i];
+				const pin = 360 + i * 10;
+				parts.push({
+					kind: 'resistor',
+					name: `R${i + 1}`,
+					x: 700,
+					y,
+					params: { resistance: 330 }
+				});
+				if (y === pin) {
+					wires.push([730, y, 900, y]);
+				} else {
+					const column = 750 + i * 10;
+					wires.push([730, y, column, y], [column, y, column, pin], [column, pin, 900, pin]);
+				}
+			}
+			return build(parts, wires);
+		}
 	},
 
 	{
@@ -1443,4 +1656,41 @@ export const EXAMPLES: Example[] = [
 
 export function exampleById(id: string): Example {
 	return EXAMPLES.find((e) => e.id === id) ?? EXAMPLES[0];
+}
+
+export type ExampleDomain = 'Analog' | 'Logic' | 'Mixed signal';
+
+/** Parts that join a circuit without making it analog or digital. */
+const NEUTRAL = new Set(['ground', 'supply', 'probe', 'port']);
+/**
+ * What a logic circuit shows its state with. An adder lighting LEDs through
+ * resistors is a logic example, not a mixed-signal one.
+ */
+const INDICATORS = new Set(['led', 'display7', 'display7x4', 'resistor']);
+
+const domains = new Map<string, ExampleDomain>();
+
+/**
+ * Which shelf an example goes on, read off the parts it is built from.
+ *
+ * Read rather than written on each example, so a new one cannot be filed on
+ * the wrong shelf: a part with a digital pin is logic, anything else that is
+ * not a rail, a marker or an indicator is analog, and a circuit with both is the thing
+ * repath is for.
+ */
+export function exampleDomain(example: Example): ExampleDomain {
+	let domain = domains.get(example.id);
+	if (domain) return domain;
+	let digital = false;
+	let analog = false;
+	for (const instance of example.build().instances) {
+		if (NEUTRAL.has(instance.kind)) continue;
+		// A block or an imported part is not in the catalog; its insides decide.
+		if (instance.kind.includes(':') && !instance.kind.startsWith('ic:')) continue;
+		if (definitionOf(instance.kind).pins.some((pin) => pin.domain === 'digital')) digital = true;
+		else if (!INDICATORS.has(instance.kind)) analog = true;
+	}
+	domain = !digital ? 'Analog' : analog ? 'Mixed signal' : 'Logic';
+	domains.set(example.id, domain);
+	return domain;
 }

@@ -293,12 +293,14 @@ would show you.
 
 | | |
 |---|---|
-| Place a part | pick it in the palette, then click the canvas — `R` turns the ghost before you drop it |
+| Place a part | pick it in the palette, or press `/` and type its name or number (`7400`, `npn`, `cap`) and `Enter`; then click the canvas — `R` turns the ghost before you drop it. The parts you used last wait at the top of the palette |
+| Find anything | `Ctrl+K` — every part, every command and every example, by name, with its shortcut beside it |
 | Connect two things | drag from one pin to another — no tool to switch to first |
-| Branch off a wire | pick **Wire** in the palette and drag from any point on one |
+| Branch off a wire | pick **Wire** in the palette (or press `W`) and drag from any point on one |
 | Move a wire | drag it; a leg with corners reshapes, a straight one slides |
 | Place several of a part | hold `Shift` — otherwise the cursor comes back after one |
-| Report something odd | **Steps** copies everything you did, as text, so it can be replayed exactly |
+| Report something odd | **File → Copy the steps taken** copies everything you did, as text, so it can be replayed exactly |
+| Save / open a file | `Ctrl+S` / `Ctrl+O`, or the **File** menu |
 | Hand-route a wire | hold `Shift` while drawing to bypass the router |
 | Reshape a wire | select it, then drag the leg you want to move |
 | Select | click, `Shift`-click or `Ctrl`-click to add or remove one, or drag a box around things |
@@ -315,7 +317,7 @@ would show you.
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Run / stop the sweep | `Space` |
 | Simulate | press Run — nothing runs until you ask |
-| Plot a net | tick it in the Signals list |
+| Plot a net | type its name under **Add a signal** beside the scope; the × on a plotted one takes it off |
 | Read it in your own symbols | the **ANSI / IEC / GOST** selector in the toolbar — zigzag or box resistors, shaped or boxed gates, an EMF drawn with an arrow |
 
 Nothing simulates on load. Press **Run** and the simulation starts and keeps
@@ -323,7 +325,8 @@ going, the way an instrument does: simulated time moves forward, the scope rolls
 and the drawing shows the newest instant. There is no scrubber, because a running
 acquisition has nothing to scrub — **Stop** freezes what was caught, and only then
 can the window be dragged and zoomed over what memory still holds. **Single**
-sweeps one window and stops at the end of it.
+sweeps one window and stops at the end of it, and **Resume** carries a stopped
+sweep on from where it got to — Run always starts again from zero.
 
 Clicking a switch or a logic toggle while it is running operates it *now*: the
 engine is carried on from where it was, so everything already solved stays solved
@@ -407,6 +410,11 @@ a box. The arrow keys nudge the number and apply it as they go — `Shift` for t
 at a time, `Alt` for a tenth — and it settles into the right decade on its own, so
 1 kΩ steps down to 999 Ω rather than to nothing. Typing engineering notation
 still works if that is the habit you have: `4k7`, `10u`, `1meg`, `100n`.
+
+The device-physics values — a saturation current, a junction capacitance, a gate
+delay — sit under **More settings**, so the value everyone sets is not one field
+among eight. The fold says how many of them were changed, so a folded change is
+not a hidden one.
 
 ## Roadmap
 

@@ -7,8 +7,8 @@
  * gate and it just works, with no explicit converter to place.
  */
 
-import { LED_COLOURS, RATED, SEGMENTS } from './led';
-import { CHIPS, chipById, chipName, isPower, isUnused, type ChipDef } from './chips';
+import { BARS, DIGITS, LED_COLOURS, RATED, SEGMENTS } from './led';
+import { analogTerminals, CHIPS, chipById, chipName, isPower, isUnused, type ChipDef } from './chips';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -65,6 +65,11 @@ export interface ParamDef {
 	plain?: boolean;
 	/** How far one arrow-key press moves a `plain` value. */
 	step?: number;
+	/**
+	 * Kept under "More settings" rather than with the values everyone sets.
+	 * Left out, `isAdvanced` decides from the key; see there.
+	 */
+	advanced?: boolean;
 }
 
 /** Why a value was refused, or null when it is fine. */
@@ -376,6 +381,18 @@ const tolerance = (percent: number) => ({
  * one is a starting point — every field stays editable afterwards, and a part
  * that is none of these is a paste of its `.model` card.
  */
+/** What choosing each regulator fills its fields in with. */
+export const REGULATOR_PRESETS: Record<string, Record<string, number>> = {
+	'7805': { voltage: 5, dropout: 2, quiescent: 5e-3 },
+	'7809': { voltage: 9, dropout: 2, quiescent: 5e-3 },
+	'7812': { voltage: 12, dropout: 2, quiescent: 5e-3 },
+	'7815': { voltage: 15, dropout: 2, quiescent: 5e-3 },
+	'7905': { voltage: 5, dropout: 1.1, quiescent: 3e-3 },
+	'7912': { voltage: 12, dropout: 1.1, quiescent: 3e-3 },
+	'7915': { voltage: 15, dropout: 1.1, quiescent: 3e-3 },
+	LM317: { voltage: 1.25, dropout: 1.7, quiescent: 50e-6 }
+};
+
 export const DIODE_PRESETS: Record<string, Record<string, number>> = {
 	// 1N4148. The one everybody has in a drawer.
 	silicon: { is: 2.52e-9, n: 1.752, rs: 0.568, cj0: 4e-12, tt: 5e-9 },
@@ -594,6 +611,86 @@ const SOURCE_PARAMS: ParamDef[] = [
 	}
 ];
 
+/** How a pair of contacts is operated, shared by every part that has a pair. */
+const SWITCH_PARAMS: ParamDef[] = [
+		{
+			key: 'start',
+			label: 'Starting position',
+			unit: '',
+			default: 'open',
+			choices: [
+				{ value: 'open', label: 'Open' },
+				{ value: 'closed', label: 'Closed' }
+			],
+			description:
+				'Where it starts. Clicking the switch on the drawing while something is playing throws it at the playhead instead, so the run keeps everything before that instant and the waveform gets the edge.'
+		},
+		{
+			key: 'action',
+			label: 'During the run',
+			unit: '',
+			default: 'manual',
+			choices: [
+				{ value: 'manual', label: 'Stays put' },
+				{ value: 'toggle', label: 'Operates once' },
+				{ value: 'momentary', label: 'Push-button' }
+			],
+			description:
+				'A run is solved end to end before it is drawn, so a click cannot land inside one. This is how the moment it moves gets into the run instead.'
+		},
+		{
+			key: 'at',
+			label: 'Operates at',
+			unit: 's',
+			default: 1e-3,
+			min: 0,
+			visibleWhen: { key: 'action', values: ['toggle', 'momentary'] }
+		},
+		{
+			key: 'hold',
+			label: 'Held for',
+			unit: 's',
+			default: 10e-3,
+			min: 0,
+			nonZero: true,
+			visibleWhen: { key: 'action', values: ['momentary'] }
+		},
+		{
+			key: 'bounce',
+			label: 'Contact bounce',
+			unit: 's',
+			default: 1e-3,
+			min: 0,
+			visibleWhen: { key: 'action', values: ['toggle', 'momentary'] },
+			description:
+				'Contacts are springs, and they chatter for a millisecond or so before they settle. It is the whole reason a button wired to a counter counts three.'
+		},
+		{
+			key: 'r_on',
+			label: 'Closed resistance',
+			unit: 'Ω',
+			default: 0.05,
+			min: 0,
+			nonZero: true,
+			description: 'The metal and the contact pressure. Milliohms on a good switch, and the reason a bad one gets warm.'
+		},
+		{
+			key: 'r_off',
+			label: 'Open resistance',
+			unit: 'Ω',
+			// A teraohm, not the gigaohm this used to be. A gigaohm across five
+			// volts is five nanoamps, and five nanoamps is not nothing — it is a
+			// hundred times the picoamp of leakage the solver puts on every node,
+			// so an open switch was the largest current in a circuit that was not
+			// conducting, and the animation dutifully scaled it up to a full flow.
+			// An open air gap between cleaned contacts is well past this.
+			default: 1e12,
+			min: 0,
+			nonZero: true,
+			description: 'Air, and whatever is condensed on the insulator beside it. Never actually infinite.'
+		}
+];
+
 export const CATALOG: ComponentDef[] = [
 	{
 		kind: 'resistor',
@@ -647,6 +744,264 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		/**
+		 * A capacitor with a knob: a trimmer, or the tuning capacitor of a radio.
+		 *
+		 * The setting is a fraction of the way from the smallest value to the
+		 * largest, like a potentiometer's wiper, and it is set before a run rather
+		 * than turned during one.
+		 */
+		kind: 'varcap',
+		box: { x: -30, y: -15, w: 60, h: 30 },
+		label: 'Variable capacitor',
+		group: 'passive',
+		prefix: 'VC',
+		pins: [analog('a', -30, 0), analog('b', 30, 0)],
+		params: [
+			{ key: 'minimum', label: 'Smallest', unit: 'F', default: 10e-12, min: 0 },
+			{ key: 'maximum', label: 'Largest', unit: 'F', default: 365e-12, min: 0, nonZero: true },
+			{
+				key: 'position',
+				label: 'Setting',
+				unit: '',
+				default: 0.5,
+				min: 0,
+				max: 1,
+				plain: true,
+				step: 0.05,
+				description:
+					'How far the plates are meshed, from 0 at the smallest value to 1 at the largest. A tuning capacitor turns the plates past each other; a trimmer is the same part set once with a screwdriver.'
+			}
+		]
+	},
+	{
+		/**
+		 * Two windings on one core: a transformer, or a pair of coupled inductors.
+		 *
+		 * The primary is an inductance and the secondary is that times the square
+		 * of the turns ratio, coupled by all but a sliver of their flux. The dotted
+		 * ends, P1 and S1, rise together. Nothing saturates: the core is as linear
+		 * at any current as it is at none, so a transformer driven with DC here
+		 * draws the current its copper allows and no more — the one a real one
+		 * would overheat on.
+		 */
+		kind: 'transformer',
+		box: { x: -30, y: -24, w: 60, h: 48 },
+		label: 'Transformer',
+		group: 'passive',
+		prefix: 'T',
+		pins: [analog('p1', -30, -20), analog('p2', -30, 20), analog('s1', 30, -20), analog('s2', 30, 20)],
+		params: [
+			{
+				key: 'ratio',
+				label: 'Turns ratio',
+				unit: '',
+				default: 1,
+				min: 0,
+				nonZero: true,
+				plain: true,
+				step: 0.1,
+				description:
+					'Secondary turns over primary turns: what the voltage is multiplied by on the way across, and the current divided by. 0.1 steps 120 V down to 12.'
+			},
+			{
+				key: 'inductance',
+				label: 'Primary inductance',
+				unit: 'H',
+				default: 10e-3,
+				min: 0,
+				nonZero: true,
+				description:
+					'With the secondary open. It sets the magnetising current the primary draws doing nothing, and how low a frequency still gets across: well below where its reactance falls to the source resistance, very little does.'
+			},
+			{
+				key: 'coupling',
+				label: 'Coupling',
+				unit: '',
+				default: 0.999,
+				min: 0,
+				max: 0.999999,
+				plain: true,
+				step: 0.001,
+				advanced: true,
+				description:
+					'The share of the flux both windings see. Just under 1 for windings on one core; the rest is leakage inductance, which rings with whatever capacitance it meets. Far lower for two coils side by side in air.'
+			},
+			{
+				key: 'r1',
+				label: 'Primary resistance',
+				unit: 'Ω',
+				default: 0.1,
+				min: 0,
+				nonZero: true,
+				advanced: true,
+				description: 'The copper. It is all that stands between a DC source and a short.'
+			},
+			{
+				key: 'r2',
+				label: 'Secondary resistance',
+				unit: 'Ω',
+				default: 0.1,
+				min: 0,
+				nonZero: true,
+				advanced: true
+			}
+		]
+	},
+	{
+		/**
+		 * A fuse: a length of wire meant to be the weakest point in the circuit.
+		 *
+		 * It carries its rating for ever. Past that the extra `i²` heats it, and
+		 * once the heat reaches the melting integral a datasheet prints as `I²t`,
+		 * it opens and stays open for the rest of the run — the same way an LED
+		 * driven too hard does.
+		 */
+		kind: 'fuse',
+		box: { x: -30, y: -9, w: 60, h: 18 },
+		label: 'Fuse',
+		group: 'passive',
+		prefix: 'F',
+		pins: [analog('a', -30, 0), analog('b', 30, 0)],
+		params: [
+			{
+				key: 'rated',
+				label: 'Rated current',
+				unit: 'A',
+				default: 1,
+				min: 0,
+				nonZero: true,
+				description: 'What it carries without ever blowing.'
+			},
+			{
+				key: 'i2t',
+				label: 'Melting I²t',
+				unit: 'A²s',
+				default: 0.5,
+				min: 0,
+				nonZero: true,
+				description:
+					'How much heat above its rating it takes before it goes. A fast-acting 1 A glass fuse is about half an A²s, so ten amps through it lasts five milliseconds; a slow-blow one of the same rating takes several times that, which is what gets it through a motor starting.'
+			},
+			{
+				key: 'resistance',
+				label: 'Cold resistance',
+				unit: 'Ω',
+				default: 0.1,
+				min: 0,
+				nonZero: true,
+				advanced: true,
+				description: 'A tenth of an ohm is typical at 1 A; smaller fuses are more.'
+			}
+		]
+	},
+	{
+		/**
+		 * A resistor with a third terminal that slides along it.
+		 *
+		 * Two resistors in series with the wiper at their junction, which is all
+		 * the part is: the track from one end to the wiper and the rest of it on
+		 * to the other. The position is a fraction of the way from `a` to `b`, so
+		 * a divider across a supply reads that fraction of it at the wiper — and a
+		 * trimmer is the same part set once and left alone.
+		 */
+		kind: 'potentiometer',
+		box: { x: -30, y: -30, w: 60, h: 39 },
+		label: 'Potentiometer',
+		group: 'passive',
+		prefix: 'RV',
+		pins: [analog('a', -30, 0), analog('b', 30, 0), analog('wiper', 0, -30)],
+		params: [
+			{
+				key: 'resistance',
+				label: 'Track resistance',
+				unit: 'Ω',
+				default: 10e3,
+				min: 0,
+				nonZero: true,
+				description: 'End to end, whatever the wiper is doing.'
+			},
+			{
+				key: 'position',
+				label: 'Wiper position',
+				unit: '',
+				default: 0.5,
+				min: 0,
+				max: 1,
+				plain: true,
+				step: 0.05,
+				description:
+					'How far along the track the wiper sits, from 0 at a to 1 at b. Across a supply, the wiper reads that fraction of it — until something it feeds draws current and pulls it down.'
+			},
+			// Pots are sold at twenty percent. A divider that only works at the
+			// printed value is a divider that has to be trimmed on every board.
+			tolerance(20)
+		]
+	},
+	{
+		/**
+		 * A quartz crystal, as its equivalent circuit.
+		 *
+		 * The motional arm — a large inductance, a tiny capacitance and the loss
+		 * that sets the Q — in series, with the holder's capacitance across the
+		 * whole thing. That is the Butterworth–Van Dyke model every datasheet
+		 * quotes its numbers against, and it is why a crystal has two resonances a
+		 * fraction of a percent apart: series, where the motional arm is a short,
+		 * and parallel just above it, where it rings against the holder.
+		 *
+		 * The frequency is the parameter rather than the inductance, because that
+		 * is what is printed on the can; the inductance is worked out from it and
+		 * the motional capacitance.
+		 */
+		kind: 'crystal',
+		box: { x: -30, y: -13, w: 60, h: 26 },
+		label: 'Crystal',
+		group: 'passive',
+		prefix: 'Y',
+		pins: [analog('a', -30, 0), analog('b', 30, 0)],
+		params: [
+			{
+				key: 'frequency',
+				label: 'Frequency',
+				unit: 'Hz',
+				default: 16e6,
+				min: 0,
+				nonZero: true,
+				description: 'The series resonance, which is what the can is marked with.'
+			},
+			{
+				key: 'r1',
+				label: 'Series resistance',
+				unit: 'Ω',
+				default: 30,
+				min: 0,
+				nonZero: true,
+				description:
+					'The loss in the motional arm, quoted as ESR. It sets the Q, and it is what an oscillator has to overcome before it starts.'
+			},
+			{
+				key: 'c0',
+				label: 'Shunt capacitance',
+				unit: 'F',
+				default: 5e-12,
+				min: 0,
+				description:
+					'The electrodes and the holder. A few picofarads, and the reason there is a parallel resonance at all.'
+			},
+			{
+				key: 'c1',
+				label: 'Motional capacitance',
+				unit: 'F',
+				default: 20e-15,
+				min: 0,
+				nonZero: true,
+				advanced: true,
+				description:
+					'Femtofarads for an HC-49 at 16 MHz, a few for a 32.768 kHz watch crystal. With the frequency it fixes the motional inductance.'
+			}
+		]
+	},
+	{
+		/**
 		 * A pair of contacts you flip by clicking them.
 		 *
 		 * Clicking sets where they rest, and the circuit is re-solved with them
@@ -666,82 +1021,142 @@ export const CATALOG: ComponentDef[] = [
 		group: 'passive',
 		prefix: 'S',
 		pins: [analog('a', -30, 0), analog('b', 30, 0)],
+		params: SWITCH_PARAMS
+	},
+	{
+		/**
+		 * A changeover: one common contact that rests on one side and is thrown to
+		 * the other.
+		 *
+		 * Two contacts worked the opposite way round by the same actuator, which
+		 * is exactly what the part is inside — so it is operated, scheduled and
+		 * bounced the same way the single pair is, and "closed" means thrown: the
+		 * common has left NC and landed on NO.
+		 */
+		kind: 'spdt',
+		box: { x: -30, y: -20, w: 60, h: 34 },
+		label: 'Changeover switch',
+		group: 'passive',
+		prefix: 'S',
+		pins: [analog('com', -30, 0), analog('no', 30, -10), analog('nc', 30, 10)],
+		params: SWITCH_PARAMS.map((param) =>
+			param.key === 'start'
+				? {
+						...param,
+						choices: [
+							{ value: 'open', label: 'At rest (common on NC)' },
+							{ value: 'closed', label: 'Thrown (common on NO)' }
+						]
+					}
+				: param
+		)
+	},
+	{
+		/**
+		 * A coil and a changeover worked by it.
+		 *
+		 * The coil is its winding resistance and its inductance in series. The
+		 * contacts read the voltage across the resistance — the coil current, in
+		 * other words — and pull in above one figure and let go below another,
+		 * which is how a relay datasheet specifies them. The inductance is not
+		 * decoration: switch the coil off with a transistor and nothing across it,
+		 * and the spike it throws back is what the flyback diode on every relay
+		 * driver is there for.
+		 *
+		 * What is left out is the armature's travel: the contacts follow the
+		 * current with no mechanical delay and no bounce.
+		 */
+		kind: 'relay',
+		box: { x: -28, y: -30, w: 68, h: 60 },
+		label: 'Relay',
+		group: 'passive',
+		prefix: 'K',
+		pins: [
+			analog('a', -20, -30),
+			analog('b', -20, 30),
+			analog('com', 40, 0),
+			analog('no', 10, -30),
+			analog('nc', 10, 30)
+		],
 		params: [
 			{
-				key: 'start',
-				label: 'Starting position',
-				unit: '',
-				default: 'open',
-				choices: [
-					{ value: 'open', label: 'Open' },
-					{ value: 'closed', label: 'Closed' }
-				],
-				description:
-					'Where it starts. Clicking the switch on the drawing while something is playing throws it at the playhead instead, so the run keeps everything before that instant and the waveform gets the edge.'
-			},
-			{
-				key: 'action',
-				label: 'During the run',
-				unit: '',
-				default: 'manual',
-				choices: [
-					{ value: 'manual', label: 'Stays put' },
-					{ value: 'toggle', label: 'Operates once' },
-					{ value: 'momentary', label: 'Push-button' }
-				],
-				description:
-					'A run is solved end to end before it is drawn, so a click cannot land inside one. This is how the moment it moves gets into the run instead.'
-			},
-			{
-				key: 'at',
-				label: 'Operates at',
-				unit: 's',
-				default: 1e-3,
-				min: 0,
-				visibleWhen: { key: 'action', values: ['toggle', 'momentary'] }
-			},
-			{
-				key: 'hold',
-				label: 'Held for',
-				unit: 's',
-				default: 10e-3,
+				key: 'coil_r',
+				label: 'Coil resistance',
+				unit: 'Ω',
+				default: 70,
 				min: 0,
 				nonZero: true,
-				visibleWhen: { key: 'action', values: ['momentary'] }
+				description: 'The winding. 70 Ω is a common 5 V coil, which draws about 70 mA held in.'
 			},
 			{
-				key: 'bounce',
-				label: 'Contact bounce',
-				unit: 's',
-				default: 1e-3,
+				key: 'coil_l',
+				label: 'Coil inductance',
+				unit: 'H',
+				default: 0.2,
 				min: 0,
-				visibleWhen: { key: 'action', values: ['toggle', 'momentary'] },
+				nonZero: true
+			},
+			{
+				key: 'pull_in',
+				label: 'Pull-in voltage',
+				unit: 'V',
+				default: 3.75,
+				min: 0,
+				nonZero: true,
 				description:
-					'Contacts are springs, and they chatter for a millisecond or so before they settle. It is the whole reason a button wired to a counter counts three.'
+					'Across the coil, at or above which the contacts are thrown. Datasheets quote 75% of the nominal voltage.'
+			},
+			{
+				key: 'drop_out',
+				label: 'Drop-out voltage',
+				unit: 'V',
+				default: 0.5,
+				min: 0,
+				description: 'Below this the contacts are back at rest. Between the two they are on their way.'
 			},
 			{
 				key: 'r_on',
-				label: 'Closed resistance',
+				label: 'Contact resistance',
 				unit: 'Ω',
 				default: 0.05,
 				min: 0,
-				nonZero: true,
-				description: 'The metal and the contact pressure. Milliohms on a good switch, and the reason a bad one gets warm.'
+				nonZero: true
 			},
 			{
 				key: 'r_off',
 				label: 'Open resistance',
 				unit: 'Ω',
-				// A teraohm, not the gigaohm this used to be. A gigaohm across five
-				// volts is five nanoamps, and five nanoamps is not nothing — it is a
-				// hundred times the picoamp of leakage the solver puts on every node,
-				// so an open switch was the largest current in a circuit that was not
-				// conducting, and the animation dutifully scaled it up to a full flow.
-				// An open air gap between cleaned contacts is well past this.
 				default: 1e12,
 				min: 0,
+				nonZero: true
+			}
+		]
+	},
+	{
+		/**
+		 * A filament lamp, as the resistance it has when it is lit.
+		 *
+		 * Rated the way a bulb is sold — a voltage and a wattage — and the
+		 * resistance follows from the two. A cold filament is a tenth of that,
+		 * which is the inrush that blows bulbs at switch-on; this one is always
+		 * hot, so the inrush is not there.
+		 */
+		kind: 'lamp',
+		box: { x: -30, y: -11, w: 60, h: 22 },
+		label: 'Lamp',
+		group: 'passive',
+		prefix: 'LP',
+		pins: [analog('a', -30, 0), analog('b', 30, 0)],
+		params: [
+			{ key: 'voltage', label: 'Rated voltage', unit: 'V', default: 6, min: 0, nonZero: true },
+			{
+				key: 'power',
+				label: 'Rated power',
+				unit: 'W',
+				default: 1.2,
+				min: 0,
 				nonZero: true,
-				description: 'Air, and whatever is condensed on the insulator beside it. Never actually infinite.'
+				description: 'At the rated voltage. Together they fix the hot resistance: V² / P.'
 			}
 		]
 	},
@@ -856,6 +1271,43 @@ export const CATALOG: ComponentDef[] = [
 		)
 	},
 	{
+		/**
+		 * A cell, or a stack of them: a voltage with a resistance inside it.
+		 *
+		 * The resistance is the whole difference between a battery and a supply.
+		 * An ideal source holds its voltage whatever it is asked for; a 9 V
+		 * battery asked for an amp gives most of a volt of it away inside, and a
+		 * circuit that only works on the bench supply is found out here.
+		 */
+		kind: 'battery',
+		box: { x: -14, y: -30, w: 28, h: 60 },
+		label: 'Battery',
+		group: 'sources',
+		prefix: 'BT',
+		pins: [analog('plus', 0, -30), analog('minus', 0, 30)],
+		params: [
+			{
+				key: 'voltage',
+				label: 'Voltage',
+				unit: 'V',
+				default: 9,
+				min: 0,
+				nonZero: true,
+				description: 'With nothing drawn from it.'
+			},
+			{
+				key: 'r_int',
+				label: 'Internal resistance',
+				unit: 'Ω',
+				default: 1.5,
+				min: 0,
+				nonZero: true,
+				description:
+					'About 1.5 Ω for a fresh 9 V alkaline, a tenth of an ohm for an AA cell, and climbing as either runs down.'
+			}
+		]
+	},
+	{
 		kind: 'diode',
 		box: { x: -30, y: -11, w: 60, h: 22 },
 		label: 'Diode',
@@ -876,7 +1328,7 @@ export const CATALOG: ComponentDef[] = [
 					{ value: 'rectifier', label: 'Rectifier (1N4007)' },
 					{ value: 'schottky', label: 'Schottky (1N5819)' },
 					{ value: 'germanium', label: 'Germanium (OA90)' },
-					{ value: 'zener', label: 'Zener' }
+					{ value: 'zener', label: 'Zener (1N4733A)' }
 				]
 			},
 			{
@@ -1032,6 +1484,96 @@ export const CATALOG: ComponentDef[] = [
 		]
 	},
 	{
+		/**
+		 * Four seven-segment digits sharing their segment pins.
+		 *
+		 * Every `a` is on one pin, every `b` on another, and each digit has only its
+		 * common pin to itself — twelve pins for thirty-two LEDs, which is the whole
+		 * point of the package. It is lit one digit at a time: put a digit's
+		 * pattern on the segments, turn its common on, move on to the next, fast
+		 * enough that the eye sees all four. Each segment is lit a quarter of the
+		 * time and looks a quarter as bright, which is why these are driven harder
+		 * than a single digit.
+		 */
+		kind: 'display7x4',
+		box: { x: -100, y: -45, w: 200, h: 95 },
+		label: '4-digit 7-segment',
+		group: 'semiconductor',
+		prefix: 'DS',
+		pins: [
+			// On the grid, unlike the single digit's, which sits between rows.
+			...SEGMENTS.map((seg, i) => analog(seg, -100, (i - 4) * 10)),
+			...DIGITS.map((digit) => analog(`d${digit}`, (digit - 2.5) * 40, 50))
+		],
+		params: [
+			{
+				key: 'polarity',
+				label: 'Common pins',
+				unit: '',
+				default: 'cathode',
+				choices: [
+					{ value: 'cathode', label: 'Cathode (lights on a high)' },
+					{ value: 'anode', label: 'Anode (lights on a low)' }
+				],
+				description:
+					'Which end of each digit\'s eight LEDs is tied to its digit pin. Common cathode: segments driven high, the digit being shown pulled low. Common anode: the other way round.'
+			},
+			{
+				key: 'colour',
+				label: 'Colour',
+				unit: '',
+				default: LED_COLOURS[0].value,
+				choices: LED_COLOURS.map(({ value, label }) => ({ value, label }))
+			},
+			{
+				key: 'imax',
+				label: 'Rated current',
+				unit: 'A',
+				default: RATED,
+				min: 0,
+				nonZero: true,
+				description: 'Per segment, averaged. Multiplexed, a segment takes several times this in bursts and survives.'
+			}
+		]
+	},
+	{
+		/**
+		 * Ten LEDs in a row, each with both of its legs brought out.
+		 *
+		 * Nothing is shared inside: anode down one side and cathode down the
+		 * other, bar for bar, which is how the common ten-segment packages are
+		 * made. So it can be driven from a row of outputs, a decoder or a
+		 * comparator ladder, whichever way round the drive happens to be.
+		 */
+		kind: 'bargraph',
+		box: { x: -40, y: -58, w: 80, h: 106 },
+		label: 'LED bar graph',
+		group: 'semiconductor',
+		prefix: 'DS',
+		pins: [
+			...BARS.map((bar, i) => analog(`a${bar}`, -40, (i - 5) * 10)),
+			...BARS.map((bar, i) => analog(`k${bar}`, 40, (i - 5) * 10))
+		],
+		params: [
+			{
+				key: 'colour',
+				label: 'Colour',
+				unit: '',
+				default: LED_COLOURS[0].value,
+				choices: LED_COLOURS.map(({ value, label }) => ({ value, label }))
+			},
+			{
+				key: 'imax',
+				label: 'Rated current',
+				unit: 'A',
+				default: RATED,
+				min: 0,
+				nonZero: true,
+				description: 'Per bar. Each one is its own LED and needs its own resistor.'
+			}
+		]
+	},
+	{
 		kind: 'nmos',
 		box: { x: -30, y: -30, w: 42, h: 60 },
 		label: 'NMOS',
@@ -1128,6 +1670,80 @@ export const CATALOG: ComponentDef[] = [
 			},
 			...BASE_CHARGE,
 			...SPICE_CARD
+		]
+	},
+	{
+		/**
+		 * A three-terminal linear regulator: the 78xx and 79xx families and the
+		 * LM317.
+		 *
+		 * One part for both because they are one circuit — an error amplifier
+		 * holding the output a fixed voltage above the third leg, through a pass
+		 * transistor from the input. On a 7805 that leg is ground and the voltage
+		 * is 5 V; on an LM317 it is ADJ and the voltage is 1.25 V, which a
+		 * divider multiplies up to whatever is wanted.
+		 */
+		kind: 'regulator',
+		box: { x: -30, y: -20, w: 60, h: 50 },
+		label: 'Regulator',
+		group: 'analog',
+		prefix: 'U',
+		pins: [analog('in', -30, 0), analog('out', 30, 0), analog('com', 0, 30)],
+		params: [
+			{
+				key: 'part',
+				label: 'Part',
+				unit: '',
+				default: '7805',
+				choices: [
+					{ value: '7805', label: '7805 (5 V)' },
+					{ value: '7809', label: '7809 (9 V)' },
+					{ value: '7812', label: '7812 (12 V)' },
+					{ value: '7815', label: '7815 (15 V)' },
+					{ value: '7905', label: '7905 (−5 V)' },
+					{ value: '7912', label: '7912 (−12 V)' },
+					{ value: '7915', label: '7915 (−15 V)' },
+					{ value: 'LM317', label: 'LM317 (adjustable)' }
+				]
+			},
+			{
+				key: 'voltage',
+				label: 'Output from COM',
+				unit: 'V',
+				default: 5,
+				min: 0,
+				nonZero: true,
+				description:
+					'What it holds between OUT and its third leg: the output itself on a 78xx, whose third leg is ground, the same below ground on a 79xx, and 1.25 V on an LM317, set up to any output by a divider on ADJ.'
+			},
+			{
+				key: 'dropout',
+				label: 'Dropout',
+				unit: 'V',
+				default: 2,
+				min: 0.3,
+				description:
+					'How far above the output the input has to stay for it to regulate. Two volts on a 78xx: a 7805 wants 7 V in.'
+			},
+			{
+				key: 'quiescent',
+				label: 'Quiescent current',
+				unit: 'A',
+				default: 5e-3,
+				min: 0,
+				description:
+					'What it draws for itself, out of the third leg: 5 mA on a 78xx, 50 µA from the ADJ pin of an LM317.'
+			},
+			{
+				key: 'limit',
+				label: 'Current limit',
+				unit: 'A',
+				default: 1.5,
+				min: 0,
+				nonZero: true,
+				description:
+					'Past this the output stops being a voltage and becomes a current: short it and this is what flows, which is what keeps the part alive.'
+			}
 		]
 	},
 	{
@@ -1312,7 +1928,10 @@ export const CATALOG: ComponentDef[] = [
  * makes and breaks a contact, a logic toggle drives a level. Everything else is
  * changed through its fields.
  */
-export const OPERABLE = new Set(['switch', 'toggle']);
+export const OPERABLE = new Set(['switch', 'spdt', 'toggle']);
+
+/** Parts with contacts worked by an actuator: thrown by a click or on a schedule. */
+export const CONTACTS = new Set(['switch', 'spdt']);
 
 /**
  * Parts that are a name attached to a point: they join a net without making
@@ -1368,9 +1987,13 @@ export function chipPinLayout(count: number): Array<{ x: number; y: number; inde
 	);
 }
 
-/** Half the body height, with room above and below the outermost legs. */
+/**
+ * Half the body height, with room above and below the outermost legs — and,
+ * at the bottom, for the part number under the last row of pin names, which
+ * it used to sit on top of.
+ */
 export function chipReach(count: number): number {
-	return ((count / 2 - 1) * CHIP_PITCH) / 2 + 18;
+	return ((count / 2 - 1) * CHIP_PITCH) / 2 + 28;
 }
 
 /**
@@ -1388,21 +2011,27 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 	const driven = new Set<string>();
 	const touched = new Set<string>();
 	for (const block of chip.blocks) {
-		for (const pin of block.inputs ?? []) touched.add(pin);
-		for (const pin of [block.clock, block.data, block.reset, block.preset]) {
+		for (const pin of [...(block.inputs ?? []), ...(block.address ?? []), ...(block.dataIn ?? [])]) {
+			touched.add(pin);
+		}
+		for (const pin of [block.clock, block.data, block.reset, block.preset, block.enable, block.write]) {
 			if (pin) touched.add(pin);
 		}
-		for (const pin of [block.output, block.q, block.qn]) {
+		for (const pin of [block.output, block.q, block.qn, ...(block.dataOut ?? [])]) {
 			if (pin) driven.add(pin);
 		}
 	}
+	// A leg anything analog inside reaches is an analog pin, even when logic
+	// inside reads it too: the part crosses between the two domains itself, and
+	// the net outside sees a voltage.
+	const analogLegs = new Set((chip.analog ?? []).flatMap(analogTerminals));
 
 	const places = chipPinLayout(chip.layout.length);
 	const pins: PinDef[] = [];
 	for (const [i, name] of chip.layout.entries()) {
 		if (isUnused(name)) continue;
 		const { x, y } = places[i];
-		if (isPower(name)) pins.push(analog(name, x, y));
+		if (isPower(name) || analogLegs.has(name)) pins.push(analog(name, x, y));
 		else if (driven.has(name)) pins.push(digitalOut(name, x, y));
 		else if (touched.has(name)) pins.push(digitalIn(name, x, y));
 	}
@@ -1416,7 +2045,11 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 		box: { x: -CHIP_HALF_WIDTH, y: -half, w: CHIP_HALF_WIDTH * 2, h: half * 2 },
 		body: { x: -CHIP_BODY_HALF_WIDTH, y: -half, w: CHIP_BODY_HALF_WIDTH * 2, h: half * 2 },
 		pins,
-		params: []
+		// What a programmable memory holds is text, edited in a block of its own
+		// the way a model card is.
+		params: chip.contents
+			? [{ key: 'contents', label: 'Contents', unit: '', default: '', hidden: true }]
+			: []
 	};
 }
 
@@ -1751,6 +2384,25 @@ export function defaultParams(kind: string): Record<string, number | string> {
 	const params: Record<string, number | string> = {};
 	for (const p of definitionOf(kind).params) params[p.key] = p.default;
 	return params;
+}
+
+/**
+ * The device-physics knobs: a saturation current, a junction capacitance, a
+ * gate delay. They are what makes the model honest, and what almost nobody
+ * changes; with them all in one column, the resistance of a resistor or the
+ * gain of an op-amp is one field among eight. Keyed by name because the same
+ * name means the same kind of thing on every part that has it.
+ */
+const ADVANCED_KEYS = new Set([
+	'tolerance', 'tc1', 'bounce', 'r_on', 'r_off', 'phase',
+	'is', 'n', 'rs', 'breakdown', 'cj0', 'tt',
+	'lambda', 'cgd', 'cgs', 'vaf', 'cjc', 'tf',
+	'slew', 'r_out', 'v_os', 'i_bias', 'delay'
+]);
+
+/** Whether a parameter belongs under "More settings". */
+export function isAdvanced(param: ParamDef): boolean {
+	return param.advanced ?? ADVANCED_KEYS.has(param.key);
 }
 
 /** Whether a parameter should be shown, given the rest of the instance's values. */
