@@ -11,6 +11,13 @@ early entries point at those instead.
 
 ---
 
+## 25 September 2026 — Drag the playhead
+
+**The playhead can be dragged.** With the sweep stopped, pick up the blue line
+in the scope and move it to walk through the run at whatever pace you like; a
+click only ever jumped it. The cursor turns into a left-right arrow over the
+line. Dragging anywhere else still slides the view along.
+
 ## 23 September 2026 — A workspace you can arrange
 
 **Examples live in the sidebar.** The left panel has two tabs, Components and
