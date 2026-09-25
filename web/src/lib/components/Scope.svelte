@@ -652,6 +652,20 @@
 		return span.from + fraction * (span.to - span.from);
 	}
 
+	/**
+	 * Whether a pointer is on the playhead, close enough to pick it up.
+	 *
+	 * A finger is wider than a line, so it gets more room than a mouse.
+	 */
+	function onPlayhead(event: PointerEvent): boolean {
+		if (!canvas || !app.result || app.playing) return false;
+		const rect = canvas.getBoundingClientRect();
+		const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
+		const at = Math.min(Math.max(app.playbackTime, span.from), span.to);
+		const x = PADDING.left + ((at - span.from) / Math.max(span.to - span.from, 1e-15)) * plotW;
+		return Math.abs(event.clientX - rect.left - x) <= (event.pointerType === 'touch' ? 14 : 6);
+	}
+
 	function seekTo(event: PointerEvent) {
 		const t = timeAt(event.clientX);
 		if (t !== null) app.seek(t);
@@ -760,6 +774,10 @@
 
 	/** Where a drag started, in screen pixels and in seconds. */
 	let dragging: { x: number; from: number } | null = null;
+	/** The playhead is held and follows the pointer, for a seek finer than a click. */
+	let scrubbing = $state(false);
+	/** The pointer is over the playhead, so the plot shows it can be picked up. */
+	let overPlayhead = $state(false);
 
 	/** Fingers on the plot, for a pinch. */
 	const touches = new Map<number, number>();
@@ -776,6 +794,7 @@
 			if (touches.size === 2) {
 				// Two fingers: the timebase, and neither of them is a seek or a drag.
 				dragging = null;
+				scrubbing = false;
 				pinchSpread = spread();
 				return;
 			}
@@ -786,6 +805,11 @@
 				marker !== null && cursor && Math.abs(marker - cursor.time) < 1e-12
 					? null
 					: (cursor?.time ?? null);
+			return;
+		}
+		if (onPlayhead(event)) {
+			// Picked up by the line itself: the drag moves it rather than the view.
+			scrubbing = true;
 			return;
 		}
 		seekTo(event);
@@ -802,6 +826,7 @@
 		touches.delete(event.pointerId);
 		if (touches.size < 2) pinchSpread = null;
 		dragging = null;
+		scrubbing = false;
 	}
 
 	function spread(): number {
@@ -828,6 +853,12 @@
 		const x = event.clientX - rect.left;
 		const t = timeAt(event.clientX);
 		cursor = t !== null && t >= span.from && t <= span.to ? { x, time: t } : null;
+
+		if (scrubbing) {
+			if (t !== null) app.seek(Math.min(Math.max(t, span.from), span.to));
+			return;
+		}
+		overPlayhead = event.pointerType !== 'touch' && onPlayhead(event);
 
 		// Dragging pans the window — and only when the sweep has stopped, because a
 		// running acquisition has nowhere to be dragged to: the newest instant is
@@ -891,7 +922,11 @@
 			onpointerup={onUp}
 			onpointercancel={onUp}
 			onwheel={onWheel}
-			onpointerleave={() => (cursor = null)}
+			onpointerleave={() => {
+				cursor = null;
+				overPlayhead = false;
+			}}
+			class:grab-playhead={overPlayhead || scrubbing}
 		></canvas>
 
 		{#if !app.result}
@@ -1120,9 +1155,13 @@
 
 	canvas {
 		display: block;
-		cursor: col-resize;
+		cursor: crosshair;
 		/* The plot takes the fingers: a pinch is the timebase, a drag is a pan. */
 		touch-action: none;
+	}
+
+	canvas.grab-playhead {
+		cursor: ew-resize;
 	}
 
 	.empty {
