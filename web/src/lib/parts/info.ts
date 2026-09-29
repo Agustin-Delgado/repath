@@ -41,6 +41,10 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		description: 'Contacts you flip by clicking, or on a schedule, with bounce',
 		keywords: ['s', 'spst', 'button', 'push-button', 'momentary', 'contact', 'bounce']
 	},
+	pushbutton: {
+		description: 'Contacts that move while you hold it down and spring back when you let go',
+		keywords: ['button', 'push button', 'momentary', 'tactile', 'tact switch', 'no', 'nc', 'press']
+	},
 	potentiometer: {
 		description: 'Resistance track with a sliding wiper; a divider you can set',
 		keywords: ['pot', 'trimmer', 'trimpot', 'rheostat', 'variable resistor', 'wiper', 'volume', 'divider', 'knob']

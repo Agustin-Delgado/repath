@@ -280,7 +280,7 @@ would show you.
 
 | | |
 |---|---|
-| **Passive** | resistor, capacitor, inductor, switch you can click, ground, supply terminal |
+| **Passive** | resistor, capacitor, inductor, switch you can click, push-button you hold down, ground, supply terminal |
 | **Sources** | voltage and current, with DC / sine / pulse waveforms |
 | **Semiconductors** | diode (five presets, one of them a zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP |
 | **Analog** | op-amp with finite gain, bandwidth, slew rate and rail saturation; voltage-controlled switch; VCVS; VCCS |
@@ -320,7 +320,7 @@ would show you.
 | Plot a net | type its name under **Add a signal** beside the scope; the × on a plotted one takes it off |
 | Read it in your own symbols | the **ANSI / IEC / GOST** selector in the toolbar — zigzag or box resistors, shaped or boxed gates, an EMF drawn with an arrow |
 
-Nothing simulates on load. Press **Run** and the simulation starts and keeps
+Nothing simulates on load. Press **Run**, under the drawing, and the simulation starts and keeps
 going, the way an instrument does: simulated time moves forward, the scope rolls,
 and the drawing shows the newest instant. There is no scrubber, because a running
 acquisition has nothing to scrub — **Stop** freezes what was caught, and only then
@@ -330,7 +330,9 @@ sweep on from where it got to — Run always starts again from zero.
 
 Clicking a switch or a logic toggle while it is running operates it *now*: the
 engine is carried on from where it was, so everything already solved stays solved
-and the waveform gets the edge at the instant of the click. Change a value instead
+and the waveform gets the edge at the instant of the click. A push-button is held
+rather than clicked: its contacts move when the pointer goes down and come back
+when it comes up. Change a value instead
 and the sweep restarts from zero — a different circuit is a different run. Moving a
 part around does not count as a change, since the circuit it describes has not
 changed.

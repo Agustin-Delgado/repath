@@ -11,6 +11,19 @@ early entries point at those instead.
 
 ---
 
+## 29 September 2026 — A push-button, and Run under the drawing
+
+**A push-button you hold down.** It is in the palette with the passive parts.
+While a run is playing, press it on the drawing and its contacts close — or
+open, if it is a normally-closed one — for exactly as long as you keep the
+pointer down, bounce included, and they spring back when you let go. The
+switch's timed push-button action is still there for a press at a known
+moment.
+
+**Run sits with the rest of the transport.** It moved from the top bar to the
+bar under the drawing, first in line before Single and Reset. The top bar lost
+its tagline and the engine version on the way.
+
 ## 25 September 2026 — Drag the playhead
 
 **The playhead can be dragged.** With the sweep stopped, pick up the blue line

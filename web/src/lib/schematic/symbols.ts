@@ -138,6 +138,8 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 			return `vsource:${String(params.waveform ?? 'dc')}`;
 		case 'switch':
 			return `switch:${String(params.action ?? 'toggle')}:${String(params.start ?? 'open')}`;
+		case 'pushbutton':
+			return `pushbutton:${String(params.start ?? 'open')}`;
 		case 'spdt':
 			return `spdt:${String(params.start ?? 'open')}`;
 		case 'toggle':
@@ -841,6 +843,7 @@ export function symbolGeometry(
 	else if (kind === 'switch') {
 		geometry = switchSymbol(String(params.action ?? 'toggle'), String(params.start ?? 'open'));
 	}
+	else if (kind === 'pushbutton') geometry = switchSymbol('momentary', String(params.start ?? 'open'));
 	else if (kind === 'spdt') geometry = changeoverSymbol(String(params.start ?? 'open'));
 	else if (kind === 'toggle') geometry = toggleSymbol(String(params.state ?? 'low'));
 	else if (kind === 'port') geometry = portSymbol(String(params.flow ?? 'in'));

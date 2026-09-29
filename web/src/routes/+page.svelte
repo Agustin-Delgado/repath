@@ -7,7 +7,7 @@
 	import Toolbar from '$lib/components/toolbar/Toolbar.svelte';
 	import CommandPalette from '$lib/commands/CommandPalette.svelte';
 	import { Button, Splitter, Toaster } from '$lib/ui';
-	import { ensureEngine, engineVersion } from '$lib/engine';
+	import { ensureEngine } from '$lib/engine';
 	import {
 		Autosaver,
 		chooseStart,
@@ -21,7 +21,6 @@
 	import { decodeCircuit, shareUrl } from '$lib/share';
 	import { app } from '$lib/state.svelte';
 
-	let version = $state('');
 	let schematic = $state<ReturnType<typeof Schematic> | null>(null);
 	/**
 	 * Which side panel is out, on a screen too narrow to keep both open.
@@ -175,8 +174,7 @@
 				const why = cause instanceof Error ? cause.message : String(cause);
 				app.notice = `Your saved work could not be opened. ${why}`;
 			});
-		ensureEngine().then(
-			() => (version = engineVersion()),
+		ensureEngine().catch(
 			async (cause) => {
 				// After the start, which clears notices as it loads.
 				await started;
@@ -341,7 +339,7 @@
 	style:--right-width="{layout.right}px"
 	style:--scope-height="{layout.scope}px"
 >
-	<div class="top"><Toolbar {version} {share} onFind={() => (finding = true)} /></div>
+	<div class="top"><Toolbar {share} onFind={() => (finding = true)} /></div>
 
 	{#if app.notice}
 		<div class="banner warn" role="alert">

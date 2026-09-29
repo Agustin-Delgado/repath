@@ -57,6 +57,7 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 	// because a net whose only part is unknown to the planner has nothing to
 	// accumulate. Half a working circuit animated and the other half looked dead.
 	switch: [['a', -1], ['b', 1]],
+	pushbutton: [['a', -1], ['b', 1]],
 	// Two resistors meeting at the wiper, so the wiper is fed by one and drains
 	// into the other: what leaves it along its own wire is the difference.
 	potentiometer: [['a', -1], ['wiper', 1], ['wiper', -1, ':b'], ['b', 1, ':b']],

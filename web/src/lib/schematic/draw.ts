@@ -376,6 +376,7 @@ function valueLabel(instance: Instance): string | null {
 		case 'supply':
 			return formatWithUnit(Number(p.voltage), 'V');
 		case 'spdt':
+		case 'pushbutton':
 		case 'switch': {
 			// What it is going to do, not what it is made of. A switch nobody
 			// scheduled says nothing at all: the blade is drawn open or closed and

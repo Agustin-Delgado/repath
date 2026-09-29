@@ -9,6 +9,7 @@
 
 import {
 	GRID,
+	SINGLE_CONTACTS,
 	definitionFor,
 	definitionOf,
 	pinPosition,
@@ -1032,7 +1033,7 @@ export function floatingLogicInputs(
 			.pins.filter((pin) => pin.domain === 'analog')
 			.map((pin) => netOf(instance, pin.name))
 			.filter((index): index is number => index !== undefined);
-		const via = instance.kind === 'switch' ? instance.id : undefined;
+		const via = SINGLE_CONTACTS.has(instance.kind) ? instance.id : undefined;
 		for (let i = 1; i < on.length; i++) join(on[0], on[i], via);
 	}
 

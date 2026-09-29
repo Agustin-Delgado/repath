@@ -1053,6 +1053,48 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		/**
+		 * A button with a spring behind it: pressed, the contacts move, and let go
+		 * they come straight back.
+		 *
+		 * The switch's push-button action does this on a schedule. This one is
+		 * worked by hand while a run is going — the contacts move at the instant
+		 * the button goes down and move back at the instant it comes up, so how
+		 * long it was held is how long it was held. The schedule stays, for the
+		 * run that wants the press at a known moment.
+		 */
+		kind: 'pushbutton',
+		box: { x: -30, y: -22, w: 60, h: 28 },
+		label: 'Push-button',
+		group: 'passive',
+		prefix: 'S',
+		pins: [analog('a', -30, 0), analog('b', 30, 0)],
+		params: SWITCH_PARAMS.map((param): ParamDef => {
+			if (param.key === 'start') {
+				return {
+					...param,
+					label: 'Contacts',
+					choices: [
+						{ value: 'open', label: 'Normally open' },
+						{ value: 'closed', label: 'Normally closed' }
+					],
+					description:
+						'What the contacts do while nobody is pressing it. Holding the button down on the drawing while something is playing moves them for exactly as long as it is held.'
+				};
+			}
+			if (param.key === 'action') {
+				return {
+					...param,
+					choices: [
+						{ value: 'manual', label: 'Only by hand' },
+						{ value: 'momentary', label: 'Pressed once' }
+					]
+				};
+			}
+			return param;
+		})
+	},
+	{
+		/**
 		 * A coil and a changeover worked by it.
 		 *
 		 * The coil is its winding resistance and its inductance in series. The
@@ -1924,14 +1966,18 @@ export const CATALOG: ComponentDef[] = [
 /**
  * Parts a plain click operates rather than merely selects.
  *
- * Both of them are things somebody puts on a drawing in order to move: a switch
+ * All of them are things somebody puts on a drawing in order to move: a switch
  * makes and breaks a contact, a logic toggle drives a level. Everything else is
- * changed through its fields.
+ * changed through its fields. A push-button is operated by being held rather
+ * than by a click, so the select tool presses and releases it instead.
  */
-export const OPERABLE = new Set(['switch', 'spdt', 'toggle']);
+export const OPERABLE = new Set(['switch', 'spdt', 'toggle', 'pushbutton']);
 
 /** Parts with contacts worked by an actuator: thrown by a click or on a schedule. */
-export const CONTACTS = new Set(['switch', 'spdt']);
+export const CONTACTS = new Set(['switch', 'spdt', 'pushbutton']);
+
+/** Parts with one pair of contacts, which is what can leave a net adrift when open. */
+export const SINGLE_CONTACTS = new Set(['switch', 'pushbutton']);
 
 /**
  * Parts that are a name attached to a point: they join a net without making

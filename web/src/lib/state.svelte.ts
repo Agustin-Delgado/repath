@@ -1672,25 +1672,16 @@ class AppState {
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return;
 		if (!OPERABLE.has(instance.kind)) return;
+		// Held, not clicked: see `pressButton`.
+		if (instance.kind === 'pushbutton') return;
 
 		// With a simulation going, this is a hand on the part: the engine is told to
 		// move it at the instant the sweep has reached, and everything already
 		// solved stays solved. Nothing is written into the drawing, which is what
 		// keeps the operation from being replayed on the next run — and what keeps
 		// an edit-triggered restart from happening on a click.
-		const acquiring = this.acquiring;
-		if (acquiring && this.analysis === 'transient') {
-			const at = acquiring.time;
-			const flips = [...(this.operations.get(id) ?? []), at];
-			this.operations = new Map(this.operations).set(id, flips);
-			if (CONTACTS.has(instance.kind)) {
-				acquiring.setWaveform(`${instance.name}__actuator`, {
-					type: 'pwl',
-					points: contactControl(instance, flips)
-				});
-			} else {
-				acquiring.setLogic(instance.name, isHighAt(instance, at, flips) ? 'high' : 'low');
-			}
+		if (this.acquiring && this.analysis === 'transient') {
+			this.operateAt(instance, this.acquiring.time);
 			return;
 		}
 
@@ -1701,6 +1692,64 @@ class AppState {
 		} else {
 			this.setParam(id, 'state', instance.params.state === 'high' ? 'low' : 'high');
 		}
+	}
+
+	/**
+	 * Hand an operation at `at` to the running engine, and remember it for the
+	 * drawing. Returns false when there is no run to hand it to.
+	 */
+	private operateAt(instance: Instance, at: number): boolean {
+		const acquiring = this.acquiring;
+		if (!acquiring || this.analysis !== 'transient') return false;
+		const flips = [...(this.operations.get(instance.id) ?? []), at];
+		this.operations = new Map(this.operations).set(instance.id, flips);
+		if (CONTACTS.has(instance.kind)) {
+			acquiring.setWaveform(`${instance.name}__actuator`, {
+				type: 'pwl',
+				points: contactControl(instance, flips)
+			});
+		} else {
+			acquiring.setLogic(instance.name, isHighAt(instance, at, flips) ? 'high' : 'low');
+		}
+		return true;
+	}
+
+	/** The push-button being held down, and the instant of the run it went down at. */
+	private held: { id: string; at: number } | null = null;
+
+	/**
+	 * Push a push-button down. Its contacts move at the instant the sweep has
+	 * reached and stay moved until `releaseButton`.
+	 *
+	 * Only while the sweep is moving. A stopped one has a single instant to offer,
+	 * and a press and a release at the same instant are no press at all.
+	 */
+	pressButton(id: string): void {
+		const instance = this.schematic.instances.find((i) => i.id === id);
+		if (!instance || instance.kind !== 'pushbutton') return;
+		if (this.held || !this.playing || !this.acquiring) return;
+		const at = this.acquiring.time;
+		if (this.operateAt(instance, at)) this.held = { id, at };
+	}
+
+	/**
+	 * Let go of the push-button, and the spring takes the contacts back.
+	 *
+	 * A click can be over inside one frame, which is the same instant of the run
+	 * as the press. The release is kept a little after it instead, so the press
+	 * still happens, and so the control's corners stay in order: the engine reads
+	 * a PWL front to back and would skip a release written before its press.
+	 */
+	releaseButton(): void {
+		const held = this.held;
+		this.held = null;
+		if (!held || !this.acquiring) return;
+		const instance = this.schematic.instances.find((i) => i.id === held.id);
+		if (!instance) return;
+		// A hundredth of the window: long enough to be seen on the scope, and never
+		// under the few microseconds the contact's own edges take.
+		const shortest = Math.max(this.stopTime / 100, 4e-6);
+		this.operateAt(instance, Math.max(this.acquiring.time, held.at + shortest));
 	}
 
 	/** When a part was operated by hand during this run. */
@@ -3625,6 +3674,7 @@ class AppState {
 				this.acquiring = acquiring;
 				this.capture = acquiring.capture;
 				this.operations = new Map();
+				this.held = null;
 				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
 				this.playing = true;
@@ -3673,6 +3723,7 @@ class AppState {
 		this.capture = null;
 		this.result = null;
 		this.operations = new Map();
+		this.held = null;
 		this.envelope = null;
 		this.playing = false;
 		this.playbackTime = 0;

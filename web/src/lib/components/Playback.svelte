@@ -2,10 +2,10 @@
 	/**
 	 * The instrument's front panel, under the drawing.
 	 *
-	 * Run and Stop live in the toolbar and nowhere else: two Run buttons that
-	 * did different things — one started over, one carried on — was one too
-	 * many. What is here is what a scope has beside them: carry on from where a
-	 * stopped sweep got to, capture one window, put the run away. There is no
+	 * Run and Stop are one button, and it is here, first on the panel: two Run
+	 * buttons that did different things — one started over, one carried on — was
+	 * one too many. Beside it is what a scope has beside them: carry on from
+	 * where a stopped sweep got to, capture one window, put the run away. There is no
 	 * scrubber, because there is nothing to scrub: the newest instant is the
 	 * only one that exists while it runs, and the way to look back is to stop.
 	 *
@@ -18,6 +18,7 @@
 	import { layout } from '$lib/layout.svelte';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
+	import RunButton from './RunButton.svelte';
 
 	/** A multiple of the four-second sweep, or a second per second. */
 	const SPEEDS: Array<number | 'real'> = [0.25, 1, 4, 'real'];
@@ -66,6 +67,8 @@
 		? 'border-b border-border'
 		: ''}"
 >
+	<!-- Outside the analysis switch: a frequency sweep is started here too. -->
+	<RunButton />
 	{#if app.analysis !== 'transient'}
 		<span class="text-[0.62rem] font-semibold tracking-[0.08em] text-muted uppercase">
 			Frequency response
