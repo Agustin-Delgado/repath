@@ -376,6 +376,12 @@ export function createSelectTool(): Tool {
 				} else if (!pressedWasSelected) {
 					app.selection = [item.id];
 				}
+				// A push-button is worked by being held, so it goes down with the
+				// pointer rather than on the click, and comes up in `pointerUp`.
+				if (!extending(pointer)) {
+					const part = app.schematic.instances.find((i) => i.id === item.id);
+					if (part?.kind === 'pushbutton') app.pressButton(item.id);
+				}
 
 				mode = 'move';
 				// Only when the wire is the whole selection: dragging a group that
@@ -446,6 +452,7 @@ export function createSelectTool(): Tool {
 		},
 
 		pointerUp(pointer, ctx) {
+			app.releaseButton();
 			if (mode === 'wire' && wireFrom) {
 				const to = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
 				if (to.x !== wireFrom.x || to.y !== wireFrom.y) {
@@ -474,7 +481,9 @@ export function createSelectTool(): Tool {
 				// selection rather than flipping whatever it lands on.
 				if (!moved && pressedId && !extending(pointer)) {
 					const part = app.schematic.instances.find((i) => i.id === pressedId);
-					if (part && OPERABLE.has(part.kind)) app.toggleSwitch(pressedId);
+					if (part && OPERABLE.has(part.kind) && part.kind !== 'pushbutton') {
+						app.toggleSwitch(pressedId);
+					}
 				}
 			} else if (mode === 'marquee' && marquee) {
 				if (marquee.w > 2 || marquee.h > 2) {

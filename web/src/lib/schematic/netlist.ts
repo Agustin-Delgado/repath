@@ -1003,7 +1003,8 @@ function compileFresh(
 				});
 				break;
 			}
-			case 'switch': {
+			case 'switch':
+			case 'pushbutton': {
 				// The engine's switch is voltage-controlled, which is the general
 				// case and the one the digital output drivers are built on. A switch
 				// somebody flips is that with its control written out in advance, on

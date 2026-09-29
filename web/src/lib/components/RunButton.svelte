@@ -8,8 +8,8 @@
 		stopped sweep sit there looking like a live one.
 
 		Run always starts a new sweep from zero, the way pressing it on a scope
-		restarts the acquisition. Picking a stopped one back up is the transport
-		underneath the drawing, which is where the timebase lives.
+		restarts the acquisition. Picking a stopped one back up is Resume, beside
+		it on the transport.
 	*/
 	const stopping = $derived(app.playing && !app.running);
 </script>
@@ -17,7 +17,8 @@
 <Button
 	variant="primary"
 	active={stopping}
-	class="min-w-[5.6rem]"
+	size="sm"
+	class="h-6.5 min-w-[4.6rem]"
 	pending={app.running}
 	onclick={() => (stopping ? app.stop() : app.run())}
 	title={app.playing ? 'Stop the sweep and freeze what is on screen' : 'Start a new sweep from zero'}

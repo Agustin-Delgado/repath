@@ -23,7 +23,7 @@
 	import { prepareFlow, rescale, sampleFlow, sampleIndexAt } from '$lib/schematic/flow';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { burnoutsById } from '$lib/schematic/led';
-	import { CONTACTS, GRID, OPERABLE } from '$lib/schematic/model';
+	import { CONTACTS, GRID, OPERABLE, SINGLE_CONTACTS } from '$lib/schematic/model';
 	import { groupLabelBox, groupLabelSize, placeGroups } from '$lib/schematic/groups';
 	import { routeWire } from '$lib/schematic/route';
 	import { parseTrace } from '$lib/trace';
@@ -140,7 +140,7 @@
 	function closedSwitchesAt(time: number): Set<string> {
 		const closed = new Set<string>();
 		for (const instance of app.schematic.instances) {
-			if (instance.kind !== 'switch') continue;
+			if (!SINGLE_CONTACTS.has(instance.kind)) continue;
 			if (isClosedAt(instance, time, app.operationsOf(instance.id))) closed.add(instance.id);
 		}
 		return closed;
