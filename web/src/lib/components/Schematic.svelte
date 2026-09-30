@@ -14,6 +14,10 @@
 	import {
 		drawGrid,
 		drawSchematic,
+		editableValue,
+		labelPixels,
+		labelScreenBox,
+		partLabels,
 		readTheme,
 		setCurrentTheme,
 		type SchematicView,
@@ -31,6 +35,7 @@
 	import { buildSceneItems, buildSnapTargets } from '$lib/schematic/scene';
 	import { createPlaceTool, createSelectTool, createWireTool } from '$lib/schematic/tools';
 	import { app } from '$lib/state.svelte';
+	import { formatWithUnit, parseQuantity } from '$lib/units';
 
 	let host = $state<HTMLDivElement | null>(null);
 	/**
@@ -265,6 +270,73 @@
 		const box = renameBox;
 		app.renamingGroup = null;
 		if (box && value !== null) app.renameGroup(box.id, value);
+		editor?.invalidate('schematic');
+	}
+
+	/**
+	 * The box a part's name or value is typed into, over the label itself.
+	 * Placed once when it opens, the same as a group's.
+	 */
+	let labelBox = $state<{
+		id: string;
+		slot: 'name' | 'value';
+		text: string;
+		x: number;
+		y: number;
+		size: number;
+	} | null>(null);
+	$effect(() => {
+		const editing = app.editingLabel;
+		const active = editor;
+		if (!editing || !active) {
+			labelBox = null;
+			return;
+		}
+		const instance = untrack(() => app.schematic.instances.find((i) => i.id === editing.id));
+		const label = instance && partLabels(instance).find((l) => l.slot === editing.slot);
+		const value = instance && editableValue(instance);
+		if (!instance || !label || (editing.slot === 'value' && !value)) {
+			app.editingLabel = null;
+			return;
+		}
+		const scale = active.viewport.scale;
+		const box = labelScreenBox(label, (world) => active.viewport.toScreen(world), scale);
+		// The value is offered as the number it is, not as printed: a source prints
+		// its frequency beside its amplitude, and only the amplitude is typed here.
+		const text =
+			editing.slot === 'name' || !value
+				? instance.name
+				: formatWithUnit(Number(instance.params[value.key]), value.unit);
+		labelBox = { id: editing.id, slot: editing.slot, text, x: box.x, y: box.y, size: labelPixels(scale) };
+	});
+
+	/**
+	 * Apply what was typed over a label. A value is read the way it would be
+	 * said (`330`, `330 mohm`, `4.7 kiloohms`); one that cannot be read, or that
+	 * the part refuses, leaves the old one and says why.
+	 */
+	function finishLabel(raw: string | null) {
+		const box = labelBox;
+		// Cleared here and not left to the effect, so the blur that closing the
+		// box sets off finds nothing left to apply.
+		labelBox = null;
+		app.editingLabel = null;
+		if (!box || raw === null || raw.trim() === box.text) return;
+		const instance = app.schematic.instances.find((i) => i.id === box.id);
+		if (!instance) return;
+		let refusal: string | null;
+		if (box.slot === 'name') {
+			refusal = app.rename(box.id, raw);
+		} else {
+			const value = editableValue(instance);
+			if (!value) return;
+			const parsed = parseQuantity(raw, value.unit);
+			refusal =
+				parsed === null
+					? `"${raw.trim()}" is not a value in ${value.unit}. Try 330, 4k7 or 4.7 k${value.unit}.`
+					: app.setParam(box.id, value.key, parsed);
+		}
+		if (refusal) app.notice = refusal;
 		editor?.invalidate('schematic');
 	}
 
@@ -792,6 +864,30 @@
 			</span>
 			<button onclick={() => app.leaveBlock()}>Back to the drawing</button>
 		</div>
+	{/if}
+	{#if labelBox}
+		<!-- svelte-ignore a11y_autofocus -->
+		<input
+			class="rename"
+			style:left="{labelBox.x - 4}px"
+			style:top="{labelBox.y - 3}px"
+			style:font-size="{Math.max(labelBox.size, 11)}px"
+			value={labelBox.text}
+			size={Math.max(4, labelBox.text.length + 2)}
+			aria-label={labelBox.slot === 'name' ? 'Part name' : 'Part value'}
+			spellcheck="false"
+			autofocus
+			onfocus={(e) => e.currentTarget.select()}
+			onblur={(e) => finishLabel(e.currentTarget.value)}
+			onkeydown={(e) => {
+				if (e.key === 'Enter') e.currentTarget.blur();
+				else if (e.key === 'Escape') {
+					e.preventDefault();
+					finishLabel(null);
+				}
+				e.stopPropagation();
+			}}
+		/>
 	{/if}
 	{#if renameBox}
 		<!-- svelte-ignore a11y_autofocus -->

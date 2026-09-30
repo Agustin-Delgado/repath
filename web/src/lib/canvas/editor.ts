@@ -273,6 +273,13 @@ export class CanvasEditor {
 	}
 
 	private onPointerDown = (event: PointerEvent) => {
+		// A field left mid-edit is finished before the press does anything. The
+		// browser would blur it too, but only after this handler has changed the
+		// selection, and by then the panel it was in shows another part — or none
+		// — and what was typed into it never reaches the part it was typed for.
+		const focused = document.activeElement;
+		if (focused instanceof HTMLElement && focused !== document.body) focused.blur();
+
 		const screen = this.localPoint(event);
 		const world = this.viewport.toWorld(screen);
 		this.touching = event.pointerType === 'touch';

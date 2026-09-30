@@ -25,15 +25,15 @@ import {
 	type Vec2
 } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
-import { currentTheme } from '../draw';
-import { OPERABLE, wireSegments, type Point } from '../model';
+import { currentTheme, editableValue, labelAt } from '../draw';
+import { OPERABLE, wireSegments, type LabelSlot, type Point } from '../model';
 import { elbow, fallback, lastResort, previewRouter, routeWire } from '../route';
 import { groupLabelAt } from '../groups';
 import { blockOf } from '../model';
 import type { SchematicItem } from '../scene';
 import { connectsAt, drawSnapHint, netAt } from './shared';
 
-type Mode = 'idle' | 'move' | 'marquee' | 'wire';
+type Mode = 'idle' | 'move' | 'marquee' | 'wire' | 'label';
 
 /** How close to a pin the cursor has to be for a drag to mean "start a wire". */
 const PIN_REACH = 1.1;
@@ -100,6 +100,8 @@ export function createSelectTool(): Tool {
 	/** The new wire's route, kept while its ends stay put; started afresh with each wire. */
 	let routed = previewRouter();
 	let wireTo: SnapTarget | null = null;
+	/** The label being dragged, and where it had been dragged to before this drag. */
+	let draggedLabel: { id: string; slot: LabelSlot; from: Point } | null = null;
 
 	/**
 	 * The leg of a wire nearest the cursor.
@@ -233,6 +235,11 @@ export function createSelectTool(): Tool {
 	function abandon(ctx: ToolContext): boolean {
 		if (mode === 'idle') return false;
 		if (mode === 'move') app.cancelMove();
+		// Escape mid-drag puts the label back where the drag found it.
+		if (mode === 'label' && draggedLabel && moved) {
+			app.moveLabel(draggedLabel.id, draggedLabel.slot, draggedLabel.from, false);
+		}
+		draggedLabel = null;
 		mode = 'idle';
 		marquee = null;
 		wireFrom = null;
@@ -260,6 +267,7 @@ export function createSelectTool(): Tool {
 			// final, so committing is what the user last saw — and leaving the
 			// snapshot held would strand it, since no pointer-up is coming.
 			if (mode === 'move') app.endMove();
+			draggedLabel = null;
 			mode = 'idle';
 			marquee = null;
 			pressedId = null;
@@ -340,6 +348,34 @@ export function createSelectTool(): Tool {
 				moved = false;
 				pendingJoin = null;
 				app.beginMove();
+				ctx.setCursor('grabbing');
+				ctx.invalidate('schematic', 'overlay');
+				return;
+			}
+
+			// A part's name and value are handles of their own: dragged, they move
+			// and the part stays; double-clicked, they are typed over where they are.
+			const printed = labelAt(
+				app.schematic,
+				pointer.screen,
+				(world) => ctx.viewport.toScreen(world),
+				ctx.viewport.scale
+			);
+			if (printed && !extending(pointer)) {
+				const { instance, label } = printed;
+				if (!app.selection.includes(instance.id)) app.selection = [instance.id];
+				if (pointer.detail >= 2 && (label.slot === 'name' || editableValue(instance))) {
+					app.editingLabel = { id: instance.id, slot: label.slot };
+					// As for a group's name: the box that opens takes the focus.
+					pointer.native.preventDefault();
+					ctx.invalidate('schematic');
+					return;
+				}
+				const from = instance.labels?.[label.slot] ?? { x: 0, y: 0 };
+				draggedLabel = { id: instance.id, slot: label.slot, from: { ...from } };
+				mode = 'label';
+				origin = pointer.world;
+				moved = false;
 				ctx.setCursor('grabbing');
 				ctx.invalidate('schematic', 'overlay');
 				return;
@@ -431,6 +467,19 @@ export function createSelectTool(): Tool {
 				return;
 			}
 
+			if (mode === 'label' && draggedLabel) {
+				// Free rather than on the grid: a label is placed by eye, clear of
+				// whatever it would otherwise sit on, and the grid is coarser than that.
+				const offset = {
+					x: Math.round(draggedLabel.from.x + pointer.world.x - origin.x),
+					y: Math.round(draggedLabel.from.y + pointer.world.y - origin.y)
+				};
+				app.moveLabel(draggedLabel.id, draggedLabel.slot, offset, !moved);
+				moved = true;
+				ctx.invalidate('schematic');
+				return;
+			}
+
 			if (mode === 'marquee') {
 				marquee = rectFromPoints(pointer.origin, pointer.world);
 				ctx.invalidate('overlay');
@@ -446,7 +495,18 @@ export function createSelectTool(): Tool {
 			const netChanged = net !== app.hoverNet;
 			app.hoverNet = net;
 
-			ctx.setCursor(pin ? 'crosshair' : ctx.scene.top(pointer.world, ctx.tolerance) ? 'pointer' : 'default');
+			const overLabel =
+				!pin &&
+				labelAt(app.schematic, pointer.screen, (world) => ctx.viewport.toScreen(world), ctx.viewport.scale);
+			ctx.setCursor(
+				pin
+					? 'crosshair'
+					: overLabel
+						? 'move'
+						: ctx.scene.top(pointer.world, ctx.tolerance)
+							? 'pointer'
+							: 'default'
+			);
 			if (pinChanged) ctx.invalidate('overlay');
 			if (netChanged) ctx.invalidate('schematic');
 		},
@@ -485,6 +545,8 @@ export function createSelectTool(): Tool {
 						app.toggleSwitch(pressedId);
 					}
 				}
+			} else if (mode === 'label') {
+				draggedLabel = null;
 			} else if (mode === 'marquee' && marquee) {
 				if (marquee.w > 2 || marquee.h > 2) {
 					const hits = ctx.scene.enclosed(marquee).map((item) => item.id);

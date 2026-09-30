@@ -122,7 +122,16 @@ export interface Instance {
 	y: number;
 	rotation: Rotation;
 	params: Record<string, number | string>;
+	/**
+	 * How far each printed label was dragged from where it would sit on its
+	 * own, in world units. Absent for a label nobody moved, which is almost
+	 * all of them.
+	 */
+	labels?: Partial<Record<LabelSlot, Point>>;
 }
+
+/** The two things printed beside a part: its designator and its value. */
+export type LabelSlot = 'name' | 'value';
 
 export interface Point {
 	x: number;

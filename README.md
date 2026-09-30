@@ -303,6 +303,7 @@ would show you.
 | Save / open a file | `Ctrl+S` / `Ctrl+O`, or the **File** menu |
 | Hand-route a wire | hold `Shift` while drawing to bypass the router |
 | Reshape a wire | select it, then drag the leg you want to move |
+| Move or edit a label | drag a part's name or value to move it clear of a wire; double-click it to type over it — a value reads the way it is said: `330` is ohms on a resistor, `330 mohm` is milliohms, `4k7`, `2.2 megohms`, `100 nanofarads` |
 | Select | click, `Shift`-click or `Ctrl`-click to add or remove one, or drag a box around things |
 | Rotate / delete | `R` / `Del` |
 | Pan | middle-drag, or `Alt`-drag |
