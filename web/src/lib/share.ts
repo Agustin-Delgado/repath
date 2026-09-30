@@ -99,9 +99,20 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array | null> {
  * off the payload — which matters, because a URL that wraps across three lines
  * of a chat message does not get clicked.
  */
-type TravellingInstance = [string, string, number, number, number, Record<string, number | string>];
+type TravellingInstance = [
+	string,
+	string,
+	number,
+	number,
+	number,
+	Record<string, number | string>,
+	Instance['labels']?
+];
 
-const packInstance = (n: Instance): TravellingInstance => [n.kind, n.name, n.x, n.y, n.rotation, n.params];
+// Where a label was dragged to rides along only when one was: most parts have
+// their labels where they fall, and an empty slot on each would lengthen every link.
+const packInstance = (n: Instance): TravellingInstance =>
+	n.labels ? [n.kind, n.name, n.x, n.y, n.rotation, n.params, n.labels] : [n.kind, n.name, n.x, n.y, n.rotation, n.params];
 const packWire = (w: Wire): number[] => w.points.flatMap((p) => [p.x, p.y]);
 
 function unpackWires(flat: number[][] | undefined, id: () => string): Wire[] {
@@ -134,7 +145,10 @@ function unpackBlock(packed: TravellingBlock, id: () => string): BlockDef {
 	};
 }
 
-function unpackInstance([kind, name, x, y, rotation, params]: TravellingInstance, id: string): Instance {
+function unpackInstance(
+	[kind, name, x, y, rotation, params, labels]: TravellingInstance,
+	id: string
+): Instance {
 	// A link outlives the catalog it was written against, so what comes out of
 	// one is brought up to date before anything else touches it.
 	return migrateInstance({
@@ -144,7 +158,8 @@ function unpackInstance([kind, name, x, y, rotation, params]: TravellingInstance
 		x,
 		y,
 		rotation: rotation as 0 | 90 | 180 | 270,
-		params: params ?? {}
+		params: params ?? {},
+		...(labels ? { labels } : {})
 	});
 }
 

@@ -21,6 +21,7 @@ import {
 	wireStart,
 	type ComponentDef,
 	type Instance,
+	type LabelSlot,
 	type Rotation,
 	type Schematic,
 	type Wire
@@ -393,6 +394,153 @@ function valueLabel(instance: Instance): string | null {
 }
 
 /**
+ * The parameter the value printed beside a part stands for, where it stands
+ * for one: what typing over that value changes. A lamp prints two ratings and
+ * a switch its schedule, and neither is one number to type, so they are not
+ * here and are changed in the inspector.
+ */
+export function editableValue(instance: Instance): { key: string; unit: string } | null {
+	switch (instance.kind) {
+		case 'resistor':
+		case 'potentiometer':
+			return { key: 'resistance', unit: 'Ω' };
+		case 'capacitor':
+			return { key: 'capacitance', unit: 'F' };
+		case 'inductor':
+			return { key: 'inductance', unit: 'H' };
+		case 'fuse':
+			return { key: 'rated', unit: 'A' };
+		case 'crystal':
+		case 'clock':
+			return { key: 'frequency', unit: 'Hz' };
+		case 'battery':
+		case 'supply':
+			return { key: 'voltage', unit: 'V' };
+		case 'vsource':
+			return { key: 'value', unit: 'V' };
+		case 'isource':
+			return { key: 'value', unit: 'A' };
+		default:
+			return null;
+	}
+}
+
+/**
+ * Label text size in screen pixels. It tracks the zoom, but only so far: past a
+ * point a value legend that keeps growing crowds out the circuit it annotates.
+ */
+export const labelPixels = (scale: number) => Math.min(11 * scale, 15);
+
+/** A designator or value as printed beside a part, anchored in world units. */
+export interface PartLabel {
+	slot: LabelSlot;
+	text: string;
+	at: Vec2;
+	align: 'center' | 'left';
+	baseline: 'bottom' | 'top';
+	/** The designator is drawn bright and the value dim. */
+	strong: boolean;
+}
+
+/**
+ * The labels printed beside a part, where they are printed.
+ *
+ * One answer for drawing them and for finding them under the pointer, so a
+ * label is picked up exactly where it is seen. Probes and ports wear their
+ * names on the symbol and are not here: those are not labels to move.
+ */
+export function partLabels(instance: Instance): PartLabel[] {
+	if (instance.kind === 'ground' || instance.kind === 'probe' || instance.kind === 'port') return [];
+	const def = definitionFor(instance);
+	// Measured off what is actually drawn, rotation included, rather than one
+	// number for every part. A single default has to suit the tallest symbol,
+	// which left a resistor's name floating twenty units above a body that
+	// stops at nine — the label reads as belonging to nothing in particular.
+	const reach = drawnReach(def, instance.rotation);
+	// Above and below when the leads go sideways; stacked to the right when
+	// they go up and down. Either way the labels land where no wire does.
+	//
+	// A rail is forced above regardless. Its one lead points down, so the
+	// stacked-to-the-right placement puts its label level with the pin —
+	// which is exactly where the live reading for that net is drawn, and two
+	// "5 V" on top of each other read as a rendering fault rather than as a
+	// setting and a measurement agreeing.
+	const sideways = instance.kind === 'supply' || leadAxis(def, instance.rotation) === 'x';
+	const clear = (sideways ? reach.y : reach.x) + LABEL_GAP;
+	const tx = sideways ? instance.x : instance.x + clear;
+	const align = sideways ? 'center' : 'left';
+	const moved = (slot: LabelSlot, x: number, y: number): Vec2 => {
+		const by = instance.labels?.[slot];
+		return by ? { x: x + by.x, y: y + by.y } : { x, y };
+	};
+
+	const labels: PartLabel[] = [];
+	// A rail is named by its voltage. "5 V" says everything there is to say
+	// about it, and "PWR1" says nothing at all — so the value takes the
+	// place the designator would have had rather than sitting under it.
+	const rail = instance.kind === 'supply';
+	const top = { y: sideways ? instance.y - clear : instance.y - 6, baseline: 'bottom' as const };
+	if (rail) {
+		const value = valueLabel(instance);
+		if (value) {
+			labels.push({ slot: 'value', text: value, at: moved('value', tx, top.y), align, baseline: top.baseline, strong: true });
+		}
+		return labels;
+	}
+	labels.push({ slot: 'name', text: instance.name, at: moved('name', tx, top.y), align, baseline: top.baseline, strong: true });
+	const value = valueLabel(instance);
+	if (value) {
+		const y = sideways ? instance.y + clear : instance.y + 8;
+		labels.push({ slot: 'value', text: value, at: moved('value', tx, y), align, baseline: 'top', strong: false });
+	}
+	return labels;
+}
+
+/** Where a label covers on screen, measured the way the monospace face sets it. */
+export function labelScreenBox(label: PartLabel, toScreen: (world: Vec2) => Vec2, scale: number): Rect {
+	const size = labelPixels(scale);
+	const at = toScreen(label.at);
+	const w = label.text.length * size * 0.6;
+	return {
+		x: label.align === 'center' ? at.x - w / 2 : at.x,
+		y: label.baseline === 'bottom' ? at.y - size : at.y,
+		w,
+		h: size
+	};
+}
+
+/**
+ * The part label under a point on screen, if any. Only where labels are drawn
+ * at all: below that zoom there is nothing to pick up.
+ */
+export function labelAt(
+	schematic: Schematic,
+	screen: Vec2,
+	toScreen: (world: Vec2) => Vec2,
+	scale: number
+): { instance: Instance; label: PartLabel } | null {
+	if (scale <= 0.35) return null;
+	// A couple of pixels of slack: the text is small, and a press that lands
+	// between two letters of it is still a press on it.
+	const slack = 2;
+	for (let i = schematic.instances.length - 1; i >= 0; i--) {
+		const instance = schematic.instances[i];
+		for (const label of partLabels(instance)) {
+			const box = labelScreenBox(label, toScreen, scale);
+			if (
+				screen.x >= box.x - slack &&
+				screen.x <= box.x + box.w + slack &&
+				screen.y >= box.y - slack &&
+				screen.y <= box.y + box.h + slack
+			) {
+				return { instance, label };
+			}
+		}
+	}
+	return null;
+}
+
+/**
  * Screen pixels — the same as a pin marker. It was made half as big again for
  * a while, because it kept disappearing; the cause was the live layer painting
  * over it, not the size.
@@ -467,9 +615,7 @@ export function labelPosition(label: SymbolLabel, rotation: Rotation): Vec2 {
 export function drawSchematic(painter: Painter, view: SchematicView, visible: Rect): void {
 	const { theme } = view;
 	const scale = painter.viewport.scale;
-	// Labels track the zoom, but only so far: past a point a value legend that
-	// keeps growing crowds out the circuit it is annotating.
-	const labelSize = Math.min(11 * scale, 15);
+	const labelSize = labelPixels(scale);
 	// A little slack so a component straddling the edge is not clipped mid-symbol.
 	const region = rectExpand(visible, 60);
 
@@ -497,8 +643,6 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 
 	for (const instance of view.schematic.instances) {
 		if (!instanceVisible(instance, region)) continue;
-		const def = definitionFor(instance);
-
 		const selected = view.selection.has(instance.id);
 		const colour = selected
 			? theme.selection
@@ -589,42 +733,15 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 			continue;
 		}
 
-		if (showLabels && instance.kind !== 'ground') {
-			// Measured off what is actually drawn, rotation included, rather than one
-			// number for every part. A single default has to suit the tallest symbol,
-			// which left a resistor's name floating twenty units above a body that
-			// stops at nine — the label reads as belonging to nothing in particular.
-			const reach = drawnReach(def, instance.rotation);
-			// Above and below when the leads go sideways; stacked to the right when
-			// they go up and down. Either way the labels land where no wire does.
-			//
-			// A rail is forced above regardless. Its one lead points down, so the
-			// stacked-to-the-right placement puts its label level with the pin —
-			// which is exactly where the live reading for that net is drawn, and two
-			// "5 V" on top of each other read as a rendering fault rather than as a
-			// setting and a measurement agreeing.
-			const sideways = instance.kind === 'supply' || leadAxis(def, instance.rotation) === 'x';
-			const clear = (sideways ? reach.y : reach.x) + LABEL_GAP;
-			const tx = sideways ? instance.x : instance.x + clear;
-			const align = sideways ? 'center' : 'left';
-
-			// A rail is named by its voltage. "5 V" says everything there is to say
-			// about it, and "PWR1" says nothing at all — so the value takes the
-			// place the designator would have had rather than sitting under it.
-			const rail = instance.kind === 'supply';
-			painter.text(
-				rail ? (valueLabel(instance) ?? instance.name) : instance.name,
-				{ x: tx, y: sideways ? instance.y - clear : instance.y - 6 },
-				{ size: labelSize, color: theme.labelStrong, align, baseline: 'bottom', minSize: 6 }
-			);
-
-			const value = rail ? null : valueLabel(instance);
-			if (value) {
-				painter.text(
-					value,
-					{ x: tx, y: sideways ? instance.y + clear : instance.y + 8 },
-					{ size: labelSize, color: theme.labelDim, align, baseline: 'top', minSize: 6 }
-				);
+		if (showLabels) {
+			for (const label of partLabels(instance)) {
+				painter.text(label.text, label.at, {
+					size: labelSize,
+					color: label.strong ? theme.labelStrong : theme.labelDim,
+					align: label.align,
+					baseline: label.baseline,
+					minSize: 6
+				});
 			}
 		}
 	}

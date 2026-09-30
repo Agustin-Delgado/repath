@@ -11,6 +11,24 @@ early entries point at those instead.
 
 ---
 
+## 30 September 2026 — Labels you can move and type over
+
+**A part's name and value can be dragged.** Pick up "R2" or "100 kΩ" on the
+drawing and put it where it does not sit on a wire; the part stays where it is.
+The spot is saved with the drawing and travels in a share link.
+
+**Double-click a label to type over it.** The name is renamed in place, and the
+value is read the way you would say it: `330` on a resistor is ohms, `330 mohm`
+is milliohms, `330 Mohm` megohms, and `4k7`, `2.2 megohms` or `100 nanofarads`
+all work too. A unit that does not fit the part — farads typed at a resistor —
+is refused with a note rather than guessed at.
+
+**A name typed in the inspector is kept when you click away.** It used to need
+Enter: clicking the drawing changed the selection before the field let go, so
+what was typed never reached the part.
+
+---
+
 ## 29 September 2026 — A push-button, and Run under the drawing
 
 **A push-button you hold down.** It is in the palette with the passive parts.

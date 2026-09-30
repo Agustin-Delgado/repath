@@ -68,6 +68,7 @@ import {
 	type BlockDef,
 	type PartGroup,
 	type Instance,
+	type LabelSlot,
 	type Point,
 	type Rotation,
 	type Schematic,
@@ -442,6 +443,9 @@ class AppState {
 
 	/** The group whose name is being typed over on the drawing, if any. */
 	renamingGroup = $state<string | null>(null);
+
+	/** The part label being typed over on the drawing, if any. */
+	editingLabel = $state<{ id: string; slot: LabelSlot } | null>(null);
 
 	/**
 	 * What has been done to this editor, in replayable form.
@@ -1775,6 +1779,27 @@ class AppState {
 		this.checkpoint();
 		instance.name = trimmed;
 		return null;
+	}
+
+	/**
+	 * Put one of a part's labels `offset` away from where it would sit on its
+	 * own. Called on every frame of a drag; `first` is the frame that starts it,
+	 * which is the one that costs an undo step.
+	 */
+	moveLabel(id: string, slot: LabelSlot, offset: Point, first: boolean): void {
+		const instance = this.schematic.instances.find((i) => i.id === id);
+		if (!instance) return;
+		const was = instance.labels?.[slot];
+		if (was && was.x === offset.x && was.y === offset.y) return;
+		if (!was && offset.x === 0 && offset.y === 0) return;
+		if (first) this.checkpoint();
+		// A new object each time rather than a field written in place: a pasted
+		// copy shares the one it was copied from until either of them moves.
+		const labels = { ...instance.labels };
+		if (offset.x === 0 && offset.y === 0) delete labels[slot];
+		else labels[slot] = { x: offset.x, y: offset.y };
+		if (Object.keys(labels).length === 0) delete instance.labels;
+		else instance.labels = labels;
 	}
 
 	// -- groups -----------------------------------------------------------

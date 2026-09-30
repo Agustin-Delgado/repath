@@ -195,3 +195,128 @@ export function stepValue(value: number, by: number, digits = 4): number {
 
 	return joinValue(Number(moved.toPrecision(12)), prefix);
 }
+
+/** Unit names people type in words, in English or Spanish, by the symbol they mean. */
+const UNIT_WORDS: Record<string, string> = {
+	'Ω': 'Ω',
+	ohm: 'Ω',
+	ohms: 'Ω',
+	ohmio: 'Ω',
+	ohmios: 'Ω',
+	f: 'F',
+	farad: 'F',
+	farads: 'F',
+	faradio: 'F',
+	faradios: 'F',
+	h: 'H',
+	henry: 'H',
+	henrys: 'H',
+	henries: 'H',
+	henrio: 'H',
+	henrios: 'H',
+	v: 'V',
+	volt: 'V',
+	volts: 'V',
+	voltio: 'V',
+	voltios: 'V',
+	a: 'A',
+	amp: 'A',
+	amps: 'A',
+	ampere: 'A',
+	amperes: 'A',
+	amperio: 'A',
+	amperios: 'A',
+	hz: 'Hz',
+	hertz: 'Hz',
+	hercio: 'Hz',
+	hercios: 'Hz',
+	s: 's',
+	sec: 's',
+	second: 's',
+	seconds: 's',
+	segundo: 's',
+	segundos: 's',
+	w: 'W',
+	watt: 'W',
+	watts: 'W',
+	vatio: 'W',
+	vatios: 'W'
+};
+
+/** Prefixes spelled out. Matched without regard to case, unlike the letters. */
+const PREFIX_WORDS: Record<string, number> = {
+	tera: 1e12,
+	giga: 1e9,
+	mega: 1e6,
+	meg: 1e6,
+	kilo: 1e3,
+	mili: 1e-3,
+	milli: 1e-3,
+	micro: 1e-6,
+	nano: 1e-9,
+	pico: 1e-12,
+	femto: 1e-15
+};
+
+/**
+ * Read a value typed the way it would be said: `330`, `4k7`, `330 mohm`,
+ * `2.2 megohms`, `100 nanofarads`, `4,7 kΩ`.
+ *
+ * A bare number is in `unit`. A unit that is named has to be `unit`, so `10 uF`
+ * typed at a resistor is refused rather than read as ten microohms. Letters keep
+ * their case — `m` is milli and `M` is mega, as on any schematic — and words do
+ * not, so `Mega` and `mega` both mean a million.
+ */
+export function parseQuantity(input: string, unit: string): number | null {
+	const match = /^\s*([+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:e[+-]?\d+)?)\s*(.*?)\s*$/i.exec(input);
+	if (!match) return null;
+	const number = Number(match[1].replace(',', '.'));
+	if (!Number.isFinite(number)) return null;
+	// `kilohm` drops the vowel the two words share.
+	let rest = match[2].replace(/\s+/g, '').replace(/^kil(?=ohm)/i, 'kilo');
+
+	// 4k7: the letter stands in for the decimal point.
+	const infix = /^([fpnuµμmkKMGT])(\d+)(.*)$/.exec(rest);
+	if (infix && /^\d+$/.test(match[1])) {
+		const whole = parseValue(`${match[1]}${infix[1]}${infix[2]}`);
+		return whole !== null && unitMatches(infix[3], unit) ? whole : null;
+	}
+
+	// A prefix on its own is only a prefix: `10 mega` must not lose its last
+	// letter to amperes.
+	if (isPrefix(rest)) return settle(number * (prefixScale(rest) ?? 1));
+
+	// Otherwise the unit comes off the end, longest spelling first, and what is
+	// left has to be a prefix: `mohm` is milli and ohm.
+	let named: string | null = null;
+	const lower = rest.toLowerCase();
+	for (const word of Object.keys(UNIT_WORDS).sort((x, y) => y.length - x.length)) {
+		if (!(word === 'Ω' ? rest.endsWith('Ω') : lower.endsWith(word))) continue;
+		const before = rest.slice(0, rest.length - word.length);
+		if (!isPrefix(before)) continue;
+		named = UNIT_WORDS[word];
+		rest = before;
+		break;
+	}
+	if (named !== unit) return null;
+
+	const scale = prefixScale(rest);
+	return scale === null ? null : settle(number * scale);
+}
+
+function unitMatches(text: string, unit: string): boolean {
+	if (text === '') return true;
+	const word = text === 'Ω' ? 'Ω' : text.toLowerCase();
+	return UNIT_WORDS[word] === unit;
+}
+
+function isPrefix(text: string): boolean {
+	return prefixScale(text) !== null;
+}
+
+function prefixScale(text: string): number | null {
+	if (text === '') return 1;
+	const word = PREFIX_WORDS[text.toLowerCase()];
+	if (word !== undefined) return word;
+	return PREFIXES[text] ?? null;
+}
