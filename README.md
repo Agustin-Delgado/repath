@@ -280,7 +280,7 @@ would show you.
 
 | | |
 |---|---|
-| **Passive** | resistor, capacitor, inductor, switch you can click, push-button you hold down, ground, supply terminal |
+| **Passive** | resistor, capacitor, inductor, switch you can click while it runs, push-button you hold down, relay whose blade follows its coil, ground, supply terminal |
 | **Sources** | voltage and current, with DC / sine / pulse waveforms |
 | **Semiconductors** | diode (five presets, one of them a zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP |
 | **Analog** | op-amp with finite gain, bandwidth, slew rate and rail saturation; voltage-controlled switch; VCVS; VCCS |
@@ -337,6 +337,9 @@ when it comes up. Change a value instead
 and the sweep restarts from zero — a different circuit is a different run. Moving a
 part around does not count as a change, since the circuit it describes has not
 changed.
+
+With nothing running, a click on a switch, toggle or button only selects it, so it
+can be dragged like any other part; where it starts is set in the inspector.
 
 A wire has to land on something at both ends — a pin, or another wire. A run that
 would finish in mid-air is drawn in red as you make it and declined on release,

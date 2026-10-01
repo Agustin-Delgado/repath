@@ -33,7 +33,7 @@ import { blockOf } from '../model';
 import type { SchematicItem } from '../scene';
 import { connectsAt, drawSnapHint, netAt } from './shared';
 
-type Mode = 'idle' | 'move' | 'marquee' | 'wire' | 'label';
+type Mode = 'idle' | 'move' | 'marquee' | 'wire' | 'label' | 'operate';
 
 /** How close to a pin the cursor has to be for a drag to mean "start a wire". */
 const PIN_REACH = 1.1;
@@ -412,11 +412,17 @@ export function createSelectTool(): Tool {
 				} else if (!pressedWasSelected) {
 					app.selection = [item.id];
 				}
-				// A push-button is worked by being held, so it goes down with the
-				// pointer rather than on the click, and comes up in `pointerUp`.
-				if (!extending(pointer)) {
-					const part = app.schematic.instances.find((i) => i.id === item.id);
-					if (part?.kind === 'pushbutton') app.pressButton(item.id);
+				// While a run is going, a switch, toggle or button under the pointer is
+				// worked rather than picked up: a hand on a running circuit flips it,
+				// and a part that slid a grid square as it was clicked is the confusion
+				// this avoids. A push-button goes down with the pointer and comes up in
+				// `pointerUp`; the rest operate on the release.
+				const part = app.schematic.instances.find((i) => i.id === item.id);
+				if (!extending(pointer) && app.operating && part && OPERABLE.has(part.kind)) {
+					if (part.kind === 'pushbutton') app.pressButton(item.id);
+					mode = 'operate';
+					ctx.invalidate('schematic', 'overlay');
+					return;
 				}
 
 				mode = 'move';
@@ -535,16 +541,9 @@ export function createSelectTool(): Tool {
 					// so one component can be picked out of a group.
 					app.selection = [pressedId];
 				}
-				// Some parts exist to be operated — a switch, a logic toggle — so
-				// pressing one operates it, a press that went nowhere at least. A drag
-				// is still a drag, and a shift- or ctrl-click is still adding to a
-				// selection rather than flipping whatever it lands on.
-				if (!moved && pressedId && !extending(pointer)) {
-					const part = app.schematic.instances.find((i) => i.id === pressedId);
-					if (part && OPERABLE.has(part.kind) && part.kind !== 'pushbutton') {
-						app.toggleSwitch(pressedId);
-					}
-				}
+			} else if (mode === 'operate') {
+				const part = app.schematic.instances.find((i) => i.id === pressedId);
+				if (part && part.kind !== 'pushbutton') app.toggleSwitch(part.id);
 			} else if (mode === 'label') {
 				draggedLabel = null;
 			} else if (mode === 'marquee' && marquee) {
