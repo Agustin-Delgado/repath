@@ -378,8 +378,7 @@ const tolerance = (percent: number) => ({
 	max: 100,
 	plain: true,
 	step: 0.5,
-	description:
-		'Only does anything with sampling switched on, where each part is drawn once from inside its band and stays there for the run.'
+	description: 'Used only when sampling is on.'
 });
 
 /**
@@ -432,8 +431,7 @@ const BASE_CHARGE = [
 		unit: 'F',
 		default: 3.6e-12,
 		min: 0,
-		description:
-			'Across the base-collector junction. An inverting stage multiplies it by its own gain — Miller — so a few picofarads here is what usually sets the top of the band.'
+		description: 'Miller-multiplied in an inverting stage; sets the top of the band.'
 	},
 	{
 		key: 'tf',
@@ -441,8 +439,7 @@ const BASE_CHARGE = [
 		unit: 's',
 		default: 301e-12,
 		min: 0,
-		description:
-			'How long a carrier takes to cross the base, which is what sets the transition frequency: fT is roughly 1/(2π·tf), so 300 ps is a device good to a few hundred megahertz.'
+		description: 'Sets fT ≈ 1/(2π·tf).'
 	}
 ] as const;
 
@@ -453,8 +450,7 @@ const GATE_CHARGE = [
 		unit: 'F',
 		default: 5e-12,
 		min: 0,
-		description:
-			'A datasheet calls it Crss. It bridges the gate to the drain, so turning the device on means dragging it across the whole output swing — the plateau in a gate-drive waveform.'
+		description: 'Crss on a datasheet.'
 	},
 	{
 		key: 'cgs',
@@ -462,8 +458,7 @@ const GATE_CHARGE = [
 		unit: 'F',
 		default: 20e-12,
 		min: 0,
-		description:
-			'With the gate-drain capacitance this makes up the datasheet Ciss — the charge a driver has to deliver before the device starts conducting at all.'
+		description: 'Ciss minus Crss on a datasheet.'
 	}
 ] as const;
 
@@ -520,8 +515,7 @@ const INPUTS_PARAM: ParamDef = {
 	min: 2,
 	max: MAX_GATE_INPUTS,
 	plain: true,
-	step: 1,
-	description: 'The symbol grows a pin for each one. Wiring only some of them leaves the rest unknown, which propagates.'
+	step: 1
 };
 
 /** How many inputs a gate's parameters ask for, whatever they say. */
@@ -591,9 +585,7 @@ const SOURCE_PARAMS: ParamDef[] = [
 		default: 0,
 		plain: true,
 		step: 15,
-		visibleWhen: { key: 'waveform', values: ['sine'] },
-		description:
-			'Where in the cycle the run starts. Two sources ninety degrees apart is a quadrature pair, and one at 180 is the other half of a differential drive.'
+		visibleWhen: { key: 'waveform', values: ['sine'] }
 	},
 	{
 		key: 'duty',
@@ -616,7 +608,7 @@ const SOURCE_PARAMS: ParamDef[] = [
 		min: 0,
 		// Only the source being swept carries a drive; a supply rail should not
 		// also inject a signal, or the frequency response is of the wrong circuit.
-		description: 'Amplitude used by the frequency sweep. Set one source to 1.'
+		description: 'Amplitude in the frequency sweep.'
 	}
 ];
 
@@ -631,8 +623,7 @@ const SWITCH_PARAMS: ParamDef[] = [
 				{ value: 'open', label: 'Open' },
 				{ value: 'closed', label: 'Closed' }
 			],
-			description:
-				'Where it starts. Clicking the switch on the drawing while something is playing throws it at the playhead instead, so the run keeps everything before that instant and the waveform gets the edge.'
+			description: 'Click it on the drawing while running to throw it.'
 		},
 		{
 			key: 'action',
@@ -644,8 +635,7 @@ const SWITCH_PARAMS: ParamDef[] = [
 				{ value: 'toggle', label: 'Operates once' },
 				{ value: 'momentary', label: 'Push-button' }
 			],
-			description:
-				'A run is solved end to end before it is drawn, so a click cannot land inside one. This is how the moment it moves gets into the run instead.'
+			description: 'A timed operation, without clicking.'
 		},
 		{
 			key: 'at',
@@ -671,8 +661,7 @@ const SWITCH_PARAMS: ParamDef[] = [
 			default: 1e-3,
 			min: 0,
 			visibleWhen: { key: 'action', values: ['toggle', 'momentary'] },
-			description:
-				'Contacts are springs, and they chatter for a millisecond or so before they settle. It is the whole reason a button wired to a counter counts three.'
+			description: 'How long the contacts chatter before settling.'
 		},
 		{
 			key: 'r_on',
@@ -680,8 +669,7 @@ const SWITCH_PARAMS: ParamDef[] = [
 			unit: 'Ω',
 			default: 0.05,
 			min: 0,
-			nonZero: true,
-			description: 'The metal and the contact pressure. Milliohms on a good switch, and the reason a bad one gets warm.'
+			nonZero: true
 		},
 		{
 			key: 'r_off',
@@ -695,8 +683,7 @@ const SWITCH_PARAMS: ParamDef[] = [
 			// An open air gap between cleaned contacts is well past this.
 			default: 1e12,
 			min: 0,
-			nonZero: true,
-			description: 'Air, and whatever is condensed on the insulator beside it. Never actually infinite.'
+			nonZero: true
 		}
 ];
 
@@ -721,9 +708,7 @@ export const CATALOG: ComponentDef[] = [
 				// would quietly move the answer of every drawing already saved.
 				default: 0,
 				plain: true,
-				step: 10,
-				description:
-					'How far the value drifts per degree. A carbon film part is a few hundred ppm and a wirewound one more; the reason a precision divider is built from a matched pair is that theirs cancel.'
+				step: 10
 			}
 		]
 	},
@@ -777,8 +762,7 @@ export const CATALOG: ComponentDef[] = [
 				max: 1,
 				plain: true,
 				step: 0.05,
-				description:
-					'How far the plates are meshed, from 0 at the smallest value to 1 at the largest. A tuning capacitor turns the plates past each other; a trimmer is the same part set once with a screwdriver.'
+				description: '0 at the smallest value, 1 at the largest.'
 			}
 		]
 	},
@@ -809,8 +793,7 @@ export const CATALOG: ComponentDef[] = [
 				nonZero: true,
 				plain: true,
 				step: 0.1,
-				description:
-					'Secondary turns over primary turns: what the voltage is multiplied by on the way across, and the current divided by. 0.1 steps 120 V down to 12.'
+				description: 'Secondary over primary: 0.1 steps 120 V down to 12 V.'
 			},
 			{
 				key: 'inductance',
@@ -819,8 +802,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 10e-3,
 				min: 0,
 				nonZero: true,
-				description:
-					'With the secondary open. It sets the magnetising current the primary draws doing nothing, and how low a frequency still gets across: well below where its reactance falls to the source resistance, very little does.'
+				description: 'With the secondary open. Sets the magnetising current.'
 			},
 			{
 				key: 'coupling',
@@ -832,8 +814,7 @@ export const CATALOG: ComponentDef[] = [
 				plain: true,
 				step: 0.001,
 				advanced: true,
-				description:
-					'The share of the flux both windings see. Just under 1 for windings on one core; the rest is leakage inductance, which rings with whatever capacitance it meets. Far lower for two coils side by side in air.'
+				description: 'Just under 1 on a shared core; the rest is leakage.'
 			},
 			{
 				key: 'r1',
@@ -842,8 +823,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 0.1,
 				min: 0,
 				nonZero: true,
-				advanced: true,
-				description: 'The copper. It is all that stands between a DC source and a short.'
+				advanced: true
 			},
 			{
 				key: 'r2',
@@ -878,8 +858,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: 'A',
 				default: 1,
 				min: 0,
-				nonZero: true,
-				description: 'What it carries without ever blowing.'
+				nonZero: true
 			},
 			{
 				key: 'i2t',
@@ -888,8 +867,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 0.5,
 				min: 0,
 				nonZero: true,
-				description:
-					'How much heat above its rating it takes before it goes. A fast-acting 1 A glass fuse is about half an A²s, so ten amps through it lasts five milliseconds; a slow-blow one of the same rating takes several times that, which is what gets it through a motor starting.'
+				description: 'Heat it takes to blow: about 0.5 A²s for a fast 1 A fuse.'
 			},
 			{
 				key: 'resistance',
@@ -898,8 +876,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 0.1,
 				min: 0,
 				nonZero: true,
-				advanced: true,
-				description: 'A tenth of an ohm is typical at 1 A; smaller fuses are more.'
+				advanced: true
 			}
 		]
 	},
@@ -927,7 +904,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 10e3,
 				min: 0,
 				nonZero: true,
-				description: 'End to end, whatever the wiper is doing.'
+				description: 'End to end.'
 			},
 			{
 				key: 'position',
@@ -938,8 +915,7 @@ export const CATALOG: ComponentDef[] = [
 				max: 1,
 				plain: true,
 				step: 0.05,
-				description:
-					'How far along the track the wiper sits, from 0 at a to 1 at b. Across a supply, the wiper reads that fraction of it — until something it feeds draws current and pulls it down.'
+				description: '0 at a, 1 at b.'
 			},
 			// Pots are sold at twenty percent. A divider that only works at the
 			// printed value is a divider that has to be trimmed on every board.
@@ -975,7 +951,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 16e6,
 				min: 0,
 				nonZero: true,
-				description: 'The series resonance, which is what the can is marked with.'
+				description: 'Series resonance, as marked on the can.'
 			},
 			{
 				key: 'r1',
@@ -984,17 +960,14 @@ export const CATALOG: ComponentDef[] = [
 				default: 30,
 				min: 0,
 				nonZero: true,
-				description:
-					'The loss in the motional arm, quoted as ESR. It sets the Q, and it is what an oscillator has to overcome before it starts.'
+				description: 'ESR. Sets the Q.'
 			},
 			{
 				key: 'c0',
 				label: 'Shunt capacitance',
 				unit: 'F',
 				default: 5e-12,
-				min: 0,
-				description:
-					'The electrodes and the holder. A few picofarads, and the reason there is a parallel resonance at all.'
+				min: 0
 			},
 			{
 				key: 'c1',
@@ -1004,8 +977,7 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				nonZero: true,
 				advanced: true,
-				description:
-					'Femtofarads for an HC-49 at 16 MHz, a few for a 32.768 kHz watch crystal. With the frequency it fixes the motional inductance.'
+				description: 'Femtofarads for a megahertz crystal.'
 			}
 		]
 	},
@@ -1086,8 +1058,7 @@ export const CATALOG: ComponentDef[] = [
 						{ value: 'open', label: 'Normally open' },
 						{ value: 'closed', label: 'Normally closed' }
 					],
-					description:
-						'What the contacts do while nobody is pressing it. Holding the button down on the drawing while something is playing moves them for exactly as long as it is held.'
+					description: 'Hold it down on the drawing while running to press it.'
 				};
 			}
 			if (param.key === 'action') {
@@ -1137,7 +1108,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 70,
 				min: 0,
 				nonZero: true,
-				description: 'The winding. 70 Ω is a common 5 V coil, which draws about 70 mA held in.'
+				description: '70 Ω is a typical 5 V coil.'
 			},
 			{
 				key: 'coil_l',
@@ -1154,8 +1125,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 3.75,
 				min: 0,
 				nonZero: true,
-				description:
-					'Across the coil, at or above which the contacts are thrown. Datasheets quote 75% of the nominal voltage.'
+				description: 'Coil voltage that throws the contacts. Typically 75% of nominal.'
 			},
 			{
 				key: 'drop_out',
@@ -1163,7 +1133,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: 'V',
 				default: 0.5,
 				min: 0,
-				description: 'Below this the contacts are back at rest. Between the two they are on their way.'
+				description: 'Coil voltage below which the contacts fall back.'
 			},
 			{
 				key: 'r_on',
@@ -1207,7 +1177,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 1.2,
 				min: 0,
 				nonZero: true,
-				description: 'At the rated voltage. Together they fix the hot resistance: V² / P.'
+				description: 'At the rated voltage.'
 			}
 		]
 	},
@@ -1260,8 +1230,7 @@ export const CATALOG: ComponentDef[] = [
 				label: 'Name',
 				unit: '',
 				default: '',
-				description:
-					'What to call this signal on the scope. Left empty it uses the designator above.'
+				description: 'Left empty, the designator is used.'
 			}
 		]
 	},
@@ -1296,8 +1265,7 @@ export const CATALOG: ComponentDef[] = [
 				key: 'voltage',
 				label: 'Voltage',
 				unit: 'V',
-				default: 5,
-				description: 'Referred to ground, which the drawing still needs a symbol for.'
+				default: 5
 			}
 		]
 	},
@@ -1344,7 +1312,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 9,
 				min: 0,
 				nonZero: true,
-				description: 'With nothing drawn from it.'
+				description: 'Open circuit.'
 			},
 			{
 				key: 'r_int',
@@ -1353,8 +1321,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 1.5,
 				min: 0,
 				nonZero: true,
-				description:
-					'About 1.5 Ω for a fresh 9 V alkaline, a tenth of an ohm for an AA cell, and climbing as either runs down.'
+				description: 'About 1.5 Ω for a 9 V, 0.1 Ω for an AA.'
 			}
 		]
 	},
@@ -1389,8 +1356,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 2.52e-9,
 				min: 0,
 				nonZero: true,
-				description:
-					'Where the forward curve sits. Larger means a smaller drop at the same current, which is most of what separates a Schottky from a silicon part.'
+				description: 'Larger means a lower forward drop.'
 			},
 			{
 				key: 'n',
@@ -1401,16 +1367,14 @@ export const CATALOG: ComponentDef[] = [
 				max: 4,
 				plain: true,
 				step: 0.05,
-				description: 'How steep the curve is: about 60·n millivolts per decade of current.'
+				description: 'Slope: about 60·n mV per decade.'
 			},
 			{
 				key: 'rs',
 				label: 'Series resistance',
 				unit: 'Ω',
 				default: 0.568,
-				min: 0,
-				description:
-					'The bulk silicon and the leads. Nothing at a milliamp, and most of the forward drop at an amp.'
+				min: 0
 			},
 			{
 				key: 'breakdown',
@@ -1428,8 +1392,7 @@ export const CATALOG: ComponentDef[] = [
 				label: 'Junction capacitance',
 				unit: 'F',
 				default: 4e-12,
-				min: 0,
-				description: 'Charge in the depletion region, which is what a diode blocks with at high frequency rather than instantly.'
+				min: 0
 			},
 			{
 				key: 'tt',
@@ -1437,8 +1400,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: 's',
 				default: 5e-9,
 				min: 0,
-				description:
-					'The carriers in transit while it conducts. They have to be swept out before it blocks, so this is the reverse recovery — and it is why a Schottky, which has none, rectifies where a silicon part has given up.'
+				description: 'Sets the reverse recovery.'
 			},
 			...SPICE_CARD
 		]
@@ -1459,7 +1421,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: '',
 				default: LED_COLOURS[0].value,
 				choices: LED_COLOURS.map(({ value, label }) => ({ value, label })),
-				description: 'Sets the forward voltage as well as the light: blue needs 3 V where red needs 1.9 V.'
+				description: 'Also sets the forward voltage.'
 			},
 			{
 				key: 'imax',
@@ -1468,7 +1430,7 @@ export const CATALOG: ComponentDef[] = [
 				default: RATED,
 				min: 0,
 				nonZero: true,
-				description: 'Held above this the LED burns out. Brief pulses well over it survive.'
+				description: 'Held above this, it burns out.'
 			},
 			// The colour and the rating survive a pasted card: one is about light and
 			// the other about what destroys the part, and neither is something a
@@ -1513,8 +1475,7 @@ export const CATALOG: ComponentDef[] = [
 					{ value: 'cathode', label: 'Cathode (lights on a high)' },
 					{ value: 'anode', label: 'Anode (lights on a low)' }
 				],
-				description:
-					'Which end of the eight LEDs is tied together. Drive a common-cathode digit from logic outputs with its common pin at ground; a common-anode one hangs its common pin on the supply and lights on a low.'
+				description: 'Common cathode lights on a high; common anode on a low.'
 			},
 			{
 				key: 'colour',
@@ -1530,7 +1491,7 @@ export const CATALOG: ComponentDef[] = [
 				default: RATED,
 				min: 0,
 				nonZero: true,
-				description: 'Per segment, and every segment is its own LED: a digit showing 8 draws eight times this.'
+				description: 'Per segment.'
 			}
 		]
 	},
@@ -1566,8 +1527,7 @@ export const CATALOG: ComponentDef[] = [
 					{ value: 'cathode', label: 'Cathode (lights on a high)' },
 					{ value: 'anode', label: 'Anode (lights on a low)' }
 				],
-				description:
-					'Which end of each digit\'s eight LEDs is tied to its digit pin. Common cathode: segments driven high, the digit being shown pulled low. Common anode: the other way round.'
+				description: 'Common cathode: segments high, digit low. Common anode: the reverse.'
 			},
 			{
 				key: 'colour',
@@ -1583,7 +1543,7 @@ export const CATALOG: ComponentDef[] = [
 				default: RATED,
 				min: 0,
 				nonZero: true,
-				description: 'Per segment, averaged. Multiplexed, a segment takes several times this in bursts and survives.'
+				description: 'Per segment, averaged.'
 			}
 		]
 	},
@@ -1620,7 +1580,7 @@ export const CATALOG: ComponentDef[] = [
 				default: RATED,
 				min: 0,
 				nonZero: true,
-				description: 'Per bar. Each one is its own LED and needs its own resistor.'
+				description: 'Per bar.'
 			}
 		]
 	},
@@ -1640,8 +1600,7 @@ export const CATALOG: ComponentDef[] = [
 				label: 'Channel-length modulation',
 				unit: '1/V',
 				default: 0.02,
-				min: 0,
-				description: 'The drain current keeps climbing in saturation. Zero makes the device a perfect current source, which nothing is.'
+				min: 0
 			},
 			...GATE_CHARGE,
 			...SPICE_CARD
@@ -1663,8 +1622,7 @@ export const CATALOG: ComponentDef[] = [
 				label: 'Channel-length modulation',
 				unit: '1/V',
 				default: 0.02,
-				min: 0,
-				description: 'The drain current keeps climbing in saturation. Zero makes the device a perfect current source, which nothing is.'
+				min: 0
 			},
 			...GATE_CHARGE,
 			...SPICE_CARD
@@ -1686,8 +1644,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: 'V',
 				default: 100,
 				min: 0,
-				description:
-					'Base-width modulation. Sets the output resistance to about VAF/Ic — zero here would make a stage into a high impedance amplify without limit.'
+				description: 'Output resistance ≈ VAF / Ic.'
 			},
 			...BASE_CHARGE,
 			...SPICE_CARD
@@ -1708,8 +1665,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: 'V',
 				default: 100,
 				min: 0,
-				description:
-					'Base-width modulation. Sets the output resistance to about VAF/Ic — zero here would make a stage into a high impedance amplify without limit.'
+				description: 'Output resistance ≈ VAF / Ic.'
 			},
 			{
 				key: 'is',
@@ -1764,8 +1720,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 5,
 				min: 0,
 				nonZero: true,
-				description:
-					'What it holds between OUT and its third leg: the output itself on a 78xx, whose third leg is ground, the same below ground on a 79xx, and 1.25 V on an LM317, set up to any output by a divider on ADJ.'
+				description: 'From OUT to the third leg: 5 V on a 7805, 1.25 V on an LM317.'
 			},
 			{
 				key: 'dropout',
@@ -1773,8 +1728,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: 'V',
 				default: 2,
 				min: 0.3,
-				description:
-					'How far above the output the input has to stay for it to regulate. Two volts on a 78xx: a 7805 wants 7 V in.'
+				description: 'Headroom the input needs above the output: 2 V on a 78xx.'
 			},
 			{
 				key: 'quiescent',
@@ -1782,8 +1736,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: 'A',
 				default: 5e-3,
 				min: 0,
-				description:
-					'What it draws for itself, out of the third leg: 5 mA on a 78xx, 50 µA from the ADJ pin of an LM317.'
+				description: 'Drawn out of the third leg.'
 			},
 			{
 				key: 'limit',
@@ -1792,8 +1745,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 1.5,
 				min: 0,
 				nonZero: true,
-				description:
-					'Past this the output stops being a voltage and becomes a current: short it and this is what flows, which is what keeps the part alive.'
+				description: 'What flows into a short.'
 			}
 		]
 	},
@@ -1813,8 +1765,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 1e6,
 				min: 0,
 				nonZero: true,
-				description:
-					'Gain and bandwidth are one quantity split two ways: asking this part for a gain of a hundred leaves a hundredth of this, and no amount of feedback buys it back.'
+				description: 'A gain of 100 leaves a hundredth of this as bandwidth.'
 			},
 			{
 				key: 'slew',
@@ -1823,8 +1774,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 0.5e6,
 				min: 0,
 				nonZero: true,
-				description:
-					'The fastest the output can move, whatever the input does. Past it the output stops following and becomes a ramp — which is why a square wave comes out with sloped edges.'
+				description: 'The fastest the output can move.'
 			},
 			{ key: 'v_max', label: 'Positive rail', unit: 'V', default: 15 },
 			{ key: 'v_min', label: 'Negative rail', unit: 'V', default: -15 },
@@ -1833,23 +1783,21 @@ export const CATALOG: ComponentDef[] = [
 				label: 'Output resistance',
 				unit: 'Ω',
 				default: 75,
-				min: 0,
-				description: 'Nothing drives a load for free. Feedback hides this at low frequencies and stops hiding it as the loop gain falls.'
+				min: 0
 			},
 			{
 				key: 'v_os',
 				label: 'Input offset',
 				unit: 'V',
 				default: 1e-3,
-				description:
-					'The input pair is never quite matched, so the output does not sit at zero — it sits at this, times the gain the circuit asks for.'
+				description: 'Multiplied by the gain the circuit asks for.'
 			},
 			{
 				key: 'i_bias',
 				label: 'Input bias current',
 				unit: 'A',
 				default: 80e-9,
-				description: 'Drawn through whatever each input is connected to. The reason an integrator drifts with nothing on its input.'
+				description: 'Why an integrator drifts.'
 			}
 		]
 	},
@@ -1965,8 +1913,7 @@ export const CATALOG: ComponentDef[] = [
 					{ value: 'low', label: 'Low (0)' },
 					{ value: 'high', label: 'High (1)' }
 				],
-				description:
-					'Where it starts. Clicking it on the drawing while something is playing operates it at the playhead instead, so the waveform gets the edge. It drives the net in both positions, so unlike a switch it never leaves what it feeds floating.'
+				description: 'Click it on the drawing while running to flip it.'
 			}
 		]
 	}

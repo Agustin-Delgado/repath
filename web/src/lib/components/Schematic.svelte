@@ -10,7 +10,13 @@
 	import { untrack } from 'svelte';
 	import { CanvasEditor, type Painter, type ViewportState } from '$lib/canvas';
 	import { createAnimationState, forget } from '$lib/schematic/animate';
-	import { isActuatedAt, isClosedAt, isHighAt } from '$lib/schematic/contacts';
+	import {
+		isActuatedAt,
+		isClosedAt,
+		isHighAt,
+		relayPulledIn,
+		type RelayTrack
+	} from '$lib/schematic/contacts';
 	import {
 		drawGrid,
 		drawSchematic,
@@ -346,10 +352,30 @@
 	 * Cleared rather than left behind when there is nothing live: a switch with no
 	 * run behind it is drawn resting where its parameters put it.
 	 */
-	function trackSwitches(time: number | null): boolean {
+	const relayTracks = new Map<string, RelayTrack>();
+
+	function trackSwitches(
+		time: number | null,
+		live?: { run: { elementNames: string[]; currents: Float64Array[] }; index: number }
+	): boolean {
 		let changed = false;
 		const seen = new Set<string>();
+		if (time === null) relayTracks.clear();
 		for (const instance of app.schematic.instances) {
+			// A relay is worked by its coil, so where its blade is drawn comes from
+			// the run's own numbers rather than from anything done by hand.
+			if (instance.kind === 'relay') {
+				if (time === null || !live) continue;
+				const track = relayPulledIn(instance, live.run, live.index, relayTracks.get(instance.id));
+				if (!track) continue;
+				relayTracks.set(instance.id, track);
+				seen.add(instance.id);
+				if (switchStates.get(instance.id) !== track.pulled) {
+					switchStates.set(instance.id, track.pulled);
+					changed = true;
+				}
+				continue;
+			}
 			const operable = OPERABLE.has(instance.kind);
 			if (!operable) continue;
 			seen.add(instance.id);
@@ -667,7 +693,7 @@
 				active.invalidate('dynamic');
 				// The blades live on the layer underneath, which is repainted only on
 				// the frames where one of them actually moves.
-				if (trackSwitches(app.playbackTime)) active.invalidate('schematic');
+				if (trackSwitches(app.playbackTime, { run, index })) active.invalidate('schematic');
 				if (import.meta.env.DEV) {
 					const handle = (window as unknown as Record<string, Record<string, unknown>>).__repath;
 					if (handle) {
