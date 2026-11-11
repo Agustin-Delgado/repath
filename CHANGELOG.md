@@ -11,6 +11,22 @@ early entries point at those instead.
 
 ---
 
+## 1 October 2026 — Editing and operating stop getting in each other's way
+
+**Switches are worked only while a run is going.** Stopped, a click on a switch,
+toggle or push-button selects it and a drag moves it, like any other part —
+it no longer flips as you pick it up. Running, a click works it and does not
+nudge it out of place. Where a switch starts is set in the inspector.
+
+**The relay says which contact is which, and moves.** NO, NC and COM are
+printed on the symbol, and during a run the blade is drawn on NO while the coil
+holds it in.
+
+**Shorter hints in the inspector.** The notes under each value were trimmed to
+a line that helps set it, or removed where the label already says it all.
+
+---
+
 ## 30 September 2026 — Labels you can move and type over
 
 **A part's name and value can be dragged.** Pick up "R2" or "100 kΩ" on the

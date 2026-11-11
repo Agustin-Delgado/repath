@@ -140,6 +140,8 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 			return `switch:${String(params.action ?? 'toggle')}:${String(params.start ?? 'open')}`;
 		case 'pushbutton':
 			return `pushbutton:${String(params.start ?? 'open')}`;
+		case 'relay':
+			return `relay:${String(params.start ?? 'open')}`;
 		case 'spdt':
 			return `spdt:${String(params.start ?? 'open')}`;
 		case 'toggle':
@@ -366,22 +368,6 @@ const STATIC: Record<string, SymbolGeometry> = {
 			path('M0 8 V30')
 		],
 		labels: [{ x: 10, y: -16, text: '+', anchor: 'start', size: 10 }]
-	},
-
-	// The coil on the left, the changeover on the right at rest, and the dashed
-	// line that says the one works the other.
-	relay: {
-		shapes: [
-			path('M-20 -30 V-12 M-20 12 V30'),
-			{ kind: 'rect', x: -28, y: -12, w: 16, h: 24 },
-			path('M-12 0 H-8 M-4 0 H0 M4 0 H8 M12 0 H16'),
-			path('M40 0 H30 M10 -30 V-10 M10 30 V10'),
-			{ kind: 'circle', cx: 30, cy: 0, r: 2 },
-			{ kind: 'circle', cx: 10, cy: -10, r: 2 },
-			{ kind: 'circle', cx: 10, cy: 10, r: 2 },
-			path('M29 1 L12 9')
-		],
-		labels: []
 	},
 
 	bargraph: {
@@ -844,6 +830,7 @@ export function symbolGeometry(
 		geometry = switchSymbol(String(params.action ?? 'toggle'), String(params.start ?? 'open'));
 	}
 	else if (kind === 'pushbutton') geometry = switchSymbol('momentary', String(params.start ?? 'open'));
+	else if (kind === 'relay') geometry = relaySymbol(String(params.start ?? 'open'));
 	else if (kind === 'spdt') geometry = changeoverSymbol(String(params.start ?? 'open'));
 	else if (kind === 'toggle') geometry = toggleSymbol(String(params.state ?? 'low'));
 	else if (kind === 'port') geometry = portSymbol(String(params.flow ?? 'in'));
@@ -859,6 +846,34 @@ export function symbolGeometry(
 	if (variantCache.size >= 2000) variantCache.clear();
 	variantCache.set(variant, geometry);
 	return geometry;
+}
+
+/**
+ * The coil on the left, the changeover on the right, and the dashed line that
+ * says the one works the other. `closed` is the coil pulled in, blade on NO:
+ * the drawing passes that in during a run, the same way it moves a switch.
+ * The contacts are named, since nothing else on the symbol says which of the
+ * three is which.
+ */
+function relaySymbol(start: string): SymbolGeometry {
+	const pulled = start === 'closed';
+	return {
+		shapes: [
+			path('M-20 -30 V-12 M-20 12 V30'),
+			{ kind: 'rect', x: -28, y: -12, w: 16, h: 24 },
+			path('M-12 0 H-8 M-4 0 H0 M4 0 H8 M12 0 H16'),
+			path('M40 0 H30 M10 -30 V-10 M10 30 V10'),
+			{ kind: 'circle', cx: 30, cy: 0, r: 2 },
+			{ kind: 'circle', cx: 10, cy: -10, r: 2 },
+			{ kind: 'circle', cx: 10, cy: 10, r: 2 },
+			path(pulled ? 'M29 -1 L12 -9' : 'M29 1 L12 9')
+		],
+		labels: [
+			{ x: 14, y: -22, text: 'NO', anchor: 'start', size: 8, fine: true },
+			{ x: 14, y: 22, text: 'NC', anchor: 'start', size: 8, fine: true },
+			{ x: 36, y: -8, text: 'COM', anchor: 'middle', size: 8, fine: true }
+		]
+	};
 }
 
 /** The half-extent of a symbol, for callers that have to frame it. */

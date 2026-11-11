@@ -195,3 +195,40 @@ export function isHighAt(
 	}
 	return high;
 }
+
+/** Where a relay's contacts were last worked out to, so the next frame can carry on from there. */
+export interface RelayTrack {
+	index: number;
+	pulled: boolean;
+}
+
+/**
+ * Whether a relay's coil has its contacts pulled in at sample `upTo` of a run.
+ *
+ * Followed through the run rather than read off the one sample, because the
+ * contacts have hysteresis: between drop-out and pull-in they stay wherever
+ * they last were. The engine throws them on the voltage across the coil's
+ * resistance, which is its current times that resistance, so the same test is
+ * made here on the same numbers. `track` is carried from frame to frame and
+ * only rewound when the playhead goes backwards.
+ */
+export function relayPulledIn(
+	instance: Instance,
+	run: { elementNames: string[]; currents: Float64Array[] },
+	upTo: number,
+	track: RelayTrack | undefined
+): RelayTrack | null {
+	const column = run.currents[run.elementNames.indexOf(instance.name)];
+	if (!column) return null;
+	const resistance = Number(instance.params.coil_r ?? 70);
+	const pullIn = Math.max(Number(instance.params.pull_in ?? 3.75), 1e-3);
+	const dropOut = Math.min(Math.max(Number(instance.params.drop_out ?? 0.5), 0), pullIn);
+	let { index, pulled } = track && track.index <= upTo + 1 ? track : { index: 0, pulled: false };
+	const last = Math.min(upTo, column.length - 1);
+	for (; index <= last; index++) {
+		const across = column[index] * resistance;
+		if (across >= pullIn) pulled = true;
+		else if (across <= dropOut) pulled = false;
+	}
+	return { index, pulled };
+}

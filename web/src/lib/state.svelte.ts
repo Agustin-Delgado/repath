@@ -540,6 +540,15 @@ class AppState {
 	 * already had in it.
 	 */
 	playing = $state(false);
+
+	/**
+	 * Whether a click on a switch, toggle or button works it. Only while a run is
+	 * going: stopped, the drawing is being edited, and a click there selects and
+	 * drags a part like any other rather than flipping it as it is picked up.
+	 */
+	get operating(): boolean {
+		return this.playing && this.acquiring !== null && this.analysis === 'transient';
+	}
 	/**
 	 * The instant the drawing is showing.
 	 *
@@ -1731,7 +1740,7 @@ class AppState {
 	pressButton(id: string): void {
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance || instance.kind !== 'pushbutton') return;
-		if (this.held || !this.playing || !this.acquiring) return;
+		if (this.held || !this.operating || !this.acquiring) return;
 		const at = this.acquiring.time;
 		if (this.operateAt(instance, at)) this.held = { id, at };
 	}
