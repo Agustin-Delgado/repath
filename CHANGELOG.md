@@ -34,7 +34,7 @@ end — says where it stopped instead of silently doing nothing.
 **A new example, Microcontroller blink,** blinks an LED once a second, lights
 another while a button is held and counts over serial, from a small program
 written for it.
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#70](https://github.com/Agustin-Delgado/repath/pull/70)
 
 ---
 
