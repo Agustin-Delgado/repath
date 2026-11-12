@@ -256,12 +256,13 @@ impl Simulation {
         self.circuit.operate_logic(name, level, at)
     }
 
-    /// What a microcontroller has to report: `{ serial, fault }` as JSON, or
-    /// `null` if there is no microcontroller by that name.
+    /// What a microcontroller has to report: `{ serial, fault, fault_time }` as
+    /// JSON, or `null` if there is no microcontroller by that name.
     ///
     /// `serial` is every byte it has sent from the `serial_from`-th on, as
     /// `{ time, byte }`, so a caller polling a live run asks only for what it
-    /// has not seen. `fault` is why the CPU stopped, if it has.
+    /// has not seen. `fault` is why the CPU stopped, if it has, and
+    /// `fault_time` when, in seconds from the start of the run.
     #[wasm_bindgen(js_name = mcuState)]
     pub fn mcu_state(&self, name: &str, serial_from: usize) -> Result<String, JsError> {
         #[derive(Serialize)]
@@ -273,6 +274,7 @@ impl Simulation {
         struct State {
             serial: Vec<Byte>,
             fault: Option<String>,
+            fault_time: Option<f64>,
         }
         let mcu = self
             .circuit
@@ -287,6 +289,7 @@ impl Simulation {
                 .map(|b| Byte { time: b.time, byte: b.byte })
                 .collect(),
             fault: mcu.fault().map(|f| f.to_string()),
+            fault_time: mcu.fault().map(|f| f.cycle as f64 / mcu.frequency()),
         });
         serde_json::to_string(&state).map_err(to_js_error)
     }

@@ -11,6 +11,33 @@ early entries point at those instead.
 
 ---
 
+## 12 November 2026 — An Arduino's chip, running your sketch
+
+**The ATmega328P is on a new Microcontrollers shelf.** It is the chip on an
+Arduino Uno, in its 28-pin package, and searching for arduino, uno, avr or
+328p finds it. Pins keep their datasheet names on the drawing; hovering one
+says what the Uno calls it too, so PB5 reads as D13.
+
+**It runs the .hex the Arduino IDE exports.** Select the chip and load the file
+in the inspector, or paste it: it says how much of the 32 KB the program uses,
+or what is wrong with the file, before you press Run. Sketch → Export Compiled
+Binary in the IDE writes one. The program is saved and shared with the drawing.
+
+**Its pins behave like the real ones.** A button from a pin to ground works
+with no resistor when the sketch uses INPUT_PULLUP, because the pull-up is
+there, and RESET restarts the program when pulled low.
+
+**What it prints over serial shows in the inspector** while the run goes, and
+a program that crashes — one built for another chip, or one that runs off its
+end — says where it stopped instead of silently doing nothing.
+
+**A new example, Microcontroller blink,** blinks an LED once a second, lights
+another while a button is held and counts over serial, from a small program
+written for it.
+[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+
+---
+
 ## 1 October 2026 — Editing and operating stop getting in each other's way
 
 **Switches are worked only while a run is going.** Stopped, a click on a switch,

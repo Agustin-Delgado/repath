@@ -17,6 +17,7 @@ import {
 	type Vec2
 } from '$lib/canvas';
 import {
+	chipOf,
 	definitionFor,
 	definitionOf,
 	pinPosition,
@@ -150,14 +151,18 @@ export function buildSnapTargets(
 	const points: SnapPoint[] = [];
 
 	for (const instance of schematic.instances) {
+		// Where a board has its own name for a leg, hovering it says both: the
+		// drawing keeps the datasheet's, and the person holding an Uno looks for D13.
+		const board = chipOf(instance.kind)?.boardNames;
 		for (const pin of definitionFor(instance).pins) {
 			const at = pinPosition(instance, pin);
+			const aka = board?.[pin.name];
 			points.push({
 				x: at.x,
 				y: at.y,
 				kind: 'pin',
 				ownerId: instance.id,
-				label: `${instance.name}.${pin.name}`
+				label: `${instance.name}.${pin.name}${aka ? ` (${aka})` : ''}`
 			});
 		}
 	}

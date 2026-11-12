@@ -7,9 +7,11 @@
  * the convention every schematic editor uses and the one every engineer expects.
  */
 
+import { positiveSupply } from './chips';
 import {
 	GRID,
 	SINGLE_CONTACTS,
+	chipOf,
 	definitionFor,
 	definitionOf,
 	pinPosition,
@@ -125,7 +127,7 @@ export interface Net {
 	hasAnalog: boolean;
 	/** Some digital device reads this net. */
 	hasDigitalInput: boolean;
-	/** Some digital device drives this net. */
+	/** Some digital device drives this net, or can: a port pin of a microcontroller. */
 	hasDigitalOutput: boolean;
 }
 
@@ -347,8 +349,12 @@ export function buildConnectivity(
 		else if (ref.pin.domain === 'analog') {
 			if (ref.instance.kind === 'probe') probed.add(net);
 			else if (ref.instance.kind !== 'port') net.hasAnalog = true;
-		} else if (ref.pin.direction === 'out') net.hasDigitalOutput = true;
-		else net.hasDigitalInput = true;
+		} else {
+			// A microcontroller's port pin is both, and its net needs both halves:
+			// a way for the pin to drive the node and a way to read it back.
+			if (ref.pin.direction !== 'in') net.hasDigitalOutput = true;
+			if (ref.pin.direction !== 'out') net.hasDigitalInput = true;
+		}
 	});
 
 	// Where there is nothing digital to name instead, the probe is measuring a
@@ -894,6 +900,7 @@ export function netLabel(net: Net, fallback: string): string {
 		if (kind === 'vsource' || kind === 'isource' || kind === 'battery') return 0;
 		if (kind === 'clock') return 1;
 		if (ref.pin.direction === 'out') return 1;
+		if (ref.pin.domain === 'digital' && ref.pin.direction === 'inout') return 1;
 		return 2;
 	};
 	const named = [...net.pins]
@@ -1035,6 +1042,15 @@ export function floatingLogicInputs(
 			.filter((index): index is number => index !== undefined);
 		const via = SINGLE_CONTACTS.has(instance.kind) ? instance.id : undefined;
 		for (let i = 1; i < on.length; i++) join(on[0], on[i], via);
+		// A logic leg with a resistor inside to the supply — a microcontroller's
+		// reset — is held by it, which is the reason the resistor is there.
+		const chip = chipOf(instance.kind);
+		const supply = chip && positiveSupply(chip);
+		const rail = supply === undefined ? undefined : netOf(instance, supply);
+		for (const leg of Object.keys(chip?.pullUps ?? {})) {
+			const index = netOf(instance, leg);
+			if (index !== undefined && rail !== undefined) join(index, rail);
+		}
 	}
 
 	/** Nets reachable from the reference. `'all'` closes every switch at once. */
@@ -1065,6 +1081,13 @@ export function floatingLogicInputs(
 		if (!net.hasDigitalInput || !net.hasAnalog || worst.has(net.index)) continue;
 		// Something digital driving the net holds it at a rail through the bridge,
 		// which is a path to the reference by any other name.
+		//
+		// A microcontroller's port pin counts, though it may be an input: whether
+		// it drives, pulls up through its own resistor or does neither is the
+		// program's choice, made at run time, and a drawing cannot be checked
+		// against it. Of the three, only the last leaves the net to leakage, and
+		// warning on every button wired to a pin read with INPUT_PULLUP — the
+		// usual way to wire one — would be wrong far more often than right.
 		if (net.hasDigitalOutput) continue;
 		watched.add(net.index);
 		for (const ref of net.pins) {

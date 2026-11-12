@@ -14,7 +14,7 @@
  */
 
 import { Capture } from './capture';
-import { EngineError, LiveRun, type LogicState } from './engine';
+import { EngineError, LiveRun, type LogicState, type McuState } from './engine';
 
 export interface AcquisitionHost {
 	/** New samples have landed. */
@@ -167,6 +167,11 @@ export class Acquisition {
 	/** Move a logic source now. */
 	setLogic(name: string, state: LogicState): boolean {
 		return this.run.setLogic(name, state, this.run.time);
+	}
+
+	/** What a microcontroller has sent from its `from`-th byte on, and whether it stopped. */
+	mcuState(name: string, from: number): McuState | null {
+		return this.run.mcuState(name, from);
 	}
 
 	/**

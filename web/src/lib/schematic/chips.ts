@@ -25,6 +25,7 @@
 
 import { ANALOG_CHIPS } from './chips-analog';
 import { MEMORY_CHIPS } from './chips-memory';
+import { MCU_CHIPS } from './chips-mcu';
 
 /** A primitive inside a package, wired to pin names rather than to nets. */
 export interface ChipBlock {
@@ -40,7 +41,8 @@ export interface ChipBlock {
 		| 'buffer'
 		| 'tristate'
 		| 'dff'
-		| 'memory';
+		| 'memory'
+		| 'mcu';
 	/** Gate inputs, in order. A tri-state buffer takes one. */
 	inputs?: readonly string[];
 	/** Gate output. */
@@ -69,6 +71,19 @@ export interface ChipBlock {
 	 * Absent for a RAM, which stores while `write` is high.
 	 */
 	programming?: { writeTime: number; page?: number; loadWindow?: number };
+	/**
+	 * A microcontroller's port legs, for `kind: 'mcu'`, by the names the engine
+	 * and the datasheet give them (`PB5`). Each is an output and an input at
+	 * once — which one, the program decides as it runs — so each is wired both
+	 * ways; `reset` is its reset leg, active low.
+	 */
+	ports?: readonly string[];
+	/**
+	 * Legs a microcontroller has that its model does nothing with: drawn and
+	 * wireable, so a drawing of the real chip connects as it would on a board,
+	 * and with nothing behind them.
+	 */
+	unmodelled?: readonly string[];
 }
 
 /**
@@ -89,6 +104,7 @@ export const CHIP_ROLES = [
 	{ id: 'bus', label: 'Three-state and bus' },
 	{ id: 'timers', label: 'Timers' },
 	{ id: 'memory', label: 'Memory' },
+	{ id: 'microcontrollers', label: 'Microcontrollers' },
 	{ id: 'amplifiers', label: 'Op-amps and comparators' },
 	{ id: 'analog', label: 'Analog switches and drivers' }
 ] as const;
@@ -125,6 +141,21 @@ export interface ChipDef {
 	 * and a word nobody wrote reads `erased`.
 	 */
 	contents?: { erased: number };
+	/**
+	 * Legs with a resistor inside to the positive supply, in ohms: a
+	 * microcontroller's reset. Always there, so a leg left to it reads high.
+	 */
+	pullUps?: Readonly<Record<string, number>>;
+	/**
+	 * Legs that are fine left unconnected, which the drawing does not nag about:
+	 * the pins a program does not use.
+	 */
+	optional?: readonly string[];
+	/**
+	 * What a board calls a leg, where that is how people know it: an Uno's
+	 * silkscreen says D13 where the datasheet says PB5.
+	 */
+	boardNames?: Readonly<Record<string, string>>;
 	/** Anything about this part the model does not do. */
 	caveat?: string;
 }
@@ -1601,7 +1632,17 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 	}
 ];
 
-export const CHIPS: readonly ChipDef[] = [...LOGIC_CHIPS, ...MEMORY_CHIPS, ...ANALOG_CHIPS];
+export const CHIPS: readonly ChipDef[] = [
+	...LOGIC_CHIPS,
+	...MEMORY_CHIPS,
+	...ANALOG_CHIPS,
+	...MCU_CHIPS
+];
+
+/** The program-running block of a chip, if it is a microcontroller. */
+export function mcuBlock(chip: ChipDef): ChipBlock | undefined {
+	return chip.blocks.find((block) => block.kind === 'mcu');
+}
 
 const BY_ID = new Map(CHIPS.map((chip) => [chip.id, chip]));
 

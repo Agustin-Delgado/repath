@@ -8,6 +8,7 @@
 import type { Schematic } from './schematic/model';
 import { defaultParams, definitionOf } from './schematic/model';
 import { SEGMENTS } from './schematic/led';
+import { intelHex } from './schematic/firmware';
 
 export interface Example {
 	id: string;
@@ -55,6 +56,64 @@ function build(parts: Placed[], wires: Array<[number, number, number, number]>):
 		}))
 	};
 }
+
+/**
+ * The program the microcontroller example runs, assembled by hand: each row is
+ * an instruction as the AVR Instruction Set Manual encodes it, beside what it
+ * is. Hand-written rather than compiled, so the example carries nothing of the
+ * Arduino core with it; the file a toolchain would write is built from these
+ * rows, so the source and the program cannot drift apart.
+ *
+ * D13 (PB5) toggles every 8 000 000 cycles, half a second at 16 MHz, so it
+ * blinks once a second. Each time it comes on the program sends the next digit
+ * of a count, and each time it goes off a newline, at 9600 baud. All the while
+ * it copies D2 (PD2, read with its pull-up on) onto D12 (PB4), lit while the
+ * button holds D2 low.
+ *
+ * The half period, counted from the manual's cycle times: 16 cycles from the
+ * start of the toggle to the end of the byte's write, the same whichever way
+ * the LED went; 3 of padding; 17 passes of the outer loop at 9 · 52 287 + 4
+ * cycles each, the button copy taking 5 cycles whether it is pressed or not;
+ * and 2 back to the top — 16 + 3 + 17 · 470 587 + 2 = 8 000 000. A press or a
+ * release that lands between the copy's two reads of D2 makes that one pass a
+ * cycle longer or shorter, which nobody watching an LED will notice.
+ */
+const BLINK_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: string]> = [
+	[[0xe300], 'ldi  r16, 0x30        ; D13 and D12 are outputs'],
+	[[0xb904], 'out  DDRB, r16'],
+	[[0x9a5a], 'sbi  PORTD, 2         ; D2 an input, its pull-up on'],
+	[[0xe607], 'ldi  r16, 103         ; 9600 baud at 16 MHz'],
+	[[0x9300, 0x00c4], 'sts  UBRR0L, r16'],
+	[[0xe008], 'ldi  r16, 0x08'],
+	[[0x9300, 0x00c1], 'sts  UCSR0B, r16      ; transmitter on'],
+	[[0xe330], "ldi  r19, '0'         ; the count's last digit"],
+	[[0x9a1d], 'loop: sbi PINB, 5     ; toggle D13'],
+	[[0xe00a], "ldi  r16, '\n'        ; going off: a newline"],
+	[[0x992d], 'sbic PORTB, 5         ; coming on: the next digit'],
+	[[0x9533], 'inc  r19'],
+	[[0x333a], "cpi  r19, '9' + 1"],
+	[[0xf409], 'brne digit'],
+	[[0xe330], "ldi  r19, '0'"],
+	[[0x992d], 'digit: sbic PORTB, 5'],
+	[[0x2f03], 'mov  r16, r19'],
+	[[0x9110, 0x00c0], 'send: lds r17, UCSR0A'],
+	[[0xff15], 'sbrs r17, UDRE0       ; wait for room to send'],
+	[[0xcffc], 'rjmp send'],
+	[[0x9300, 0x00c6], 'sts  UDR0, r16'],
+	[[0x0000, 0x0000, 0x0000], 'nop ×3                ; to make the half period exact'],
+	[[0xe121], 'ldi  r18, 17'],
+	[[0xe38f], 'outer: ldi r24, lo8(52287)'],
+	[[0xec9c], 'ldi  r25, hi8(52287)'],
+	[[0x994a], 'inner: sbic PIND, 2   ; D2 high: D12 off'],
+	[[0x982c], 'cbi  PORTB, 4'],
+	[[0x9b4a], 'sbis PIND, 2          ; D2 low: D12 on'],
+	[[0x9a2c], 'sbi  PORTB, 4'],
+	[[0x9701], 'sbiw r24, 1'],
+	[[0xf7d1], 'brne inner'],
+	[[0x952a], 'dec  r18'],
+	[[0xf7b1], 'brne outer'],
+	[[0xcfe2], 'rjmp loop']
+];
 
 export const EXAMPLES: Example[] = [
 	{
@@ -698,6 +757,73 @@ export const EXAMPLES: Example[] = [
 			}
 			return build(parts, wires);
 		}
+	},
+
+	{
+		id: 'atmega-blink',
+		name: 'Microcontroller blink',
+		description:
+			"An ATmega328P, the chip on an Arduino Uno, running a program. D13 blinks once a second and D12 lights while the button on D2 is held down — with no resistor on D2, because the program turns on the pin's own pull-up, the way INPUT_PULLUP does in a sketch. Each time D13 comes on the chip sends the next digit of a count over serial; select it to read them. The other button pulls RESET low, which starts the program, and the count, again. The program is a few dozen instructions assembled by hand; to run a sketch of your own, export its .hex from the Arduino IDE and load it from the chip's inspector.",
+		stopTime: 4,
+		build: () =>
+			build(
+				[
+					{
+						kind: 'ic:ATmega328P',
+						name: 'U1',
+						x: 500,
+						y: 300,
+						params: { firmware: intelHex(BLINK_PROGRAM.flatMap(([words]) => words)) }
+					},
+					{ kind: 'supply', name: 'PWR1', x: 400, y: 270, params: { voltage: 5 } },
+					{ kind: 'supply', name: 'PWR2', x: 660, y: 320, params: { voltage: 5 } },
+					{ kind: 'ground', name: 'GND1', x: 400, y: 330 },
+					{ kind: 'ground', name: 'GND2', x: 290, y: 260 },
+					{ kind: 'ground', name: 'GND3', x: 620, y: 300 },
+					{ kind: 'ground', name: 'GND4', x: 880, y: 370 },
+					{ kind: 'ground', name: 'GND5', x: 880, y: 450 },
+					{ kind: 'pushbutton', name: 'S1', x: 350, y: 170 },
+					{ kind: 'pushbutton', name: 'S2', x: 350, y: 230 },
+					{ kind: 'resistor', name: 'R1', x: 730, y: 350, params: { resistance: 330 } },
+					{ kind: 'resistor', name: 'R2', x: 730, y: 430, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D1', x: 820, y: 350, params: { colour: 'red' } },
+					{ kind: 'led', name: 'D2', x: 820, y: 430, params: { colour: 'green' } },
+					{ kind: 'probe', name: 'BUTTON', x: 410, y: 230 },
+					{ kind: 'probe', name: 'D13', x: 620, y: 350 },
+					{ kind: 'probe', name: 'D12', x: 620, y: 430 }
+				],
+				[
+					// VCC and GND, pins 7 and 8; AVCC and AGND, pins 20 and 22, the same.
+					[400, 280, 400, 290],
+					[400, 290, 440, 290],
+					[440, 310, 400, 310],
+					[400, 310, 400, 320],
+					[560, 290, 620, 290],
+					[560, 330, 660, 330],
+					// RESET, pin 1, and D2, pin 4, each to ground through a button.
+					[380, 170, 440, 170],
+					[380, 230, 410, 230],
+					[410, 230, 440, 230],
+					[320, 170, 290, 170],
+					[290, 170, 290, 230],
+					[320, 230, 290, 230],
+					[290, 230, 290, 250],
+					// D13, pin 19, through a resistor and an LED to ground.
+					[560, 350, 620, 350],
+					[620, 350, 700, 350],
+					[760, 350, 790, 350],
+					[850, 350, 880, 350],
+					[880, 350, 880, 360],
+					// D12, pin 18, the same, round below.
+					[560, 370, 580, 370],
+					[580, 370, 580, 430],
+					[580, 430, 620, 430],
+					[620, 430, 700, 430],
+					[760, 430, 790, 430],
+					[850, 430, 880, 430],
+					[880, 430, 880, 440]
+				]
+			)
 	},
 
 	{

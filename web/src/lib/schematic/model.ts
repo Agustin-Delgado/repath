@@ -8,7 +8,8 @@
  */
 
 import { BARS, DIGITS, LED_COLOURS, RATED, SEGMENTS } from './led';
-import { analogTerminals, CHIPS, chipById, chipName, isPower, isUnused, type ChipDef } from './chips';
+import { analogTerminals, CHIPS, chipById, chipName, isPower, isUnused, mcuBlock, type ChipDef } from './chips';
+import { DEFAULT_CLOCK } from './chips-mcu';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -476,6 +477,15 @@ const digitalOut = (name: string, x: number, y: number): PinDef => ({
 	y,
 	domain: 'digital',
 	direction: 'out'
+});
+
+/** A logic pin that drives and reads, depending on what is running behind it. */
+const digitalBoth = (name: string, x: number, y: number): PinDef => ({
+	name,
+	x,
+	y,
+	domain: 'digital',
+	direction: 'inout'
 });
 
 const DELAY_PARAM: ParamDef = {
@@ -2004,6 +2014,8 @@ export function chipReach(count: number): number {
  * Direction is read off what is inside rather than declared twice: a pin a block
  * drives is an output, everything else a block touches is an input. Supply pins
  * are analog, because that is what they connect to — a rail and a ground symbol.
+ * A microcontroller's port legs are both at once: which way one goes is up to
+ * the program, and changes while it runs.
  *
  * Unconnected legs are deliberately *not* pins. They exist on the package and
  * the symbol draws their numbers, but a pin the die does not reach would collect
@@ -2027,6 +2039,9 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 	// inside reads it too: the part crosses between the two domains itself, and
 	// the net outside sees a voltage.
 	const analogLegs = new Set((chip.analog ?? []).flatMap(analogTerminals));
+	const mcu = mcuBlock(chip);
+	const ports = new Set(mcu?.ports ?? []);
+	for (const leg of mcu?.unmodelled ?? []) analogLegs.add(leg);
 
 	const places = chipPinLayout(chip.layout.length);
 	const pins: PinDef[] = [];
@@ -2034,6 +2049,7 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 		if (isUnused(name)) continue;
 		const { x, y } = places[i];
 		if (isPower(name) || analogLegs.has(name)) pins.push(analog(name, x, y));
+		else if (ports.has(name)) pins.push(digitalBoth(name, x, y));
 		else if (driven.has(name)) pins.push(digitalOut(name, x, y));
 		else if (touched.has(name)) pins.push(digitalIn(name, x, y));
 	}
@@ -2048,10 +2064,23 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 		body: { x: -CHIP_BODY_HALF_WIDTH, y: -half, w: CHIP_BODY_HALF_WIDTH * 2, h: half * 2 },
 		pins,
 		// What a programmable memory holds is text, edited in a block of its own
-		// the way a model card is.
+		// the way a model card is; so is a microcontroller's program.
 		params: chip.contents
 			? [{ key: 'contents', label: 'Contents', unit: '', default: '', hidden: true }]
-			: []
+			: mcu
+				? [
+						{ key: 'firmware', label: 'Program', unit: '', default: '', hidden: true },
+						{
+							key: 'frequency',
+							label: 'Clock',
+							unit: 'Hz',
+							default: DEFAULT_CLOCK,
+							min: 1,
+							advanced: true,
+							description: 'What its crystal or oscillator runs at: 16 MHz on an Uno, 8 MHz on its own internal one.'
+						}
+					]
+				: []
 	};
 }
 
