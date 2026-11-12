@@ -6,8 +6,9 @@
 //! rather than a panic deep inside the solver.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
+use crate::avr::{self, Mcu, Pin, PinNets};
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
 use crate::digital::{
@@ -336,6 +337,25 @@ fn one() -> usize {
     1
 }
 
+/// The nets one microcontroller pin reaches. See `avr::PinNets`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct McuPinSpec {
+    #[serde(default)]
+    pub input: Option<String>,
+    #[serde(default)]
+    pub output: Option<String>,
+    #[serde(default)]
+    pub pullup: Option<String>,
+}
+
+fn default_mcu_model() -> String {
+    "atmega328p".into()
+}
+
+fn default_mcu_frequency() -> f64 {
+    avr::DEFAULT_FREQUENCY
+}
+
 /// A digital device.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -407,6 +427,27 @@ pub enum Device {
         #[serde(default)]
         flips: Vec<f64>,
     },
+    /// A microcontroller running a program. See `avr::Mcu`.
+    Mcu {
+        name: String,
+        /// Only `atmega328p` so far.
+        #[serde(default = "default_mcu_model")]
+        model: String,
+        /// The program, as the Intel HEX text a toolchain writes.
+        firmware: String,
+        /// Clock, in hertz.
+        #[serde(default = "default_mcu_frequency")]
+        frequency: f64,
+        /// Port pins by name — `PB5`, `PD2` — and the nets each reaches. A
+        /// pin left out is connected to nothing.
+        #[serde(default)]
+        pins: BTreeMap<String, McuPinSpec>,
+        /// Holds the chip in reset while low; absent, it runs.
+        #[serde(default)]
+        reset: Option<String>,
+        /// A net of its own, for the device to wake itself with.
+        wake: String,
+    },
 }
 
 impl Device {
@@ -417,7 +458,8 @@ impl Device {
             | Device::DFlipFlop { name, .. }
             | Device::TriState { name, .. }
             | Device::Memory { name, .. }
-            | Device::LogicSource { name, .. } => name,
+            | Device::LogicSource { name, .. }
+            | Device::Mcu { name, .. } => name,
         }
     }
 }
@@ -786,6 +828,49 @@ impl Netlist {
                 c.add_device(Box::new(
                     LogicSource::new(name, out, *state).operated_at(flips.iter().copied()),
                 ));
+            }
+            Device::Mcu { name, model, firmware, frequency, pins, reset, wake } => {
+                let bad_value =
+                    |reason: String| NetlistError::BadValue { component: name.clone(), reason };
+                if !model.eq_ignore_ascii_case("atmega328p") {
+                    return Err(bad_value(format!(
+                        "'{model}' is not a microcontroller this simulates; atmega328p is"
+                    )));
+                }
+                if !(frequency.is_finite() && *frequency > 0.0) {
+                    return Err(bad_value(format!(
+                        "the clock must be a positive frequency, not {frequency}"
+                    )));
+                }
+                // Parsed against the flash size, so a program for a bigger part
+                // is refused on the line that does not fit.
+                let image = avr::hex::parse(firmware, avr::FLASH_BYTES).map_err(|e| {
+                    bad_value(format!(
+                        "the firmware is not a program for its {} KB of flash: {e}",
+                        avr::FLASH_BYTES / 1024
+                    ))
+                })?;
+                let mut connected = Vec::with_capacity(pins.len());
+                for (pin_name, spec) in pins {
+                    let Some(pin) = Pin::parse(pin_name) else {
+                        return Err(NetlistError::BadTerminals {
+                            component: name.clone(),
+                            reason: format!(
+                                "an ATmega328P has no pin '{pin_name}'; its port pins are \
+                                 PB0-PB7, PC0-PC5 and PD0-PD7"
+                            ),
+                        });
+                    };
+                    let nets = PinNets {
+                        input: spec.input.as_ref().map(|n| c.net(n)),
+                        output: spec.output.as_ref().map(|n| c.net(n)),
+                        pullup: spec.pullup.as_ref().map(|n| c.net(n)),
+                    };
+                    connected.push((pin, nets));
+                }
+                let reset = reset.as_ref().map(|n| c.net(n));
+                let wake = c.net(wake);
+                c.add_device(Box::new(Mcu::new(name, &image, *frequency, &connected, reset, wake)));
             }
         }
         Ok(())
@@ -1173,6 +1258,90 @@ mod tests {
         assert_eq!(word_at(&run, 1.27e-3), Some(5), "word 1 written");
         assert_eq!(word_at(&run, 1.35e-3), Some(5), "word 0 written");
         assert_eq!(word_at(&run, 1.0e-3), None, "the page is still being written at 1 ms");
+    }
+
+    /// A program as the Intel HEX a toolchain writes: sixteen bytes a
+    /// record, each with its checksum, and the end-of-file record.
+    fn hex_of(words: &[u16]) -> String {
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let mut text = String::new();
+        for (i, chunk) in bytes.chunks(16).enumerate() {
+            let address = (i * 16) as u16;
+            let mut record = vec![chunk.len() as u8, (address >> 8) as u8, address as u8, 0];
+            record.extend_from_slice(chunk);
+            let sum = record.iter().fold(0u8, |a, b| a.wrapping_add(*b));
+            record.push(sum.wrapping_neg());
+            text.push(':');
+            text.extend(record.iter().map(|b| format!("{b:02X}")));
+            text.push('\n');
+        }
+        text + ":00000001FF\n"
+    }
+
+    fn mcu_json(firmware: &str, pins: &str) -> String {
+        format!(
+            r#"{{"components":[],"devices":[{{"type":"mcu","name":"U1",
+                "firmware":{},"pins":{pins},"wake":"u1_wake"}}]}}"#,
+            serde_json::to_string(firmware).unwrap()
+        )
+    }
+
+    #[test]
+    fn a_microcontroller_runs_its_firmware_through_the_solver() {
+        //        sbi  DDRB, 5        ; 0x9A25   2
+        // loop:  sbi  PINB, 5        ; 0x9A1D   2
+        //        ldi  r24, lo(4000)  ; 0xEA80   1
+        //        ldi  r25, hi(4000)  ; 0xE09F   1
+        // wait:  sbiw r24, 1         ; 0x9701   2
+        //        brne wait           ; 0xF7F1   2 taken, 1 not
+        //        rjmp loop           ; 0xCFFA   2
+        let firmware = hex_of(&[0x9A25, 0x9A1D, 0xEA80, 0xE09F, 0x9701, 0xF7F1, 0xCFFA]);
+        let run = run(&mcu_json(&firmware, r#"{"PB5":{"output":"led"}}"#), 3e-3);
+        let net = run.net_names.iter().position(|n| n == "led").unwrap();
+        let edges = &run.digital[net];
+        // A toggle every 2 + 1 + 1 + (4 * 4000 - 1) + 2 = 16 005 cycles at
+        // 16 MHz, the first as the first `sbi PINB` ends at cycle 4; the pin
+        // went low as `sbi DDRB` ended at 2. The trace opens with the level the
+        // net started at.
+        let expected = [
+            (0, Logic::HighZ),
+            (2, Logic::Low),
+            (4, Logic::High),
+            (16_009, Logic::Low),
+            (32_014, Logic::High),
+        ];
+        assert_eq!(edges.len(), expected.len(), "{edges:?}");
+        for ((t, level), (cycle, want)) in edges.iter().zip(expected) {
+            assert!((t * 16e6 - f64::from(cycle)).abs() < 1e-6, "{t} for cycle {cycle}");
+            assert_eq!(*level, want);
+        }
+    }
+
+    #[test]
+    fn a_microcontroller_with_bad_firmware_or_pins_is_refused() {
+        let good = hex_of(&[0xCFFF]);
+        let compile = |json: String| {
+            let netlist: Netlist = serde_json::from_str(&json).unwrap();
+            netlist.compile().map(|_| ())
+        };
+        assert_eq!(compile(mcu_json(&good, "{}")), Ok(()));
+
+        let corrupt = good.replacen("FF", "FE", 1);
+        let err = compile(mcu_json(&corrupt, "{}")).unwrap_err();
+        assert!(err.to_string().contains("line 1: the checksum"), "{err}");
+
+        // One byte at 0x8000, just past 32 KB, behind an extended address of
+        // zero so the line number has something to point past.
+        let too_big = ":020000040000FA\n:01800000AAD5\n:00000001FF\n";
+        let err = compile(mcu_json(too_big, "{}")).unwrap_err();
+        assert!(err.to_string().contains("line 2"), "{err}");
+
+        let err = compile(mcu_json(&good, r#"{"PB9":{"output":"x"}}"#)).unwrap_err();
+        assert!(matches!(err, NetlistError::BadTerminals { .. }), "{err}");
+
+        let json = mcu_json(&good, "{}")
+            .replace(r#""type":"mcu","#, r#""type":"mcu","model":"attiny85","#);
+        assert!(matches!(compile(json), Err(NetlistError::BadValue { .. })));
     }
 
     #[test]

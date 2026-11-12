@@ -27,6 +27,7 @@
 //! assert!((op.solution[out_index] - 2.5).abs() < 1e-6);
 //! ```
 
+pub mod avr;
 pub mod bridge;
 pub mod circuit;
 pub mod complex;
