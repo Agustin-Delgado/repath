@@ -100,6 +100,6 @@ export const MCU_CHIPS: readonly ChipDef[] = [
 		optional: [...PORTS, 'RESET', 'AREF'],
 		boardNames: ARDUINO_NAMES,
 		caveat:
-			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers and serial output. analogRead() reads 0, Serial.read() never receives, I²C finds nothing on the bus, and there is no watchdog or SPI: a sketch that uses one of these is told so while it runs. AVCC, AREF and AGND are there to be wired as on the real chip and do nothing here; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
+			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers, serial output and the EEPROM, erased at the start of every run. analogRead() reads 0, Serial.read() never receives, I²C finds nothing on the bus, and there is no watchdog or SPI: a sketch that uses one of these is told so while it runs. AVCC, AREF and AGND are there to be wired as on the real chip and do nothing here; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
 	}
 ];

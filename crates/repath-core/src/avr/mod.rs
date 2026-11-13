@@ -33,6 +33,7 @@
 #[cfg(test)]
 mod asm;
 mod cpu;
+mod eeprom;
 pub mod hex;
 mod machine;
 mod timer;
@@ -220,7 +221,7 @@ impl Mcu {
         Self {
             name: name.into(),
             frequency,
-            committed: Machine::new(flash.clone(), 0),
+            committed: Machine::new(flash.clone(), 0, frequency),
             flash,
             pins: pins.to_vec(),
             reset,
@@ -269,7 +270,7 @@ impl Mcu {
 
     /// Back to power-on.
     fn restart(&mut self) {
-        self.committed = Machine::new(self.flash.clone(), 0);
+        self.committed = Machine::new(self.flash.clone(), 0, self.frequency);
         self.speculation = None;
         self.pending.clear();
         self.sampled = None;
@@ -459,10 +460,13 @@ impl DigitalDevice for Mcu {
 
         if reset_low {
             if !self.in_reset {
-                // What was emitted stands; from here every pin lets go.
-                self.in_reset = true;
+                // Whatever ran up to now happened: a speculation has nothing
+                // on the pins before its stop, but it can have written the
+                // EEPROM, which outlives the reset. From here every pin lets
+                // go.
                 self.speculation = None;
-                self.pending.clear();
+                self.catch_up(ctx, now);
+                self.in_reset = true;
                 self.publish(ctx, now);
             }
             self.sampled = Some(levels);
@@ -472,7 +476,10 @@ impl DigitalDevice for Mcu {
             // Out of reset the chip starts from its reset vector, with no
             // start-up delay; see BACKLOG.md.
             self.in_reset = false;
-            self.committed = Machine::new(self.flash.clone(), now);
+            // A reset is not a power cycle: the EEPROM keeps what it holds.
+            let kept = self.committed.eeprom.cells;
+            self.committed = Machine::new(self.flash.clone(), now, self.frequency);
+            self.committed.eeprom.cells = kept;
             self.committed.set_inputs(levels);
             self.sampled = Some(levels);
             self.publish(ctx, now);
@@ -963,6 +970,46 @@ mod tests {
         let cycles: Vec<(Peripheral, f64)> =
             notices.iter().map(|n| (n.peripheral, (n.time * F * 1e6).round() / 1e6)).collect();
         assert_eq!(cycles, vec![(Peripheral::Adc, 1.0), (Peripheral::Spi, 960.0 + 7005.0)]);
+    }
+
+    /// Show EEPROM byte 0 on port B, then write 42 to it. A reset just after
+    /// the write — before anything has made the device adopt the run that
+    /// did it — keeps it, so the program reads 42 once restarted; a new run
+    /// starts erased again.
+    #[test]
+    fn the_eeprom_outlives_a_reset_but_not_the_run() {
+        let program = [
+            ldi(16, 0xFF), // ldi r16, 0xFF         ; 0..1
+            out(0x04, 16), // out DDRB, r16         ; 1..2   PB0 low
+            out(0x21, 1),  // out EEARL, r1         ; 2..3
+            sbi(0x1F, 0),  // sbi EECR, EERE        ; 3..5, halted to 9
+            in_(17, 0x20), // in r17, EEDR          ; 9..10
+            out(0x05, 17), // out PORTB, r17        ; 10..11
+            ldi(24, 0xF4), // ldi r24, lo(500)      ; 11..12
+            ldi(25, 0x01), // ldi r25, hi(500)      ; 12..13
+            sbiw(24, 1),   // sbiw r24, 1           ; 4 * 500 - 1
+            brne(-2),      // brne .-4              ;   = 1999, to 2012
+            ldi(16, 42),   // ldi r16, 42
+            out(0x20, 16), // out EEDR, r16
+            sbi(0x1F, 2),  // sbi EECR, EEMPE
+            sbi(0x1F, 1),  // sbi EECR, EEPE        ; at 2016
+            idle(),
+        ];
+        let mut bench = Bench::new();
+        let rst = bench.net("rst");
+        let pb0 = bench.net("pb0");
+        // Low from 2100 cycles to 3200.
+        bench.domain.add_device(Box::new(
+            LogicSource::new("RST", rst, Logic::High).operated_at([131.25e-6, 200e-6]),
+        ));
+        bench.mcu(&program, &[("PB0", output(pb0))], Some(rst));
+        // Erased, byte 0 reads 0xFF: PB0 high from 11. Restarted at 3200, it
+        // reads 42, which is even: PB0 stays low from 3202.
+        let expected =
+            vec![(2, Logic::Low), (11, Logic::High), (2_100, Logic::HighZ), (3_202, Logic::Low)];
+        assert_eq!(edges(&bench.run(10_000), pb0), expected);
+        bench.domain.reset();
+        assert_eq!(edges(&bench.run(10_000), pb0), expected, "erased again for a new run");
     }
 
     #[test]

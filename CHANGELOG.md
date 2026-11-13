@@ -25,7 +25,9 @@ Binary in the IDE writes one. The program is saved and shared with the drawing.
 
 **Its pins behave like the real ones.** A button from a pin to ground works
 with no resistor when the sketch uses INPUT_PULLUP, because the pull-up is
-there, and RESET restarts the program when pulled low.
+there, and RESET restarts the program when pulled low. Its EEPROM keeps what
+the sketch writes through a reset, starts erased on every run, and takes the
+real chip's few milliseconds to write.
 
 **What it prints over serial shows in the inspector** while the run goes, and
 a program that crashes — one built for another chip, or one that runs off its

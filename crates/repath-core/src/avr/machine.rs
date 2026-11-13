@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use super::eeprom::Eeprom;
 use super::timer::{ICF, OCFA, OCFB, TOV, Timer};
 use super::twi::{TWEN, Twi};
 
@@ -44,6 +45,9 @@ const PCIFR: u8 = 0x3B;
 const EIFR: u8 = 0x3C;
 const EIMSK: u8 = 0x3D;
 const EECR: u8 = 0x3F;
+const EEDR: u8 = 0x40;
+const EEARL: u8 = 0x41;
+const EEARH: u8 = 0x42;
 const TCCR0A: u8 = 0x44;
 const TCCR0B: u8 = 0x45;
 const TCNT0: u8 = 0x46;
@@ -173,7 +177,7 @@ impl std::fmt::Display for Fault {
 /// The set is what a sketch can be caught using cheaply and without crying
 /// wolf. Not here: USART0's receiver, which `Serial.begin()` turns on in every
 /// sketch that only prints; the timers' external clock pins, which count as
-/// stopped and show as a timer that never moves; and EEPROM.
+/// stopped and show as a timer that never moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Peripheral {
     /// A conversion was started: ADSC written as one.
@@ -366,6 +370,10 @@ pub struct Machine {
     temp: u8,
     usart: Usart,
     twi: Twi,
+    pub(super) eeprom: Eeprom,
+    /// Cycles the CPU is halted for after the instruction under way, as an
+    /// EEPROM access halts it.
+    stall: u64,
     eicra: u8,
     eimsk: u8,
     eifr: u8,
@@ -413,8 +421,11 @@ pub fn flash_words(image: &[u8]) -> Arc<[u16]> {
 }
 
 impl Machine {
-    /// The chip at power-on, `cycle` cycles into the run: what a reset is.
-    pub fn new(flash: Arc<[u16]>, cycle: u64) -> Self {
+    /// The chip at power-on, `cycle` cycles into the run, clocked at
+    /// `frequency` — which only the EEPROM's programming time, set in
+    /// milliseconds, needs to know. Its EEPROM is erased: a reset that is
+    /// not a power-on keeps the old one's.
+    pub fn new(flash: Arc<[u16]>, cycle: u64, frequency: f64) -> Self {
         let mut data = [0u8; DATA_SIZE];
         // Power-on reset is the reason for the last reset.
         data[MCUSR as usize] = 0x01;
@@ -440,6 +451,8 @@ impl Machine {
             temp: 0,
             usart: Usart::new(),
             twi: Twi::new(),
+            eeprom: Eeprom::new(frequency),
+            stall: 0,
             eicra: 0,
             eimsk: 0,
             eifr: 0,
@@ -639,6 +652,10 @@ impl Machine {
             PCIFR => self.pcifr,
             EIFR => self.eifr,
             EIMSK => self.eimsk,
+            EECR => self.eeprom.control(self.cycle),
+            EEDR => self.eeprom.data,
+            EEARL => self.eeprom.address_byte(false),
+            EEARH => self.eeprom.address_byte(true),
             TCCR0A => self.timers[0].control_a(),
             TCCR0B => self.timers[0].control_b(),
             TCNT0 => self.timer(0).count() as u8,
@@ -723,7 +740,13 @@ impl Machine {
             EIFR => self.eifr &= !v,
             EIMSK => self.eimsk = v & 3,
             // An EEPROM read or write completes at once; see BACKLOG.md.
-            EECR => self.data[EECR as usize] = v & !0x03,
+            EECR => {
+                let cycle = self.cycle;
+                self.stall = self.eeprom.write_control(v, cycle);
+            }
+            EEDR => self.eeprom.data = v,
+            EEARL => self.eeprom.set_address_byte(false, v),
+            EEARH => self.eeprom.set_address_byte(true, v),
             TCCR0A => self.timer(0).set_control_a(v),
             TCCR0B => {
                 let timer = self.timer(0);
@@ -863,7 +886,7 @@ impl Machine {
             .timers
             .iter()
             .map(Timer::next_event)
-            .chain([self.usart.next_event(), self.twi.next_event()])
+            .chain([self.usart.next_event(), self.twi.next_event(), self.eeprom.next_event()])
             .min()
             .unwrap_or(u64::MAX);
     }
@@ -880,6 +903,9 @@ impl Machine {
         }
         if self.twi.next_event() <= at {
             self.twi.event();
+        }
+        if self.eeprom.next_event() <= at {
+            self.eeprom.event();
         }
         self.progress += 1;
         self.refresh_next_event();
@@ -950,6 +976,9 @@ impl Machine {
         }
         if status & TXC != 0 && self.usart.control_b & 0x40 != 0 {
             return Some(20);
+        }
+        if self.eeprom.interrupt() {
+            return Some(22);
         }
         if self.twi.interrupt() {
             return Some(24);
@@ -1046,7 +1075,7 @@ impl Machine {
                     if self.fault.is_some() {
                         return Stop::Fault(self.cycle);
                     }
-                    self.cycle += cycles;
+                    self.cycle += cycles + std::mem::take(&mut self.stall);
                     // Worth stopping for, as a byte is: otherwise the notice
                     // would wait for whatever next ends the run, up to a
                     // horizon, before anyone outside saw it.
@@ -1084,7 +1113,7 @@ pub(super) mod tests {
 
     pub fn machine(words: &[u16]) -> Machine {
         let image: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        Machine::new(flash_words(&image), 0)
+        Machine::new(flash_words(&image), 0, 16e6)
     }
 
     /// Run until the program counter reaches word `pc`, returning the cycle.
@@ -1318,6 +1347,65 @@ pub(super) mod tests {
         assert_eq!(m.read(u16::from(TWSR)) & 0xF8, 0xF8);
         assert_eq!(&m.data[0x100..0x103], &[0x08, 0x20, 0x00], "a START, an SLA+W NACK, no more");
         assert_eq!(m.notices, vec![(8, Peripheral::I2c)]);
+    }
+
+    /// avr-libc's way: read a byte, write one and poll EEPE until the write
+    /// is done, read it back. A read halts the CPU four cycles and a write
+    /// two, and the write takes 3.4 ms: 54 400 cycles at 16 MHz.
+    #[test]
+    fn an_eeprom_write_holds_eepe_for_the_programming_time() {
+        let program = [
+            ldi(16, 5),    // ldi r16, 5            ; 0..1
+            out(0x21, 16), // out EEARL, r16        ; 1..2
+            sbi(0x1F, 0),  // sbi EECR, EERE        ; 2..4, halted to 8
+            in_(17, 0x20), // in r17, EEDR          ; 8..9
+            ldi(16, 42),   // ldi r16, 42           ; 9..10
+            out(0x20, 16), // out EEDR, r16         ; 10..11
+            sbi(0x1F, 2),  // sbi EECR, EEMPE       ; 11..13
+            sbi(0x1F, 1),  // sbi EECR, EEPE        ; 13..15, halted to 17
+            sbic(0x1F, 1), // wait: sbic EECR, EEPE ; 1, or 2 skipping
+            rjmp(-2),      // rjmp wait             ; 2
+            sbi(0x1F, 0),  // sbi EECR, EERE
+            in_(18, 0x20), // in r18, EEDR
+            idle(),
+        ];
+        let mut m = machine(&program);
+        assert_eq!(run_to(&mut m, 3, 100), 8, "the `in` waits out the halt");
+        run_to(&mut m, 4, 100);
+        assert_eq!(m.data[17], 0xFF, "erased");
+        assert_eq!(run_to(&mut m, 8, 100), 17);
+        // The write began at 13 and is done at 13 + 54 400 = 54 413. The poll
+        // loop is 3 cycles from 17, so an `sbic` starts on 54 413 exactly,
+        // sees EEPE clear and skips.
+        assert_eq!(run_to(&mut m, 10, 100_000), 54_413 + 2);
+        run_to(&mut m, 12, 100_000);
+        assert_eq!(m.data[18], 42);
+    }
+
+    #[test]
+    fn ee_ready_interrupts_when_the_write_is_done() {
+        let mut program = vec![nop(); 55];
+        program[0] = rjmp(45); // reset -> main, word 46
+        program[44] = rjmp(8); // EE_READY, vector 22 -> isr, word 53
+        let main = [
+            ldi(16, 42),   // ldi r16, 42           ; 2..3
+            out(0x20, 16), // out EEDR, r16         ; 3..4
+            sbi(0x1F, 2),  // sbi EECR, EEMPE       ; 4..6
+            sbi(0x1F, 1),  // sbi EECR, EEPE        ; 6..8, halted to 10
+            sbi(0x1F, 3),  // sbi EECR, EERIE       ; 10..12
+            sei(),         // sei                   ; 12..13
+            idle(),        // rjmp .                ; from 13, every 2
+            cbi(0x1F, 3),  // isr: cbi EECR, EERIE
+            reti(),
+        ];
+        program[46..55].copy_from_slice(&main);
+        let mut m = machine(&program);
+        // Done at 6 + 54 400 = 54 406, served at the idle loop's next
+        // boundary, 54 407: 4 cycles of response, `rjmp isr` 2.
+        assert_eq!(run_to(&mut m, 53, 100_000), 54_407 + 4 + 2);
+        // The handler turned it off, so it does not come round again.
+        while m.run(60_000, &Watch::default()) != Stop::Limit {}
+        assert_eq!(m.pc, 52);
     }
 
     #[test]
