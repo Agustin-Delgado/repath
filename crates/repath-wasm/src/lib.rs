@@ -4,6 +4,7 @@
 //! A 20 000-point run has millions of numbers in it, and serializing those to
 //! JSON and back is slower than the simulation that produced them.
 
+use repath_core::avr::Mcu;
 use repath_core::digital::Logic;
 use repath_core::prelude::*;
 use serde::Serialize;
@@ -253,6 +254,58 @@ impl Simulation {
             _ => return false,
         };
         self.circuit.operate_logic(name, level, at)
+    }
+
+    /// What a microcontroller has to report: `{ serial, notices, fault,
+    /// fault_time }` as JSON, or `null` if there is no microcontroller by that
+    /// name.
+    ///
+    /// `serial` is every byte it has sent from the `serial_from`-th on, as
+    /// `{ time, byte }`, so a caller polling a live run asks only for what it
+    /// has not seen. `notices` is every peripheral the program has used that
+    /// is not simulated, as `{ peripheral, time }`, all of them every time:
+    /// there are at most a handful. `fault` is why the CPU stopped, if it
+    /// has, and `fault_time` when, in seconds from the start of the run.
+    #[wasm_bindgen(js_name = mcuState)]
+    pub fn mcu_state(&self, name: &str, serial_from: usize) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct Byte {
+            time: f64,
+            byte: u8,
+        }
+        #[derive(Serialize)]
+        struct Notice {
+            peripheral: &'static str,
+            time: f64,
+        }
+        #[derive(Serialize)]
+        struct State {
+            serial: Vec<Byte>,
+            notices: Vec<Notice>,
+            fault: Option<String>,
+            fault_time: Option<f64>,
+        }
+        let mcu = self
+            .circuit
+            .digital
+            .device(name)
+            .and_then(|device| device.as_any().downcast_ref::<Mcu>());
+        let state = mcu.map(|mcu| State {
+            serial: mcu
+                .serial()
+                .iter()
+                .skip(serial_from)
+                .map(|b| Byte { time: b.time, byte: b.byte })
+                .collect(),
+            notices: mcu
+                .notices()
+                .iter()
+                .map(|n| Notice { peripheral: n.peripheral.id(), time: n.time })
+                .collect(),
+            fault: mcu.fault().map(|f| f.to_string()),
+            fault_time: mcu.fault().map(|f| f.cycle as f64 / mcu.frequency()),
+        });
+        serde_json::to_string(&state).map_err(to_js_error)
     }
 }
 

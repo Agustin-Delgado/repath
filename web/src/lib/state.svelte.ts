@@ -11,6 +11,7 @@ import {
 	runFrequencySweep,
 	runTransient,
 	type FrequencyRun,
+	type McuNotice,
 	type TransientRun
 } from './engine';
 import { EXAMPLES, exampleById } from './examples';
@@ -317,6 +318,49 @@ function nextGroupName(groups: readonly PartGroup[]): string {
 	}
 }
 
+/** What a microcontroller has said during a run. */
+export interface McuLog {
+	/** Its serial output as text, the newest end of it. */
+	text: string;
+	/** How many bytes it has sent in all, which is where the next poll starts. */
+	bytes: number;
+	/** The parts of the chip it used that are not simulated, oldest first. */
+	notices: McuNotice[];
+	fault: { message: string; time: number } | null;
+}
+
+/**
+ * How much of a serial log is kept on screen, in characters: a sketch printing
+ * millis() ten times a second fills it in a few minutes, and nobody scrolls
+ * back further than that in a monitor.
+ */
+const SERIAL_KEPT = 8_000;
+
+/**
+ * Bytes as a serial monitor shows them: printable ASCII as itself, a newline
+ * as a line break, and the carriage return `println` sends before it dropped.
+ * Anything else is shown as a middle dot rather than dropped, so a sketch
+ * sending binary does not look like one sending nothing.
+ */
+export function appendSerial(text: string, bytes: readonly number[]): string {
+	let added = '';
+	for (const byte of bytes) {
+		if (byte === 0x0a || byte === 0x09 || (byte >= 0x20 && byte < 0x7f)) {
+			added += String.fromCharCode(byte);
+		} else if (byte !== 0x0d) {
+			added += '·';
+		}
+	}
+	const joined = text + added;
+	return joined.length > SERIAL_KEPT ? joined.slice(joined.length - SERIAL_KEPT) : joined;
+}
+
+/** The names of the microcontrollers in a compiled netlist. */
+function mcuDevices(netlist: unknown): string[] {
+	const devices = (netlist as { devices?: Array<{ type: string; name: string }> } | null)?.devices;
+	return (devices ?? []).filter((device) => device.type === 'mcu').map((device) => device.name);
+}
+
 class AppState {
 	/**
 	 * An empty sheet.
@@ -487,6 +531,16 @@ class AppState {
 	 * with it.
 	 */
 	operations = $state<Map<string, number[]>>(new Map());
+	/**
+	 * What each microcontroller has said during this run, by name: the bytes it
+	 * sent over serial, as text, and why its CPU stopped if it did.
+	 *
+	 * Belongs to the run, like `operations`: the engine keeps the log, and this
+	 * is the part of it the screen has been shown, topped up every frame.
+	 */
+	mcuLogs = $state<Record<string, McuLog>>({});
+	/** The microcontrollers in the run that is going, to be asked for their logs. */
+	private mcuNames: string[] = [];
 	error = $state<string | null>(null);
 	/**
 	 * Whether results are being kept up to date with the circuit.
@@ -3708,6 +3762,7 @@ class AppState {
 				this.acquiring = acquiring;
 				this.capture = acquiring.capture;
 				this.operations = new Map();
+				this.mcuNames = mcuDevices(compiled.netlist);
 				this.held = null;
 				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
@@ -3735,6 +3790,7 @@ class AppState {
 		const acquiring = this.acquiring;
 		if (!capture || !acquiring) return;
 		this.result = capture.run();
+		this.readMcus(acquiring);
 		// While the sweep is going, the instant on the drawing is the newest one
 		// there is. Stopped, it stays where it was left, to be measured.
 		if (acquiring.sweeping) {
@@ -3750,6 +3806,32 @@ class AppState {
 		if (ended && acquiring.single && this.sweepCount > 0) void this.sweepTolerances();
 	}
 
+	/**
+	 * Top up each microcontroller's log with what it has sent since the last
+	 * frame. Only a log that changed is replaced, so a chip with nothing to say
+	 * costs the screen nothing.
+	 */
+	private readMcus(acquiring: Acquisition): void {
+		for (const name of this.mcuNames) {
+			const log = this.mcuLogs[name] ?? { text: '', bytes: 0, notices: [], fault: null };
+			const state = acquiring.mcuState(name, log.bytes);
+			if (
+				!state ||
+				(state.serial.length === 0 &&
+					state.notices.length === log.notices.length &&
+					(state.fault === null) === (log.fault === null))
+			) {
+				continue;
+			}
+			this.mcuLogs[name] = {
+				text: appendSerial(log.text, state.serial.map((b) => b.byte)),
+				bytes: log.bytes + state.serial.length,
+				notices: state.notices,
+				fault: state.fault
+			};
+		}
+	}
+
 	private discardRun(): void {
 		this.runGeneration++;
 		this.acquiring?.close();
@@ -3757,6 +3839,8 @@ class AppState {
 		this.capture = null;
 		this.result = null;
 		this.operations = new Map();
+		this.mcuLogs = {};
+		this.mcuNames = [];
 		this.held = null;
 		this.envelope = null;
 		this.playing = false;

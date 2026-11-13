@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ChevronRight, RotateCw, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/ui';
+	import { mcuBlock } from '$lib/schematic/chips';
 	import { ledRating } from '$lib/schematic/led';
 	import { pinKey } from '$lib/schematic/nets';
 	import {
@@ -15,6 +16,7 @@
 	import PartIcon from '../palette/PartIcon.svelte';
 	import BlockPanel from './BlockPanel.svelte';
 	import NameField from './NameField.svelte';
+	import McuPanel from './McuPanel.svelte';
 	import MemoryContents from './MemoryContents.svelte';
 	import ParamField from './ParamField.svelte';
 	import SpiceCard from './SpiceCard.svelte';
@@ -79,6 +81,11 @@
 	const programmable = $derived.by(() => {
 		const chip = chipOf(instance.kind);
 		return chip?.contents ? chip : null;
+	});
+	/** A microcontroller, whose program is loaded rather than typed. */
+	const runsProgram = $derived.by(() => {
+		const chip = chipOf(instance.kind);
+		return chip !== undefined && mcuBlock(chip) !== undefined;
 	});
 </script>
 
@@ -174,6 +181,12 @@
 	{#if programmable}
 		{#key instance.id}
 			<MemoryContents {instance} chip={programmable} />
+		{/key}
+	{/if}
+
+	{#if runsProgram}
+		{#key instance.id}
+			<McuPanel {instance} />
 		{/key}
 	{/if}
 

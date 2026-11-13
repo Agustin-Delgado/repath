@@ -185,6 +185,30 @@ export async function runTransient(
 	}
 }
 
+/** A byte a microcontroller sent, timed when its stop bit ended. */
+export interface SerialByte {
+	time: number;
+	byte: number;
+}
+
+/**
+ * A part of the chip the program used that is not simulated, and when it
+ * first did: `adc`, `spi`, `i2c`, `comparator` or `watchdog`.
+ */
+export interface McuNotice {
+	peripheral: string;
+	time: number;
+}
+
+/** What a microcontroller in a live run has to report. */
+export interface McuState {
+	serial: SerialByte[];
+	/** Every notice so far, not only the new ones: there are at most a handful. */
+	notices: McuNotice[];
+	/** Why its CPU stopped, and when: an instruction it does not know. */
+	fault: { message: string; time: number } | null;
+}
+
 /** One piece of a live run: the timepoints solved since the last call. */
 export interface Chunk {
 	time: Float64Array;
@@ -270,6 +294,28 @@ export class LiveRun {
 	setLogic(name: string, state: LogicState, at: number): boolean {
 		if (this.freed) return false;
 		return this.simulation.setLogic(name, state, at);
+	}
+
+	/**
+	 * What a microcontroller has sent and whether its CPU has stopped, or null
+	 * when there is none by that name. Bytes come from the `from`-th on, so a
+	 * caller polling every frame is handed only the new ones.
+	 */
+	mcuState(name: string, from: number): McuState | null {
+		if (this.freed) return null;
+		const state = JSON.parse(this.simulation.mcuState(name, from)) as {
+			serial: SerialByte[];
+			notices: McuNotice[];
+			fault: string | null;
+			fault_time: number | null;
+		} | null;
+		if (!state) return null;
+		return {
+			serial: state.serial,
+			notices: state.notices,
+			fault:
+				state.fault === null ? null : { message: state.fault, time: state.fault_time ?? 0 }
+		};
 	}
 
 	/**

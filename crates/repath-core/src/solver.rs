@@ -1226,7 +1226,15 @@ impl Simulator {
             // run out in full before the valve was next looked at.
             let allowed = (run.budget as f64).min(cfg.max_steps as f64) - spent;
             let events_allowed = ((allowed * EVENTS_PER_STEP).ceil() as usize).max(1);
-            let settled = circuit.digital.settle_until(t + proposal, true, events_allowed);
+            // No further than the next corner, though: a switch thrown there
+            // is a change on its way to the digital side, and a device that has
+            // already run past it — a microcontroller cannot take back cycles
+            // it has run — would answer it a whole step late.
+            let horizon = match self.next_breakpoint(circuit, t) {
+                Some(bp) if bp > t => proposal.min(bp - t),
+                _ => proposal,
+            };
+            let settled = circuit.digital.settle_until(t + horizon, true, events_allowed);
             stats.digital_events += settled.events;
             if let Err(e) = unsettled(circuit) {
                 restore(run, t, dt, euler_steps, stats);

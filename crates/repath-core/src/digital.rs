@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+
+use crate::element::AsAny;
 use std::collections::BinaryHeap;
 
 /// A digital net (wire).
@@ -196,7 +198,11 @@ impl EvalCtx<'_> {
 }
 
 /// A device in the digital domain.
-pub trait DigitalDevice: std::fmt::Debug + Send {
+///
+/// `AsAny` is there for reading out what a particular kind of device has to
+/// report — a microcontroller's serial log — without every device having to
+/// know such things exist.
+pub trait DigitalDevice: std::fmt::Debug + Send + AsAny {
     fn name(&self) -> &str;
     fn kind(&self) -> &'static str;
     /// Nets this device listens to. Changes on these trigger `evaluate`.
@@ -1101,6 +1107,11 @@ impl DigitalDomain {
         // there is.
         self.queue.push(at.max(self.now), DriverId(self.driver_base[index]), net, state);
         true
+    }
+
+    /// A device by name.
+    pub fn device(&self, name: &str) -> Option<&dyn DigitalDevice> {
+        self.devices.iter().find(|d| d.name() == name).map(|d| d.as_ref())
     }
 
     /// Time of the earliest pending event.

@@ -12,7 +12,14 @@
 import { contactControl, restingContact } from './contacts';
 import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, pointKey } from './model';
-import { negativeSupply, positiveSupply, type ChipDef, type ChipVolts } from './chips';
+import {
+	negativeSupply,
+	positiveSupply,
+	type ChipBlock,
+	type ChipDef,
+	type ChipVolts
+} from './chips';
+import { DEFAULT_CLOCK, PORT_PULL_UP_OHMS } from './chips-mcu';
 import { unfoldBlocks } from './blocks';
 import { parseContents } from './memory';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
@@ -447,7 +454,10 @@ function compileFresh(
 	for (const instance of schematic.instances) {
 		const def = definitionFor(instance);
 		const box = blockOf(schematic, instance.kind) !== null;
+		const optional = new Set(chipOf(instance.kind)?.optional ?? []);
 		for (const pin of def.pins) {
+			// A microcontroller's spare pins are left open on every board there is.
+			if (optional.has(pin.name)) continue;
 			const index = connectivity.netOfPin.get(pinKey(instance.id, pin.name));
 			const net = index === undefined ? undefined : connectivity.nets[index];
 			// A pin with a wire hanging off it is fine — that is how you leave a
@@ -720,6 +730,121 @@ function compileFresh(
 		}
 	}
 
+	/** The analog node a pin is on, or null where its net has none. */
+	const nodeOf = (instance: Instance, pin: string): string | null => {
+		const index = connectivity.netOfPin.get(pinKey(instance.id, pin));
+		return (index !== undefined && names.get(index)?.analog) || null;
+	};
+
+	/**
+	 * A chip's fixed pull-ups: a resistor from its positive supply leg to each
+	 * leg that has one. Only where the leg reaches something analog — a button,
+	 * a resistor — since that is all a resistor can pull against; on a net that
+	 * is only logic there is no node to hang it from.
+	 */
+	function emitPullUps(instance: Instance, chip: ChipDef) {
+		const supply = positiveSupply(chip);
+		if (!supply) return;
+		for (const [leg, ohms] of Object.entries(chip.pullUps ?? {})) {
+			const node = nodeOf(instance, leg);
+			if (node === null) continue;
+			components.push({
+				type: 'resistor',
+				name: `${instance.name}:pullup_${leg}`,
+				a: analogOf(instance, supply),
+				b: node,
+				resistance: ohms
+			});
+		}
+	}
+
+	/**
+	 * A microcontroller: the engine's `mcu` device on its port legs, plus what
+	 * the silicon puts on each leg besides the program — a pull-up the program
+	 * switches in.
+	 *
+	 * A leg's output drives its net and its input reads the net back. On a net
+	 * the analog side shares that is two nets, joined through the node, so a
+	 * lamp dragging the leg down is what the pin reads (see `NetNames.readBack`).
+	 * The pull-up is a switch from the supply leg to the leg, closed by a net the
+	 * device drives high while the pin is an input with its PORT bit set; it is
+	 * built only for legs on an analog net, which is the only place it can pull
+	 * against anything, and keeps a drawing with twenty spare pins from carrying
+	 * twenty switches. On a net that is only logic the device reads its own
+	 * pull-up wherever nothing drives.
+	 */
+	function emitMcu(
+		instance: Instance,
+		chip: ChipDef,
+		block: ChipBlock,
+		deviceName: string,
+		net: (pin: string) => string
+	) {
+		const name = instance.name;
+		const firmware = str(instance, 'firmware').trim();
+		if (!firmware) {
+			warnings.push(
+				`${name} has no program loaded, so it runs nothing and leaves its pins alone. Load a .hex file for it in the inspector.`
+			);
+			return;
+		}
+		const supply = analogOf(instance, positiveSupply(chip)!);
+		const pins: Record<string, { input: string; output: string; pullup?: string }> = {};
+		// Every leg is on a net, if only one of its own; a leg touching nothing
+		// need not be mentioned to the device at all.
+		const wired = (pin: string) => {
+			const index = connectivity.netOfPin.get(pinKey(instance.id, pin));
+			const on = index === undefined ? undefined : connectivity.nets[index];
+			return on !== undefined && (on.pins.length > 1 || on.points.length > 1);
+		};
+		for (const port of block.ports ?? []) {
+			if (!wired(port)) continue;
+			const index = connectivity.netOfPin.get(pinKey(instance.id, port));
+			const entry = index === undefined ? undefined : names.get(index);
+			if (!entry?.digital) continue;
+			const pin: (typeof pins)[string] = {
+				output: entry.digital,
+				input: entry.readBack ?? entry.digital
+			};
+			if (entry.analog) {
+				pin.pullup = net(`pullup_${port}`);
+				const control = `${instance.id}_an_pullup_${port}`;
+				// Bridges and components share one namespace in the engine.
+				chipBridges.push({
+					direction: 'to_analog',
+					name: `${name}:pullup_${port}_drive`,
+					net: pin.pullup,
+					node: control
+				});
+				components.push({
+					type: 'switch',
+					name: `${name}:pullup_${port}`,
+					a: supply,
+					b: entry.analog,
+					control_plus: control,
+					control_minus: 'gnd',
+					// Off is a teraohm, as for a switch's contacts: a gigaohm from the
+					// supply put nanoamps through every LED on a pin left as an input,
+					// and lit it up on the drawing as a current.
+					model: { v_on: 2.4, v_off: 1, r_on: PORT_PULL_UP_OHMS, r_off: 1e12 }
+				});
+			}
+			pins[port] = pin;
+		}
+		const reset = block.reset;
+		devices.push({
+			type: 'mcu',
+			name: deviceName,
+			model: chip.id.toLowerCase(),
+			firmware,
+			frequency: num(instance, 'frequency', DEFAULT_CLOCK),
+			pins,
+			// Left unwired, reset is held off by its pull-up: the chip runs.
+			reset: reset && wired(reset) ? net(reset) : null,
+			wake: net('wake')
+		});
+	}
+
 	for (const instance of schematic.instances) {
 		const name = instance.name;
 
@@ -753,9 +878,12 @@ function compileFresh(
 			const legs = new Set(chip.layout);
 			const net = (pin: string) =>
 				legs.has(pin) ? digitalOf(instance, pin) : `${instance.id}_in_${pin}`;
+			emitPullUps(instance, chip);
 			for (const [index, block] of chip.blocks.entries()) {
 				const blockName = index === 0 ? name : `${name}:${index + 1}`;
-				if (block.kind === 'dff') {
+				if (block.kind === 'mcu') {
+					emitMcu(instance, chip, block, blockName, net);
+				} else if (block.kind === 'dff') {
 					devices.push({
 						type: 'd_flip_flop',
 						name: blockName,
@@ -1573,7 +1701,9 @@ function compileFresh(
 			net.isGround || net.pins.some((pin) => pin.instance.kind === 'supply');
 		const driven = a.hasDigitalOutput && railed(k) ? a : k.hasDigitalOutput && railed(a) ? k : null;
 		if (!driven) continue;
-		const output = driven.pins.find((pin) => pin.pin.direction === 'out');
+		const output = driven.pins.find(
+			(pin) => pin.pin.domain === 'digital' && pin.pin.direction !== 'in'
+		);
 		const who = output ? `${output.instance.name}.${output.pin.name}` : 'a logic output';
 		const readers = driven.pins
 			.filter((pin) => pin.pin.domain === 'digital' && pin.pin.direction === 'in')
