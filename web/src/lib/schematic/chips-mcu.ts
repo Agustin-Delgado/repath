@@ -47,6 +47,31 @@ export const DEFAULT_CLOCK = 16e6;
  */
 export const PORT_PULL_UP_OHMS = 35e3;
 
+/**
+ * What to tell someone whose program used a part of the chip the engine does
+ * not simulate, by the engine's name for it: what is missing, and what that
+ * does to what they see. A value nothing computed must not pass for a
+ * measurement, and a sketch must not seem to work when it is talking to
+ * nobody.
+ */
+const UNSIMULATED: Readonly<Record<string, string>> = {
+	adc: 'analogRead() is not simulated yet: every reading is 0, not a measurement.',
+	i2c: 'Nothing is on the I²C bus: no I²C devices are simulated yet, so every address goes unanswered (Wire.endTransmission() returns 2, Wire.requestFrom() 0).',
+	spi: 'SPI is not simulated yet: a transfer ends at once without touching the pins, and what it reads back did not come from any device.',
+	comparator:
+		'The analog comparator is not simulated yet: its output reads 0 whatever is on its pins, and it never interrupts.',
+	watchdog:
+		'The watchdog is not simulated yet: it never times out, so it neither resets the chip nor interrupts, and the program runs on.'
+};
+
+/** The message for a notice, from the engine's name for the peripheral. */
+export function unsimulatedMessage(peripheral: string): string {
+	return (
+		UNSIMULATED[peripheral] ??
+		`The program used a part of the chip that is not simulated yet (${peripheral}).`
+	);
+}
+
 /** The reset leg's own pull-up: the middle of the datasheet's 30 to 60 kΩ. */
 const RESET_PULL_UP_OHMS = 45e3;
 
@@ -75,6 +100,6 @@ export const MCU_CHIPS: readonly ChipDef[] = [
 		optional: [...PORTS, 'RESET', 'AREF'],
 		boardNames: ARDUINO_NAMES,
 		caveat:
-			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers and serial output. analogRead() reads 0, Serial.read() never receives, and there is no watchdog, SPI, I²C or EEPROM. AVCC, AREF and AGND are there to be wired as on the real chip and do nothing here; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
+			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers and serial output. analogRead() reads 0, Serial.read() never receives, I²C finds nothing on the bus, and there is no watchdog or SPI: a sketch that uses one of these is told so while it runs. AVCC, AREF and AGND are there to be wired as on the real chip and do nothing here; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
 	}
 ];

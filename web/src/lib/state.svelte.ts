@@ -11,6 +11,7 @@ import {
 	runFrequencySweep,
 	runTransient,
 	type FrequencyRun,
+	type McuNotice,
 	type TransientRun
 } from './engine';
 import { EXAMPLES, exampleById } from './examples';
@@ -323,6 +324,8 @@ export interface McuLog {
 	text: string;
 	/** How many bytes it has sent in all, which is where the next poll starts. */
 	bytes: number;
+	/** The parts of the chip it used that are not simulated, oldest first. */
+	notices: McuNotice[];
 	fault: { message: string; time: number } | null;
 }
 
@@ -3810,14 +3813,20 @@ class AppState {
 	 */
 	private readMcus(acquiring: Acquisition): void {
 		for (const name of this.mcuNames) {
-			const log = this.mcuLogs[name] ?? { text: '', bytes: 0, fault: null };
+			const log = this.mcuLogs[name] ?? { text: '', bytes: 0, notices: [], fault: null };
 			const state = acquiring.mcuState(name, log.bytes);
-			if (!state || (state.serial.length === 0 && (state.fault === null) === (log.fault === null))) {
+			if (
+				!state ||
+				(state.serial.length === 0 &&
+					state.notices.length === log.notices.length &&
+					(state.fault === null) === (log.fault === null))
+			) {
 				continue;
 			}
 			this.mcuLogs[name] = {
 				text: appendSerial(log.text, state.serial.map((b) => b.byte)),
 				bytes: log.bytes + state.serial.length,
+				notices: state.notices,
 				fault: state.fault
 			};
 		}

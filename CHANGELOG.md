@@ -29,7 +29,9 @@ there, and RESET restarts the program when pulled low.
 
 **What it prints over serial shows in the inspector** while the run goes, and
 a program that crashes — one built for another chip, or one that runs off its
-end — says where it stopped instead of silently doing nothing.
+end — says where it stopped instead of silently doing nothing. A sketch that
+uses a part of the chip not simulated yet, such as `analogRead()` or I²C,
+is told so while it runs, rather than handed a 0 that looks measured.
 
 **A new example, Microcontroller blink,** blinks an LED once a second, lights
 another while a button is held and counts over serial, from a small program

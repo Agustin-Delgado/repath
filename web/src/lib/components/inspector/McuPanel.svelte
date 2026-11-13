@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { FileUp, X } from '@lucide/svelte';
 	import { Button } from '$lib/ui';
-	import { FLASH_BYTES } from '$lib/schematic/chips-mcu';
+	import { FLASH_BYTES, unsimulatedMessage } from '$lib/schematic/chips-mcu';
 	import { readFirmware } from '$lib/schematic/firmware';
 	import type { Instance } from '$lib/schematic/model';
 	import { app } from '$lib/state.svelte';
@@ -120,6 +120,23 @@
 		D8–D13 are PB0–PB5 and A0–A5 are PC0–PC5.
 	</p>
 </section>
+
+{#if ran && loaded && log && log.notices.length > 0}
+	<section class="flex flex-col gap-1.5">
+		<h3 class={sectionTitle}>Not simulated</h3>
+		<ul class="m-0 flex list-none flex-col gap-1 p-0">
+			{#each log.notices as notice (notice.peripheral)}
+				<li class={hint}>
+					<span class="text-fg">{unsimulatedMessage(notice.peripheral)}</span>
+					First used at {formatWithUnit(notice.time, 's', 4)}.
+				</li>
+			{/each}
+		</ul>
+		<p class={hint}>
+			The program runs on: these parts of the chip just do not do what the real ones would.
+		</p>
+	</section>
+{/if}
 
 {#if ran && loaded && !summary?.problem}
 	<section class="flex flex-col gap-1.5">

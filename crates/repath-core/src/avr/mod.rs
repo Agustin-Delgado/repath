@@ -36,11 +36,12 @@ mod cpu;
 pub mod hex;
 mod machine;
 mod timer;
+mod twi;
 
 use std::sync::Arc;
 
 use crate::digital::{DigitalDevice, EvalCtx, Logic, NetId};
-pub use machine::{FLASH_BYTES, Fault};
+pub use machine::{FLASH_BYTES, Fault, Peripheral};
 use machine::{Machine, PinLevels, PinOutputs, Stop, Watch, flash_words};
 
 /// The clock an Arduino Uno runs its ATmega328P at.
@@ -118,6 +119,14 @@ pub struct SerialByte {
     pub byte: u8,
 }
 
+/// The first time the program used a peripheral that is not simulated, timed
+/// at the start of the instruction that did it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Notice {
+    pub time: f64,
+    pub peripheral: Peripheral,
+}
+
 #[derive(Debug)]
 struct Speculation {
     machine: Machine,
@@ -155,6 +164,7 @@ pub struct Mcu {
     published: Vec<Logic>,
     chunk: u64,
     serial: Vec<SerialByte>,
+    notices: Vec<Notice>,
     fault: Option<Fault>,
 }
 
@@ -229,6 +239,7 @@ impl Mcu {
             in_reset: false,
             chunk: MIN_CHUNK,
             serial: Vec::new(),
+            notices: Vec::new(),
             fault: None,
         }
     }
@@ -242,6 +253,13 @@ impl Mcu {
     /// clock reaches the end of its stop bit.
     pub fn serial(&self) -> &[SerialByte] {
         &self.serial
+    }
+
+    /// Each peripheral the program has used that is not simulated, once, in
+    /// the order they were first used. Once means once a run: a program
+    /// restarted by RESET does the same again, and is not told twice.
+    pub fn notices(&self) -> &[Notice] {
+        &self.notices
     }
 
     /// The instruction that stopped the CPU, if one has.
@@ -259,6 +277,7 @@ impl Mcu {
         self.published.fill(Logic::Unknown);
         self.chunk = MIN_CHUNK;
         self.serial.clear();
+        self.notices.clear();
         self.fault = None;
     }
 
@@ -324,7 +343,8 @@ impl Mcu {
         ctx.drive(self.wake_slot, self.wake, Logic::Low, delay + WAKE_PULSE);
     }
 
-    /// Take over what the committed machine sent and whether it faulted.
+    /// Take over what the committed machine sent, what it used that is not
+    /// simulated, and whether it faulted.
     fn absorb(&mut self) {
         let f = self.frequency;
         self.serial.extend(
@@ -333,6 +353,11 @@ impl Mcu {
                 .drain(..)
                 .map(|(cycle, byte)| SerialByte { time: cycle as f64 / f, byte }),
         );
+        for (cycle, peripheral) in self.committed.notices.drain(..) {
+            if !self.notices.iter().any(|n| n.peripheral == peripheral) {
+                self.notices.push(Notice { time: cycle as f64 / f, peripheral });
+            }
+        }
         if self.fault.is_none() {
             self.fault = self.committed.fault();
         }
@@ -892,6 +917,52 @@ mod tests {
             edges(&log, pb5),
             vec![(2, Logic::Low), (4, Logic::High), (16_009, Logic::Low), (32_014, Logic::High)]
         );
+    }
+
+    /// A program that starts a conversion on every pass of a loop that reads
+    /// a pin, then enables SPI once the loop is done, with that pin flipping
+    /// under it — every flip throws a speculation away — and a reset that
+    /// starts it all again. Each peripheral comes out once, at the instruction
+    /// that first used it.
+    #[test]
+    fn notices_come_out_once_through_rollbacks_and_resets() {
+        let program = [
+            ldi(16, 0xC0), // ldi r16, ADEN | ADSC  ; 0..1
+            sts(0x7A, 16)[0],
+            0x007A,        // sts ADCSRA, r16       ; 1..3   noticed at 1
+            ldi(24, 0xE8), // ldi r24, lo(1000)     ; 3..4
+            ldi(25, 0x03), // ldi r25, hi(1000)     ; 4..5
+            in_(17, 0x09), // loop: in r17, PIND    ; 1
+            sts(0x7A, 16)[0],
+            0x007A,        // sts ADCSRA, r16       ; 2
+            sbiw(24, 1),   // sbiw r24, 1           ; 2
+            brne(-5),      // brne loop             ; 2 taken, 1 not
+            ldi(16, 0x40), // ldi r16, SPE
+            out(0x2C, 16), // out SPCR, r16
+            idle(),
+        ];
+        let mut bench = Bench::new();
+        let pd2 = bench.net("pd2");
+        let rst = bench.net("rst");
+        let flips: Vec<f64> = (1..30).map(|i| f64::from(i) * 23.7e-6).collect();
+        bench
+            .domain
+            .add_device(Box::new(LogicSource::new("SW", pd2, Logic::Low).operated_at(flips)));
+        bench.domain.add_device(Box::new(
+            LogicSource::new("RST", rst, Logic::High).operated_at([50e-6, 60e-6]),
+        ));
+        let pd2_nets = PinNets { input: Some(pd2), ..Default::default() };
+        bench.mcu(&program, &[("PD2", pd2_nets)], Some(rst));
+        bench.run(12_000);
+        // The loop starts at 5 and takes 7 cycles a pass but the last, which
+        // takes 6: `out SPCR` starts 5 + 7 · 1000 = 7005 cycles in. The reset
+        // runs from 50 µs to 60 µs, so the program starts again at cycle 960,
+        // and the first run never got that far. The conversion it notices
+        // again at 961 was already noticed at 1.
+        let notices = bench.mcu_state().notices();
+        let cycles: Vec<(Peripheral, f64)> =
+            notices.iter().map(|n| (n.peripheral, (n.time * F * 1e6).round() / 1e6)).collect();
+        assert_eq!(cycles, vec![(Peripheral::Adc, 1.0), (Peripheral::Spi, 960.0 + 7005.0)]);
     }
 
     #[test]

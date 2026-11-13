@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use super::timer::{ICF, OCFA, OCFB, TOV, Timer};
+use super::twi::{TWEN, Twi};
 
 pub const FLASH_WORDS: usize = 16 * 1024;
 pub const FLASH_BYTES: usize = FLASH_WORDS * 2;
@@ -48,14 +49,17 @@ const TCCR0B: u8 = 0x45;
 const TCNT0: u8 = 0x46;
 const OCR0A: u8 = 0x47;
 const OCR0B: u8 = 0x48;
+const SPCR: u8 = 0x4C;
 const SPSR: u8 = 0x4D;
 const SPDR: u8 = 0x4E;
+const ACSR: u8 = 0x50;
 pub(super) const SMCR: u8 = 0x53;
 const MCUSR: u8 = 0x54;
 const MCUCR: u8 = 0x55;
 const SPL: u8 = 0x5D;
 const SPH: u8 = 0x5E;
 const SREG: u8 = 0x5F;
+const WDTCSR: u8 = 0x60;
 const PCICR: u8 = 0x68;
 const EICRA: u8 = 0x69;
 const PCMSK0: u8 = 0x6B;
@@ -77,6 +81,10 @@ const TCCR2B: u8 = 0xB1;
 const TCNT2: u8 = 0xB2;
 const OCR2A: u8 = 0xB3;
 const OCR2B: u8 = 0xB4;
+const TWBR: u8 = 0xB8;
+const TWSR: u8 = 0xB9;
+const TWDR: u8 = 0xBB;
+const TWCR: u8 = 0xBC;
 const UCSR0A: u8 = 0xC0;
 const UCSR0B: u8 = 0xC1;
 const UCSR0C: u8 = 0xC2;
@@ -157,10 +165,48 @@ impl std::fmt::Display for Fault {
     }
 }
 
+/// A part of the chip that is not simulated, or not fully, which a program
+/// has started to use. Using it is not an error and the program runs on, but
+/// what it gets back is not what the silicon would give, and the person
+/// reading the results ought to know.
+///
+/// The set is what a sketch can be caught using cheaply and without crying
+/// wolf. Not here: USART0's receiver, which `Serial.begin()` turns on in every
+/// sketch that only prints; the timers' external clock pins, which count as
+/// stopped and show as a timer that never moves; and EEPROM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Peripheral {
+    /// A conversion was started: ADSC written as one.
+    Adc,
+    /// SPE set in SPCR.
+    Spi,
+    /// TWEN set in TWCR. The bus is simulated, as one with nothing on it, so
+    /// this is less "not simulated" than "nothing to talk to".
+    I2c,
+    /// ACSR read, or its interrupt enabled, while the comparator is on.
+    Comparator,
+    /// WDE or WDIE left set by a write: the watchdog armed, not just touched
+    /// on the way to switching it off.
+    Watchdog,
+}
+
+impl Peripheral {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Adc => "adc",
+            Self::Spi => "spi",
+            Self::I2c => "i2c",
+            Self::Comparator => "comparator",
+            Self::Watchdog => "watchdog",
+        }
+    }
+}
+
 /// Why [`Machine::run`] stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stop {
-    /// A watched output changed, or a byte finished going out, at this cycle.
+    /// A watched output changed, a byte finished going out, or the program
+    /// first used a peripheral that is not simulated, at this cycle.
     Changed(u64),
     /// The CPU faulted at this cycle.
     Fault(u64),
@@ -319,6 +365,7 @@ pub struct Machine {
     /// The TEMP register Timer1's 16-bit registers are reached through.
     temp: u8,
     usart: Usart,
+    twi: Twi,
     eicra: u8,
     eimsk: u8,
     eifr: u8,
@@ -335,6 +382,12 @@ pub struct Machine {
     irq_armed_seen: bool,
     /// Bytes sent, with the cycle each one's stop bit ended.
     pub(super) serial: Vec<(u64, u8)>,
+    /// Peripherals noticed so far, one bit each: a program converting in a
+    /// loop is noticed once, not on every conversion.
+    noticed: u8,
+    /// Peripherals first used, with the cycle of the instruction that did it.
+    /// Taken away like `serial`, so a notice leaves the chip once.
+    pub(super) notices: Vec<(u64, Peripheral)>,
 }
 
 impl std::fmt::Debug for Machine {
@@ -386,6 +439,7 @@ impl Machine {
             ],
             temp: 0,
             usart: Usart::new(),
+            twi: Twi::new(),
             eicra: 0,
             eimsk: 0,
             eifr: 0,
@@ -397,6 +451,8 @@ impl Machine {
             last_input_read: None,
             irq_armed_seen: false,
             serial: Vec::new(),
+            noticed: 0,
+            notices: Vec::new(),
         }
     }
 
@@ -551,7 +607,13 @@ impl Machine {
         let value = if strobe {
             if set { mask } else { 0 }
         } else {
-            let old = self.read(address);
+            // `sbi ACSR, ACD` switches the comparator off; the read it does on
+            // the way is not the program looking at the comparator's output.
+            let old = if address == u16::from(ACSR) {
+                self.data[ACSR as usize]
+            } else {
+                self.read(address)
+            };
             if set { old | mask } else { old & !mask }
         };
         self.write(address, value);
@@ -587,6 +649,12 @@ impl Machine {
                 // datasheet's "SPSR then SPDR" sequence does.
                 self.data[SPSR as usize] &= 0x7F;
                 self.data[SPDR as usize]
+            }
+            ACSR => {
+                if self.data[ACSR as usize] & 0x80 == 0 {
+                    self.note(Peripheral::Comparator);
+                }
+                self.data[ACSR as usize]
             }
             SPL => self.sp as u8,
             SPH => (self.sp >> 8) as u8,
@@ -628,6 +696,10 @@ impl Machine {
             UBRR0H => (self.usart.baud >> 8) as u8,
             // Nothing is ever received.
             UDR0 => 0,
+            TWBR => self.twi.bit_rate,
+            TWSR => self.twi.status(),
+            TWDR => self.twi.data,
+            TWCR => self.twi.control(),
             _ => self.data[usize::from(a)],
         }
     }
@@ -661,15 +733,38 @@ impl Machine {
             TCNT0 => self.timer(0).set_count(u16::from(v)),
             OCR0A => self.timer(0).set_compare_value(0, u16::from(v)),
             OCR0B => self.timer(0).set_compare_value(1, u16::from(v)),
+            SPCR => {
+                if v & 0x40 != 0 {
+                    self.note(Peripheral::Spi);
+                }
+                self.data[SPCR as usize] = v;
+            }
             SPDR => {
                 // A transfer completes at once and shifts in nothing, so that a
                 // sketch waiting on SPIF goes on rather than hanging.
                 self.data[SPDR as usize] = v;
                 self.data[SPSR as usize] |= 0x80;
             }
+            ACSR => {
+                // ACD is bit 7, ACIE bit 3. The comparator is on from reset,
+                // so being on says nothing; an interrupt asked of it does.
+                if v & 0x88 == 0x08 {
+                    self.note(Peripheral::Comparator);
+                }
+                self.data[ACSR as usize] = v;
+            }
             SPL => self.sp = (self.sp & 0xFF00) | u16::from(v),
             SPH => self.sp = (self.sp & 0x00FF) | u16::from(v) << 8,
             SREG => self.sreg = v,
+            WDTCSR => {
+                // WDCE | WDE is the first half of the timed sequence that
+                // changes the watchdog, and `wdt_disable()` writes it too; what
+                // arms it is WDIE, or WDE written without WDCE.
+                if v & 0x40 != 0 || v & 0x18 == 0x08 {
+                    self.note(Peripheral::Watchdog);
+                }
+                self.data[WDTCSR as usize] = v;
+            }
             PCICR => self.pcicr = v & 7,
             EICRA => self.eicra = v & 0x0F,
             PCMSK0..=PCMSK2 => self.pcmsk[usize::from(a - PCMSK0)] = v,
@@ -679,6 +774,7 @@ impl Machine {
             ADCSRA => {
                 let mut v = v;
                 if v & 0x40 != 0 {
+                    self.note(Peripheral::Adc);
                     v = (v & !0x40) | 0x10;
                     self.data[0x78] = 0;
                     self.data[0x79] = 0;
@@ -725,12 +821,31 @@ impl Machine {
                 let cycle = self.cycle + 2;
                 self.usart.write(v, cycle);
             }
+            TWBR => self.twi.bit_rate = v,
+            TWSR => self.twi.set_status(v),
+            TWDR => self.twi.write_data(v),
+            TWCR => {
+                if v & TWEN != 0 {
+                    self.note(Peripheral::I2c);
+                }
+                // Extended I/O again: the bus starts as the store ends.
+                self.twi.write_control(v, self.cycle + 2);
+            }
             _ => self.data[usize::from(a)] = v,
         }
         if self.pin_irqs_armed() {
             self.irq_armed_seen = true;
         }
         self.refresh_next_event();
+    }
+
+    /// Record the first use of a peripheral that is not simulated.
+    fn note(&mut self, peripheral: Peripheral) {
+        let bit = 1 << peripheral as u8;
+        if self.noticed & bit == 0 {
+            self.noticed |= bit;
+            self.notices.push((self.cycle, peripheral));
+        }
     }
 
     /// The FOCnA and FOCnB strobes, bits 7 and 6 of whichever register has them.
@@ -748,7 +863,7 @@ impl Machine {
             .timers
             .iter()
             .map(Timer::next_event)
-            .chain([self.usart.next_event()])
+            .chain([self.usart.next_event(), self.twi.next_event()])
             .min()
             .unwrap_or(u64::MAX);
     }
@@ -762,6 +877,9 @@ impl Machine {
         }
         if self.usart.next_event() <= at {
             self.usart.event(at, &mut self.serial);
+        }
+        if self.twi.next_event() <= at {
+            self.twi.event();
         }
         self.progress += 1;
         self.refresh_next_event();
@@ -833,11 +951,15 @@ impl Machine {
         if status & TXC != 0 && self.usart.control_b & 0x40 != 0 {
             return Some(20);
         }
+        if self.twi.interrupt() {
+            return Some(24);
+        }
         None
     }
 
     /// The flag the hardware clears when it runs a vector. UDRE stays: it is a
     /// state, not an event, and the handler has to fill the buffer to end it.
+    /// So does the TWI's TWINT, which holds the bus until the handler writes it.
     fn acknowledge(&mut self, vector: u8) {
         let clear = |m: &mut Self, t: usize, flag: u8| m.timers[t].clear_flags(flag);
         match vector {
@@ -918,12 +1040,19 @@ impl Machine {
                 Some(vector) => self.interrupt(vector, false),
                 None => {
                     self.inhibit = false;
+                    let noticed = self.notices.len();
                     let cycles = self.execute();
                     self.progress += 1;
                     if self.fault.is_some() {
                         return Stop::Fault(self.cycle);
                     }
                     self.cycle += cycles;
+                    // Worth stopping for, as a byte is: otherwise the notice
+                    // would wait for whatever next ends the run, up to a
+                    // horizon, before anyone outside saw it.
+                    if self.notices.len() > noticed {
+                        return Stop::Changed(self.cycle);
+                    }
                 }
             }
             if std::mem::take(&mut self.outputs_dirty) {
@@ -1125,5 +1254,122 @@ pub(super) mod tests {
         while m.run(10_000, &none) != Stop::Limit {}
         assert_eq!(m.serial, vec![(162, b'a'), (322, b'b')]);
         assert_eq!(m.read(u16::from(UCSR0A)) & (UDRE | TXC), UDRE | TXC);
+    }
+
+    /// What the Arduino `Wire` library does, cut down: an interrupt handler
+    /// that answers a START with an address, and anything else with a STOP.
+    /// With nobody on the bus, the address is NACKed and the handler is
+    /// entered twice, when each action's bit times say.
+    #[test]
+    fn the_twi_interrupt_walks_an_empty_bus_through_start_address_and_stop() {
+        let mut program = vec![nop(); 76];
+        program[0] = rjmp(49); // reset -> main, word 50
+        program[48] = rjmp(11); // TWI, vector 24 -> isr, word 60
+        let main = [
+            ldi(30, 0x00), // ldi r30, lo(0x100)    ; 2..3   Z: where statuses go
+            ldi(31, 0x01), // ldi r31, hi(0x100)    ; 3..4
+            ldi(16, 72),   // ldi r16, 72           ; 4..5   160 cycles a bit
+            sts(0xB8, 16)[0],
+            0x00B8,        // sts TWBR, r16         ; 5..7
+            ldi(16, 0xA5), // ldi r16, TWINT | TWSTA | TWEN | TWIE
+            sts(0xBC, 16)[0],
+            0x00BC, // sts TWCR, r16         ; 8..10  START from 10
+            sei(),  // sei                   ; 10..11
+            idle(), // rjmp .                ; from 11, every 2
+            // isr:
+            lds(20, 0xB9)[0],
+            0x00B9,        // lds r20, TWSR
+            st_z_inc(20),  // st Z+, r20
+            sbrs(20, 3),   // sbrs r20, 3          ; a START is 0x08
+            rjmp(7),       // rjmp stop
+            ldi(16, 0x4E), // ldi r16, 0x27 << 1   ; SLA+W
+            sts(0xBB, 16)[0],
+            0x00BB,        // sts TWDR, r16
+            ldi(16, 0x85), // ldi r16, TWINT | TWEN | TWIE
+            sts(0xBC, 16)[0],
+            0x00BC,        // sts TWCR, r16
+            reti(),        // reti
+            ldi(16, 0x95), // stop: ldi r16, TWINT | TWSTO | TWEN | TWIE
+            sts(0xBC, 16)[0],
+            0x00BC, // sts TWCR, r16
+            reti(), // reti
+        ];
+        program[50..76].copy_from_slice(&main);
+        let mut m = machine(&program);
+        // SCL = 16 MHz / (16 + 2 · 72) = 100 kHz: 160 cycles a bit.
+        //
+        // The START goes from 10 and is done a bit later, at 170; the idle
+        // loop's boundaries are odd, so it is served at 171: 4 cycles of
+        // response and `rjmp isr` 2.
+        assert_eq!(run_to(&mut m, 60, 10_000), 170 + 1 + 4 + 2);
+        // lds 2, st 2, sbrs skipping 2, ldi 1, sts 2, ldi 1, sts 2: the
+        // address goes from 177 + 12 = 189, nine bits to the NACK at 1629 —
+        // a boundary of the idle loop again after `reti` — and the handler
+        // starts 4 + 2 later.
+        let _ = m.run(m.cycle + 1, &Watch::default());
+        assert_eq!(run_to(&mut m, 60, 10_000), 189 + 9 * 160 + 4 + 2);
+        // lds 2, st 2, sbrs 1, rjmp 2, ldi 1, sts 2: the STOP from 1645.
+        run_to(&mut m, 75, 10_000);
+        assert_eq!(m.cycle, 1635 + 10);
+        assert_eq!(m.twi.next_event(), 1645 + 160);
+        assert_ne!(m.read(u16::from(TWCR)) & 0x10, 0, "TWSTO stays until the STOP is out");
+        while m.run(5_000, &Watch::default()) != Stop::Limit {}
+        assert_eq!(m.read(u16::from(TWCR)) & 0x90, 0, "TWSTO cleared, and TWINT never set");
+        assert_eq!(m.read(u16::from(TWSR)) & 0xF8, 0xF8);
+        assert_eq!(&m.data[0x100..0x103], &[0x08, 0x20, 0x00], "a START, an SLA+W NACK, no more");
+        assert_eq!(m.notices, vec![(8, Peripheral::I2c)]);
+    }
+
+    #[test]
+    fn a_peripheral_is_noticed_once_at_the_instruction_that_first_used_it() {
+        let mut m = machine(&[idle()]);
+        let at = |m: &mut Machine, cycle: u64, address: u8, value: u8| {
+            m.cycle = cycle;
+            m.write(u16::from(address), value);
+        };
+        // ADEN alone converts nothing; ADSC starts a conversion, every time.
+        at(&mut m, 10, ADCSRA, 0x80);
+        at(&mut m, 20, ADCSRA, 0xC0);
+        at(&mut m, 30, ADCSRA, 0xC0);
+        // `wdt_disable()`: WDCE | WDE, then nothing.
+        at(&mut m, 40, WDTCSR, 0x18);
+        at(&mut m, 41, WDTCSR, 0x00);
+        // `sbi ACSR, ACD` switches the comparator off, and reading it off is
+        // not using it.
+        m.cycle = 50;
+        m.write_bit(u16::from(ACSR), 7, true);
+        let _ = m.read(u16::from(ACSR));
+        assert_eq!(m.notices, vec![(20, Peripheral::Adc)]);
+        // `wdt_enable(WDTO_1S)`: WDCE | WDE, then WDE and the prescaler.
+        at(&mut m, 60, WDTCSR, 0x18);
+        at(&mut m, 61, WDTCSR, 0x0E);
+        at(&mut m, 70, SPCR, 0x50);
+        at(&mut m, 80, TWCR, 0x45);
+        // On again, the comparator's output is read.
+        at(&mut m, 90, ACSR, 0x00);
+        m.cycle = 91;
+        let _ = m.read(u16::from(ACSR));
+        let _ = m.read(u16::from(ACSR));
+        assert_eq!(
+            m.notices,
+            vec![
+                (20, Peripheral::Adc),
+                (61, Peripheral::Watchdog),
+                (70, Peripheral::Spi),
+                (80, Peripheral::I2c),
+                (91, Peripheral::Comparator),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_notice_ends_a_run_like_a_byte_does() {
+        // ldi r16, ADEN | ADSC / sts ADCSRA, r16 / idle.
+        let mut m = machine(&[ldi(16, 0xC0), sts(0x7A, 16)[0], 0x007A, idle()]);
+        assert_eq!(m.run(1_000, &Watch::default()), Stop::Changed(3));
+        assert_eq!(m.notices, vec![(1, Peripheral::Adc)]);
+        // The conversion is over at once and reads 0: that is what is noticed.
+        assert_eq!(m.read(u16::from(ADCSRA)) & 0x50, 0x10);
+        assert_eq!((m.read(0x78), m.read(0x79)), (0, 0));
     }
 }
