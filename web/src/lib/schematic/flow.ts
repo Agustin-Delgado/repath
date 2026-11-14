@@ -20,7 +20,7 @@
 
 import type { TransientRun } from '$lib/engine';
 import { levelAt } from '$lib/transitions';
-import { definitionOf, pointKey, wireSegments, type Point, type Schematic } from './model';
+import { chipOf, definitionOf, pointKey, wireSegments, type Point, type Schematic } from './model';
 import { DEFAULT_FAMILY, logicFamily, type LogicFamily } from './logic';
 import { BARS, DIGITS, SEGMENTS } from './led';
 import { CURRENT_FLOOR } from './animate';
@@ -282,6 +282,11 @@ export function prepareFlow(
 				const at = elementByName.get(i === 0 ? instance.name : `${instance.name}:${segment}`);
 				if (at !== undefined) segmentElement.set(`${instance.id}:${segment}`, at);
 			}
+		}
+		// A board's LEDs are diodes named for what is printed beside them.
+		for (const light of chipOf(instance.kind)?.board?.lights ?? []) {
+			const at = elementByName.get(`${instance.name}:${light.name}`);
+			if (at !== undefined) segmentElement.set(`${instance.id}:${light.name}`, at);
 		}
 		const index = elementByName.get(instance.name);
 		if (index === undefined) continue;

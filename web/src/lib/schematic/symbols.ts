@@ -24,7 +24,7 @@ import {
 } from './model';
 import { BARS, DIGITS, SEGMENTS, SEGMENT_SHAPES, digitSegment } from './led';
 import { CHIP_BODY_HALF_WIDTH, chipOf, chipPinLayout, chipReach } from './model';
-import { chipName, isUnused, type ChipDef } from './chips';
+import { chipName, isUnused, type BoardShape, type ChipDef } from './chips';
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
@@ -813,6 +813,54 @@ function dip(chip: ChipDef): SymbolGeometry {
 	return { shapes, labels, extent: { x: Math.abs(places[0].x), y: half } };
 }
 
+/**
+ * A board, drawn as the board: its outline and what is on it, a hole in a
+ * header for every place, the lead from each hole out to where wires land,
+ * and the silkscreen beside each one — 13, ~11, 5V — which is what anyone
+ * holding the board reads.
+ */
+function boardSymbol(board: BoardShape): SymbolGeometry {
+	const shapes: Shape[] = [
+		...board.art.strokes.map((d) => path(d)),
+		...board.art.fills.map((d) => path(d, true))
+	];
+	const labels: SymbolLabel[] = [];
+	const { body } = board;
+	let reach = {
+		x: Math.max(-body.x, body.x + body.w),
+		y: Math.max(-body.y, body.y + body.h)
+	};
+	for (const [name, tip] of Object.entries(board.pins)) {
+		// Inward from the tip along the axis the pin faces, the same rule the
+		// router reads a pin's direction by.
+		const sideways = Math.abs(tip.x) >= Math.abs(tip.y);
+		const inward = sideways ? { x: -Math.sign(tip.x), y: 0 } : { x: 0, y: -Math.sign(tip.y) };
+		const hole = { x: tip.x + inward.x * board.lead, y: tip.y + inward.y * board.lead };
+		// The power header's first place is a hole with nothing behind it.
+		if (!isUnused(name)) shapes.push(path(`M${tip.x} ${tip.y} L${hole.x} ${hole.y}`));
+		shapes.push(path(`M${hole.x - 2.5} ${hole.y - 2.5} h5 v5 h-5 Z`, true));
+		const text = board.silkscreen[name];
+		if (text) {
+			const inset = board.staggered?.includes(name) ? 25 : 16;
+			labels.push({
+				x: hole.x + inward.x * inset,
+				y: hole.y + inward.y * inset,
+				text,
+				size: 7,
+				anchor: 'middle',
+				fine: true
+			});
+		}
+		reach = { x: Math.max(reach.x, Math.abs(tip.x)), y: Math.max(reach.y, Math.abs(tip.y)) };
+	}
+	for (const light of board.lights) {
+		shapes.push(path(`M${light.x - 6} ${light.y - 3.5} h12 v7 h-12 Z`));
+		labels.push({ x: light.x + 15, y: light.y, text: light.name, size: 7, anchor: 'middle', fine: true });
+	}
+	for (const print of board.art.print) labels.push({ ...print, anchor: 'middle', fine: true });
+	return { shapes, labels, extent: reach };
+}
+
 export function symbolGeometry(
 	kind: string,
 	params: Record<string, unknown> = {}
@@ -839,7 +887,10 @@ export function symbolGeometry(
 	}
 	else if (kind.startsWith(SUBCIRCUIT_PREFIX)) geometry = block(kind);
 	else if (kind.startsWith(BLOCK_PREFIX)) geometry = block(kind, true);
-	else if (chipOf(kind)) geometry = dip(chipOf(kind)!);
+	else if (chipOf(kind)) {
+		const chip = chipOf(kind)!;
+		geometry = chip.board ? boardSymbol(chip.board) : dip(chip);
+	}
 	else geometry = STATIC[`${kind}@${standardFamily(standard)}`] ?? STATIC[kind] ?? EMPTY;
 
 	// Every edit of a block's ports is a variant nobody asks for again.

@@ -26,6 +26,7 @@
 import { ANALOG_CHIPS } from './chips-analog';
 import { MEMORY_CHIPS } from './chips-memory';
 import { MCU_CHIPS } from './chips-mcu';
+import { BOARDS } from './boards';
 
 /** A primitive inside a package, wired to pin names rather than to nets. */
 export interface ChipBlock {
@@ -90,6 +91,21 @@ export interface ChipBlock {
 		avcc: string;
 		agnd: string;
 	};
+	/**
+	 * Legs a microcontroller has that its model does nothing with: drawn and
+	 * wireable, so a drawing of the real chip connects as it would on a board,
+	 * and with nothing behind them.
+	 */
+	unmodelled?: readonly string[];
+	/**
+	 * Where a microcontroller's ports and supplies come out, by the engine's
+	 * name, when that is not a leg of the same name: on a board, PB5 is the
+	 * header pin printed 13, and the crystal's PB6 and PB7 reach no header at
+	 * all. Absent, every name is its own leg, as on a bare package.
+	 */
+	legs?: Readonly<Record<string, string>>;
+	/** The engine's name for the chip, where the part is not named for it: a board. */
+	model?: string;
 }
 
 /**
@@ -158,12 +174,69 @@ export interface ChipDef {
 	 */
 	optional?: readonly string[];
 	/**
-	 * What a board calls a leg, where that is how people know it: an Uno's
-	 * silkscreen says D13 where the datasheet says PB5.
+	 * A leg's other name, where people know it by that one too: on the bare
+	 * chip, what an Uno's silkscreen calls it (PB5 is D13); on the board, what
+	 * its chip's datasheet does (D13 is PB5).
 	 */
 	boardNames?: Readonly<Record<string, string>>;
 	/** Anything about this part the model does not do. */
 	caveat?: string;
+	/** What it is called, where that is not a part number: `Arduino Uno`. */
+	name?: string;
+	/**
+	 * Legs that are one conductor on the part itself: the Uno's SDA is the
+	 * same copper as its A4, and its three GND pins are one ground. A wire to
+	 * any of them is a wire to all. The first of each list is the one the
+	 * others are the same pin as, and they take its kind.
+	 */
+	joined?: ReadonlyArray<readonly string[]>;
+	/**
+	 * A part that powers itself, as a board on a USB cable does: the legs it
+	 * holds at a voltage, the one of those its chip runs from, and the leg that
+	 * is its ground. That ground is the drawing's reference, the way a ground
+	 * symbol is — the computer at the other end of the cable is earthed — so a
+	 * board needs nothing else to run.
+	 */
+	power?: {
+		rails: Readonly<Record<string, number>>;
+		supply: string;
+		ground: string;
+		/**
+		 * What each rail has in series with its source, in ohms: a fuse and a
+		 * switch on a board. Small, and there so that a supply wired to the same
+		 * net meets a resistance rather than a second ideal source head on.
+		 */
+		ohms: number;
+	};
+	/** Drawn as the board it is rather than as a DIP. */
+	board?: BoardShape;
+}
+
+/**
+ * The outline of a part that is a board, and where its header pins are.
+ *
+ * Schematic units, centred on the part's origin like every symbol. A pin is
+ * where its wire lands; `lights` are LEDs on the board that a run lights up,
+ * each the analog block of the same `light` name.
+ */
+export interface BoardShape {
+	/** Every header place of `layout`, NC included, at the tip of its pin. */
+	pins: Readonly<Record<string, { x: number; y: number }>>;
+	/** From a pin's tip in to the hole it comes out of, along its axis. */
+	lead: number;
+	/** What the silkscreen prints by each pin, just inside its hole. */
+	silkscreen: Readonly<Record<string, string>>;
+	/** Pins whose print is set a line further in, where two long ones side by side would touch. */
+	staggered?: readonly string[];
+	/** The board itself, which is what a click selects. */
+	body: { x: number; y: number; w: number; h: number };
+	lights: ReadonlyArray<{ name: string; x: number; y: number; colour: string }>;
+	/** Everything else drawn on it, as SVG path data, and the rest of its print. */
+	art: {
+		strokes: readonly string[];
+		fills: readonly string[];
+		print: ReadonlyArray<{ x: number; y: number; text: string; size: number }>;
+	};
 }
 
 /**
@@ -203,6 +276,11 @@ export interface OpAmpSpec {
 export type AnalogBlock =
 	| { kind: 'resistor'; a: string; b: string; ohms: number }
 	| { kind: 'diode'; anode: string; cathode: string }
+	/**
+	 * An indicator on a board, named for what is printed beside it (`L`) so the
+	 * drawing can light it where it is drawn.
+	 */
+	| { kind: 'led'; anode: string; cathode: string; colour: string; light: string }
 	| { kind: 'npn' | 'pnp'; collector: string; base: string; emitter: string; beta?: number }
 	| { kind: 'opamp'; plus: string; minus: string; out: string; spec: OpAmpSpec }
 	| {
@@ -227,6 +305,7 @@ export function analogTerminals(block: AnalogBlock): string[] {
 		case 'resistor':
 			return [block.a, block.b];
 		case 'diode':
+		case 'led':
 			return [block.anode, block.cathode];
 		case 'npn':
 		case 'pnp':
@@ -1642,12 +1721,22 @@ export const CHIPS: readonly ChipDef[] = [
 	...LOGIC_CHIPS,
 	...MEMORY_CHIPS,
 	...ANALOG_CHIPS,
-	...MCU_CHIPS
+	...MCU_CHIPS,
+	...BOARDS
 ];
 
 /** The program-running block of a chip, if it is a microcontroller. */
 export function mcuBlock(chip: ChipDef): ChipBlock | undefined {
 	return chip.blocks.find((block) => block.kind === 'mcu');
+}
+
+/**
+ * The leg a microcontroller's port or supply comes out on, by the engine's
+ * name for it; undefined where it reaches none, as an Uno's crystal pins do.
+ */
+export function mcuLeg(chip: ChipDef, block: ChipBlock, name: string): string | undefined {
+	const leg = block.legs ? block.legs[name] : name;
+	return leg !== undefined && chip.layout.includes(leg) ? leg : undefined;
 }
 
 const BY_ID = new Map(CHIPS.map((chip) => [chip.id, chip]));
@@ -1670,7 +1759,7 @@ export function chipName(chip: ChipDef): string {
 	// it came with rather than borrowing one.
 	if (/^4[05]\d{2,3}$/.test(chip.id)) return 'CD' + chip.id;
 	if (/^74\d{2,4}$/.test(chip.id)) return 'SN' + chip.id;
-	return chip.id;
+	return chip.name ?? chip.id;
 }
 
 /**
@@ -1686,12 +1775,12 @@ export function isPower(pin: string): boolean {
 
 /** The leg a chip takes its positive supply on, if it has one. */
 export function positiveSupply(chip: ChipDef): string | undefined {
-	return chip.layout.find((pin) => pin === 'VCC' || pin === 'VDD');
+	return chip.power?.supply ?? chip.layout.find((pin) => pin === 'VCC' || pin === 'VDD');
 }
 
 /** The leg a chip takes its negative supply or ground on. */
 export function negativeSupply(chip: ChipDef): string | undefined {
-	return chip.layout.find((pin) => pin === 'GND' || pin === 'VSS' || pin === 'VEE');
+	return chip.power?.ground ?? chip.layout.find((pin) => pin === 'GND' || pin === 'VSS' || pin === 'VEE');
 }
 
 /**

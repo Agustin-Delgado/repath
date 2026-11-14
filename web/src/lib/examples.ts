@@ -827,6 +827,50 @@ export const EXAMPLES: Example[] = [
 	},
 
 	{
+		id: 'uno-blink',
+		name: 'Arduino Uno blink',
+		description:
+			"The same program as the microcontroller blink, on the board instead of the bare chip — so there is nothing to wire for it to run: the board is powered from USB, and its own L LED blinks on pin 13 once a second. The LED on pin 12 lights while the button on pin 2 is held down, with no resistor on pin 2 because the program turns on the pin's pull-up, the way INPUT_PULLUP does. The other button is a reset button: RESET has the board's pull-up on it, so pressing it starts the program, and the count it sends over serial, again. Select the board to read the count, or to load a .hex of your own from the Arduino IDE.",
+		stopTime: 4,
+		build: () =>
+			build(
+				[
+					{
+						kind: 'ic:ArduinoUno',
+						name: 'U1',
+						x: 500,
+						y: 400,
+						params: { firmware: intelHex(BLINK_PROGRAM.flatMap(([words]) => words)) }
+					},
+					{ kind: 'resistor', name: 'R1', x: 450, y: 100, params: { resistance: 330 } },
+					{ kind: 'led', name: 'D1', x: 540, y: 100, params: { colour: 'red' } },
+					{ kind: 'ground', name: 'GND1', x: 600, y: 110 },
+					{ kind: 'pushbutton', name: 'S2', x: 670, y: 140 },
+					{ kind: 'ground', name: 'GND2', x: 730, y: 150 },
+					{ kind: 'pushbutton', name: 'S1', x: 470, y: 660 },
+					{ kind: 'ground', name: 'GND3', x: 530, y: 670 },
+					{ kind: 'probe', name: 'D13', x: 400, y: 170 },
+					{ kind: 'probe', name: 'D12', x: 420, y: 150 },
+					{ kind: 'probe', name: 'BUTTON', x: 640, y: 160 }
+				],
+				[
+					// Pin 13 has the board's own LED, and a probe to watch it by.
+					[400, 190, 400, 170],
+					// Pin 12, up through a resistor and an LED to ground.
+					[420, 190, 420, 100],
+					[480, 100, 510, 100],
+					[570, 100, 600, 100],
+					// Pin 2, through a button to ground.
+					[640, 190, 640, 140],
+					[700, 140, 730, 140],
+					// RESET, on the power header, through a button to ground.
+					[440, 610, 440, 660],
+					[500, 660, 530, 660]
+				]
+			)
+	},
+
+	{
 		id: 'seven-segment',
 		name: 'Seven-segment digit',
 		description:

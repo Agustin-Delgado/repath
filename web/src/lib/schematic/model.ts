@@ -8,7 +8,17 @@
  */
 
 import { BARS, DIGITS, LED_COLOURS, RATED, SEGMENTS } from './led';
-import { analogTerminals, CHIPS, chipById, chipName, isPower, isUnused, mcuBlock, type ChipDef } from './chips';
+import {
+	analogTerminals,
+	CHIPS,
+	chipById,
+	chipName,
+	isPower,
+	isUnused,
+	mcuBlock,
+	mcuLeg,
+	type ChipDef
+} from './chips';
 import { DEFAULT_CLOCK } from './chips-mcu';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
@@ -25,6 +35,14 @@ export interface PinDef {
 	y: number;
 	domain: Domain;
 	direction: PinDirection;
+	/**
+	 * A logic pin with something analog behind it inside the part as well — the
+	 * buffer an Uno hangs its L LED from on pin 13 — so its net always has a
+	 * node, whatever is wired to it outside.
+	 */
+	node?: boolean;
+	/** The drawing's reference, as a ground symbol's pin is: the GND of a board on USB. */
+	reference?: boolean;
 }
 
 export interface ParamDef {
@@ -2040,29 +2058,63 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 	// the net outside sees a voltage.
 	const analogLegs = new Set((chip.analog ?? []).flatMap(analogTerminals));
 	const mcu = mcuBlock(chip);
-	const ports = new Set(mcu?.ports ?? []);
+	// By leg, which on a board is the header pin rather than the port's name.
+	const ports = new Set(
+		(mcu?.ports ?? []).map((port) => mcuLeg(chip, mcu!, port)).filter((leg) => leg !== undefined)
+	);
+	for (const leg of mcu?.unmodelled ?? []) analogLegs.add(leg);
 	const converter = mcu?.converter;
-	if (converter) for (const leg of [converter.aref, converter.avcc, converter.agnd]) analogLegs.add(leg);
+	if (converter) {
+		for (const name of [converter.aref, converter.avcc, converter.agnd]) {
+			const leg = mcuLeg(chip, mcu!, name);
+			if (leg !== undefined) analogLegs.add(leg);
+		}
+	}
+	for (const leg of Object.keys(chip.power?.rails ?? {})) analogLegs.add(leg);
+	if (chip.power) analogLegs.add(chip.power.ground);
+	// A leg that is the same copper as another is the same kind of pin.
+	const sameAs = new Map<string, string>();
+	for (const [first, ...rest] of chip.joined ?? []) for (const leg of rest) sameAs.set(leg, first);
 
-	const places = chipPinLayout(chip.layout.length);
+	const places = chip.board ? null : chipPinLayout(chip.layout.length);
 	const pins: PinDef[] = [];
 	for (const [i, name] of chip.layout.entries()) {
 		if (isUnused(name)) continue;
-		const { x, y } = places[i];
-		if (isPower(name) || analogLegs.has(name)) pins.push(analog(name, x, y));
-		else if (ports.has(name)) pins.push(digitalBoth(name, x, y));
-		else if (driven.has(name)) pins.push(digitalOut(name, x, y));
-		else if (touched.has(name)) pins.push(digitalIn(name, x, y));
+		const { x, y } = chip.board ? chip.board.pins[name] : places![i];
+		const kind = sameAs.get(name) ?? name;
+		// A port first: a microcontroller's leg is logic to the program even with
+		// something analog on the board behind it, which its net then carries too.
+		if (ports.has(kind)) {
+			const pin = digitalBoth(name, x, y);
+			if (analogLegs.has(kind)) pin.node = true;
+			pins.push(pin);
+		} else if (isPower(kind) || analogLegs.has(kind)) pins.push(analog(name, x, y));
+		else if (driven.has(kind)) pins.push(digitalOut(name, x, y));
+		else if (touched.has(kind)) pins.push(digitalIn(name, x, y));
+	}
+	if (chip.power) {
+		for (const pin of pins) {
+			if ((sameAs.get(pin.name) ?? pin.name) === chip.power.ground) pin.reference = true;
+		}
 	}
 
 	const half = chipReach(chip.layout.length);
+	const body = chip.board?.body ?? {
+		x: -CHIP_BODY_HALF_WIDTH,
+		y: -half,
+		w: CHIP_BODY_HALF_WIDTH * 2,
+		h: half * 2
+	};
+	const box = chip.board
+		? boardBox(chip.board.body, pins)
+		: { x: -CHIP_HALF_WIDTH, y: -half, w: CHIP_HALF_WIDTH * 2, h: half * 2 };
 	return {
 		kind: CHIP_PREFIX + chip.id,
 		label: chipName(chip),
 		group: 'ic',
 		prefix: 'U',
-		box: { x: -CHIP_HALF_WIDTH, y: -half, w: CHIP_HALF_WIDTH * 2, h: half * 2 },
-		body: { x: -CHIP_BODY_HALF_WIDTH, y: -half, w: CHIP_BODY_HALF_WIDTH * 2, h: half * 2 },
+		box,
+		body,
 		pins,
 		// What a programmable memory holds is text, edited in a block of its own
 		// the way a model card is; so is a microcontroller's program.
@@ -2083,6 +2135,15 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 					]
 				: []
 	};
+}
+
+/** A board's outline grown to take in the tips of its header pins. */
+function boardBox(body: { x: number; y: number; w: number; h: number }, pins: readonly PinDef[]) {
+	const left = Math.min(body.x, ...pins.map((p) => p.x));
+	const top = Math.min(body.y, ...pins.map((p) => p.y));
+	const right = Math.max(body.x + body.w, ...pins.map((p) => p.x));
+	const bottom = Math.max(body.y + body.h, ...pins.map((p) => p.y));
+	return { x: left, y: top, w: right - left, h: bottom - top };
 }
 
 /** The chip a kind names, if it names one. */

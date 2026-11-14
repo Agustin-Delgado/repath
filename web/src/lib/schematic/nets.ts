@@ -270,11 +270,27 @@ export function buildConnectivity(
 	const pins: PinRef[] = [];
 	const pinPoint: number[] = [];
 
+	/** Legs a part joins on itself, as point pairs: a board's SDA is its A4. */
+	const internal: Array<readonly [number, number]> = [];
 	for (const instance of schematic.instances) {
+		const first = pinPoint.length;
 		for (const pin of definitionFor(instance).pins) {
 			const { x, y } = pinPosition(instance, pin);
 			pins.push({ instance, pin, x, y });
 			pinPoint.push(points.of(x, y));
+		}
+		const joined = chipOf(instance.kind)?.joined;
+		if (!joined) continue;
+		const at = (name: string) => {
+			for (let k = first; k < pins.length; k++) if (pins[k].pin.name === name) return pinPoint[k];
+			return undefined;
+		};
+		for (const [leg, ...rest] of joined) {
+			const a = at(leg);
+			for (const other of rest) {
+				const b = at(other);
+				if (a !== undefined && b !== undefined) internal.push([a, b]);
+			}
 		}
 	}
 	const wirePoints: Array<Point & { n: number }> = [];
@@ -290,6 +306,7 @@ export function buildConnectivity(
 		set.union(points.of(segment.a.x, segment.a.y), points.of(segment.b.x, segment.b.y));
 	}
 	for (const [a, b] of tied) set.union(a, b);
+	for (const [a, b] of internal) set.union(a, b);
 
 	// Anything sitting mid-wire joins that wire: pins and other wires' corners.
 	const touchPoints = new LineIndex<Point & { n: number }>([
@@ -336,7 +353,7 @@ export function buildConnectivity(
 	pins.forEach((ref, i) => {
 		const net = ensure(pinPoint[i]);
 		net.pins.push(ref);
-		if (ref.instance.kind === 'ground') net.isGround = true;
+		if (ref.instance.kind === 'ground' || ref.pin.reference) net.isGround = true;
 		// A probe is a name attached to a point, not a part on the net. Deciding
 		// here that its pin makes the net analog would mean that clipping one onto
 		// a gate output conjures an analog node, a bridge to drive it and — since
@@ -354,6 +371,7 @@ export function buildConnectivity(
 			// a way for the pin to drive the node and a way to read it back.
 			if (ref.pin.direction !== 'in') net.hasDigitalOutput = true;
 			if (ref.pin.direction !== 'out') net.hasDigitalInput = true;
+			if (ref.pin.node) net.hasAnalog = true;
 		}
 	});
 

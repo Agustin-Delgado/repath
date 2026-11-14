@@ -90,7 +90,8 @@ import {
 	trimOverlaps,
 	unexpectedJoin,
 	liesWithin,
-	type Connectivity
+	type Connectivity,
+	type Net
 } from './schematic/nets';
 
 /**
@@ -2986,6 +2987,12 @@ class AppState {
 	autoProbe(): void {
 		const compiled = compileSchematic(this.schematic, this.temperature + 273.15, this.sample, this.logicFamily);
 		const chosen: string[] = [];
+		// A board's SDA and A4 are one net through two points of one part, with no
+		// wire: wired as far as the points go, and not what anybody wants plotted.
+		const drawn = new Set(this.schematic.wires.flatMap((w) => w.points.map((p) => pointKey(p.x, p.y))));
+		const internal = (net: Net) =>
+			net.pins.every((ref) => ref.instance.id === net.pins[0].instance.id) &&
+			!net.points.some((key) => drawn.has(key));
 		// Wired nets first — a lone pin is rarely what you want — and pin-only ones
 		// after, rather than never. An output with nothing hanging off it is exactly
 		// what you want when the circuit is small enough that there is nothing else,
@@ -2997,7 +3004,7 @@ class AppState {
 				if (net.isGround) continue;
 				const names = compiled.names.get(net.index);
 				if (!names?.analog && !names?.digital) continue;
-				if ((net.points.length >= 2) !== wired) continue;
+				if ((net.points.length >= 2 && !internal(net)) !== wired) continue;
 				const pin = net.pins[0];
 				const handle = pin ? probePin(pin.instance.id, pin.pin.name) : net.points[0];
 				if (handle !== undefined && !chosen.includes(handle)) chosen.push(handle);

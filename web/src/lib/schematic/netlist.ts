@@ -13,6 +13,8 @@ import { contactControl, restingContact } from './contacts';
 import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, pointKey } from './model';
 import {
+	analogTerminals,
+	mcuLeg,
 	negativeSupply,
 	positiveSupply,
 	type ChipBlock,
@@ -317,6 +319,11 @@ function dcGraph(schematic: Schematic, connectivity: Connectivity) {
 		else through.set(a, [b]);
 	};
 	for (const instance of schematic.instances) {
+		// A board holds its own rails, so a chip powered from one has a supply.
+		for (const leg of Object.keys(chipOf(instance.kind)?.power?.rails ?? {})) {
+			const index = connectivity.netOfPin.get(pinKey(instance.id, leg));
+			if (index !== undefined) sourced.add(index);
+		}
 		if (chipOf(instance.kind) || NO_DC_PATH.has(instance.kind)) continue;
 		const on = definitionFor(instance)
 			.pins.filter((pin) => pin.domain === 'analog')
@@ -537,6 +544,8 @@ function compileFresh(
 		for (const ref of net.pins) {
 			const part = ref.instance;
 			if (part.kind === 'supply') return num(part, 'voltage', 5);
+			const rail = chipOf(part.kind)?.power?.rails[ref.pin.name];
+			if (rail !== undefined) return rail;
 			if (part.kind === 'battery' && ref.pin.name === 'plus' && grounded(part, 'minus')) {
 				return num(part, 'voltage', 9);
 			}
@@ -609,6 +618,16 @@ function compileFresh(
 						anode: node(block.anode),
 						cathode: node(block.cathode),
 						model: { is: 2.52e-9, n: 1.752, rs: 0.568, cj0: 4e-12, tt: 5e-9, bv: null, temp: 300.15 }
+					});
+					break;
+				case 'led':
+					// Named for its light, which is what the drawing asks after to light it.
+					components.push({
+						type: 'diode',
+						name: `${name}:${block.light}`,
+						anode: node(block.anode),
+						cathode: node(block.cathode),
+						model: ledDiodeModel(block.colour, ledRating(instance))
 					});
 					break;
 				case 'npn':
@@ -759,6 +778,33 @@ function compileFresh(
 	}
 
 	/**
+	 * What a board on USB holds its rails at: a source from ground for each,
+	 * through the little resistance of the fuse and switch in the way. Whether
+	 * or not anything is wired to them — its own chip and LEDs run from them.
+	 */
+	function emitRails(instance: Instance, power: NonNullable<ChipDef['power']>) {
+		for (const [leg, volts] of Object.entries(power.rails)) {
+			const source = `${instance.id}_an_${leg}_source`;
+			components.push({
+				type: 'voltage_source',
+				name: `${instance.name}:${leg}`,
+				plus: source,
+				minus: analogOf(instance, power.ground),
+				waveform: { type: 'dc', value: volts },
+				ac_magnitude: 0,
+				ac_phase: 0
+			});
+			components.push({
+				type: 'resistor',
+				name: `${instance.name}:${leg}_feed`,
+				a: source,
+				b: analogOf(instance, leg),
+				resistance: power.ohms
+			});
+		}
+	}
+
+	/**
 	 * A microcontroller: the engine's `mcu` device on its port legs, plus what
 	 * the silicon puts on each leg besides the program — a pull-up the program
 	 * switches in.
@@ -798,15 +844,20 @@ function compileFresh(
 		const converter = block.converter;
 		const measured = new Set(converter?.inputs ?? []);
 		// Every leg is on a net, if only one of its own; a leg touching nothing
-		// need not be mentioned to the device at all.
+		// need not be mentioned to the device at all — unless the part itself
+		// has something on it, as a board has its L LED on pin 13.
+		const inside = new Set((chip.analog ?? []).flatMap(analogTerminals));
 		const wired = (pin: string) => {
+			if (inside.has(pin)) return true;
 			const index = connectivity.netOfPin.get(pinKey(instance.id, pin));
 			const on = index === undefined ? undefined : connectivity.nets[index];
 			return on !== undefined && (on.pins.length > 1 || on.points.length > 1);
 		};
 		for (const port of block.ports ?? []) {
-			if (!wired(port)) continue;
-			const index = connectivity.netOfPin.get(pinKey(instance.id, port));
+			// On a board a port comes out on a header pin of another name, or on none.
+			const leg = mcuLeg(chip, block, port);
+			if (leg === undefined || !wired(leg)) continue;
+			const index = connectivity.netOfPin.get(pinKey(instance.id, leg));
 			const entry = index === undefined ? undefined : names.get(index);
 			if (!entry?.digital) continue;
 			const pin: (typeof pins)[string] = {
@@ -840,19 +891,25 @@ function compileFresh(
 			pins[port] = pin;
 		}
 		const reset = block.reset;
+		// On a board the converter's supply and reference come out on header
+		// pins of other names: AVCC is the 5V rail.
+		const converterNode = (pin: string) => {
+			const leg = mcuLeg(chip, block, pin);
+			return leg === undefined ? null : nodeOf(instance, leg);
+		};
 		devices.push({
 			type: 'mcu',
 			name: deviceName,
-			model: chip.id.toLowerCase(),
+			model: block.model ?? chip.id.toLowerCase(),
 			firmware,
 			frequency: num(instance, 'frequency', DEFAULT_CLOCK),
 			pins,
 			// Left unwired, reset is held off by its pull-up: the chip runs.
 			reset: reset && wired(reset) ? net(reset) : null,
 			wake: net('wake'),
-			aref: converter ? nodeOf(instance, converter.aref) : null,
-			avcc: converter ? nodeOf(instance, converter.avcc) : null,
-			agnd: converter ? nodeOf(instance, converter.agnd) : null
+			aref: converter ? converterNode(converter.aref) : null,
+			avcc: converter ? converterNode(converter.avcc) : null,
+			agnd: converter ? converterNode(converter.agnd) : null
 		});
 	}
 
@@ -889,6 +946,7 @@ function compileFresh(
 			const legs = new Set(chip.layout);
 			const net = (pin: string) =>
 				legs.has(pin) ? digitalOf(instance, pin) : `${instance.id}_in_${pin}`;
+			if (chip.power) emitRails(instance, chip.power);
 			emitPullUps(instance, chip);
 			for (const [index, block] of chip.blocks.entries()) {
 				const blockName = index === 0 ? name : `${name}:${index + 1}`;
