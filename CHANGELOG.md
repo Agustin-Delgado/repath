@@ -29,7 +29,7 @@ conversion-complete interrupt work too.
 **Wire AVCC and AGND.** The converter measures against them, as on the real
 chip; with AVCC left unwired every reading above ground is 1023. Reading the temperature
 sensor or triggering conversions from a timer is not simulated yet, and the run
-says so when a sketch does. [#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+says so when a sketch does. [#71](https://github.com/Agustin-Delgado/repath/pull/71)
 
 ---
 
