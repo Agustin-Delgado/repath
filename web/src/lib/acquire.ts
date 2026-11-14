@@ -15,6 +15,7 @@
 
 import { Capture } from './capture';
 import { EngineError, LiveRun, type LogicState, type McuState } from './engine';
+import type { LcdFrame } from './schematic/lcd';
 
 export interface AcquisitionHost {
 	/** New samples have landed. */
@@ -177,6 +178,11 @@ export class Acquisition {
 	/** What a microcontroller has sent from its `from`-th byte on, and whether it stopped. */
 	mcuState(name: string, from: number): McuState | null {
 		return this.run.mcuState(name, from);
+	}
+
+	/** What an I2C LCD module shows right now. */
+	lcdState(name: string): LcdFrame | null {
+		return this.run.lcdState(name);
 	}
 
 	/**

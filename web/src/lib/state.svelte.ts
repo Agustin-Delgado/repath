@@ -23,6 +23,7 @@ import { Trace, wireRef, type Step } from './trace';
 import type { CircuitSettings, SharedCircuit } from './share';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
+import { LCD_HISTORY, sameGlass, type LcdFrame } from './schematic/lcd';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import { groupFrame, outside } from './schematic/groups';
 import {
@@ -359,10 +360,10 @@ export function appendSerial(text: string, bytes: readonly number[]): string {
 	return joined.length > SERIAL_KEPT ? joined.slice(joined.length - SERIAL_KEPT) : joined;
 }
 
-/** The names of the microcontrollers in a compiled netlist. */
-function mcuDevices(netlist: unknown): string[] {
+/** The names of the devices of one type in a compiled netlist. */
+function devicesOfType(netlist: unknown, type: string): string[] {
 	const devices = (netlist as { devices?: Array<{ type: string; name: string }> } | null)?.devices;
-	return (devices ?? []).filter((device) => device.type === 'mcu').map((device) => device.name);
+	return (devices ?? []).filter((device) => device.type === type).map((device) => device.name);
 }
 
 class AppState {
@@ -545,6 +546,14 @@ class AppState {
 	mcuLogs = $state<Record<string, McuLog>>({});
 	/** The microcontrollers in the run that is going, to be asked for their logs. */
 	private mcuNames: string[] = [];
+	/**
+	 * What each LCD module has shown during this run, by name: one frame per
+	 * change, oldest first, so the drawing can show the glass at whatever
+	 * instant playback is at. Not reactive — the live layer is repainted every
+	 * frame a run moves, and reads it then.
+	 */
+	lcdHistory = new Map<string, LcdFrame[]>();
+	private lcdNames: string[] = [];
 	error = $state<string | null>(null);
 	/**
 	 * Whether results are being kept up to date with the circuit.
@@ -3772,7 +3781,9 @@ class AppState {
 				this.acquiring = acquiring;
 				this.capture = acquiring.capture;
 				this.operations = new Map();
-				this.mcuNames = mcuDevices(compiled.netlist);
+				this.mcuNames = devicesOfType(compiled.netlist, 'mcu');
+				this.lcdNames = devicesOfType(compiled.netlist, 'i2c_lcd');
+				this.lcdHistory = new Map();
 				this.held = null;
 				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
@@ -3801,6 +3812,7 @@ class AppState {
 		if (!capture || !acquiring) return;
 		this.result = capture.run();
 		this.readMcus(acquiring);
+		this.readDisplays(acquiring);
 		// While the sweep is going, the instant on the drawing is the newest one
 		// there is. Stopped, it stays where it was left, to be measured.
 		if (acquiring.sweeping) {
@@ -3863,6 +3875,27 @@ class AppState {
 		}
 	}
 
+	/**
+	 * Add a frame to each LCD's history where what it shows has changed. Polled
+	 * once a piece of the run, so a change is placed at the instant the engine
+	 * had the module up to, not at the instant it happened; for a display that
+	 * is a frame of the run at most.
+	 */
+	private readDisplays(acquiring: Acquisition): void {
+		for (const name of this.lcdNames) {
+			const state = acquiring.lcdState(name);
+			if (!state) continue;
+			const history = this.lcdHistory.get(name) ?? [];
+			const last = history[history.length - 1];
+			// A sketch rewriting the same text ten times a second changes nothing
+			// worth a frame.
+			if (last && (last.version === state.version || sameGlass(last, state))) continue;
+			history.push(state);
+			if (history.length > LCD_HISTORY) history.splice(0, history.length - LCD_HISTORY);
+			this.lcdHistory.set(name, history);
+		}
+	}
+
 	private discardRun(): void {
 		this.runGeneration++;
 		this.acquiring?.close();
@@ -3872,6 +3905,8 @@ class AppState {
 		this.operations = new Map();
 		this.mcuLogs = {};
 		this.mcuNames = [];
+		this.lcdNames = [];
+		this.lcdHistory = new Map();
 		this.held = null;
 		this.envelope = null;
 		this.playing = false;

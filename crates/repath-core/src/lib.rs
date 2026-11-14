@@ -34,6 +34,7 @@ pub mod complex;
 pub mod digital;
 pub mod element;
 pub mod elements;
+pub mod i2c;
 pub mod linalg;
 pub mod lte;
 pub mod netlist;

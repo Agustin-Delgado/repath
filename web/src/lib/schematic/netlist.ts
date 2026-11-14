@@ -12,8 +12,10 @@
 import { contactControl, restingContact } from './contacts';
 import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, pointKey } from './model';
+import { LCD_KIND, lcdAddress } from './lcd';
 import {
 	analogTerminals,
+	mcuBlock,
 	mcuLeg,
 	negativeSupply,
 	positiveSupply,
@@ -343,8 +345,12 @@ function dcGraph(schematic: Schematic, connectivity: Connectivity) {
 	return graph;
 }
 
-/** Parts that carry no current at DC, the same list the floating-input check uses. */
-const NO_DC_PATH = new Set(['capacitor', 'varcap', 'crystal', 'isource', 'probe', 'port']);
+/**
+ * Parts that carry no current at DC, the same list the floating-input check
+ * uses — and the LCD module, which does, from VCC to GND, but as a load: a
+ * chip's supply that reached ground through it would be no supply at all.
+ */
+const NO_DC_PATH = new Set(['capacitor', 'varcap', 'crystal', 'isource', 'probe', 'port', LCD_KIND]);
 
 /** The last compile, and what it was a compile of. */
 let lastCompile: { signature: string; result: CompileResult } | null = null;
@@ -1468,6 +1474,61 @@ function compileFresh(
 						model
 					});
 				}
+				break;
+			}
+			// The engine's `i2c_lcd`, built into the microcontroller whose TWI it is
+			// on. Which one that is the engine works out from the nets, so all this
+			// passes on is where SDA and SCL go; the drawing is what can say why a
+			// module is on no bus, so that is said here.
+			case LCD_KIND: {
+				const unpowered = chipUnpowered(instance, schematic, connectivity);
+				if (unpowered) {
+					unpoweredChips++;
+					warnings.push(
+						`${name} is not powered: ${unpowered} Its screen stays dark and nothing on the bus finds it.`
+					);
+					break;
+				}
+				const netOf = (part: Instance, pin: string) =>
+					connectivity.netOfPin.get(pinKey(part.id, pin));
+				const sda = netOf(instance, 'SDA');
+				const scl = netOf(instance, 'SCL');
+				const logic = (index: number | undefined) =>
+					(index !== undefined && names.get(index)?.digital) || null;
+				devices.push({
+					type: 'i2c_lcd',
+					name,
+					address: lcdAddress(instance.params.address),
+					sda: logic(sda),
+					scl: logic(scl)
+				});
+				// The chips and boards that can be its master, with the legs their
+				// PC4 and PC5 come out on: on an Uno that is A4 and A5, which the
+				// board joins to its SDA and SCL pins, so either pair is one net.
+				const masters = schematic.instances.flatMap((part) => {
+					const chip = chipOf(part.kind);
+					const block = chip && mcuBlock(chip);
+					if (!chip || !block || !(block.ports ?? []).includes('PC4')) return [];
+					const data = mcuLeg(chip, block, 'PC4');
+					const clock = mcuLeg(chip, block, 'PC5');
+					return data && clock ? [{ part, data, clock }] : [];
+				});
+				const wired = (
+					master: (typeof masters)[number],
+					a: number | undefined,
+					b: number | undefined
+				) =>
+					a !== undefined &&
+					b !== undefined &&
+					netOf(master.part, master.data) === a &&
+					netOf(master.part, master.clock) === b;
+				if (masters.length === 0 || masters.some((master) => wired(master, sda, scl))) break;
+				const swapped = masters.find((master) => wired(master, scl, sda));
+				warnings.push(
+					swapped
+						? `${name}'s SDA and SCL are swapped: SDA goes to ${swapped.part.name}'s A4 (PC4) and SCL to its A5 (PC5). As it is, nothing answers at its address.`
+						: `${name} is not on a microcontroller's I²C bus: its SDA has to go to A4 (PC4) and its SCL to A5 (PC5), or on an Uno to SDA and SCL. As it is, nothing talks to it.`
+				);
 				break;
 			}
 			case 'display7': {

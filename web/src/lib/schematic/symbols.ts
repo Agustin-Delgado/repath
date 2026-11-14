@@ -25,6 +25,19 @@ import {
 import { BARS, DIGITS, SEGMENTS, SEGMENT_SHAPES, digitSegment } from './led';
 import { CHIP_BODY_HALF_WIDTH, chipOf, chipPinLayout, chipReach } from './model';
 import { chipName, isUnused, type BoardShape, type ChipDef } from './chips';
+import {
+	DOT_SIZE,
+	LCD_BEZEL,
+	LCD_BOARD,
+	LCD_COLUMNS,
+	LCD_GLASS,
+	LCD_KIND,
+	LCD_LEG_X,
+	LCD_LEGS,
+	LCD_LINES,
+	dotAt,
+	lcdLegY
+} from './lcd';
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
@@ -65,6 +78,7 @@ export interface SymbolGeometry {
 }
 
 const path = (d: string, fill = false): Shape => ({ kind: 'path', d, fill });
+const rectShape = (r: { x: number; y: number; w: number; h: number }): Shape => ({ kind: 'rect', ...r });
 
 /** The gates drawn from their input count rather than from a fixed shape. */
 const GATES = new Set(['and', 'nand', 'or', 'nor', 'xor', 'xnor']);
@@ -315,6 +329,47 @@ const STATIC: Record<string, SymbolGeometry> = {
 			fine: true
 		})),
 		extent: { x: 100, y: 50 }
+	},
+
+	// The module as it sits on a bench: the board with its four mounting holes,
+	// the bezel and the glass, and the backpack's header on the left. Each
+	// character position is outlined so that, unpowered, it still reads as a
+	// character display; what lights them is painted on the live layer.
+	[LCD_KIND]: {
+		shapes: [
+			rectShape(LCD_BOARD),
+			rectShape(LCD_BEZEL),
+			rectShape(LCD_GLASS),
+			...[-1, 1].flatMap((sx) =>
+				[-1, 1].map((sy) => ({
+					kind: 'circle' as const,
+					cx: LCD_BOARD.x + LCD_BOARD.w / 2 + sx * (LCD_BOARD.w / 2 - 6),
+					cy: sy * (LCD_BOARD.h / 2 - 6),
+					r: 2.5
+				}))
+			),
+			...Array.from({ length: LCD_COLUMNS * LCD_LINES }, (_, cell) => {
+				const corner = dotAt(cell, 0, 0);
+				const far = dotAt(cell, 7, 4);
+				return {
+					kind: 'rect' as const,
+					x: corner.x,
+					y: corner.y,
+					w: far.x + DOT_SIZE - corner.x,
+					h: far.y + DOT_SIZE - corner.y
+				};
+			}),
+			...LCD_LEGS.map((_, i) => path(`M${LCD_LEG_X} ${lcdLegY(i)} H${LCD_BOARD.x}`))
+		],
+		labels: LCD_LEGS.map((leg, i) => ({
+			x: LCD_BOARD.x + 4,
+			y: lcdLegY(i) + 2.5,
+			text: leg,
+			size: 6.5,
+			anchor: 'start' as const,
+			fine: true
+		})),
+		extent: { x: -LCD_LEG_X, y: LCD_BOARD.h / 2 }
 	},
 
 	// The resistor with an arrow brought down onto it: the wiper, pressing on

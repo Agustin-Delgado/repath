@@ -113,6 +113,13 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		description: 'Ten LEDs in a row, every anode and cathode brought out',
 		keywords: ['bar graph', 'led bar', 'level meter', 'vu', 'ladder', 'display', 'indicator']
 	},
+	lcd1602: {
+		description: 'Sixteen characters on two lines, on an I²C backpack: GND, VCC, SDA, SCL',
+		keywords: [
+			'lcd', '1602', '16x2', 'i2c lcd', 'lcd i2c', 'pcf8574', 'hd44780', 'liquidcrystal',
+			'liquidcrystal_i2c', 'character display', 'display', 'text', 'screen'
+		]
+	},
 	nmos: {
 		description: 'N-channel MOSFET, Shichman-Hodges',
 		keywords: ['mosfet', 'fet', 'transistor', 'n-channel', 'switch', '2n7000']

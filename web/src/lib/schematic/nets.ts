@@ -965,9 +965,11 @@ function short(pin: string): string {
  * A capacitor is an open circuit once everything has settled; a current source
  * and a probe are high impedances by definition. A switch is not on this list:
  * it is an open circuit when it is open and a piece of wire when it is closed,
- * which is a fact about the moment rather than about the drawing.
+ * which is a fact about the moment rather than about the drawing. The LCD
+ * module draws a current, but as a load across its supply: it holds neither
+ * leg at the other's level.
  */
-const NO_DC_PATH = new Set(['capacitor', 'varcap', 'crystal', 'isource', 'probe', 'port']);
+const NO_DC_PATH = new Set(['capacitor', 'varcap', 'crystal', 'isource', 'probe', 'port', 'lcd1602']);
 
 /** One conductive route between two nets. `via` is a switch that has to be closed. */
 interface DcEdge {

@@ -51,6 +51,15 @@ import {
 	type WireSegment
 } from './model';
 import { instanceBounds, instancePins } from './scene';
+import {
+	DOT_SIZE,
+	LCD_GLASS,
+	LCD_KIND,
+	dotAt,
+	frameAt,
+	shownCells,
+	type LcdFrame
+} from './lcd';
 
 export interface DynamicView {
 	schematic: Schematic;
@@ -72,6 +81,8 @@ export interface DynamicView {
 	stopTime: number;
 	/** Instance id -> the moment that LED failed. */
 	burnouts: ReadonlyMap<string, Burnout>;
+	/** What each LCD module showed during the run, by name, oldest first. */
+	displays: ReadonlyMap<string, readonly LcdFrame[]>;
 	/**
 	 * Nets whose voltage is an artifact rather than a measurement.
 	 *
@@ -218,6 +229,7 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 		else if (instance.kind === 'fuse') drawFuse(painter, view, instance);
 		else if (instance.kind === 'bargraph') drawBars(painter, view, instance);
 		else if (instance.kind === 'lamp') drawLamp(painter, view, instance);
+		else if (instance.kind === LCD_KIND) drawLcd(painter, view, instance);
 	}
 }
 
@@ -524,7 +536,51 @@ function drawFuse(painter: Painter, view: DynamicView, instance: Instance): void
 }
 
 /** Parts that give off light, and so are drawn again once something flows. */
-const LIT = new Set(['led', 'display7', 'display7x4', 'bargraph', 'lamp', 'fuse']);
+const LIT = new Set(['led', 'display7', 'display7x4', 'bargraph', 'lamp', 'fuse', LCD_KIND]);
+
+/**
+ * The glass of an LCD module, as the run had it at the playback instant.
+ *
+ * The blue modules: white dots on a blue backlight, the unlit ones a shade
+ * lighter than the glass so the matrix shows, as it does on the real thing.
+ * Backlight off, the glass goes nearly black and the text stays, faint, the
+ * way it reads in room light. A module the run knows nothing of — one that
+ * was not powered — is left as the layer below draws it: dark.
+ *
+ * Not gated on `showLight`: what a display shows is its output, the thing
+ * the circuit exists to produce, not a lighting effect over it.
+ */
+function drawLcd(painter: Painter, view: DynamicView, instance: Instance): void {
+	const frame = frameAt(view.displays.get(instance.name) ?? [], view.time);
+	if (!frame) return;
+	const lit = frame.backlight;
+	const glass = lit ? '#2350c8' : '#0d1730';
+	const unlit = lit ? '#3463de' : '#132042';
+	const ink = lit ? '#eef3ff' : '#55617d';
+	const blocks = lit ? '#b9c9f5' : '#2c3a5e';
+	const cells = shownCells(frame, view.time);
+	const on = new Path2D();
+	const off = new Path2D();
+	const overdriven = new Path2D();
+	for (const [cell, rows] of cells.entries()) {
+		for (let row = 0; row < 8; row++) {
+			for (let column = 0; column < 5; column++) {
+				const { x, y } = dotAt(cell, row, column);
+				const set = (rows[row] >> (4 - column)) & 1;
+				const target = set ? on : frame.overdriven && cell < 16 ? overdriven : off;
+				target.rect(x, y, DOT_SIZE, DOT_SIZE);
+			}
+		}
+	}
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		painter.rect(LCD_GLASS, { color: glass });
+		painter.fillPath(off, { color: unlit });
+		// A controller left in 1-line mode shows every dot of the first line:
+		// the row of blocks of a module nothing initialised.
+		painter.fillPath(overdriven, { color: blocks, alpha: 0.85 });
+		painter.fillPath(on, { color: ink });
+	});
+}
 
 /** A bar graph: the digit's lighting, one bar at a time. */
 function drawBars(painter: Painter, view: DynamicView, instance: Instance): void {

@@ -1,18 +1,21 @@
-//! The TWI — the AVR's I2C — as a master on a bus with nothing else on it.
+//! The TWI — the AVR's I2C — as the master of a bus of I2C devices.
 //!
-//! repath has no I2C devices, so whatever the program addresses, nobody
-//! answers. That is a perfectly well-defined bus: with the pull-ups holding
-//! SDA high, every address and every data byte is NACKed, and a byte clocked
-//! in reads as all ones. The master's state machine is modelled just far
-//! enough to give those answers in the status codes of the datasheet's tables,
-//! at roughly the time they would come, so that the Arduino `Wire` library —
-//! interrupt-driven, waiting on TWINT — returns "address not acknowledged"
-//! instead of waiting for ever.
+//! The devices are the ones the netlist found wired to this chip's SDA and
+//! SCL (`i2c::Bus`), and each transfer is handed to them whole, at the instant
+//! its bits are over (see `i2c` for why not bit by bit). An address nobody has
+//! goes unanswered, as on a bus with nothing on it: with the pull-ups holding
+//! SDA high, the address and every data byte after it are NACKed, and a byte
+//! clocked in reads as all ones. The master's state machine is modelled far
+//! enough to give the answers in the status codes of the datasheet's tables,
+//! at the time they would come, so that the Arduino `Wire` library —
+//! interrupt-driven, waiting on TWINT — sees what it would on a board.
 //!
-//! Not modelled: the slave modes (nothing could address this chip either),
-//! arbitration, and the bus on the pins. SDA and SCL stay whatever the port
-//! makes them, which after `Wire.begin()` is two pull-ups: the idle bus, not
-//! the transfer's waveform.
+//! Not modelled: the slave modes (nothing could address this chip),
+//! arbitration, clock stretching (no device here stretches), and the bus on
+//! the pins. SDA and SCL stay whatever the port makes them, which after
+//! `Wire.begin()` is two pull-ups: the idle bus, not the transfer's waveform.
+
+use crate::i2c::Bus;
 
 /// TWCR's bits.
 pub const TWINT: u8 = 1 << 7;
@@ -26,8 +29,11 @@ const TWIE: u8 = 1 << 0;
 // Status codes, TWSR's top five bits, from the master tables of the datasheet.
 const START: u8 = 0x08;
 const REPEATED_START: u8 = 0x10;
+const SLA_W_ACK: u8 = 0x18;
 const SLA_W_NACK: u8 = 0x20;
+const DATA_ACK: u8 = 0x28;
 const DATA_NACK: u8 = 0x30;
+const SLA_R_ACK: u8 = 0x40;
 const SLA_R_NACK: u8 = 0x48;
 const DATA_IN_ACK: u8 = 0x50;
 const DATA_IN_NACK: u8 = 0x58;
@@ -68,6 +74,11 @@ pub struct Twi {
     phase: Phase,
     /// What the bus is doing, and the cycle it is done.
     action: Option<(Action, u64)>,
+    /// The devices on the bus.
+    pub bus: Bus,
+    /// The address that acknowledged the last SLA, until the next START or
+    /// STOP lets it go.
+    selected: Option<u8>,
 }
 
 impl Twi {
@@ -80,6 +91,8 @@ impl Twi {
             control: 0,
             phase: Phase::Idle,
             action: None,
+            bus: Bus::default(),
+            selected: None,
         }
     }
 
@@ -137,6 +150,7 @@ impl Twi {
             self.control &= !TWSTO;
             self.phase = Phase::Idle;
             self.action = None;
+            self.selected = None;
             return;
         }
         if v & TWINT == 0 {
@@ -166,13 +180,16 @@ impl Twi {
         self.action = Some((action, at + bits * self.bit_cycles()));
     }
 
-    /// The action under way finishes: now is its [`Self::next_event`].
-    pub fn event(&mut self) {
-        let Some((action, _)) = self.action.take() else { return };
+    /// The action under way finishes: now is its [`Self::next_event`], `time`
+    /// seconds into the run. Whether it was an address nobody answered.
+    pub fn event(&mut self, time: f64) -> bool {
+        let Some((action, _)) = self.action.take() else { return false };
+        let mut unanswered = false;
         self.status = match action {
             Action::Start { repeated } => {
                 self.control &= !TWSTO;
                 self.phase = Phase::Address;
+                self.selected = None;
                 if repeated { REPEATED_START } else { START }
             }
             // The one action that does not set TWINT: TWSTO clearing is how
@@ -180,37 +197,53 @@ impl Twi {
             Action::Stop => {
                 self.control &= !TWSTO;
                 self.phase = Phase::Idle;
+                self.selected = None;
                 NO_INFO
             }
             Action::Byte => match self.phase {
                 // The read/write bit decides which half of the master the
-                // NACK leaves it in.
-                Phase::Address if self.data & 1 == 0 => {
-                    self.phase = Phase::Transmit;
-                    SLA_W_NACK
-                }
+                // address leaves it in, answered or not.
                 Phase::Address => {
-                    self.phase = Phase::Receive;
-                    SLA_R_NACK
+                    let address = self.data >> 1;
+                    let read = self.data & 1 != 0;
+                    let ack = self.bus.answers(address);
+                    self.selected = ack.then_some(address);
+                    unanswered = !ack;
+                    self.phase = if read { Phase::Receive } else { Phase::Transmit };
+                    match (read, ack) {
+                        (false, true) => SLA_W_ACK,
+                        (false, false) => SLA_W_NACK,
+                        (true, true) => SLA_R_ACK,
+                        (true, false) => SLA_R_NACK,
+                    }
                 }
-                Phase::Transmit => DATA_NACK,
-                // Nobody drives SDA, so the pull-ups make every bit a one.
+                Phase::Transmit => match self.selected {
+                    Some(address) if self.bus.write(address, self.data, time) => DATA_ACK,
+                    _ => DATA_NACK,
+                },
+                // Whoever was addressed drives SDA; with nobody, the pull-ups
+                // make every bit a one.
                 Phase::Receive => {
-                    self.data = 0xFF;
+                    self.data = match self.selected {
+                        Some(address) => self.bus.read(address, time),
+                        None => 0xFF,
+                    };
                     if self.control & TWEA != 0 { DATA_IN_ACK } else { DATA_IN_NACK }
                 }
-                Phase::Idle => return,
+                Phase::Idle => return false,
             },
         };
         if action != Action::Stop {
             self.control |= TWINT;
         }
+        unanswered
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i2c::{LcdModule, Target};
 
     /// Write TWCR at `at`, then let the bus finish: the cycle it finished, and
     /// TWSR and TWCR then.
@@ -218,7 +251,7 @@ mod tests {
         twi.write_control(control, at);
         let done = twi.next_event();
         assert_ne!(done, u64::MAX, "nothing started");
-        twi.event();
+        twi.event(0.0);
         (done, twi.status() & 0xF8, twi.control())
     }
 
@@ -258,7 +291,7 @@ mod tests {
         assert_eq!(twi.control() & (TWINT | TWSTO), TWSTO);
         assert!(!twi.interrupt());
         assert_eq!(twi.next_event(), 7000 + 160);
-        twi.event();
+        twi.event(0.0);
         assert_eq!(twi.control() & (TWINT | TWSTO), 0);
         assert_eq!(twi.status(), NO_INFO);
         // And the next START is a first one again.
@@ -305,7 +338,7 @@ mod tests {
         twi.write_data(0x42);
         assert_ne!(twi.control() & TWWC, 0, "a START is under way");
         assert_eq!(twi.data, 0xFF);
-        twi.event();
+        twi.event(0.0);
         twi.write_data(0x42);
         assert_eq!((twi.data, twi.control() & TWWC), (0x42, 0));
     }
@@ -320,5 +353,50 @@ mod tests {
         // Back on, a START is a first one: the bus was let go.
         let (_, status, _) = step(&mut twi, TWINT | TWEN | TWSTA, 100);
         assert_eq!(status, START);
+    }
+
+    /// A backpack at 0x27 on the bus: its address and its data are
+    /// acknowledged, with the codes of the master transmitter and receiver
+    /// tables, and the byte written is what its port then reads back.
+    #[test]
+    fn a_device_at_the_address_acknowledges_and_takes_the_byte() {
+        let mut twi = Twi::new();
+        twi.bit_rate = 72;
+        twi.bus.targets.push(Target::Lcd(LcdModule::new("LCD1", 0x27)));
+        let go = TWINT | TWEN | TWEA;
+        step(&mut twi, go | TWSTA, 0);
+        twi.write_data(0x27 << 1);
+        let (_, status, _) = step(&mut twi, go, 1000);
+        assert_eq!(status, SLA_W_ACK);
+        twi.write_data(0b1010_0000);
+        let (_, status, _) = step(&mut twi, go, 3000);
+        assert_eq!(status, DATA_ACK);
+        // A repeated START and SLA+R: acknowledged, and the port reads what
+        // was written, P7–P4 being weak ones nothing pulls down but where
+        // written low.
+        step(&mut twi, go | TWSTA, 5000);
+        twi.write_data(0x27 << 1 | 1);
+        let (_, status, _) = step(&mut twi, go, 6000);
+        assert_eq!(status, SLA_R_ACK);
+        let (_, status, _) = step(&mut twi, TWINT | TWEN, 8000);
+        assert_eq!((status, twi.data), (DATA_IN_NACK, 0b1010_0000));
+    }
+
+    #[test]
+    fn another_address_on_a_bus_with_a_device_goes_unanswered() {
+        let mut twi = Twi::new();
+        twi.bit_rate = 72;
+        twi.bus.targets.push(Target::Lcd(LcdModule::new("LCD1", 0x27)));
+        let go = TWINT | TWEN;
+        step(&mut twi, go | TWSTA, 0);
+        twi.write_data(0x3F << 1);
+        twi.write_control(go, 1000);
+        assert!(twi.event(0.0), "nobody is at 0x3F");
+        assert_eq!(twi.status() & 0xF8, SLA_W_NACK);
+        // The data that follows is not acknowledged, and reaches nobody.
+        let (_, status, _) = step(&mut twi, go, 3000);
+        assert_eq!(status, DATA_NACK);
+        let lcd = twi.bus.targets[0].as_lcd().unwrap();
+        assert_eq!(lcd.version(), 0, "the module at 0x27 was never written");
     }
 }

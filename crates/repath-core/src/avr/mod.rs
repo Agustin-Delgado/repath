@@ -69,6 +69,7 @@ use std::sync::Arc;
 
 use crate::digital::{DigitalDevice, EvalCtx, Logic, NetId};
 use crate::element::NodeId;
+use crate::i2c::Bus;
 use adc::AnalogLevels;
 pub use machine::{FLASH_BYTES, Fault, Peripheral};
 use machine::{Machine, PinLevels, PinOutputs, Stop, Watch, flash_words};
@@ -213,7 +214,8 @@ pub struct SerialByte {
 }
 
 /// The first time the program used a peripheral that is not simulated, timed
-/// at the start of the instruction that did it.
+/// at the start of the instruction that did it — or the first time an I2C
+/// address went unanswered, timed at the acknowledge that never came.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Notice {
     pub time: f64,
@@ -263,6 +265,8 @@ pub struct Mcu {
     /// nothing, for a chip that measures nothing.
     analog: Vec<NodeId>,
     samples: Samples,
+    /// The devices on its I2C bus as they power up, for each new run.
+    i2c: Bus,
 }
 
 impl std::fmt::Debug for Mcu {
@@ -340,6 +344,7 @@ impl Mcu {
             fault: None,
             analog: Vec::new(),
             samples: Samples::default(),
+            i2c: Bus::default(),
         }
     }
 
@@ -356,8 +361,28 @@ impl Mcu {
         self
     }
 
+    /// The chip with `bus` on its SDA and SCL.
+    pub fn with_i2c(mut self, bus: Bus) -> Self {
+        self.committed.set_i2c(bus.clone());
+        self.i2c = bus;
+        self
+    }
+
     pub fn frequency(&self) -> f64 {
         self.frequency
+    }
+
+    /// The devices on its I2C bus, as of [`Self::committed_time`]: what the
+    /// chip has done up to there, which is never more than a speculation's
+    /// horizon (a millisecond) behind the domain's clock. A device's state is
+    /// nothing the domain sees, so it is not worth stopping a run for.
+    pub fn i2c(&self) -> &Bus {
+        self.committed.i2c()
+    }
+
+    /// The instant everything this chip reports is up to.
+    pub fn committed_time(&self) -> f64 {
+        self.time_of(self.committed.cycle)
     }
 
     /// Every byte sent so far, oldest first. A finished byte is one of the
@@ -388,6 +413,7 @@ impl Mcu {
     /// Back to power-on.
     fn restart(&mut self) {
         self.committed = Machine::new(self.flash.clone(), 0, self.frequency);
+        self.committed.set_i2c(self.i2c.clone());
         self.speculation = None;
         self.pending.clear();
         self.sampled = None;
@@ -612,10 +638,13 @@ impl DigitalDevice for Mcu {
             // Out of reset the chip starts from its reset vector, with no
             // start-up delay; see BACKLOG.md.
             self.in_reset = false;
-            // A reset is not a power cycle: the EEPROM keeps what it holds.
+            // A reset is not a power cycle: the EEPROM keeps what it holds,
+            // and the devices on the bus, powered apart, what they were told.
             let kept = self.committed.eeprom.cells;
+            let bus = self.committed.take_i2c();
             self.committed = Machine::new(self.flash.clone(), now, self.frequency);
             self.committed.eeprom.cells = kept;
+            self.committed.set_i2c(bus);
             self.committed.set_inputs(levels, now);
             self.sampled = Some(levels);
             self.publish(ctx, now);

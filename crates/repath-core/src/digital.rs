@@ -1194,6 +1194,11 @@ impl DigitalDomain {
         self.devices.iter().find(|d| d.name() == name).map(|d| d.as_ref())
     }
 
+    /// Every device, in the order they were added.
+    pub fn devices(&self) -> impl Iterator<Item = &dyn DigitalDevice> {
+        self.devices.iter().map(|d| d.as_ref())
+    }
+
     /// Time of the earliest pending event.
     pub fn next_event_time(&self) -> Option<f64> {
         self.queue.next_time()

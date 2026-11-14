@@ -19,7 +19,8 @@ use super::adc::{self, Adc, AnalogLevels};
 use super::eeprom::Eeprom;
 use super::receiver::{self, Format, Receiver};
 use super::timer::{ICF, OCFA, OCFB, TOV, Timer};
-use super::twi::{TWEN, Twi};
+use super::twi::Twi;
+use crate::i2c::Bus;
 
 pub const FLASH_WORDS: usize = 16 * 1024;
 pub const FLASH_BYTES: usize = FLASH_WORDS * 2;
@@ -189,8 +190,10 @@ pub enum Peripheral {
     AdcTrigger,
     /// SPE set in SPCR.
     Spi,
-    /// TWEN set in TWCR. The bus is simulated, as one with nothing on it, so
-    /// this is less "not simulated" than "nothing to talk to".
+    /// An address went unanswered on the I2C bus: nothing on it at the
+    /// address the program sent. Not a part left out — the bus is simulated —
+    /// but the commonest reason an I2C sketch shows nothing, and silent on a
+    /// real board. Timed at the acknowledge nobody gave.
     I2c,
     /// ACSR read, or its interrupt enabled, while the comparator is on.
     Comparator,
@@ -409,6 +412,8 @@ pub struct Machine {
     twi: Twi,
     pub(super) eeprom: Eeprom,
     adc: Adc,
+    /// The clock, for the devices on the I2C bus, which keep time in seconds.
+    frequency: f64,
     /// Cycles the CPU is halted for after the instruction under way, as an
     /// EEPROM access halts it.
     stall: u64,
@@ -464,8 +469,9 @@ pub fn flash_words(image: &[u8]) -> Arc<[u16]> {
 impl Machine {
     /// The chip at power-on, `cycle` cycles into the run, clocked at
     /// `frequency` — which only the EEPROM's programming time, set in
-    /// milliseconds, needs to know. Its EEPROM is erased: a reset that is
-    /// not a power-on keeps the old one's.
+    /// milliseconds, and the I2C devices, which keep time in seconds, need to
+    /// know. Its EEPROM is erased: a reset that is not a power-on keeps the
+    /// old one's.
     pub fn new(flash: Arc<[u16]>, cycle: u64, frequency: f64) -> Self {
         let mut data = [0u8; DATA_SIZE];
         // Power-on reset is the reason for the last reset.
@@ -495,6 +501,7 @@ impl Machine {
             twi: Twi::new(),
             eeprom: Eeprom::new(frequency),
             adc: Adc::default(),
+            frequency,
             stall: 0,
             eicra: 0,
             eimsk: 0,
@@ -519,6 +526,22 @@ impl Machine {
 
     pub fn progress(&self) -> u64 {
         self.progress
+    }
+
+    /// The devices on the I2C bus, as this machine has left them.
+    pub fn i2c(&self) -> &Bus {
+        &self.twi.bus
+    }
+
+    /// Put devices on the bus. A reset that is not a power cycle hands the
+    /// old machine's to the new one, since they are powered apart from the
+    /// chip.
+    pub fn set_i2c(&mut self, bus: Bus) {
+        self.twi.bus = bus;
+    }
+
+    pub fn take_i2c(&mut self) -> Bus {
+        std::mem::take(&mut self.twi.bus)
     }
 
     pub(super) fn fetch(&self, pc: u16) -> u16 {
@@ -943,13 +966,8 @@ impl Machine {
             TWBR => self.twi.bit_rate = v,
             TWSR => self.twi.set_status(v),
             TWDR => self.twi.write_data(v),
-            TWCR => {
-                if v & TWEN != 0 {
-                    self.note(Peripheral::I2c);
-                }
-                // Extended I/O again: the bus starts as the store ends.
-                self.twi.write_control(v, self.cycle + 2);
-            }
+            // Extended I/O again: the bus starts as the store ends.
+            TWCR => self.twi.write_control(v, self.cycle + 2),
             _ => self.data[usize::from(a)] = v,
         }
         if self.pin_irqs_armed() {
@@ -963,10 +981,14 @@ impl Machine {
 
     /// Record the first use of a peripheral that is not simulated.
     fn note(&mut self, peripheral: Peripheral) {
+        self.note_at(self.cycle, peripheral);
+    }
+
+    fn note_at(&mut self, cycle: u64, peripheral: Peripheral) {
         let bit = 1 << peripheral as u8;
         if self.noticed & bit == 0 {
             self.noticed |= bit;
-            self.notices.push((self.cycle, peripheral));
+            self.notices.push((cycle, peripheral));
         }
     }
 
@@ -1005,8 +1027,8 @@ impl Machine {
         if self.usart.next_event() <= at {
             self.usart.event(at, &mut self.serial);
         }
-        if self.twi.next_event() <= at {
-            self.twi.event();
+        if self.twi.next_event() <= at && self.twi.event(at as f64 / self.frequency) {
+            self.note_at(at, Peripheral::I2c);
         }
         if self.eeprom.next_event() <= at {
             self.eeprom.event();
@@ -1154,12 +1176,17 @@ impl Machine {
                     return Stop::Sample(at);
                 }
                 let sent = self.serial.len();
+                let noticed = self.notices.len();
                 self.process_events(at);
                 let now = self.outputs();
                 // A byte is worth stopping for too: it is the one thing a
                 // serial monitor shows, and otherwise it would be seen only
-                // when the run next stopped for something else.
-                if now.differs(&seen, watch) || self.serial.len() > sent {
+                // when the run next stopped for something else. So is a
+                // notice, for the same reason.
+                if now.differs(&seen, watch)
+                    || self.serial.len() > sent
+                    || self.notices.len() > noticed
+                {
                     return Stop::Changed(at);
                 }
                 seen = now;
@@ -1494,7 +1521,8 @@ pub(super) mod tests {
         assert_eq!(m.read(u16::from(TWCR)) & 0x90, 0, "TWSTO cleared, and TWINT never set");
         assert_eq!(m.read(u16::from(TWSR)) & 0xF8, 0xF8);
         assert_eq!(&m.data[0x100..0x103], &[0x08, 0x20, 0x00], "a START, an SLA+W NACK, no more");
-        assert_eq!(m.notices, vec![(8, Peripheral::I2c)]);
+        // Noticed at the acknowledge nobody gave, not at switching it on.
+        assert_eq!(m.notices, vec![(1629, Peripheral::I2c)]);
     }
 
     /// avr-libc's way: read a byte, write one and poll EEPE until the write
@@ -1585,6 +1613,8 @@ pub(super) mod tests {
         at(&mut m, 60, WDTCSR, 0x18);
         at(&mut m, 61, WDTCSR, 0x0E);
         at(&mut m, 70, SPCR, 0x50);
+        // The TWI switched on is not a notice: the bus is simulated, and only
+        // an address nobody answers is.
         at(&mut m, 80, TWCR, 0x45);
         // On again, the comparator's output is read.
         at(&mut m, 90, ACSR, 0x00);
@@ -1600,7 +1630,6 @@ pub(super) mod tests {
                 (20, Peripheral::Thermometer),
                 (61, Peripheral::Watchdog),
                 (70, Peripheral::Spi),
-                (80, Peripheral::I2c),
                 (91, Peripheral::Comparator),
                 (101, Peripheral::AdcTrigger),
             ]
