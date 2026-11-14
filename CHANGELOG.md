@@ -33,7 +33,7 @@ RESET to ground restarts the sketch, against the board's own 10 kΩ pull-up.
 **A new example, Arduino Uno blink,** runs the Microcontroller blink program on
 the board: L blinks once a second, an LED on pin 12 lights while a button is
 held, and a second button resets it.
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#72](https://github.com/Agustin-Delgado/repath/pull/72)
 
 ---
 
