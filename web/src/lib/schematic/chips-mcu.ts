@@ -118,6 +118,6 @@ export const MCU_CHIPS: readonly ChipDef[] = [
 		optional: [...PORTS, 'RESET', 'AREF'],
 		boardNames: ARDUINO_NAMES,
 		caveat:
-			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers, serial output, the EEPROM, erased at the start of every run, and analogRead(), which measures A0 to A5 against AVCC, AREF or the internal 1.1 V when its conversion samples. Serial.read() never receives, I²C finds nothing on the bus, and there is no watchdog or SPI: a sketch that uses one of these is told so while it runs. AVCC is the converter's supply and reference, so analogRead() needs it wired, as on the real chip; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
+			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers, serial in and out — type to it in the inspector — the EEPROM, erased at the start of every run, and analogRead(), which measures A0 to A5 against AVCC, AREF or the internal 1.1 V when its conversion samples. I²C finds nothing on the bus, and there is no watchdog or SPI: a sketch that uses one of these is told so while it runs. AVCC is the converter's supply and reference, so analogRead() needs it wired, as on the real chip; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
 	}
 ];

@@ -1165,6 +1165,30 @@ impl DigitalDomain {
         true
     }
 
+    /// Let a device of type `T`, found by name, drive its outputs from `at`
+    /// on, as somebody acting on it from outside the circuit would — a
+    /// terminal sending bytes. `None` when there is no such device.
+    ///
+    /// Never behind what the domain has already run, for the reason given at
+    /// [`Self::operate`].
+    pub fn act_on<T: DigitalDevice, R>(
+        &mut self,
+        name: &str,
+        at: f64,
+        act: impl FnOnce(&mut T, &mut EvalCtx) -> R,
+    ) -> Option<R> {
+        let index = self.devices.iter().position(|d| d.name() == name)?;
+        // Through the box: the box is `Any` too, and would be what came back.
+        let device = self.devices[index].as_mut().as_any_mut().downcast_mut::<T>()?;
+        let mut ctx = EvalCtx {
+            now: at.max(self.now),
+            resolved: &self.resolved,
+            queue: &mut self.queue,
+            driver_base: self.driver_base[index],
+        };
+        Some(act(device, &mut ctx))
+    }
+
     /// A device by name.
     pub fn device(&self, name: &str) -> Option<&dyn DigitalDevice> {
         self.devices.iter().find(|d| d.name() == name).map(|d| d.as_ref())

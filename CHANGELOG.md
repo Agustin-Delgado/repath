@@ -11,6 +11,22 @@ early entries point at those instead.
 
 ---
 
+## 13 November 2026 — Type to your sketch
+
+**The chip hears serial now.** `Serial.read()` gets what arrives on RX (D0),
+read off the pin the way the real chip reads it, so a second chip's TX wired
+to it is received too, and a sender at the wrong baud rate arrives as the
+garbage it would on the bench.
+
+**The inspector's Serial section has an input box.** While a run goes, type a
+line and press Send: it reaches D0 the way an Uno's USB converter sends it,
+with the line ending and the baud rate you pick, as in the Arduino IDE's serial
+monitor. If the sketch listens at another rate, or has not turned its receiver
+on, the inspector says so.
+[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+
+---
+
 ## 13 November 2026 — The whole Arduino Uno
 
 **An Arduino Uno is on the Microcontrollers shelf,** drawn as the board seen

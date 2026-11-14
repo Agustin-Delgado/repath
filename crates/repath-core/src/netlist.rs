@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
-use crate::avr::{self, AnalogPins, Mcu, Pin, PinNets};
+use crate::avr::{self, AnalogPins, Mcu, Pin, PinNets, UsbSerial};
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
 use crate::digital::{
@@ -460,6 +460,9 @@ pub enum Device {
         #[serde(default)]
         agnd: Option<String>,
     },
+    /// The serial monitor's end of a serial line: bytes typed into it go out
+    /// on `output` as UART frames. See `avr::UsbSerial`.
+    UsbSerial { name: String, output: String },
 }
 
 impl Device {
@@ -471,7 +474,8 @@ impl Device {
             | Device::TriState { name, .. }
             | Device::Memory { name, .. }
             | Device::LogicSource { name, .. }
-            | Device::Mcu { name, .. } => name,
+            | Device::Mcu { name, .. }
+            | Device::UsbSerial { name, .. } => name,
         }
     }
 }
@@ -912,6 +916,10 @@ impl Netlist {
                 let wake = c.net(wake);
                 let mcu = Mcu::new(name, &image, *frequency, &connected, reset, wake);
                 c.add_device(Box::new(mcu.with_analog(analog)));
+            }
+            Device::UsbSerial { name, output } => {
+                let out = c.net(output);
+                c.add_device(Box::new(UsbSerial::new(name, out)));
             }
         }
         Ok(())

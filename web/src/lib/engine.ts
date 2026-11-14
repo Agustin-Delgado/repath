@@ -208,6 +208,8 @@ export interface McuState {
 	notices: McuNotice[];
 	/** Why its CPU stopped, and when: an instruction it does not know. */
 	fault: { message: string; time: number } | null;
+	/** The baud rate its receiver is set to, or null while the receiver is off. */
+	listening: number | null;
 }
 
 /** One piece of a live run: the timepoints solved since the last call. */
@@ -309,14 +311,26 @@ export class LiveRun {
 			notices: McuNotice[];
 			fault: string | null;
 			fault_time: number | null;
+			listening?: number | null;
 		} | null;
 		if (!state) return null;
 		return {
 			serial: state.serial,
 			notices: state.notices,
 			fault:
-				state.fault === null ? null : { message: state.fault, time: state.fault_time ?? 0 }
+				state.fault === null ? null : { message: state.fault, time: state.fault_time ?? 0 },
+			listening: state.listening ?? null
 		};
+	}
+
+	/**
+	 * Type bytes into a serial monitor: the USB-serial converter by that name
+	 * sends them as UART frames at `baud`, from `at` on. False when there is no
+	 * such converter.
+	 */
+	sendSerial(name: string, bytes: Uint8Array, baud: number, at: number): boolean {
+		if (this.freed) return false;
+		return this.simulation.sendSerial(name, bytes, Math.max(1, Math.round(baud)), at);
 	}
 
 	/**

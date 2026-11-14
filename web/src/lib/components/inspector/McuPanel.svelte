@@ -1,12 +1,30 @@
+<script lang="ts" module>
+	import type { LineEnding } from '$lib/schematic/serial';
+
+	/**
+	 * What each chip's monitor was last set to, by name: the panel is rebuilt
+	 * whenever the selection changes, and a monitor that forgot its baud rate
+	 * every time would be set again on every look at it.
+	 */
+	const monitors = new Map<string, { baud: number; ending: LineEnding }>();
+</script>
+
 <script lang="ts">
-	import { FileUp, X } from '@lucide/svelte';
-	import { Button } from '$lib/ui';
+	import { FileUp, SendHorizontal, X } from '@lucide/svelte';
+	import { Button, Select } from '$lib/ui';
 	import { FLASH_BYTES, unsimulatedMessage } from '$lib/schematic/chips-mcu';
 	import { readFirmware } from '$lib/schematic/firmware';
 	import type { Instance } from '$lib/schematic/model';
+	import {
+		BAUD_RATES,
+		DEFAULT_BAUD,
+		DEFAULT_LINE_ENDING,
+		LINE_ENDINGS,
+		baudMismatch
+	} from '$lib/schematic/serial';
 	import { app } from '$lib/state.svelte';
 	import { formatWithUnit } from '$lib/units';
-	import { hint, problem, sectionTitle } from './styles';
+	import { fieldBox, fieldInput, hint, problem, sectionTitle } from './styles';
 
 	/**
 	 * A microcontroller's program, and what it has said while running.
@@ -48,6 +66,38 @@
 
 	/** On the same timer as the memory contents, for the same reason. */
 	let settling: ReturnType<typeof setTimeout> | undefined;
+
+	// The monitor's input: what to send, and how, as the Arduino IDE has it.
+	let typed = $state('');
+	let baud = $state(DEFAULT_BAUD);
+	let ending = $state<LineEnding>(DEFAULT_LINE_ENDING);
+	/** Whose settings are showing: the panel can be handed another chip without being rebuilt. */
+	let shown: string | null = null;
+	$effect.pre(() => {
+		if (instance.name === shown) return;
+		shown = instance.name;
+		const remembered = monitors.get(instance.name);
+		baud = remembered?.baud ?? DEFAULT_BAUD;
+		ending = remembered?.ending ?? DEFAULT_LINE_ENDING;
+	});
+	function choose(next: { baud?: number; ending?: LineEnding }) {
+		baud = next.baud ?? baud;
+		ending = next.ending ?? ending;
+		monitors.set(instance.name, { baud, ending });
+	}
+	/** A run to send into: going or paused, as long as it is still there. */
+	const live = $derived(app.acquiring !== null && app.analysis === 'transient');
+	const listening = $derived(log?.listening ?? null);
+	const garbled = $derived(listening !== null && baudMismatch(baud, listening));
+	const baudItems = BAUD_RATES.map((rate) => ({
+		value: String(rate),
+		label: `${rate.toLocaleString('en')} baud`
+	}));
+	const endingItems = LINE_ENDINGS.map((e) => ({ value: e.id, label: e.label }));
+
+	function send() {
+		if (app.sendSerial(instance.name, typed, ending, baud)) typed = '';
+	}
 </script>
 
 <section class="flex flex-col gap-1.5">
@@ -153,5 +203,55 @@
 					class="text-muted">Nothing sent yet.</span
 				>{/if}</pre>
 		<p class={hint}>What it sends on TX (D1), at whatever baud rate the program set.</p>
+		<form
+			class="flex gap-1.5"
+			onsubmit={(e) => {
+				e.preventDefault();
+				send();
+			}}
+		>
+			<label class={fieldBox}>
+				<input
+					class={fieldInput}
+					bind:value={typed}
+					disabled={!live}
+					placeholder={live ? 'Message to send' : 'Run the circuit to type to it'}
+					aria-label="Serial input"
+					spellcheck="false"
+					autocomplete="off"
+				/>
+			</label>
+			<Button size="sm" type="submit" disabled={!live || (typed === '' && ending === 'none')} title="Send">
+				<SendHorizontal /> Send
+			</Button>
+		</form>
+		<div class="flex flex-wrap gap-1.5">
+			<Select
+				size="sm"
+				items={endingItems}
+				value={ending}
+				onChange={(value) => choose({ ending: value as LineEnding })}
+				aria-label="Line ending"
+			/>
+			<Select
+				size="sm"
+				items={baudItems}
+				value={String(baud)}
+				onChange={(value) => choose({ baud: Number(value) })}
+				aria-label="Baud rate"
+			/>
+		</div>
+		{#if garbled && listening !== null}
+			<p class={problem} role="alert">
+				The program listens at {Math.round(listening).toLocaleString('en')} baud: sent at
+				{baud.toLocaleString('en')} it arrives as garbage, as it would on a real Uno.
+			</p>
+		{:else if log && listening === null}
+			<p class={hint}>Its receiver is off, so it takes in nothing it is sent. Serial.begin() turns it on.</p>
+		{/if}
+		<p class={hint}>
+			Typed text reaches RX (D0) the way an Uno's USB converter sends it, at the baud rate chosen
+			here.
+		</p>
 	</section>
 {/if}

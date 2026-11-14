@@ -256,9 +256,17 @@ impl Simulation {
         self.circuit.operate_logic(name, level, at)
     }
 
+    /// Type `bytes` into a serial monitor: the USB-serial converter by that
+    /// name sends them as 8N1 frames at `baud`, from `at` onwards. Returns
+    /// whether there is such a converter.
+    #[wasm_bindgen(js_name = sendSerial)]
+    pub fn send_serial(&mut self, name: &str, bytes: &[u8], baud: u32, at: f64) -> bool {
+        self.circuit.send_serial(name, bytes, baud, at).is_some()
+    }
+
     /// What a microcontroller has to report: `{ serial, notices, fault,
-    /// fault_time }` as JSON, or `null` if there is no microcontroller by that
-    /// name.
+    /// fault_time, listening }` as JSON, or `null` if there is no
+    /// microcontroller by that name.
     ///
     /// `serial` is every byte it has sent from the `serial_from`-th on, as
     /// `{ time, byte }`, so a caller polling a live run asks only for what it
@@ -266,6 +274,8 @@ impl Simulation {
     /// is not simulated, as `{ peripheral, time }`, all of them every time:
     /// there are at most a handful. `fault` is why the CPU stopped, if it
     /// has, and `fault_time` when, in seconds from the start of the run.
+    /// `listening` is the baud rate its receiver is set to, or `null` while
+    /// the receiver is off.
     #[wasm_bindgen(js_name = mcuState)]
     pub fn mcu_state(&self, name: &str, serial_from: usize) -> Result<String, JsError> {
         #[derive(Serialize)]
@@ -284,6 +294,7 @@ impl Simulation {
             notices: Vec<Notice>,
             fault: Option<String>,
             fault_time: Option<f64>,
+            listening: Option<f64>,
         }
         let mcu = self
             .circuit
@@ -304,6 +315,7 @@ impl Simulation {
                 .collect(),
             fault: mcu.fault().map(|f| f.to_string()),
             fault_time: mcu.fault().map(|f| f.cycle as f64 / mcu.frequency()),
+            listening: mcu.listening(),
         });
         serde_json::to_string(&state).map_err(to_js_error)
     }

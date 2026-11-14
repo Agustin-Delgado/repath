@@ -78,6 +78,7 @@ import {
 } from './schematic/model';
 import { elbow, routeWire } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
+import { serialBytes, usbSerialName, type LineEnding } from './schematic/serial';
 import {
 	buildConnectivity,
 	mergeWireChains,
@@ -328,6 +329,8 @@ export interface McuLog {
 	/** The parts of the chip it used that are not simulated, oldest first. */
 	notices: McuNotice[];
 	fault: { message: string; time: number } | null;
+	/** The baud rate its receiver is set to, or null while it is not listening. */
+	listening: number | null;
 }
 
 /**
@@ -3814,19 +3817,39 @@ class AppState {
 	}
 
 	/**
+	 * Type into a microcontroller's serial monitor: `text` and the line ending
+	 * go out of its USB-serial converter at `baud`, from the instant the run
+	 * has reached. False when there is no transient run to send them into.
+	 */
+	sendSerial(mcu: string, text: string, ending: LineEnding, baud: number): boolean {
+		const acquiring = this.acquiring;
+		if (!acquiring || this.analysis !== 'transient') return false;
+		const bytes = serialBytes(text, ending);
+		if (bytes.length === 0) return false;
+		return acquiring.sendSerial(usbSerialName(mcu), bytes, baud);
+	}
+
+	/**
 	 * Top up each microcontroller's log with what it has sent since the last
 	 * frame. Only a log that changed is replaced, so a chip with nothing to say
 	 * costs the screen nothing.
 	 */
 	private readMcus(acquiring: Acquisition): void {
 		for (const name of this.mcuNames) {
-			const log = this.mcuLogs[name] ?? { text: '', bytes: 0, notices: [], fault: null };
+			const log = this.mcuLogs[name] ?? {
+				text: '',
+				bytes: 0,
+				notices: [],
+				fault: null,
+				listening: null
+			};
 			const state = acquiring.mcuState(name, log.bytes);
 			if (
 				!state ||
 				(state.serial.length === 0 &&
 					state.notices.length === log.notices.length &&
-					(state.fault === null) === (log.fault === null))
+					(state.fault === null) === (log.fault === null) &&
+					state.listening === log.listening)
 			) {
 				continue;
 			}
@@ -3834,7 +3857,8 @@ class AppState {
 				text: appendSerial(log.text, state.serial.map((b) => b.byte)),
 				bytes: log.bytes + state.serial.length,
 				notices: state.notices,
-				fault: state.fault
+				fault: state.fault,
+				listening: state.listening
 			};
 		}
 	}

@@ -22,6 +22,7 @@ import {
 	type ChipVolts
 } from './chips';
 import { DEFAULT_CLOCK, PORT_PULL_UP_OHMS } from './chips-mcu';
+import { USB_SERIAL_OHMS, usbSerialName } from './serial';
 import { unfoldBlocks } from './blocks';
 import { parseContents } from './memory';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
@@ -890,6 +891,7 @@ function compileFresh(
 			}
 			pins[port] = pin;
 		}
+		emitUsbSerial(instance, deviceName, pins, net);
 		const reset = block.reset;
 		// On a board the converter's supply and reference come out on header
 		// pins of other names: AVCC is the 5V rail.
@@ -911,6 +913,49 @@ function compileFresh(
 			avcc: converter ? converterNode(converter.avcc) : null,
 			agnd: converter ? converterNode(converter.agnd) : null
 		});
+	}
+
+	/**
+	 * The serial monitor's USB-serial converter on a microcontroller's D0, as
+	 * on an Uno (see `serial.ts`). It lets go of the line until something is
+	 * typed, so a chip nobody types to has its D0 to itself.
+	 *
+	 * Where D0's net reaches the analog side the converter drives it through
+	 * the board's 1 kΩ, so anything else driving D0 — another chip's TX, a
+	 * button — wins against it as on the bench, and once it has sent something
+	 * an LED there lights from its idle high. On a net that is only logic there is no resistor to put in: the
+	 * converter drives the net directly, and where it and another driver
+	 * disagree the net is unknown, which the chip reads as low.
+	 */
+	function emitUsbSerial(
+		instance: Instance,
+		deviceName: string,
+		pins: Record<string, { input: string; output: string; pullup?: string }>,
+		net: (pin: string) => string
+	) {
+		const name = usbSerialName(deviceName);
+		const rx = pins.PD0;
+		const index = connectivity.netOfPin.get(pinKey(instance.id, 'PD0'));
+		const node = rx && index !== undefined ? names.get(index)?.analog : undefined;
+		let line: string;
+		if (!rx) {
+			line = net('usb_rx');
+			pins.PD0 = { input: line, output: line };
+		} else if (node) {
+			line = net('usb_tx');
+			const drive = `${instance.id}_an_usb_tx`;
+			chipBridges.push({ direction: 'to_analog', name: `${name}_drive`, net: line, node: drive });
+			components.push({
+				type: 'resistor',
+				name: `${name}_resistor`,
+				a: drive,
+				b: node,
+				resistance: USB_SERIAL_OHMS
+			});
+		} else {
+			line = rx.output;
+		}
+		devices.push({ type: 'usb_serial', name, output: line });
 	}
 
 	for (const instance of schematic.instances) {
