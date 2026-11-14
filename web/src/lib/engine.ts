@@ -7,6 +7,7 @@
  */
 
 import init, { Simulation, runFrequencySweep as sweep, version } from './wasm/repath.js';
+import type { LcdFrame } from './schematic/lcd';
 
 export type LogicState = 'low' | 'high' | 'unknown' | 'highz';
 
@@ -331,6 +332,35 @@ export class LiveRun {
 	sendSerial(name: string, bytes: Uint8Array, baud: number, at: number): boolean {
 		if (this.freed) return false;
 		return this.simulation.sendSerial(name, bytes, Math.max(1, Math.round(baud)), at);
+	}
+
+	/**
+	 * What an I2C LCD module shows, or null when there is none by that name.
+	 * One on no bus never changes, and is reported as of the start of the run.
+	 */
+	lcdState(name: string): LcdFrame | null {
+		if (this.freed) return null;
+		const state = JSON.parse(this.simulation.lcdState(name)) as {
+			time: number | null;
+			version: number;
+			backlight: boolean;
+			cells: number[][];
+			cursor: number | null;
+			blink: number | null;
+			overdriven: boolean;
+			blink_interval: number;
+		} | null;
+		if (!state) return null;
+		return {
+			time: state.time ?? 0,
+			version: state.version,
+			backlight: state.backlight,
+			cells: state.cells,
+			cursor: state.cursor,
+			blink: state.blink,
+			overdriven: state.overdriven,
+			blinkInterval: state.blink_interval
+		};
 	}
 
 	/**

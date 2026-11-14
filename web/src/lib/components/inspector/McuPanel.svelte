@@ -12,7 +12,7 @@
 <script lang="ts">
 	import { FileUp, SendHorizontal, X } from '@lucide/svelte';
 	import { Button, Select } from '$lib/ui';
-	import { FLASH_BYTES, unsimulatedMessage } from '$lib/schematic/chips-mcu';
+	import { FLASH_BYTES, isUnsimulated, unsimulatedMessage } from '$lib/schematic/chips-mcu';
 	import { readFirmware } from '$lib/schematic/firmware';
 	import type { Instance } from '$lib/schematic/model';
 	import {
@@ -42,6 +42,9 @@
 	const log = $derived(app.mcuLogs[instance.name]);
 	/** A run is going or has been, so there is a log to show, empty or not. */
 	const ran = $derived(app.capture !== null);
+	const unsimulated = $derived((log?.notices ?? []).filter((n) => isUnsimulated(n.peripheral)));
+	/** What the program did that a real board would let pass in silence. */
+	const circuit = $derived((log?.notices ?? []).filter((n) => !isUnsimulated(n.peripheral)));
 
 	let picker: HTMLInputElement | undefined = $state();
 	let pasting = $state(false);
@@ -171,11 +174,25 @@
 	</p>
 </section>
 
-{#if ran && loaded && log && log.notices.length > 0}
+{#if ran && loaded && circuit.length > 0}
+	<section class="flex flex-col gap-1.5">
+		<h3 class={sectionTitle}>On the bus</h3>
+		<ul class="m-0 flex list-none flex-col gap-1 p-0">
+			{#each circuit as notice (notice.peripheral)}
+				<li class={hint}>
+					<span class="text-fg">{unsimulatedMessage(notice.peripheral)}</span>
+					First at {formatWithUnit(notice.time, 's', 4)}.
+				</li>
+			{/each}
+		</ul>
+	</section>
+{/if}
+
+{#if ran && loaded && unsimulated.length > 0}
 	<section class="flex flex-col gap-1.5">
 		<h3 class={sectionTitle}>Not simulated</h3>
 		<ul class="m-0 flex list-none flex-col gap-1 p-0">
-			{#each log.notices as notice (notice.peripheral)}
+			{#each unsimulated as notice (notice.peripheral)}
 				<li class={hint}>
 					<span class="text-fg">{unsimulatedMessage(notice.peripheral)}</span>
 					First used at {formatWithUnit(notice.time, 's', 4)}.

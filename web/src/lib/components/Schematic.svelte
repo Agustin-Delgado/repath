@@ -669,6 +669,7 @@
 					time: app.playbackTime,
 					stopTime: app.stopTime,
 					burnouts: burnoutMap,
+					displays: app.lcdHistory,
 					// Two ways of being at no particular potential, drawn the same way:
 					// an analog node nothing holds, and a digital net nothing drives.
 					floating: floatingFor(closed, frame.netUndriven),

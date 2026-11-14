@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Cpu, Flame, Info, TriangleAlert } from '@lucide/svelte';
-	import { unsimulatedMessage } from '$lib/schematic/chips-mcu';
+	import { isUnsimulated, unsimulatedMessage } from '$lib/schematic/chips-mcu';
 	import { app } from '$lib/state.svelte';
 	import { formatWithUnit } from '$lib/units';
 
@@ -25,11 +25,18 @@
 	 * the program runs on — but what it reads from them is not what a real chip
 	 * would read, and that is easy to take for a result.
 	 */
-	const unsimulated = $derived(
+	const notices = $derived(
 		Object.entries(app.mcuLogs).flatMap(([name, log]) =>
 			log.notices.map((notice) => ({ name, peripheral: notice.peripheral }))
 		)
 	);
+	const unsimulated = $derived(notices.filter((notice) => isUnsimulated(notice.peripheral)));
+	/**
+	 * What a program met on its bus that a real board would let pass in
+	 * silence: an I²C address nobody answered, the usual reason a display
+	 * stays blank.
+	 */
+	const unanswered = $derived(notices.filter((notice) => !isUnsimulated(notice.peripheral)));
 </script>
 
 {#if stopped.length > 0}
@@ -92,6 +99,21 @@
 			{#if warnings.length > SHOWN}
 				<li class="text-muted">…and {warnings.length - SHOWN} more</li>
 			{/if}
+		</ul>
+	</section>
+{/if}
+
+{#if unanswered.length > 0}
+	<section class="flex flex-col gap-1.5 rounded-md border border-selection/25 bg-selection/5 p-2">
+		<h3 class="m-0 flex items-center gap-1.5 text-[0.7rem] font-semibold text-selection">
+			<TriangleAlert class="size-3.5" /> Nobody answered
+		</h3>
+		<ul class="m-0 flex list-none flex-col gap-1 p-0 text-[0.7rem] leading-snug text-strong">
+			{#each unanswered as notice (`${notice.name}:${notice.peripheral}`)}
+				<li>
+					<strong class="text-fg">{notice.name}</strong>: {unsimulatedMessage(notice.peripheral)}
+				</li>
+			{/each}
 		</ul>
 	</section>
 {/if}

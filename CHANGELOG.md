@@ -11,6 +11,31 @@ early entries point at those instead.
 
 ---
 
+## 13 November 2026 — A 16×2 LCD for the microcontroller to talk to
+
+**The I²C character display is in the palette,** under Semiconductors with the
+other displays. It is the blue 16×2 module with the little board on its back,
+four pins: GND, VCC, SDA and SCL. Searching for lcd, 1602, i2c lcd, pcf8574 or
+hd44780 finds it. Its address is in the inspector, 0x27 unless you choose
+otherwise, with 0x3F for the boards that come with the other chip.
+
+**Wire SDA to the ATmega328P's A4 and SCL to A5, or to the SDA and SCL pins of
+an Uno, and a LiquidCrystal_I2C sketch writes on it.** The dots light as the
+sketch prints, custom characters from `createChar()` included, and the cursor,
+the blinking block, scrolling and the backlight all do what the sketch tells
+them. It takes the real controller's time over each command, so a sketch that
+skips the waits shows what it would on a bench. Scrubbing the timeline back
+shows what the glass said then.
+
+**When it stays blank, the editor says why.** A module with SDA and SCL swapped,
+on other pins, or with no supply is pointed out before you press Run, and a
+sketch addressing 0x3F when the module is set to 0x27 is told, during the run,
+that nothing answered. With nothing on the bus at all, the I²C notice now
+reads that way too, rather than saying I²C is not simulated.
+[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+
+---
+
 ## 13 November 2026 — Type to your sketch
 
 **The chip hears serial now.** `Serial.read()` gets what arrives on RX (D0),

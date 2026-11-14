@@ -22,6 +22,7 @@ use crate::elements::{
     MosfetModel, OpAmp, OpAmpModel, Resistor, Supply, Switch, SwitchModel, Transformer, Vccs, Vcvs,
     VoltageSource, Waveform,
 };
+use crate::i2c::{self, LcdModule, Target};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetlistError {
@@ -463,6 +464,30 @@ pub enum Device {
     /// The serial monitor's end of a serial line: bytes typed into it go out
     /// on `output` as UART frames. See `avr::UsbSerial`.
     UsbSerial { name: String, output: String },
+    /// A 16×2 character LCD on an I2C backpack. See `i2c::LcdModule`.
+    ///
+    /// It is on a microcontroller's bus when its SDA net is that chip's PC4
+    /// and its SCL net its PC5, as the input or the output side of the pin;
+    /// anywhere else nobody talks to it, and it stays as it powered up.
+    I2cLcd {
+        name: String,
+        /// The 7-bit address: 0x27 for a PCF8574 backpack as shipped, 0x3F
+        /// for a PCF8574A one.
+        address: u8,
+        #[serde(default)]
+        sda: Option<String>,
+        #[serde(default)]
+        scl: Option<String>,
+    },
+}
+
+/// Whether `net` is one of the nets a microcontroller's `pin` reaches.
+fn reaches(pins: &BTreeMap<String, McuPinSpec>, pin: &str, net: Option<&String>) -> bool {
+    let Some(net) = net else { return false };
+    pins.iter().any(|(name, spec)| {
+        Pin::parse(name) == Pin::parse(pin)
+            && (spec.input.as_ref() == Some(net) || spec.output.as_ref() == Some(net))
+    })
 }
 
 impl Device {
@@ -475,7 +500,8 @@ impl Device {
             | Device::Memory { name, .. }
             | Device::LogicSource { name, .. }
             | Device::Mcu { name, .. }
-            | Device::UsbSerial { name, .. } => name,
+            | Device::UsbSerial { name, .. }
+            | Device::I2cLcd { name, .. } => name,
         }
     }
 }
@@ -588,6 +614,37 @@ impl Netlist {
 
         circuit.build();
         Ok(circuit)
+    }
+
+    /// The microcontroller whose TWI an I2C device with these SDA and SCL nets
+    /// is on: the first whose PC4 reaches `sda` and PC5 `scl`. A bus with two
+    /// masters is not simulated, so a second is not one of its masters.
+    fn i2c_master(&self, sda: Option<&String>, scl: Option<&String>) -> Option<&str> {
+        self.devices.iter().find_map(|device| match device {
+            Device::Mcu { name, pins, .. }
+                if reaches(pins, "PC4", sda) && reaches(pins, "PC5", scl) =>
+            {
+                Some(name.as_str())
+            }
+            _ => None,
+        })
+    }
+
+    /// The I2C devices on the bus of the microcontroller called `master`.
+    fn i2c_bus(&self, master: &str) -> i2c::Bus {
+        let targets = self
+            .devices
+            .iter()
+            .filter_map(|device| match device {
+                Device::I2cLcd { name, address, sda, scl }
+                    if self.i2c_master(sda.as_ref(), scl.as_ref()) == Some(master) =>
+                {
+                    Some(Target::Lcd(LcdModule::new(name, *address)))
+                }
+                _ => None,
+            })
+            .collect();
+        i2c::Bus { targets }
     }
 
     fn node(&self, circuit: &mut Circuit, name: &str) -> NodeId {
@@ -914,12 +971,28 @@ impl Netlist {
                 }
                 let reset = reset.as_ref().map(|n| c.net(n));
                 let wake = c.net(wake);
-                let mcu = Mcu::new(name, &image, *frequency, &connected, reset, wake);
-                c.add_device(Box::new(mcu.with_analog(analog)));
+                let mcu = Mcu::new(name, &image, *frequency, &connected, reset, wake)
+                    .with_analog(analog)
+                    .with_i2c(self.i2c_bus(name));
+                c.add_device(Box::new(mcu));
             }
             Device::UsbSerial { name, output } => {
                 let out = c.net(output);
                 c.add_device(Box::new(UsbSerial::new(name, out)));
+            }
+            Device::I2cLcd { name, address, sda, scl } => {
+                if *address > 0x7F {
+                    return Err(NetlistError::BadValue {
+                        component: name.clone(),
+                        reason: format!("an I2C address is seven bits, not {address:#x}"),
+                    });
+                }
+                // On a bus, it is built into its master; otherwise it is kept
+                // where it can be looked at, as nothing ever spoke to it.
+                if self.i2c_master(sda.as_ref(), scl.as_ref()).is_none() {
+                    let target = Target::Lcd(LcdModule::new(name, *address));
+                    c.add_device(Box::new(i2c::Unattached { target }));
+                }
             }
         }
         Ok(())
@@ -1364,6 +1437,38 @@ mod tests {
             assert!((t * 16e6 - f64::from(cycle)).abs() < 1e-6, "{t} for cycle {cycle}");
             assert_eq!(*level, want);
         }
+    }
+
+    /// Which LCD modules end up on U1's bus: only one whose SDA is on PC4's
+    /// net and whose SCL is on PC5's. Swapped, half-wired or wired elsewhere,
+    /// it is built on its own, on no bus.
+    #[test]
+    fn an_i2c_device_is_on_the_bus_only_with_sda_on_pc4_and_scl_on_pc5() {
+        let pins = r#"{"PC4":{"input":"sda_in","output":"sda"},"PC5":{"output":"scl"},
+                       "PB0":{"output":"other"}}"#;
+        let lcd = |name: &str, sda: &str, scl: &str| {
+            format!(r#",{{"type":"i2c_lcd","name":"{name}","address":39,"sda":{sda},"scl":{scl}}}"#)
+        };
+        let lcds = [
+            lcd("ON", r#""sda""#, r#""scl""#),
+            lcd("READ_SIDE", r#""sda_in""#, r#""scl""#),
+            lcd("SWAPPED", r#""scl""#, r#""sda""#),
+            lcd("NO_SDA", "null", r#""scl""#),
+            lcd("ELSEWHERE", r#""other""#, r#""scl""#),
+        ]
+        .concat();
+        let json = mcu_json(&hex_of(&[0xCFFF]), pins)
+            .replace(r#""wake":"u1_wake"}"#, &format!(r#""wake":"u1_wake"}}{lcds}"#));
+        let netlist: Netlist = serde_json::from_str(&json).unwrap();
+        let c = netlist.compile().unwrap();
+        let mcu = c.digital.device("U1").unwrap().as_any().downcast_ref::<Mcu>().unwrap();
+        let on: Vec<&str> = mcu.i2c().targets.iter().map(|t| t.name()).collect();
+        assert_eq!(on, ["ON", "READ_SIDE"]);
+        for alone in ["SWAPPED", "NO_SDA", "ELSEWHERE"] {
+            let device = c.digital.device(alone).unwrap();
+            assert!(device.as_any().downcast_ref::<i2c::Unattached>().is_some(), "{alone}");
+        }
+        assert!(c.digital.device("ON").is_none(), "built into its master, not beside it");
     }
 
     #[test]

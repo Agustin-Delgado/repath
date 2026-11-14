@@ -319,6 +319,48 @@ impl Simulation {
         });
         serde_json::to_string(&state).map_err(to_js_error)
     }
+
+    /// What an I2C LCD module shows, as JSON, or `null` if there is none by
+    /// that name: `{ time, version, backlight, cells, cursor, blink,
+    /// overdriven, blink_interval }`.
+    ///
+    /// `cells` is the 32 character positions, line by line, each eight rows of
+    /// five dots with the leftmost as bit 4. `cursor` and `blink` are the
+    /// cell index of the underline and of the blinking block, which
+    /// alternates with the character every `blink_interval` seconds.
+    /// `overdriven` is a controller still in 1-line mode, whose first line's
+    /// unlit dots show dark. `time` is the instant this is as of — the
+    /// microcontroller driving it is up to a millisecond behind the run —
+    /// or `null` for a module on no bus, which never changes. `version`
+    /// changes whenever anything was written to it.
+    #[wasm_bindgen(js_name = lcdState)]
+    pub fn lcd_state(&self, name: &str) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct State {
+            time: Option<f64>,
+            version: u64,
+            backlight: bool,
+            cells: Vec<[u8; 8]>,
+            cursor: Option<usize>,
+            blink: Option<usize>,
+            overdriven: bool,
+            blink_interval: f64,
+        }
+        let state = repath_core::i2c::find_lcd(&self.circuit.digital, name).map(|(lcd, time)| {
+            let screen = lcd.screen();
+            State {
+                time,
+                version: lcd.version(),
+                backlight: lcd.backlight(),
+                cells: screen.cells.to_vec(),
+                cursor: screen.cursor,
+                blink: screen.blink,
+                overdriven: screen.overdriven,
+                blink_interval: repath_core::i2c::hd44780::BLINK_INTERVAL,
+            }
+        });
+        serde_json::to_string(&state).map_err(to_js_error)
+    }
 }
 
 /// What a run, or one piece of one, has to say for itself.

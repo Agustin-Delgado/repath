@@ -20,6 +20,15 @@ import {
 	type ChipDef
 } from './chips';
 import { DEFAULT_CLOCK } from './chips-mcu';
+import {
+	DEFAULT_LCD_ADDRESS,
+	LCD_ADDRESSES,
+	LCD_BOARD,
+	LCD_KIND,
+	LCD_LEG_X,
+	LCD_LEGS,
+	lcdLegY
+} from './lcd';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -1609,6 +1618,39 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				nonZero: true,
 				description: 'Per bar.'
+			}
+		]
+	},
+	{
+		/**
+		 * A 16×2 character LCD with an I2C backpack: the display of nearly every
+		 * Arduino tutorial, on four wires.
+		 *
+		 * A module rather than a chip: the HD44780 controller, the PCF8574
+		 * expander driving it and the pull-ups on SDA and SCL are all on the board,
+		 * so the drawing is the board and its header. What it shows is painted
+		 * from the run (`lcd.ts`), from what the engine's controller holds.
+		 */
+		kind: LCD_KIND,
+		box: { x: LCD_LEG_X, y: LCD_BOARD.y, w: LCD_BOARD.x + LCD_BOARD.w - LCD_LEG_X, h: LCD_BOARD.h },
+		body: LCD_BOARD,
+		label: '16×2 LCD (I²C)',
+		group: 'semiconductor',
+		prefix: 'LCD',
+		pins: LCD_LEGS.map((leg, i) =>
+			leg === 'SDA' || leg === 'SCL'
+				? digitalBoth(leg, LCD_LEG_X, lcdLegY(i))
+				: analog(leg, LCD_LEG_X, lcdLegY(i))
+		),
+		params: [
+			{
+				key: 'address',
+				label: 'I²C address',
+				unit: '',
+				default: DEFAULT_LCD_ADDRESS,
+				choices: [...LCD_ADDRESSES],
+				description:
+					'Set by the A0–A2 jumpers on the backpack. The sketch has to use the same one: 0x27 and 0x3F are the usual two.'
 			}
 		]
 	},

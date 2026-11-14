@@ -376,6 +376,9 @@ function valueLabel(instance: Instance): string | null {
 			return formatWithUnit(Number(p.frequency), 'Hz');
 		case 'supply':
 			return formatWithUnit(Number(p.voltage), 'V');
+		// The one setting that decides whether a sketch finds it.
+		case 'lcd1602':
+			return String(p.address ?? '0x27');
 		case 'spdt':
 		case 'pushbutton':
 		case 'switch': {
