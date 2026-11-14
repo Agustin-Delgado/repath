@@ -891,7 +891,7 @@ function compileFresh(
 			}
 			pins[port] = pin;
 		}
-		emitUsbSerial(instance, deviceName, pins, net);
+		emitUsbSerial(instance, deviceName, pins, net, mcuLeg(chip, block, 'PD0'));
 		const reset = block.reset;
 		// On a board the converter's supply and reference come out on header
 		// pins of other names: AVCC is the 5V rail.
@@ -931,11 +931,13 @@ function compileFresh(
 		instance: Instance,
 		deviceName: string,
 		pins: Record<string, { input: string; output: string; pullup?: string }>,
-		net: (pin: string) => string
+		net: (pin: string) => string,
+		// On a board PD0 is the header pin printed 0.
+		rxLeg: string | undefined
 	) {
 		const name = usbSerialName(deviceName);
 		const rx = pins.PD0;
-		const index = connectivity.netOfPin.get(pinKey(instance.id, 'PD0'));
+		const index = rxLeg === undefined ? undefined : connectivity.netOfPin.get(pinKey(instance.id, rxLeg));
 		const node = rx && index !== undefined ? names.get(index)?.analog : undefined;
 		let line: string;
 		if (!rx) {
