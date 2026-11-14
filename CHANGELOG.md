@@ -32,7 +32,7 @@ on other pins, or with no supply is pointed out before you press Run, and a
 sketch addressing 0x3F when the module is set to 0x27 is told, during the run,
 that nothing answered. With nothing on the bus at all, the I²C notice now
 reads that way too, rather than saying I²C is not simulated.
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#74](https://github.com/Agustin-Delgado/repath/pull/74)
 
 ---
 
