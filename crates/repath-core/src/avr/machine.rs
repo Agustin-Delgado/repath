@@ -1699,7 +1699,7 @@ pub(super) mod tests {
     #[test]
     fn didr0_makes_a_port_c_pin_read_zero() {
         let mut m = machine(&[idle()]);
-        m.set_inputs(PinLevels { high: 0x3F << 8, floating: 0 });
+        m.set_inputs(PinLevels { high: 0x3F << 8, floating: 0 }, 0);
         assert_eq!(m.read(0x26), 0x3F);
         m.write(u16::from(adc::DIDR0), 0x05);
         assert_eq!(m.read(0x26), 0x3A);
