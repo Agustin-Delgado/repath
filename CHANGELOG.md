@@ -23,7 +23,7 @@ line and press Send: it reaches D0 the way an Uno's USB converter sends it,
 with the line ending and the baud rate you pick, as in the Arduino IDE's serial
 monitor. If the sketch listens at another rate, or has not turned its receiver
 on, the inspector says so.
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#73](https://github.com/Agustin-Delgado/repath/pull/73)
 
 ---
 
