@@ -11,6 +11,28 @@ early entries point at those instead.
 
 ---
 
+## 13 November 2026 — `analogRead()` measures the circuit
+
+**A sketch reads the voltage on A0 to A5.** A potentiometer, a divider or a
+sensor on one of the chip's analog pins is what `analogRead()` returns, from 0
+to 1023 against AVCC as on an Uno, against the internal 1.1 V after
+`analogReference(INTERNAL)`, or against the AREF pin after
+`analogReference(EXTERNAL)`. Turn the knob between runs and the serial monitor
+prints the new number; a ramp or a waveform on the pin is read at the moment
+each conversion samples it, so a fast signal shows up as it would on the chip.
+
+**It takes the time it takes.** A conversion lasts 13 clocks of the converter,
+25 for the first, which at the Uno's 125 kHz converter clock is 104 µs and
+200 µs: a sketch timing its own loop sees the same numbers as on a board. Free-running mode and the
+conversion-complete interrupt work too.
+
+**Wire AVCC and AGND.** The converter measures against them, as on the real
+chip; with AVCC left unwired every reading above ground is 1023. Reading the temperature
+sensor or triggering conversions from a timer is not simulated yet, and the run
+says so when a sketch does. [#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+
+---
+
 ## 12 November 2026 — An Arduino's chip, running your sketch
 
 **The ATmega328P is on a new Microcontrollers shelf.** It is the chip on an

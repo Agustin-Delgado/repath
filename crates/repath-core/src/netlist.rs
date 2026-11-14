@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
-use crate::avr::{self, Mcu, Pin, PinNets};
+use crate::avr::{self, AnalogPins, Mcu, Pin, PinNets};
 use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
 use crate::digital::{
@@ -346,6 +346,10 @@ pub struct McuPinSpec {
     pub output: Option<String>,
     #[serde(default)]
     pub pullup: Option<String>,
+    /// The analog node the pin is on, for the converter to measure: PC0 to
+    /// PC5 only, which are ADC0 to ADC5.
+    #[serde(default)]
+    pub analog: Option<String>,
 }
 
 fn default_mcu_model() -> String {
@@ -447,6 +451,14 @@ pub enum Device {
         reset: Option<String>,
         /// A net of its own, for the device to wake itself with.
         wake: String,
+        /// The nodes of the converter's reference and ground legs. One left
+        /// out is taken as ground.
+        #[serde(default)]
+        aref: Option<String>,
+        #[serde(default)]
+        avcc: Option<String>,
+        #[serde(default)]
+        agnd: Option<String>,
     },
 }
 
@@ -829,7 +841,18 @@ impl Netlist {
                     LogicSource::new(name, out, *state).operated_at(flips.iter().copied()),
                 ));
             }
-            Device::Mcu { name, model, firmware, frequency, pins, reset, wake } => {
+            Device::Mcu {
+                name,
+                model,
+                firmware,
+                frequency,
+                pins,
+                reset,
+                wake,
+                aref,
+                avcc,
+                agnd,
+            } => {
                 let bad_value =
                     |reason: String| NetlistError::BadValue { component: name.clone(), reason };
                 if !model.eq_ignore_ascii_case("atmega328p") {
@@ -851,6 +874,12 @@ impl Netlist {
                     ))
                 })?;
                 let mut connected = Vec::with_capacity(pins.len());
+                let mut analog = AnalogPins {
+                    aref: aref.as_ref().map(|n| self.node(c, n)),
+                    avcc: avcc.as_ref().map(|n| self.node(c, n)),
+                    agnd: agnd.as_ref().map(|n| self.node(c, n)),
+                    ..Default::default()
+                };
                 for (pin_name, spec) in pins {
                     let Some(pin) = Pin::parse(pin_name) else {
                         return Err(NetlistError::BadTerminals {
@@ -861,6 +890,17 @@ impl Netlist {
                             ),
                         });
                     };
+                    if let Some(node) = &spec.analog {
+                        let Some(channel) = pin.adc_channel() else {
+                            return Err(NetlistError::BadTerminals {
+                                component: name.clone(),
+                                reason: format!(
+                                    "{pin_name} is not an input of the converter; PC0-PC5 are"
+                                ),
+                            });
+                        };
+                        analog.channels[channel] = Some(self.node(c, node));
+                    }
                     let nets = PinNets {
                         input: spec.input.as_ref().map(|n| c.net(n)),
                         output: spec.output.as_ref().map(|n| c.net(n)),
@@ -870,7 +910,8 @@ impl Netlist {
                 }
                 let reset = reset.as_ref().map(|n| c.net(n));
                 let wake = c.net(wake);
-                c.add_device(Box::new(Mcu::new(name, &image, *frequency, &connected, reset, wake)));
+                let mcu = Mcu::new(name, &image, *frequency, &connected, reset, wake);
+                c.add_device(Box::new(mcu.with_analog(analog)));
             }
         }
         Ok(())

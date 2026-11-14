@@ -772,6 +772,10 @@ function compileFresh(
 	 * against anything, and keeps a drawing with twenty spare pins from carrying
 	 * twenty switches. On a net that is only logic the device reads its own
 	 * pull-up wherever nothing drives.
+	 *
+	 * The converter measures nodes rather than nets: each input leg on an
+	 * analog net is given its node, and so are the reference and ground legs.
+	 * One on no analog net — logic only, or nothing — reads as ground.
 	 */
 	function emitMcu(
 		instance: Instance,
@@ -789,7 +793,10 @@ function compileFresh(
 			return;
 		}
 		const supply = analogOf(instance, positiveSupply(chip)!);
-		const pins: Record<string, { input: string; output: string; pullup?: string }> = {};
+		const pins: Record<string, { input: string; output: string; pullup?: string; analog?: string }> =
+			{};
+		const converter = block.converter;
+		const measured = new Set(converter?.inputs ?? []);
 		// Every leg is on a net, if only one of its own; a leg touching nothing
 		// need not be mentioned to the device at all.
 		const wired = (pin: string) => {
@@ -828,6 +835,7 @@ function compileFresh(
 					// and lit it up on the drawing as a current.
 					model: { v_on: 2.4, v_off: 1, r_on: PORT_PULL_UP_OHMS, r_off: 1e12 }
 				});
+				if (measured.has(port)) pin.analog = entry.analog;
 			}
 			pins[port] = pin;
 		}
@@ -841,7 +849,10 @@ function compileFresh(
 			pins,
 			// Left unwired, reset is held off by its pull-up: the chip runs.
 			reset: reset && wired(reset) ? net(reset) : null,
-			wake: net('wake')
+			wake: net('wake'),
+			aref: converter ? nodeOf(instance, converter.aref) : null,
+			avcc: converter ? nodeOf(instance, converter.avcc) : null,
+			agnd: converter ? nodeOf(instance, converter.agnd) : null
 		});
 	}
 

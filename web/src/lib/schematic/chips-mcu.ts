@@ -55,7 +55,10 @@ export const PORT_PULL_UP_OHMS = 35e3;
  * nobody.
  */
 const UNSIMULATED: Readonly<Record<string, string>> = {
-	adc: 'analogRead() is not simulated yet: every reading is 0, not a measurement.',
+	temperature:
+		'The temperature sensor is not simulated yet: a conversion of it reads as 0 V, not as the chip’s temperature.',
+	'adc-trigger':
+		'Auto-triggering the converter from a timer, the comparator or an external interrupt is not simulated yet: only free running is, so no conversion it would start ever starts.',
 	i2c: 'Nothing is on the I²C bus: no I²C devices are simulated yet, so every address goes unanswered (Wire.endTransmission() returns 2, Wire.requestFrom() 0).',
 	spi: 'SPI is not simulated yet: a transfer ends at once without touching the pins, and what it reads back did not come from any device.',
 	comparator:
@@ -93,13 +96,28 @@ export const MCU_CHIPS: readonly ChipDef[] = [
 			'RESET', 'PD0', 'PD1', 'PD2', 'PD3', 'PD4', 'VCC', 'GND', 'PB6', 'PB7', 'PD5', 'PD6', 'PD7', 'PB0',
 			'PB1', 'PB2', 'PB3', 'PB4', 'PB5', 'AVCC', 'AREF', 'AGND', 'PC0', 'PC1', 'PC2', 'PC3', 'PC4', 'PC5'
 		],
-		blocks: [{ kind: 'mcu', ports: PORTS, reset: 'RESET', unmodelled: ['AVCC', 'AREF', 'AGND'] }],
+		blocks: [
+			{
+				kind: 'mcu',
+				ports: PORTS,
+				reset: 'RESET',
+				// ADC0 to ADC5. ADC6 and ADC7 are bonded out only on the
+				// surface-mount packages.
+				converter: {
+					inputs: ['PC0', 'PC1', 'PC2', 'PC3', 'PC4', 'PC5'],
+					aref: 'AREF',
+					avcc: 'AVCC',
+					agnd: 'AGND'
+				}
+			}
+		],
 		pullUps: { RESET: RESET_PULL_UP_OHMS },
 		// A program uses the pins it uses, and the rest are inputs nobody reads;
-		// reset has its pull-up, and the reference is for a converter not modelled.
+		// reset has its pull-up, and AREF is needed only by a sketch that uses
+		// analogReference(EXTERNAL).
 		optional: [...PORTS, 'RESET', 'AREF'],
 		boardNames: ARDUINO_NAMES,
 		caveat:
-			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers, serial output and the EEPROM, erased at the start of every run. analogRead() reads 0, Serial.read() never receives, I²C finds nothing on the bus, and there is no watchdog or SPI: a sketch that uses one of these is told so while it runs. AVCC, AREF and AGND are there to be wired as on the real chip and do nothing here; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
+			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers, serial output, the EEPROM, erased at the start of every run, and analogRead(), which measures A0 to A5 against AVCC, AREF or the internal 1.1 V when its conversion samples. Serial.read() never receives, I²C finds nothing on the bus, and there is no watchdog or SPI: a sketch that uses one of these is told so while it runs. AVCC is the converter's supply and reference, so analogRead() needs it wired, as on the real chip; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
 	}
 ];

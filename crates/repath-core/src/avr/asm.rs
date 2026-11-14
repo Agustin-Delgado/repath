@@ -212,6 +212,9 @@ pub fn bst(d: u16, b: u16) -> u16 {
 pub fn bld(d: u16, b: u16) -> u16 {
     0xF800 | (d << 4) | b
 }
+pub fn sbrc(r: u16, b: u16) -> u16 {
+    0xFC00 | (r << 4) | b
+}
 pub fn sbrs(r: u16, b: u16) -> u16 {
     0xFE00 | (r << 4) | b
 }

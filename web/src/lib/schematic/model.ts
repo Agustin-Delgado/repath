@@ -2041,7 +2041,8 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 	const analogLegs = new Set((chip.analog ?? []).flatMap(analogTerminals));
 	const mcu = mcuBlock(chip);
 	const ports = new Set(mcu?.ports ?? []);
-	for (const leg of mcu?.unmodelled ?? []) analogLegs.add(leg);
+	const converter = mcu?.converter;
+	if (converter) for (const leg of [converter.aref, converter.avcc, converter.agnd]) analogLegs.add(leg);
 
 	const places = chipPinLayout(chip.layout.length);
 	const pins: PinDef[] = [];
