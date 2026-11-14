@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use super::adc::{self, Adc, AnalogLevels};
 use super::eeprom::Eeprom;
+use super::receiver::{self, Format, Receiver};
 use super::timer::{ICF, OCFA, OCFB, TOV, Timer};
 use super::twi::{TWEN, Twi};
 
@@ -97,6 +98,7 @@ const UBRR0H: u8 = 0xC5;
 const UDR0: u8 = 0xC6;
 
 /// Pins are numbered `port * 8 + bit`, ports B, C, D as 0, 1, 2.
+pub const PD0: u32 = 16;
 pub const PD1: u32 = 17;
 pub const PD2: u32 = 18;
 
@@ -175,9 +177,8 @@ impl std::fmt::Display for Fault {
 /// reading the results ought to know.
 ///
 /// The set is what a sketch can be caught using cheaply and without crying
-/// wolf. Not here: USART0's receiver, which `Serial.begin()` turns on in every
-/// sketch that only prints; the timers' external clock pins, which count as
-/// stopped and show as a timer that never moves.
+/// wolf. Not here: the timers' external clock pins, which count as stopped
+/// and show as a timer that never moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Peripheral {
     /// A conversion of the temperature sensor was started, which reads 0 V.
@@ -231,7 +232,7 @@ pub enum Stop {
     Idle,
 }
 
-/// USART0's transmitter. The receiver is not modelled.
+/// USART0's registers and transmitter; the receiver is in `receiver.rs`.
 #[derive(Debug, Clone)]
 struct Usart {
     /// UCSR0A's own bits: TXC0, U2X0, MPCM0. UDRE0 is derived.
@@ -260,6 +261,8 @@ struct Frame {
 const TXC: u8 = 1 << 6;
 const UDRE: u8 = 1 << 5;
 const TXEN: u8 = 1 << 3;
+const RXEN: u8 = 1 << 4;
+const RXCIE: u8 = 1 << 7;
 
 impl Usart {
     fn new() -> Self {
@@ -280,6 +283,29 @@ impl Usart {
 
     fn enabled(&self) -> bool {
         self.control_b & TXEN != 0
+    }
+
+    fn receiving(&self) -> bool {
+        self.control_b & RXEN != 0
+    }
+
+    /// The frame the registers describe, as the receiver takes it.
+    fn format(&self) -> Format {
+        let size = ((self.control_c >> 1) & 3) | (self.control_b & 4);
+        let parity = (self.control_c >> 4) & 3;
+        Format {
+            period: u64::from(self.baud) + 1,
+            samples: if self.status & 0x02 != 0 { 8 } else { 16 },
+            data: match size {
+                0 => 5,
+                1 => 6,
+                2 => 7,
+                7 => 9,
+                _ => 8,
+            },
+            parity: (parity >= 2).then_some(parity == 3),
+            addresses_only: self.status & 0x01 != 0,
+        }
     }
 
     fn next_event(&self) -> u64 {
@@ -379,6 +405,7 @@ pub struct Machine {
     /// The TEMP register Timer1's 16-bit registers are reached through.
     temp: u8,
     usart: Usart,
+    receiver: Receiver,
     twi: Twi,
     pub(super) eeprom: Eeprom,
     adc: Adc,
@@ -399,6 +426,9 @@ pub struct Machine {
     /// Whether an external or pin-change interrupt was enabled at any time
     /// since [`Self::begin_speculation`]: then any input change matters.
     irq_armed_seen: bool,
+    /// Whether the receiver was on at any time since then: it reads RXD
+    /// whether or not the program ever looks at what it got.
+    rx_seen: bool,
     /// Bytes sent, with the cycle each one's stop bit ended.
     pub(super) serial: Vec<(u64, u8)>,
     /// Peripherals noticed so far, one bit each: a program converting in a
@@ -461,6 +491,7 @@ impl Machine {
             ],
             temp: 0,
             usart: Usart::new(),
+            receiver: Receiver::default(),
             twi: Twi::new(),
             eeprom: Eeprom::new(frequency),
             adc: Adc::default(),
@@ -475,6 +506,7 @@ impl Machine {
             outputs_dirty: false,
             last_input_read: None,
             irq_armed_seen: false,
+            rx_seen: false,
             serial: Vec::new(),
             noticed: 0,
             notices: Vec::new(),
@@ -527,6 +559,16 @@ impl Machine {
                 out.level = (out.level & !bit) | if level { bit } else { 0 };
             }
         }
+        // The receiver makes RXD an input whatever DDRD says, its pull-up
+        // still PORTD0's.
+        if self.usart.receiving() {
+            let bit = 1 << PD0;
+            out.driven &= !bit;
+            out.level &= !bit;
+            if !pull_ups_off && self.port[2] & 1 != 0 {
+                out.pullup |= bit;
+            }
+        }
         // The transmitter overrides TXD whatever DDRD says.
         if self.usart.enabled() {
             let bit = 1 << PD1;
@@ -544,16 +586,25 @@ impl Machine {
         (self.inputs.high & !self.inputs.floating) | (own & self.inputs.floating)
     }
 
-    /// Apply new levels from outside, catching the edges the external and
-    /// pin-change interrupts look for. Flags are raised only for an enabled
-    /// interrupt.
-    pub fn set_inputs(&mut self, levels: PinLevels) {
+    /// Apply new levels from outside, as they are from cycle `at` on,
+    /// catching the edges the external and pin-change interrupts and the
+    /// receiver look for. Flags are raised only for an enabled interrupt.
+    ///
+    /// `at` matters only to the receiver, which times a frame from its start
+    /// edge. The machine can stand a few cycles past `at`, an instruction
+    /// being atomic, but the receiver never samples past the limit of a run,
+    /// so no sample it took after `at` was of the old level.
+    pub fn set_inputs(&mut self, levels: PinLevels, at: u64) {
         let before = self.pin_bits();
         self.inputs = levels;
         let after = self.pin_bits();
         let changed = before ^ after;
         if changed == 0 {
             return;
+        }
+        let rxd = 1 << PD0;
+        if self.usart.receiving() && changed & rxd != 0 && after & rxd == 0 {
+            self.receiver.falling_edge(at, self.usart.format());
         }
         for n in 0..2 {
             let bit = 1 << (PD2 + n);
@@ -588,12 +639,22 @@ impl Machine {
     pub fn begin_speculation(&mut self) {
         self.last_input_read = None;
         self.irq_armed_seen = self.pin_irqs_armed();
+        self.rx_seen = self.usart.receiving();
     }
 
-    /// Whether this run would have gone differently had the inputs changed at
-    /// `cycle`: it read a pin at or after it, or a pin could have interrupted.
-    pub fn depends_on_inputs_from(&self, cycle: u64) -> bool {
-        self.irq_armed_seen || self.last_input_read.is_some_and(|at| at >= cycle)
+    /// Whether this run would have gone differently had the pins in
+    /// `changed` changed at `cycle`: it read a pin at or after it, a pin
+    /// could have interrupted, or the receiver was listening to RXD.
+    pub fn depends_on_inputs_from(&self, cycle: u64, changed: u32) -> bool {
+        self.irq_armed_seen
+            || self.last_input_read.is_some_and(|at| at >= cycle)
+            || self.rx_seen && changed & (1 << PD0) != 0
+    }
+
+    /// CPU cycles a bit lasts at the rate the receiver is set to, while it is
+    /// on.
+    pub fn receive_bit_cycles(&self) -> Option<u64> {
+        self.usart.receiving().then(|| self.usart.format().bit_cycles())
     }
 
     // -----------------------------------------------------------------------
@@ -726,13 +787,12 @@ impl Machine {
             TCNT2 => self.timer(2).count() as u8,
             OCR2A => self.timers[2].compare_value(0) as u8,
             OCR2B => self.timers[2].compare_value(1) as u8,
-            UCSR0A => self.usart.status(),
-            UCSR0B => self.usart.control_b,
+            UCSR0A => self.usart.status() | self.receiver.status(),
+            UCSR0B => self.usart.control_b | self.receiver.ninth_bit(),
             UCSR0C => self.usart.control_c,
             UBRR0L => self.usart.baud as u8,
             UBRR0H => (self.usart.baud >> 8) as u8,
-            // Nothing is ever received.
-            UDR0 => 0,
+            UDR0 => self.receiver.read(),
             TWBR => self.twi.bit_rate,
             TWSR => self.twi.status(),
             TWDR => self.twi.data,
@@ -864,7 +924,13 @@ impl Machine {
                 let kept = self.usart.status & TXC & !v;
                 self.usart.status = kept | (v & 0x03);
             }
-            UCSR0B => self.usart.control_b = v,
+            UCSR0B => {
+                if v & RXEN == 0 {
+                    self.receiver.disable();
+                }
+                // RXB80 is the receiver's to set.
+                self.usart.control_b = v & !0x02;
+            }
             UCSR0C => self.usart.control_c = v,
             UBRR0L => self.usart.baud = (self.usart.baud & 0x0F00) | u16::from(v),
             UBRR0H => self.usart.baud = (self.usart.baud & 0x00FF) | u16::from(v & 0x0F) << 8,
@@ -888,6 +954,9 @@ impl Machine {
         }
         if self.pin_irqs_armed() {
             self.irq_armed_seen = true;
+        }
+        if self.usart.receiving() {
+            self.rx_seen = true;
         }
         self.refresh_next_event();
     }
@@ -1008,6 +1077,9 @@ impl Machine {
                 return Some(vector);
             }
         }
+        if self.receiver.status() & receiver::RXC != 0 && self.usart.control_b & RXCIE != 0 {
+            return Some(18);
+        }
         let status = self.usart.status();
         if status & UDRE != 0 && self.usart.control_b & 0x20 != 0 {
             return Some(19);
@@ -1092,6 +1164,10 @@ impl Machine {
                 }
                 seen = now;
             }
+            // The receiver reads a pin, and what the pin does from `limit` on
+            // is not known yet: it is the one peripheral held to the limit
+            // rather than to the end of the instruction that crossed it.
+            self.receive_until(self.cycle.min(limit.saturating_sub(1)));
             if self.cycle >= limit {
                 return Stop::Limit;
             }
@@ -1105,10 +1181,11 @@ impl Machine {
                     }
                     continue;
                 }
-                if self.next_event == u64::MAX {
+                let next = self.next_event.min(self.receiver.next_at());
+                if next == u64::MAX {
                     return Stop::Idle;
                 }
-                self.cycle = self.next_event.min(limit);
+                self.cycle = next.min(limit);
                 continue;
             }
             let enabled = self.sreg & (1 << I) != 0 && !self.inhibit;
@@ -1138,6 +1215,18 @@ impl Machine {
                 }
                 seen = now;
             }
+        }
+    }
+
+    /// Take every receiver sample due at or before `cycle`.
+    fn receive_until(&mut self, cycle: u64) {
+        while self.receiver.next_at() <= cycle {
+            let at = self.receiver.next_at();
+            let high = self.pin_bits() & (1 << PD0) != 0;
+            if self.receiver.sample(high) {
+                self.receiver.falling_edge(at + self.usart.format().period, self.usart.format());
+            }
+            self.progress += 1;
         }
     }
 
@@ -1215,7 +1304,7 @@ pub(super) mod tests {
         // Port B all inputs; PORTB bit 3 turns PB3's pull-up on.
         // ldi r16, 0x08 / out PORTB, r16 / in r17, PINB
         let mut m = machine(&[ldi(16, 0x08), out(0x05, 16), in_(17, 0x03), idle()]);
-        m.set_inputs(PinLevels { high: 0x01, floating: !0x03 });
+        m.set_inputs(PinLevels { high: 0x01, floating: !0x03 }, 0);
         run_to(&mut m, 3, 100);
         // PB0 is driven high outside, PB1 low; PB3 floats onto its pull-up and
         // the rest float with nothing to pull them.
@@ -1293,16 +1382,16 @@ pub(super) mod tests {
     fn a_pin_change_raises_its_port_flag_only_when_enabled() {
         let mut m = machine(&[idle()]);
         let levels = |high: u32| PinLevels { high, floating: 0 };
-        m.set_inputs(levels(0));
-        m.set_inputs(levels(1));
+        m.set_inputs(levels(0), 0);
+        m.set_inputs(levels(1), 0);
         assert_eq!(m.pcifr, 0, "nothing enabled");
         m.write(0x6B, 0x01); // PCMSK0: PB0
         m.write(0x68, 0x01); // PCICR: PCIE0
-        m.set_inputs(levels(1 << 1));
+        m.set_inputs(levels(1 << 1), 0);
         assert_eq!(m.pcifr, 0x01, "PB0 fell");
         assert_eq!(m.pending_interrupt(), Some(3));
         m.write(0x3B, 0x01);
-        m.set_inputs(levels((1 << 1) | (1 << 8)));
+        m.set_inputs(levels((1 << 1) | (1 << 8)), 0);
         assert_eq!(m.pcifr, 0, "PB1 and PC0 are not in the masks");
     }
 
@@ -1610,9 +1699,210 @@ pub(super) mod tests {
     #[test]
     fn didr0_makes_a_port_c_pin_read_zero() {
         let mut m = machine(&[idle()]);
-        m.set_inputs(PinLevels { high: 0x3F << 8, floating: 0 });
+        m.set_inputs(PinLevels { high: 0x3F << 8, floating: 0 }, 0);
         assert_eq!(m.read(0x26), 0x3F);
         m.write(u16::from(adc::DIDR0), 0x05);
         assert_eq!(m.read(0x26), 0x3A);
+    }
+
+    // -----------------------------------------------------------------------
+    // The receiver
+    // -----------------------------------------------------------------------
+
+    /// RXD high or low, every other pin left to the chip.
+    fn rxd(high: bool) -> PinLevels {
+        PinLevels { high: if high { 1 << PD0 } else { 0 }, floating: !(1 << PD0) }
+    }
+
+    /// Run to `cycle`, however little there is to do on the way.
+    fn run_until(m: &mut Machine, cycle: u64) {
+        loop {
+            match m.run(cycle, &Watch::default()) {
+                Stop::Limit => return,
+                Stop::Idle => return m.idle_until(cycle),
+                _ => {}
+            }
+        }
+    }
+
+    /// Put levels on RXD at the cycles given the way the device does: the
+    /// machine run up to each change, then told of it.
+    fn drive_rxd(m: &mut Machine, levels: &[(u64, bool)]) {
+        for &(at, high) in levels {
+            run_until(m, at);
+            m.set_inputs(rxd(high), at);
+        }
+    }
+
+    /// A frame from `start`, `bit` cycles a bit: the start bit, `width` bits
+    /// of `data` least significant first, then `tail` — parity, stop.
+    fn frame(start: u64, bit: u64, data: u16, width: u16, tail: &[bool]) -> Vec<(u64, bool)> {
+        std::iter::once(false)
+            .chain((0..width).map(|i| data >> i & 1 != 0))
+            .chain(tail.iter().copied())
+            .enumerate()
+            .map(|(i, level)| (start + i as u64 * bit, level))
+            .collect()
+    }
+
+    /// A chip listening on an idle line, its USART set up as given.
+    fn listening(a: u8, b: u8, c: u8, ubrr: u8) -> Machine {
+        let mut m = machine(&[idle()]);
+        m.set_inputs(rxd(true), 0);
+        m.write(u16::from(UCSR0A), a);
+        m.write(u16::from(UCSR0C), c);
+        m.write(u16::from(UBRR0L), ubrr);
+        m.write(u16::from(UCSR0B), RXEN | b);
+        m
+    }
+
+    const RXC0: u8 = 0x80;
+    const FE0: u8 = 0x10;
+    const DOR0: u8 = 0x08;
+    const UPE0: u8 = 0x04;
+
+    #[test]
+    fn a_byte_is_complete_at_the_stop_bits_last_vote() {
+        // UBRR0 = 0 at normal speed: a sample every cycle, sixteen a bit, and
+        // samples 8, 9 and 10 vote — 7, 8 and 9 cycles into each bit. The stop
+        // bit is the tenth, from 100 + 9 · 16 = 244: its last vote at 253.
+        let mut m = listening(0, 0, 0x06, 0);
+        drive_rxd(&mut m, &frame(100, 16, 0xA5, 8, &[true]));
+        run_until(&mut m, 253);
+        assert_eq!(m.read(u16::from(UCSR0A)) & RXC0, 0, "an instruction at 252 does not see it");
+        run_until(&mut m, 254);
+        assert_eq!(m.read(u16::from(UCSR0A)) & (RXC0 | FE0 | DOR0 | UPE0), RXC0);
+        assert_eq!(m.read(u16::from(UDR0)), 0xA5);
+        assert_eq!(m.read(u16::from(UCSR0A)) & RXC0, 0, "reading UDR0 empties it");
+
+        // U2X0 with UBRR0 = 1: a sample every two cycles, eight a bit — the
+        // same sixteen cycles — and samples 4, 5 and 6 vote, at 6, 8 and 10.
+        let mut m = listening(0x02, 0, 0x06, 1);
+        drive_rxd(&mut m, &frame(100, 16, 0x3C, 8, &[true]));
+        run_until(&mut m, 254);
+        assert_eq!(m.read(u16::from(UCSR0A)) & RXC0, 0);
+        run_until(&mut m, 255);
+        assert_eq!(m.read(u16::from(UDR0)), 0x3C);
+    }
+
+    #[test]
+    fn two_of_three_samples_in_the_middle_of_a_bit_decide_it() {
+        // A byte of zeros with high glitches inside some of its bits, placed
+        // against the three voting samples 7, 8 and 9 cycles into each bit:
+        // before them, on one, on two, on the last two, on the last one.
+        let mut m = listening(0, 0, 0x06, 0);
+        let bit = |i: u64| 100 + 16 * (i + 1);
+        let mut levels = vec![(100, false)];
+        for (i, from, to) in [(0, 0, 7), (1, 8, 9), (2, 7, 9), (5, 8, 16), (7, 9, 15)] {
+            levels.push((bit(i) + from, true));
+            levels.push((bit(i) + to, false));
+        }
+        levels.push((244, true));
+        drive_rxd(&mut m, &levels);
+        run_until(&mut m, 300);
+        // Bits 2 and 5 had two votes high.
+        assert_eq!(m.read(u16::from(UCSR0A)) & (RXC0 | FE0), RXC0);
+        assert_eq!(m.read(u16::from(UDR0)), 0x24);
+    }
+
+    #[test]
+    fn a_start_bit_that_does_not_last_to_its_middle_is_noise() {
+        // Low for eight cycles: the first vote, at 107, reads low and the
+        // other two high, so it is not a start bit; a real frame after it is
+        // received as if it had not happened.
+        let mut m = listening(0, 0, 0x06, 0);
+        drive_rxd(&mut m, &[(100, false), (108, true)]);
+        drive_rxd(&mut m, &frame(200, 16, 0x5A, 8, &[true]));
+        run_until(&mut m, 400);
+        assert_eq!(m.read(u16::from(UDR0)), 0x5A);
+        assert_eq!(m.read(u16::from(UCSR0A)) & RXC0, 0, "one byte, not two");
+    }
+
+    #[test]
+    fn a_low_stop_bit_is_a_framing_error() {
+        let mut m = listening(0, 0, 0x06, 0);
+        // The stop bit low, and the line back up a bit later.
+        drive_rxd(&mut m, &frame(100, 16, 0x41, 8, &[false, true]));
+        drive_rxd(&mut m, &frame(400, 16, 0x42, 8, &[true]));
+        run_until(&mut m, 600);
+        assert_eq!(m.read(u16::from(UCSR0A)) & (RXC0 | FE0), RXC0 | FE0);
+        assert_eq!(m.read(u16::from(UDR0)), 0x41, "the data is kept all the same");
+        assert_eq!(m.read(u16::from(UCSR0A)) & (RXC0 | FE0), RXC0, "the flag goes with its byte");
+        assert_eq!(m.read(u16::from(UDR0)), 0x42);
+    }
+
+    #[test]
+    fn a_fourth_byte_unread_loses_the_third() {
+        // Two bytes fit in UDR0's buffer and a third waits in the shift
+        // register; the fourth's start bit finds nowhere for it and it is
+        // lost. The fourth goes in when there is room, marked with DOR0.
+        let mut m = listening(0, 0, 0x06, 0);
+        for (k, byte) in b"abcd".iter().copied().enumerate() {
+            drive_rxd(&mut m, &frame(100 + 160 * k as u64, 16, byte.into(), 8, &[true]));
+        }
+        run_until(&mut m, 1_000);
+        let mut read = Vec::new();
+        while m.read(u16::from(UCSR0A)) & RXC0 != 0 {
+            let dor = m.read(u16::from(UCSR0A)) & DOR0 != 0;
+            read.push((m.read(u16::from(UDR0)), dor));
+        }
+        assert_eq!(read, vec![(b'a', false), (b'b', false), (b'd', true)]);
+    }
+
+    #[test]
+    fn parity_is_checked_against_the_data() {
+        // 8E1: the parity bit makes the number of ones even. 0x03 has two,
+        // so its parity bit is 0; 0x07 has three, so a 0 is wrong.
+        let mut m = listening(0, 0, 0x26, 0);
+        drive_rxd(&mut m, &frame(100, 16, 0x03, 8, &[false, true]));
+        drive_rxd(&mut m, &frame(300, 16, 0x07, 8, &[false, true]));
+        run_until(&mut m, 500);
+        assert_eq!(m.read(u16::from(UCSR0A)) & UPE0, 0);
+        assert_eq!(m.read(u16::from(UDR0)), 0x03);
+        assert_eq!(m.read(u16::from(UCSR0A)) & UPE0, UPE0);
+        assert_eq!(m.read(u16::from(UDR0)), 0x07);
+        // 8O1: odd, so for 0x07 a parity bit of 0 is right.
+        let mut m = listening(0, 0, 0x36, 0);
+        drive_rxd(&mut m, &frame(100, 16, 0x07, 8, &[false, true]));
+        run_until(&mut m, 300);
+        assert_eq!(m.read(u16::from(UCSR0A)) & (RXC0 | UPE0), RXC0);
+    }
+
+    #[test]
+    fn a_ninth_bit_lands_in_rxb8() {
+        // UCSZ0 = 7: nine data bits, the ninth read from UCSR0B.
+        let mut m = listening(0, 0x04, 0x06, 0);
+        drive_rxd(&mut m, &frame(100, 16, 0x1A5, 9, &[true]));
+        run_until(&mut m, 300);
+        assert_eq!(m.read(u16::from(UCSR0B)) & 0x02, 0x02);
+        assert_eq!(m.read(u16::from(UDR0)), 0xA5);
+        assert_eq!(m.read(u16::from(UCSR0B)) & 0x02, 0, "with the buffer empty");
+    }
+
+    #[test]
+    fn switching_the_receiver_off_flushes_it_and_stops_it_listening() {
+        let mut m = listening(0, 0, 0x06, 0);
+        drive_rxd(&mut m, &frame(100, 16, 0x11, 8, &[true]));
+        run_until(&mut m, 300);
+        m.write(u16::from(UCSR0B), 0);
+        assert_eq!(m.read(u16::from(UCSR0A)) & RXC0, 0, "flushed");
+        drive_rxd(&mut m, &frame(300, 16, 0x22, 8, &[true]));
+        run_until(&mut m, 500);
+        m.write(u16::from(UCSR0B), RXEN);
+        assert_eq!(m.read(u16::from(UCSR0A)) & RXC0, 0, "nothing was received while off");
+    }
+
+    #[test]
+    fn the_receiver_makes_rxd_an_input_whatever_ddrd_says() {
+        // DDRD0 and PORTD0 set: a high output, until RXEN0 makes it an input
+        // with its pull-up on.
+        let mut m = machine(&[idle()]);
+        m.write(0x2A, 0x01);
+        m.write(0x2B, 0x01);
+        assert_ne!(m.outputs().driven & 1 << PD0, 0);
+        m.write(u16::from(UCSR0B), RXEN);
+        let out = m.outputs();
+        assert_eq!(out.driven & 1 << PD0, 0);
+        assert_ne!(out.pullup & 1 << PD0, 0);
     }
 }

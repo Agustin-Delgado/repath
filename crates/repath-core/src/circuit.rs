@@ -309,6 +309,14 @@ impl Circuit {
     pub fn operate_logic(&mut self, name: &str, state: Logic, at: f64) -> bool {
         self.digital.operate(name, state, at)
     }
+
+    /// Send bytes from a USB-serial converter, by name, from `at` onwards at
+    /// `baud`: what typing into a serial monitor does. Returns when the last
+    /// byte's stop bit ends, or `None` if there is no converter by that name.
+    pub fn send_serial(&mut self, name: &str, bytes: &[u8], baud: u32, at: f64) -> Option<f64> {
+        self.digital
+            .act_on(name, at, |port: &mut crate::avr::UsbSerial, ctx| port.send(ctx, bytes, baud))
+    }
 }
 
 #[cfg(test)]

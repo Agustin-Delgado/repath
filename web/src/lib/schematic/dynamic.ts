@@ -29,6 +29,7 @@ import {
 	brightness,
 	ledColour,
 	ledRating,
+	RATED,
 	SEGMENTS,
 	SEGMENT_SHAPES,
 	type Burnout,
@@ -37,9 +38,11 @@ import {
 } from './led';
 import { formatWithUnit } from '$lib/units';
 import {
+	chipOf,
 	definitionFor,
 	definitionOf,
 	pointKey,
+	rotatePoint,
 	wireSegments,
 	wireStart,
 	type Instance,
@@ -205,9 +208,11 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 	// burnt LED looking burnt, or the drawing contradicts both the panel and the
 	// scope trace that steps at the moment it failed.
 	for (const instance of schematic.instances) {
-		if (!LIT.has(instance.kind)) continue;
+		const lights = chipOf(instance.kind)?.board?.lights;
+		if (!LIT.has(instance.kind) && !lights) continue;
 		if (!instanceVisible(instance, region, 0)) continue;
-		if (instance.kind === 'led') drawLed(painter, view, instance);
+		if (lights) drawBoardLights(painter, view, instance, lights);
+		else if (instance.kind === 'led') drawLed(painter, view, instance);
 		else if (instance.kind === 'display7') drawDigit(painter, view, instance);
 		else if (instance.kind === 'display7x4') drawDigits(painter, view, instance);
 		else if (instance.kind === 'fuse') drawFuse(painter, view, instance);
@@ -567,6 +572,34 @@ function drawLamp(painter: Painter, view: DynamicView, instance: Instance): void
 	const at = { x: instance.x, y: instance.y };
 	painter.glow(at, 16 + 36 * lit, FILAMENT, Math.min(0.2 + lit * 0.5, 0.9));
 	painter.glow(at, (16 + 36 * lit) * 0.45, FILAMENT, Math.min(0.25 + lit * 0.55, 1));
+}
+
+/**
+ * The LEDs on a board: an LED's glow, smaller, where the board has the part.
+ * They are surface-mount and a millimetre or two across, and a halo the size
+ * of a through-hole one's would cover the headers beside them.
+ */
+function drawBoardLights(
+	painter: Painter,
+	view: DynamicView,
+	instance: Instance,
+	lights: ReadonlyArray<{ name: string; x: number; y: number; colour: string }>
+): void {
+	if (!view.showLight) return;
+	for (const light of lights) {
+		const current = view.frame.segmentCurrent.get(`${instance.id}:${light.name}`) ?? 0;
+		const lit = brightness(current, RATED);
+		if (lit < 0.05) continue;
+		const { rgb } = ledColour(light.colour);
+		const turned = rotatePoint(light.x, light.y, instance.rotation);
+		const at = { x: instance.x + turned.x, y: instance.y + turned.y };
+		painter.glow(at, 8 + 22 * lit, rgb, Math.min(0.2 + lit * 0.5, 0.9));
+		painter.glow(at, (8 + 22 * lit) * 0.45, rgb, Math.min(0.25 + lit * 0.55, 1));
+		painter.dot(at, 1.8 + 2.5 * Math.min(lit, 1), {
+			color: whiteHot(rgb, Math.max(lit - 0.75, 0) * 0.5),
+			alpha: Math.min(0.55 + lit * 0.5, 1)
+		});
+	}
 }
 
 function drawLed(painter: Painter, view: DynamicView, instance: Instance): void {

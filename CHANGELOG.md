@@ -11,6 +11,48 @@ early entries point at those instead.
 
 ---
 
+## 13 November 2026 — Type to your sketch
+
+**The chip hears serial now.** `Serial.read()` gets what arrives on RX (D0),
+read off the pin the way the real chip reads it, so a second chip's TX wired
+to it is received too, and a sender at the wrong baud rate arrives as the
+garbage it would on the bench.
+
+**The inspector's Serial section has an input box.** While a run goes, type a
+line and press Send: it reaches D0 the way an Uno's USB converter sends it,
+with the line ending and the baud rate you pick, as in the Arduino IDE's serial
+monitor. If the sketch listens at another rate, or has not turned its receiver
+on, the inspector says so.
+[#73](https://github.com/Agustin-Delgado/repath/pull/73)
+
+---
+
+## 13 November 2026 — The whole Arduino Uno
+
+**An Arduino Uno is on the Microcontrollers shelf,** drawn as the board seen
+from above, USB on the left, with its headers where the real ones are and
+each pin labelled as printed: 13, ~11, TX→1, A0, 5V, GND. Hovering a pin says
+what the chip calls it too, so 13 reads as PB5. Searching for arduino, uno or
+board finds it first.
+
+**It needs nothing around it to run.** It powers itself as if plugged into
+USB: 5V and 3V3 hold their voltages for anything wired to them, and GND is the
+circuit's ground, so no supply or ground symbol is needed. Load the same .hex
+as for the bare chip and press Run — it is the same ATmega328P inside, with
+the same inspector, serial output and caveats.
+
+**The parts on the board are there too.** The L LED lights when pin 13 is
+high, through the buffer the real board has, so pin 13 still works as an
+input; the green ON LED is lit while the board is powered; and a button from
+RESET to ground restarts the sketch, against the board's own 10 kΩ pull-up.
+
+**A new example, Arduino Uno blink,** runs the Microcontroller blink program on
+the board: L blinks once a second, an LED on pin 12 lights while a button is
+held, and a second button resets it.
+[#72](https://github.com/Agustin-Delgado/repath/pull/72)
+
+---
+
 ## 13 November 2026 — `analogRead()` measures the circuit
 
 **A sketch reads the voltage on A0 to A5.** A potentiometer, a divider or a

@@ -60,8 +60,10 @@ mod cpu;
 mod eeprom;
 pub mod hex;
 mod machine;
+mod receiver;
 mod timer;
 mod twi;
+mod usb_serial;
 
 use std::sync::Arc;
 
@@ -70,6 +72,7 @@ use crate::element::NodeId;
 use adc::AnalogLevels;
 pub use machine::{FLASH_BYTES, Fault, Peripheral};
 use machine::{Machine, PinLevels, PinOutputs, Stop, Watch, flash_words};
+pub use usb_serial::UsbSerial;
 
 /// The clock an Arduino Uno runs its ATmega328P at.
 pub const DEFAULT_FREQUENCY: f64 = 16e6;
@@ -376,6 +379,12 @@ impl Mcu {
         self.fault
     }
 
+    /// The baud rate the receiver is set to, as of the last instant the
+    /// device was brought up to, or `None` while it is off.
+    pub fn listening(&self) -> Option<f64> {
+        self.committed.receive_bit_cycles().map(|cycles| self.frequency / cycles as f64)
+    }
+
     /// Back to power-on.
     fn restart(&mut self) {
         self.committed = Machine::new(self.flash.clone(), 0, self.frequency);
@@ -540,7 +549,7 @@ impl Mcu {
     fn catch_up(&mut self, ctx: &mut EvalCtx, now: u64) {
         for (at, levels) in std::mem::take(&mut self.pending) {
             self.run_committed(ctx, at);
-            self.committed.set_inputs(levels);
+            self.committed.set_inputs(levels, at);
         }
         self.run_committed(ctx, now);
         self.samples.prune(&self.committed);
@@ -607,7 +616,7 @@ impl DigitalDevice for Mcu {
             let kept = self.committed.eeprom.cells;
             self.committed = Machine::new(self.flash.clone(), now, self.frequency);
             self.committed.eeprom.cells = kept;
-            self.committed.set_inputs(levels);
+            self.committed.set_inputs(levels, now);
             self.sampled = Some(levels);
             self.publish(ctx, now);
             self.speculate(ctx, now);
@@ -618,16 +627,19 @@ impl DigitalDevice for Mcu {
             self.adopt(ctx, due);
         }
         if self.sampled != Some(levels) {
+            let changed = self
+                .sampled
+                .map_or(!0, |old| (old.high ^ levels.high) | (old.floating ^ levels.floating));
             match self.speculation.as_mut() {
-                Some(s) if !s.machine.depends_on_inputs_from(now) => {
-                    s.machine.set_inputs(levels);
+                Some(s) if !s.machine.depends_on_inputs_from(now, changed) => {
+                    s.machine.set_inputs(levels, now);
                     self.pending.push((now, levels));
                 }
                 _ => {
                     self.speculation = None;
                     self.chunk = MIN_CHUNK;
                     self.catch_up(ctx, now);
-                    self.committed.set_inputs(levels);
+                    self.committed.set_inputs(levels, now);
                 }
             }
             self.sampled = Some(levels);
@@ -704,9 +716,19 @@ mod tests {
         }
 
         fn mcu(&mut self, words: &[u16], pins: &[(&str, PinNets)], reset: Option<NetId>) {
+            self.mcu_as("U1", words, pins, reset);
+        }
+
+        fn mcu_as(
+            &mut self,
+            name: &str,
+            words: &[u16],
+            pins: &[(&str, PinNets)],
+            reset: Option<NetId>,
+        ) {
             let wake = self.net("wake");
             let pins: Vec<_> = pins.iter().map(|(n, nets)| (pin(n), *nets)).collect();
-            let mcu = Mcu::new("U1", &image(words), F, &pins, reset, wake);
+            let mcu = Mcu::new(name, &image(words), F, &pins, reset, wake);
             self.domain.add_device(Box::new(mcu));
         }
 
@@ -1303,5 +1325,123 @@ mod tests {
         bench.mcu(&program, &[("PD2", pd2)], None);
         let log = bench.run(100);
         assert_eq!(edges(&log, pull), vec![(0, Logic::Low), (2, Logic::High)]);
+    }
+
+    /// One chip's transmitter wired to another's receiver. U1 sends 'H' as
+    /// in the test above; U2 takes it in its RX complete interrupt and puts it
+    /// on port B. U2's speculations run ahead of every edge U1 sends, and each
+    /// has to be thrown away, since its receiver is reading the pin.
+    #[test]
+    fn a_chip_receives_what_another_sends_it() {
+        let sender = [
+            ldi(16, 0x08), // ldi r16, TXEN0
+            sts(0xC1, 16)[0],
+            0x00C1,        // sts UCSR0B, r16      ; TXD high from 3
+            ldi(16, b'H'), // ldi r16, 'H'
+            sts(0xC6, 16)[0],
+            0x00C6, //      sts UDR0, r16         ; the frame from 6
+            idle(),
+        ];
+        let mut receiver = vec![nop(); 49];
+        receiver[0] = rjmp(37); // reset -> main, word 38
+        receiver[36] = rjmp(8); // USART_RX, vector 18 -> isr, word 45
+        let main = [
+            ldi(16, 0x90), // ldi r16, RXCIE0 | RXEN0  ; 2..3
+            sts(0xC1, 16)[0],
+            0x00C1,        // sts UCSR0B, r16         ; 3..5
+            ldi(16, 0xFF), // ldi r16, 0xFF           ; 5..6
+            out(0x04, 16), // out DDRB, r16           ; 6..7  port B low
+            sei(),         // sei                     ; 7..8
+            idle(),        // rjmp .                  ; from 8, every 2
+            lds(17, 0xC6)[0],
+            0x00C6,        // isr: lds r17, UDR0
+            out(0x05, 17), // out PORTB, r17
+            reti(),
+        ];
+        receiver[38..49].copy_from_slice(&main);
+
+        let mut bench = Bench::new();
+        let line = bench.net("line");
+        let pb: Vec<NetId> = (0..8).map(|b| bench.net(&format!("pb{b}"))).collect();
+        bench.mcu_as("U1", &sender, &[("PD1", output(line))], None);
+        let rxd = PinNets { input: Some(line), ..Default::default() };
+        let mut pins = vec![("PD0".to_string(), rxd)];
+        pins.extend(pb.iter().enumerate().map(|(b, &net)| (format!("PB{b}"), output(net))));
+        let pins: Vec<(&str, PinNets)> = pins.iter().map(|(n, p)| (n.as_str(), *p)).collect();
+        bench.mcu_as("U2", &receiver, &pins, None);
+        let log = bench.run(400);
+
+        // U1's start bit falls at 6, sample 1 of U2's start bit. At UBRR0 = 0
+        // and normal speed a bit is sixteen cycles and votes 7, 8 and 9
+        // cycles in, so the stop bit's last vote — the byte complete — is at
+        // 6 + 9 · 16 + 9 = 159. The idle loop's next boundary is 160: 4
+        // cycles of response, `rjmp isr` 2, `lds` 2 and `out` 1, so port B
+        // shows 'H' = 0x48 — PB3 and PB6 — from 169.
+        for (b, &net) in pb.iter().enumerate() {
+            let expected = if 0x48 >> b & 1 != 0 {
+                vec![(7, Logic::Low), (169, Logic::High)]
+            } else {
+                vec![(7, Logic::Low)]
+            };
+            assert_eq!(edges(&log, net), expected, "PB{b}");
+        }
+    }
+
+    /// The serial monitor's converter typing 'A' at 115 200 baud to a chip
+    /// set to the same — U2X0, UBRR0 = 16 — that sends back whatever it gets
+    /// from its RX complete interrupt.
+    #[test]
+    fn a_byte_typed_into_the_converter_is_received_and_echoed() {
+        let mut program = vec![nop(); 54];
+        program[0] = rjmp(37); // reset -> main, word 38
+        program[36] = rjmp(12); // USART_RX -> isr, word 49
+        let main = [
+            ldi(16, 0x02), // ldi r16, U2X0           ; 2..3
+            sts(0xC0, 16)[0],
+            0x00C0,      // sts UCSR0A, r16         ; 3..5
+            ldi(16, 16), // ldi r16, 16             ; 5..6
+            sts(0xC4, 16)[0],
+            0x00C4,        // sts UBRR0L, r16         ; 6..8
+            ldi(16, 0x98), // ldi r16, RXCIE0 | RXEN0 | TXEN0
+            sts(0xC1, 16)[0],
+            0x00C1, // sts UCSR0B, r16         ; 9..11
+            sei(),  // sei                     ; 11..12
+            idle(), // rjmp .                  ; from 12, every 2
+            lds(16, 0xC6)[0],
+            0x00C6, // isr: lds r16, UDR0
+            sts(0xC6, 16)[0],
+            0x00C6, // sts UDR0, r16
+            reti(),
+        ];
+        program[38..54].copy_from_slice(&main);
+        let mut bench = Bench::new();
+        let line = bench.net("line");
+        let tx = bench.net("tx");
+        bench.domain.add_device(Box::new(UsbSerial::new("USB", line)));
+        let rxd = PinNets { input: Some(line), ..Default::default() };
+        bench.mcu_as("U1", &program, &[("PD0", rxd), ("PD1", output(tx))], None);
+        bench.domain.initialize();
+        bench.domain.settle(50e-6);
+        let sent = bench
+            .domain
+            .act_on("USB", 1_600.0 / F, |port: &mut UsbSerial, ctx| port.send(ctx, b"A", 115_200));
+        // The converter's 115 200 is 8 · 17 = 136 cycles a bit too. It takes
+        // the line high at 1600 and starts 'A' a bit later.
+        assert!((sent.unwrap() * F - (1_600.0 + 11.0 * 136.0)).abs() < 1e-6);
+        bench.domain.settle(400e-6);
+        let log = bench.domain.take_log();
+        let line_edges = edges(&log, line);
+        assert_eq!(&line_edges[..2], &[(1_600, Logic::High), (1_736, Logic::Low)]);
+
+        // The receiver samples every 17 cycles, eight a bit, votes on samples
+        // 4, 5 and 6: the stop bit's last vote is (8 · 9 + 5) · 17 = 1309
+        // cycles after the start edge, at 3045. Served at the idle loop's
+        // next boundary, 3046: 4 cycles, `rjmp isr` 2, `lds` 2, and the store
+        // to UDR0 lands as it ends at 3056. Ten bits of 136 cycles later the
+        // echo is out.
+        let serial = bench.mcu_state().serial().to_vec();
+        assert_eq!(serial.len(), 1, "{serial:?}");
+        assert_eq!(serial[0].byte, b'A');
+        assert!((serial[0].time * F - (3_056.0 + 1_360.0)).abs() < 1e-6, "{}", serial[0].time * F);
     }
 }

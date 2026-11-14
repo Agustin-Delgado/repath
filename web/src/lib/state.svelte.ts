@@ -78,6 +78,7 @@ import {
 } from './schematic/model';
 import { elbow, routeWire } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
+import { serialBytes, usbSerialName, type LineEnding } from './schematic/serial';
 import {
 	buildConnectivity,
 	mergeWireChains,
@@ -90,7 +91,8 @@ import {
 	trimOverlaps,
 	unexpectedJoin,
 	liesWithin,
-	type Connectivity
+	type Connectivity,
+	type Net
 } from './schematic/nets';
 
 /**
@@ -327,6 +329,8 @@ export interface McuLog {
 	/** The parts of the chip it used that are not simulated, oldest first. */
 	notices: McuNotice[];
 	fault: { message: string; time: number } | null;
+	/** The baud rate its receiver is set to, or null while it is not listening. */
+	listening: number | null;
 }
 
 /**
@@ -2986,6 +2990,12 @@ class AppState {
 	autoProbe(): void {
 		const compiled = compileSchematic(this.schematic, this.temperature + 273.15, this.sample, this.logicFamily);
 		const chosen: string[] = [];
+		// A board's SDA and A4 are one net through two points of one part, with no
+		// wire: wired as far as the points go, and not what anybody wants plotted.
+		const drawn = new Set(this.schematic.wires.flatMap((w) => w.points.map((p) => pointKey(p.x, p.y))));
+		const internal = (net: Net) =>
+			net.pins.every((ref) => ref.instance.id === net.pins[0].instance.id) &&
+			!net.points.some((key) => drawn.has(key));
 		// Wired nets first — a lone pin is rarely what you want — and pin-only ones
 		// after, rather than never. An output with nothing hanging off it is exactly
 		// what you want when the circuit is small enough that there is nothing else,
@@ -2997,7 +3007,7 @@ class AppState {
 				if (net.isGround) continue;
 				const names = compiled.names.get(net.index);
 				if (!names?.analog && !names?.digital) continue;
-				if ((net.points.length >= 2) !== wired) continue;
+				if ((net.points.length >= 2 && !internal(net)) !== wired) continue;
 				const pin = net.pins[0];
 				const handle = pin ? probePin(pin.instance.id, pin.pin.name) : net.points[0];
 				if (handle !== undefined && !chosen.includes(handle)) chosen.push(handle);
@@ -3807,19 +3817,39 @@ class AppState {
 	}
 
 	/**
+	 * Type into a microcontroller's serial monitor: `text` and the line ending
+	 * go out of its USB-serial converter at `baud`, from the instant the run
+	 * has reached. False when there is no transient run to send them into.
+	 */
+	sendSerial(mcu: string, text: string, ending: LineEnding, baud: number): boolean {
+		const acquiring = this.acquiring;
+		if (!acquiring || this.analysis !== 'transient') return false;
+		const bytes = serialBytes(text, ending);
+		if (bytes.length === 0) return false;
+		return acquiring.sendSerial(usbSerialName(mcu), bytes, baud);
+	}
+
+	/**
 	 * Top up each microcontroller's log with what it has sent since the last
 	 * frame. Only a log that changed is replaced, so a chip with nothing to say
 	 * costs the screen nothing.
 	 */
 	private readMcus(acquiring: Acquisition): void {
 		for (const name of this.mcuNames) {
-			const log = this.mcuLogs[name] ?? { text: '', bytes: 0, notices: [], fault: null };
+			const log = this.mcuLogs[name] ?? {
+				text: '',
+				bytes: 0,
+				notices: [],
+				fault: null,
+				listening: null
+			};
 			const state = acquiring.mcuState(name, log.bytes);
 			if (
 				!state ||
 				(state.serial.length === 0 &&
 					state.notices.length === log.notices.length &&
-					(state.fault === null) === (log.fault === null))
+					(state.fault === null) === (log.fault === null) &&
+					state.listening === log.listening)
 			) {
 				continue;
 			}
@@ -3827,7 +3857,8 @@ class AppState {
 				text: appendSerial(log.text, state.serial.map((b) => b.byte)),
 				bytes: log.bytes + state.serial.length,
 				notices: state.notices,
-				fault: state.fault
+				fault: state.fault,
+				listening: state.listening
 			};
 		}
 	}

@@ -169,6 +169,11 @@ export class Acquisition {
 		return this.run.setLogic(name, state, this.run.time);
 	}
 
+	/** Type bytes into a serial monitor now. */
+	sendSerial(converter: string, bytes: Uint8Array, baud: number): boolean {
+		return this.run.sendSerial(converter, bytes, baud, this.run.time);
+	}
+
 	/** What a microcontroller has sent from its `from`-th byte on, and whether it stopped. */
 	mcuState(name: string, from: number): McuState | null {
 		return this.run.mcuState(name, from);
