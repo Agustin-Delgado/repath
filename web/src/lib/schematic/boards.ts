@@ -230,7 +230,7 @@ export const ARDUINO_UNO: ChipDef = {
 		]
 	},
 	caveat:
-		"The board as it runs from a USB cable: 5V and 3V3 are held there, GND is the circuit's ground, and VIN does nothing. The 500 mA fuse on USB is not modelled, so a short across 5V is not stopped. Its ATmega328P runs a .hex exactly as the ATmega328P part does, and leaves out what that leaves out. The L LED follows pin 13 through the board's buffer; the TX and RX LEDs, and the USB-to-serial chip on pins 0 and 1 are not modelled."
+		"The board as it runs from a USB cable: 5V and 3V3 are held there, GND is the circuit's ground, and VIN does nothing. The 500 mA fuse on USB is not modelled, so a short across 5V is not stopped. Its ATmega328P runs a .hex exactly as the ATmega328P part does, and leaves out what that leaves out. The L LED follows pin 13 through the board's buffer, and the USB-to-serial chip sends pin 0 what is typed into the serial monitor; the TX and RX LEDs are not modelled."
 };
 
 export const BOARDS: readonly ChipDef[] = [ARDUINO_UNO];
