@@ -79,11 +79,17 @@ export interface ChipBlock {
 	 */
 	ports?: readonly string[];
 	/**
-	 * Legs a microcontroller has that its model does nothing with: drawn and
-	 * wireable, so a drawing of the real chip connects as it would on a board,
-	 * and with nothing behind them.
+	 * A microcontroller's analog-to-digital converter: the port legs that are
+	 * its inputs, in channel order, and the legs of its reference and its
+	 * ground. The device measures the nodes these are on; the reference and
+	 * ground legs are analog pins, and nothing drives them.
 	 */
-	unmodelled?: readonly string[];
+	converter?: {
+		inputs: readonly string[];
+		aref: string;
+		avcc: string;
+		agnd: string;
+	};
 }
 
 /**

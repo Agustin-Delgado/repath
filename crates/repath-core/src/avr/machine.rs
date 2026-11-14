@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use super::adc::{self, Adc, AnalogLevels};
 use super::eeprom::Eeprom;
 use super::timer::{ICF, OCFA, OCFB, TOV, Timer};
 use super::twi::{TWEN, Twi};
@@ -70,7 +71,6 @@ const PCMSK0: u8 = 0x6B;
 const PCMSK2: u8 = 0x6D;
 const TIMSK0: u8 = 0x6E;
 const TIMSK2: u8 = 0x70;
-const ADCSRA: u8 = 0x7A;
 const TCCR1A: u8 = 0x80;
 const TCCR1B: u8 = 0x81;
 const TCCR1C: u8 = 0x82;
@@ -180,8 +180,12 @@ impl std::fmt::Display for Fault {
 /// stopped and show as a timer that never moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Peripheral {
-    /// A conversion was started: ADSC written as one.
-    Adc,
+    /// A conversion of the temperature sensor was started, which reads 0 V.
+    Thermometer,
+    /// The converter set to be auto triggered by something other than its own
+    /// completion: a timer, the comparator, an external interrupt. No such
+    /// conversion ever starts.
+    AdcTrigger,
     /// SPE set in SPCR.
     Spi,
     /// TWEN set in TWCR. The bus is simulated, as one with nothing on it, so
@@ -197,7 +201,8 @@ pub enum Peripheral {
 impl Peripheral {
     pub fn id(self) -> &'static str {
         match self {
-            Self::Adc => "adc",
+            Self::Thermometer => "temperature",
+            Self::AdcTrigger => "adc-trigger",
             Self::Spi => "spi",
             Self::I2c => "i2c",
             Self::Comparator => "comparator",
@@ -212,6 +217,11 @@ pub enum Stop {
     /// A watched output changed, a byte finished going out, or the program
     /// first used a peripheral that is not simulated, at this cycle.
     Changed(u64),
+    /// A conversion is due to complete at this cycle and nobody has said what
+    /// it sampled: [`Machine::adc_sample_needed`] says when that was, and
+    /// [`Machine::give_adc_levels`] lets the run go on. Nothing due at the
+    /// cycle has been done.
+    Sample(u64),
     /// The CPU faulted at this cycle.
     Fault(u64),
     /// The limit was reached.
@@ -371,6 +381,7 @@ pub struct Machine {
     usart: Usart,
     twi: Twi,
     pub(super) eeprom: Eeprom,
+    adc: Adc,
     /// Cycles the CPU is halted for after the instruction under way, as an
     /// EEPROM access halts it.
     stall: u64,
@@ -452,6 +463,7 @@ impl Machine {
             usart: Usart::new(),
             twi: Twi::new(),
             eeprom: Eeprom::new(frequency),
+            adc: Adc::default(),
             stall: 0,
             eicra: 0,
             eimsk: 0,
@@ -644,7 +656,9 @@ impl Machine {
             0x23 | 0x26 | 0x29 => {
                 let p = usize::from((a - PINB) / 3);
                 self.last_input_read = Some(self.cycle);
-                (self.pin_bits() >> (8 * p)) as u8 & PORT_MASK[p]
+                let bits = (self.pin_bits() >> (8 * p)) as u8 & PORT_MASK[p];
+                // A pin whose digital input DIDR0 disables reads zero.
+                if p == 1 { bits & !self.adc.didr0 } else { bits }
             }
             0x24 | 0x27 | 0x2A => self.ddr[usize::from((a - 0x24) / 3)],
             0x25 | 0x28 | PORTD => self.port[usize::from((a - 0x25) / 3)],
@@ -701,6 +715,12 @@ impl Machine {
                 let v = self.timers[1].compare_value(usize::from((a - OCR1AL) / 2));
                 if a & 1 == 0 { v as u8 } else { (v >> 8) as u8 }
             }
+            adc::ADCL => self.adc.read_low(),
+            adc::ADCH => self.adc.read_high(),
+            adc::ADCSRA => self.adc.status(),
+            adc::ADCSRB => self.adc.adcsrb,
+            adc::ADMUX => self.adc.admux,
+            adc::DIDR0 => self.adc.didr0,
             TCCR2A => self.timers[2].control_a(),
             TCCR2B => self.timers[2].control_b(),
             TCNT2 => self.timer(2).count() as u8,
@@ -792,18 +812,28 @@ impl Machine {
             EICRA => self.eicra = v & 0x0F,
             PCMSK0..=PCMSK2 => self.pcmsk[usize::from(a - PCMSK0)] = v,
             TIMSK0..=TIMSK2 => self.timers[usize::from(a - TIMSK0)].set_mask(v),
-            // A conversion completes at once and reads zero, so analogRead()
-            // returns rather than waiting on ADSC for ever.
-            ADCSRA => {
-                let mut v = v;
-                if v & 0x40 != 0 {
-                    self.note(Peripheral::Adc);
-                    v = (v & !0x40) | 0x10;
-                    self.data[0x78] = 0;
-                    self.data[0x79] = 0;
+            // Extended I/O, like UDR0: the write lands as the store ends, and
+            // the converter's clock edges are counted from there.
+            adc::ADCSRA => {
+                let started = self.adc.write_status(v, self.cycle + 2);
+                if started && self.adc.admux & 0x0F == adc::TEMPERATURE_CHANNEL {
+                    self.note(Peripheral::Thermometer);
                 }
-                self.data[ADCSRA as usize] = v;
+                if self.adc.foreign_trigger() {
+                    self.note(Peripheral::AdcTrigger);
+                }
             }
+            adc::ADCSRB => {
+                self.adc.adcsrb = v & 0x47;
+                if self.adc.foreign_trigger() {
+                    self.note(Peripheral::AdcTrigger);
+                }
+            }
+            // Bit 4 is reserved and reads zero.
+            adc::ADMUX => self.adc.write_mux(v & 0xEF, self.cycle + 2),
+            adc::DIDR0 => self.adc.didr0 = v & 0x3F,
+            // The result registers are read-only.
+            adc::ADCL | adc::ADCH => {}
             TCCR1A => self.timer(1).set_control_a(v),
             TCCR1B => self.timer(1).set_control_b(v),
             TCCR1C => Self::force(self.timer(1), v),
@@ -886,7 +916,12 @@ impl Machine {
             .timers
             .iter()
             .map(Timer::next_event)
-            .chain([self.usart.next_event(), self.twi.next_event(), self.eeprom.next_event()])
+            .chain([
+                self.usart.next_event(),
+                self.twi.next_event(),
+                self.eeprom.next_event(),
+                self.adc.next_event(),
+            ])
             .min()
             .unwrap_or(u64::MAX);
     }
@@ -906,6 +941,9 @@ impl Machine {
         }
         if self.eeprom.next_event() <= at {
             self.eeprom.event();
+        }
+        if self.adc.next_event() <= at {
+            self.adc.complete();
         }
         self.progress += 1;
         self.refresh_next_event();
@@ -977,6 +1015,9 @@ impl Machine {
         if status & TXC != 0 && self.usart.control_b & 0x40 != 0 {
             return Some(20);
         }
+        if self.adc.interrupt() {
+            return Some(21);
+        }
         if self.eeprom.interrupt() {
             return Some(22);
         }
@@ -1005,6 +1046,7 @@ impl Machine {
             15 => clear(self, 0, OCFB),
             16 => clear(self, 0, TOV),
             20 => self.usart.status &= !TXC,
+            21 => self.adc.acknowledge(),
             _ => {}
         }
     }
@@ -1034,6 +1076,11 @@ impl Machine {
         loop {
             while self.next_event <= self.cycle {
                 let at = self.next_event;
+                // A conversion cannot finish without what it sampled, and only
+                // the analog side knows that.
+                if self.adc.waiting(at) {
+                    return Stop::Sample(at);
+                }
                 let sent = self.serial.len();
                 self.process_events(at);
                 let now = self.outputs();
@@ -1097,6 +1144,18 @@ impl Machine {
     #[cfg(test)]
     pub(super) fn raise_timer_flags(&mut self, t: usize, flags: u8) {
         self.timers[t].raise(flags);
+    }
+
+    /// The sample-and-hold cycle of the conversion under way, if it has not
+    /// been given what it sampled.
+    pub fn adc_sample_needed(&self) -> Option<u64> {
+        self.adc.sample_needed()
+    }
+
+    /// What the conversion under way sampled, for a run stopped with
+    /// [`Stop::Sample`] to go on.
+    pub fn give_adc_levels(&mut self, levels: AnalogLevels) {
+        self.adc.give(levels);
     }
 
     /// Stand idle up to `cycle`: what an [`Stop::Idle`] machine does while
@@ -1415,10 +1474,15 @@ pub(super) mod tests {
             m.cycle = cycle;
             m.write(u16::from(address), value);
         };
-        // ADEN alone converts nothing; ADSC starts a conversion, every time.
-        at(&mut m, 10, ADCSRA, 0x80);
-        at(&mut m, 20, ADCSRA, 0xC0);
-        at(&mut m, 30, ADCSRA, 0xC0);
+        // A conversion of ADC0 is simulated; one of the temperature sensor is
+        // not, and is noticed when it starts — twice is not news.
+        at(&mut m, 10, adc::ADMUX, 0x40);
+        at(&mut m, 11, adc::ADCSRA, 0xC7);
+        at(&mut m, 12, adc::ADCSRA, 0x00);
+        at(&mut m, 19, adc::ADMUX, 0xC8);
+        at(&mut m, 20, adc::ADCSRA, 0xC7);
+        at(&mut m, 30, adc::ADCSRA, 0x00);
+        at(&mut m, 31, adc::ADCSRA, 0xC7);
         // `wdt_disable()`: WDCE | WDE, then nothing.
         at(&mut m, 40, WDTCSR, 0x18);
         at(&mut m, 41, WDTCSR, 0x00);
@@ -1427,7 +1491,7 @@ pub(super) mod tests {
         m.cycle = 50;
         m.write_bit(u16::from(ACSR), 7, true);
         let _ = m.read(u16::from(ACSR));
-        assert_eq!(m.notices, vec![(20, Peripheral::Adc)]);
+        assert_eq!(m.notices, vec![(20, Peripheral::Thermometer)]);
         // `wdt_enable(WDTO_1S)`: WDCE | WDE, then WDE and the prescaler.
         at(&mut m, 60, WDTCSR, 0x18);
         at(&mut m, 61, WDTCSR, 0x0E);
@@ -1438,26 +1502,117 @@ pub(super) mod tests {
         m.cycle = 91;
         let _ = m.read(u16::from(ACSR));
         let _ = m.read(u16::from(ACSR));
+        // Free running is simulated; a timer as the trigger is not.
+        at(&mut m, 100, adc::ADCSRA, 0xA7);
+        at(&mut m, 101, adc::ADCSRB, 0x05);
         assert_eq!(
             m.notices,
             vec![
-                (20, Peripheral::Adc),
+                (20, Peripheral::Thermometer),
                 (61, Peripheral::Watchdog),
                 (70, Peripheral::Spi),
                 (80, Peripheral::I2c),
                 (91, Peripheral::Comparator),
+                (101, Peripheral::AdcTrigger),
             ]
         );
     }
 
     #[test]
     fn a_notice_ends_a_run_like_a_byte_does() {
-        // ldi r16, ADEN | ADSC / sts ADCSRA, r16 / idle.
-        let mut m = machine(&[ldi(16, 0xC0), sts(0x7A, 16)[0], 0x007A, idle()]);
-        assert_eq!(m.run(1_000, &Watch::default()), Stop::Changed(3));
-        assert_eq!(m.notices, vec![(1, Peripheral::Adc)]);
-        // The conversion is over at once and reads 0: that is what is noticed.
-        assert_eq!(m.read(u16::from(ADCSRA)) & 0x50, 0x10);
-        assert_eq!((m.read(0x78), m.read(0x79)), (0, 0));
+        // ldi r16, SPE / out SPCR, r16 / idle.
+        let mut m = machine(&[ldi(16, 0x40), out(0x2C, 16), idle()]);
+        assert_eq!(m.run(1_000, &Watch::default()), Stop::Changed(2));
+        assert_eq!(m.notices, vec![(1, Peripheral::Spi)]);
+    }
+
+    /// Levels with ADC0 at `volts` and AVCC at 5 V.
+    fn on_adc0(volts: f64) -> AnalogLevels {
+        AnalogLevels { channels: [volts, 0.0, 0.0, 0.0, 0.0, 0.0], avcc: 5.0, ..Default::default() }
+    }
+
+    /// `analogRead()` as the Arduino core has it, cut down: ADMUX, ADSC, wait
+    /// for ADSC to clear, ADCL then ADCH. The run stops where the conversion
+    /// is to complete, having said when it sampled, and goes on once told.
+    #[test]
+    fn a_conversion_waits_at_its_end_for_what_it_sampled() {
+        let program = [
+            ldi(16, 0x87), // ldi r16, ADEN | 128         ; 0..1
+            sts(0x7A, 16)[0],
+            0x007A,        // sts ADCSRA, r16             ; 1..3   prescaler from 3
+            ldi(16, 0x40), // ldi r16, REFS0              ; 3..4
+            sts(0x7C, 16)[0],
+            0x007C,        // sts ADMUX, r16              ; 4..6
+            ldi(16, 0xC7), // ldi r16, ADEN | ADSC | 128  ; 6..7
+            sts(0x7A, 16)[0],
+            0x007A, //        sts ADCSRA, r16             ; 7..9
+            lds(17, 0x7A)[0],
+            0x007A,      //   wait: lds r17, ADCSRA       ; 2
+            sbrc(17, 6), //   sbrc r17, ADSC              ; 1, or 2 skipping
+            rjmp(-4),    //   rjmp wait                   ; 2
+            lds(18, 0x78)[0],
+            0x0078, //        lds r18, ADCL
+            lds(19, 0x79)[0],
+            0x0079, //        lds r19, ADCH
+            idle(),
+        ];
+        let mut m = machine(&program);
+        let all = Watch { drive: !0, pullup: !0 };
+        // ADEN lands at 3 and ADSC at 9: the conversion starts on the ADC
+        // clock edge after 9, at 3 + 128 = 131. It is the first since the
+        // converter was switched on, so it samples 13.5 ADC clocks in and is
+        // done 25 in.
+        let done = 131 + 25 * 128;
+        assert_eq!(m.run(100_000, &all), Stop::Sample(done));
+        assert_eq!(m.adc_sample_needed(), Some(131 + 27 * 64));
+        assert_eq!(m.data[18], 0, "nothing read yet");
+        m.give_adc_levels(on_adc0(3.0));
+        // 3 · 1024 / 5 = 614.4: 0x266.
+        run_to(&mut m, 17, 100_000);
+        assert_eq!((m.data[18], m.data[19]), (0x66, 0x02));
+        // The wait loop is 5 cycles a pass from 9, and the `lds` of the first
+        // pass to start at or after `done` sees ADSC clear: it, the skipping
+        // `sbrc`, and the two reads.
+        let last = 9 + 5 * (done - 9).div_ceil(5);
+        assert_eq!(m.cycle, last + 2 + 2 + 2 + 2);
+    }
+
+    #[test]
+    fn the_adc_interrupt_is_vector_21() {
+        let mut program = vec![nop(); 52];
+        program[0] = rjmp(43); // reset -> main, word 44
+        program[42] = rjmp(6); // ADC, vector 21 -> isr, word 49
+        let main = [
+            sei(),         // sei                               ; 2..3
+            ldi(16, 0xCC), // ldi r16, ADEN | ADSC | ADIE | 16  ; 3..4
+            sts(0x7A, 16)[0],
+            0x007A, //        sts ADCSRA, r16                   ; 4..6
+            idle(), //        rjmp .
+            lds(20, 0x79)[0],
+            0x0079, //        isr: lds r20, ADCH
+            idle(),
+        ];
+        program[44..52].copy_from_slice(&main);
+        let mut m = machine(&program);
+        // ADSC lands at 6, the prescaler released at 6 too, and the first
+        // edge 16 later: done 25 ADC clocks after 22.
+        let done = 22 + 25 * 16;
+        assert_eq!(m.run(100_000, &Watch::default()), Stop::Sample(done));
+        m.give_adc_levels(on_adc0(5.0));
+        run_to(&mut m, 51, 100_000);
+        // 5 V against AVCC at 5 V reads all ones, and running the vector
+        // cleared ADIF.
+        assert_eq!(m.data[20], 0x03);
+        assert!(!m.adc.interrupt());
+        assert_eq!(m.read(u16::from(adc::ADCSRA)) & 0x50, 0);
+    }
+
+    #[test]
+    fn didr0_makes_a_port_c_pin_read_zero() {
+        let mut m = machine(&[idle()]);
+        m.set_inputs(PinLevels { high: 0x3F << 8, floating: 0 });
+        assert_eq!(m.read(0x26), 0x3F);
+        m.write(u16::from(adc::DIDR0), 0x05);
+        assert_eq!(m.read(0x26), 0x3A);
     }
 }

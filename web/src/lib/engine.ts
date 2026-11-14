@@ -193,7 +193,8 @@ export interface SerialByte {
 
 /**
  * A part of the chip the program used that is not simulated, and when it
- * first did: `adc`, `spi`, `i2c`, `comparator` or `watchdog`.
+ * first did: `temperature`, `adc-trigger`, `spi`, `i2c`, `comparator` or
+ * `watchdog`.
  */
 export interface McuNotice {
 	peripheral: string;

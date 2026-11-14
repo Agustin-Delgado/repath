@@ -29,7 +29,31 @@
 //! atomic, so an input that changes while one runs is seen by the next: the
 //! committed machine can stand a few cycles past the domain's clock, never
 //! behind it, and what it emits carries the cycle it happened on.
+//!
+//! # Measuring a voltage
+//!
+//! The converter needs what is on an analog node, which the digital domain
+//! does not know, and which the analog solver — behind the domain, and
+//! further behind a speculation — does not know yet either. What makes it
+//! possible is that a conversion says long beforehand when it will sample:
+//! the sample-and-hold instant is fixed the moment ADSC is written, and the
+//! result is not needed until the conversion ends, eleven and a half ADC
+//! clocks after that.
+//!
+//! So a conversion runs on without its voltages, and the machine stops only
+//! where it is to end without them (`Stop::Sample`). The device tells the
+//! domain the sample-and-hold instant it is owed ([`DigitalDevice::sample_due`]),
+//! the domain is not run past that instant, the solver makes it a timepoint
+//! and hands over the node voltages solved there, and the conversion ends on
+//! its cycle with them. What was measured is kept by cycle, so a speculation
+//! thrown away and run again — through the same conversion, at the same
+//! instant — finds it rather than asking twice.
+//!
+//! The pin is measured as the node is, with nothing hung on it: the 14 pF
+//! sample-and-hold capacitor and the input's leakage are not a load here,
+//! which matters only behind a source of tens of kilohms or more.
 
+mod adc;
 #[cfg(test)]
 mod asm;
 mod cpu;
@@ -42,6 +66,8 @@ mod twi;
 use std::sync::Arc;
 
 use crate::digital::{DigitalDevice, EvalCtx, Logic, NetId};
+use crate::element::NodeId;
+use adc::AnalogLevels;
 pub use machine::{FLASH_BYTES, Fault, Peripheral};
 use machine::{Machine, PinLevels, PinOutputs, Stop, Watch, flash_words};
 
@@ -96,6 +122,11 @@ impl Pin {
     fn bit(self) -> u32 {
         u32::from(self.0)
     }
+
+    /// The converter input this pin is: PC0 to PC5 are ADC0 to ADC5.
+    pub fn adc_channel(self) -> Option<usize> {
+        (8..14).contains(&self.0).then(|| usize::from(self.0 - 8))
+    }
 }
 
 /// The nets one pin reaches. A pin used both ways is given its output and,
@@ -111,6 +142,64 @@ pub struct PinNets {
     /// High while the pin's internal pull-up is on (an input with PORTx set),
     /// low otherwise: for the analog side to hang the resistor from.
     pub pullup: Option<NetId>,
+}
+
+/// The analog nodes the converter measures. A leg left out reads as ground.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AnalogPins {
+    /// ADC0 to ADC5: the nodes PC0 to PC5 are on.
+    pub channels: [Option<NodeId>; 6],
+    pub aref: Option<NodeId>,
+    pub avcc: Option<NodeId>,
+    /// What the converter measures from.
+    pub agnd: Option<NodeId>,
+}
+
+/// What the converter sampled, as the analog side said.
+#[derive(Debug, Default)]
+struct Samples {
+    /// Whether the chip has any analog node to measure. With none, every
+    /// voltage is 0 V and a conversion waits for nobody.
+    measured: bool,
+    /// Levels by sample-and-hold cycle, oldest first.
+    taken: Vec<(u64, AnalogLevels)>,
+}
+
+impl Samples {
+    fn get(&self, cycle: u64) -> Option<AnalogLevels> {
+        if !self.measured {
+            return Some(AnalogLevels::default());
+        }
+        self.taken.iter().find(|(c, _)| *c == cycle).map(|(_, levels)| *levels)
+    }
+
+    /// Forget what nothing from `machine` on can ask for again.
+    fn prune(&mut self, machine: &Machine) {
+        let keep = machine.adc_sample_needed().map_or(machine.cycle, |c| c.min(machine.cycle));
+        self.taken.retain(|(c, _)| *c >= keep);
+    }
+
+    /// [`Machine::run`], giving a conversion what it sampled whenever that is
+    /// known. Stopped where one is due to end, it stays stopped only while
+    /// the end is ahead of `now`: the domain is never run past an instant
+    /// owed a sample, so one still unknown by the end of its conversion means
+    /// there is no analog side to measure it, and it reads 0 V.
+    fn run(&self, machine: &mut Machine, limit: u64, watch: &Watch, now: u64) -> Stop {
+        loop {
+            match machine.run(limit, watch) {
+                Stop::Sample(at) => {
+                    let cycle = machine.adc_sample_needed().unwrap_or(at);
+                    let levels = match self.get(cycle) {
+                        Some(levels) => levels,
+                        None if at <= now => AnalogLevels::default(),
+                        None => return Stop::Sample(at),
+                    };
+                    machine.give_adc_levels(levels);
+                }
+                stop => return stop,
+            }
+        }
+    }
 }
 
 /// A byte that went out of USART0, timed when its stop bit ended.
@@ -167,6 +256,10 @@ pub struct Mcu {
     serial: Vec<SerialByte>,
     notices: Vec<Notice>,
     fault: Option<Fault>,
+    /// ADC0 to ADC5, AREF, AVCC and AGND, with ground for a leg not wired; or
+    /// nothing, for a chip that measures nothing.
+    analog: Vec<NodeId>,
+    samples: Samples,
 }
 
 impl std::fmt::Debug for Mcu {
@@ -242,7 +335,22 @@ impl Mcu {
             serial: Vec::new(),
             notices: Vec::new(),
             fault: None,
+            analog: Vec::new(),
+            samples: Samples::default(),
         }
+    }
+
+    /// The nodes its converter measures.
+    pub fn with_analog(mut self, pins: AnalogPins) -> Self {
+        let legs: Vec<Option<NodeId>> =
+            pins.channels.iter().copied().chain([pins.aref, pins.avcc, pins.agnd]).collect();
+        self.samples.measured = legs.iter().any(Option::is_some);
+        self.analog = if self.samples.measured {
+            legs.iter().map(|n| n.unwrap_or(crate::circuit::Circuit::GROUND)).collect()
+        } else {
+            Vec::new()
+        };
+        self
     }
 
     pub fn frequency(&self) -> f64 {
@@ -280,6 +388,7 @@ impl Mcu {
         self.serial.clear();
         self.notices.clear();
         self.fault = None;
+        self.samples.taken.clear();
     }
 
     /// The cycle an instant falls in. A wake-up meant for cycle n arrives as
@@ -367,6 +476,7 @@ impl Mcu {
     fn adopt(&mut self, ctx: &mut EvalCtx, speculation: Speculation) {
         self.committed = speculation.machine;
         self.pending.clear();
+        self.samples.prune(&self.committed);
         self.absorb();
         self.publish(ctx, speculation.stop);
         if speculation.horizon {
@@ -382,8 +492,10 @@ impl Mcu {
             machine.begin_speculation();
             let before = machine.progress();
             let limit = machine.cycle.max(now) + self.chunk;
-            let (stop, horizon) = match machine.run(limit, &self.watch) {
-                Stop::Changed(at) | Stop::Fault(at) => (at, false),
+            let (stop, horizon) = match self.samples.run(&mut machine, limit, &self.watch, now) {
+                // Waiting for a sample is woken where the conversion ends,
+                // by when the sample has been taken.
+                Stop::Changed(at) | Stop::Fault(at) | Stop::Sample(at) => (at, false),
                 Stop::Limit => (machine.cycle, true),
                 // Asleep for good with nothing to wake it: only an input can
                 // change that, and an input re-evaluates the device anyway.
@@ -409,10 +521,11 @@ impl Mcu {
     /// before `until` and ends after it.
     fn run_committed(&mut self, ctx: &mut EvalCtx, until: u64) {
         loop {
-            match self.committed.run(until, &self.watch) {
+            match self.samples.run(&mut self.committed, until, &self.watch, until) {
                 Stop::Changed(at) => self.publish(ctx, at),
                 Stop::Fault(_) => {}
-                Stop::Limit => break,
+                // Only past `until`, which the instruction under way ran over.
+                Stop::Limit | Stop::Sample(_) => break,
                 Stop::Idle => {
                     self.committed.idle_until(until);
                     break;
@@ -430,6 +543,20 @@ impl Mcu {
             self.committed.set_inputs(levels);
         }
         self.run_committed(ctx, now);
+        self.samples.prune(&self.committed);
+    }
+
+    /// The sample-and-hold cycle the converter is owed a measurement for.
+    ///
+    /// The speculation is the furthest the program has got, and it only ever
+    /// stops for a sample at the first conversion it lacks one for, so there
+    /// is never more than one owed.
+    fn owed_sample(&self) -> Option<u64> {
+        if !self.samples.measured || self.in_reset {
+            return None;
+        }
+        let machine = self.speculation.as_ref().map_or(&self.committed, |s| &s.machine);
+        machine.adc_sample_needed().filter(|&cycle| self.samples.get(cycle).is_none())
     }
 }
 
@@ -513,13 +640,31 @@ impl DigitalDevice for Mcu {
     fn reset(&mut self) {
         self.restart();
     }
+
+    fn analog_nodes(&self) -> &[usize] {
+        &self.analog
+    }
+
+    fn sample_due(&self) -> Option<f64> {
+        self.owed_sample().map(|cycle| self.time_of(cycle))
+    }
+
+    fn take_sample(&mut self, voltages: &[f64]) {
+        let (Some(cycle), [channels @ .., aref, avcc, agnd]) = (self.owed_sample(), voltages)
+        else {
+            return;
+        };
+        let Ok(channels) = channels.try_into() else { return };
+        let levels = AnalogLevels { channels, aref: *aref, avcc: *avcc, agnd: *agnd };
+        self.samples.taken.push((cycle, levels));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::asm::*;
     use super::*;
-    use crate::digital::{DigitalDomain, LogicSource, Transition};
+    use crate::digital::{DigitalDomain, Halt, LogicSource, Transition};
 
     const F: f64 = 16e6;
 
@@ -926,19 +1071,22 @@ mod tests {
         );
     }
 
-    /// A program that starts a conversion on every pass of a loop that reads
-    /// a pin, then enables SPI once the loop is done, with that pin flipping
-    /// under it — every flip throws a speculation away — and a reset that
-    /// starts it all again. Each peripheral comes out once, at the instruction
-    /// that first used it.
+    /// A program that starts a conversion of the temperature sensor on every
+    /// pass of a loop that reads a pin, then enables SPI once the loop is
+    /// done, with that pin flipping under it — every flip throws a speculation
+    /// away — and a reset that starts it all again. Each peripheral comes out
+    /// once, at the instruction that first used it.
     #[test]
     fn notices_come_out_once_through_rollbacks_and_resets() {
         let program = [
-            ldi(16, 0xC0), // ldi r16, ADEN | ADSC  ; 0..1
+            ldi(16, 0xC8), // ldi r16, REFS 11 | MUX 1000 ; 0..1
+            sts(0x7C, 16)[0],
+            0x007C,        // sts ADMUX, r16       ; 1..3
+            ldi(16, 0xC0), // ldi r16, ADEN | ADSC  ; 3..4
             sts(0x7A, 16)[0],
-            0x007A,        // sts ADCSRA, r16       ; 1..3   noticed at 1
-            ldi(24, 0xE8), // ldi r24, lo(1000)     ; 3..4
-            ldi(25, 0x03), // ldi r25, hi(1000)     ; 4..5
+            0x007A,        // sts ADCSRA, r16       ; 4..6   noticed at 4
+            ldi(24, 0xE8), // ldi r24, lo(1000)     ; 6..7
+            ldi(25, 0x03), // ldi r25, hi(1000)     ; 7..8
             in_(17, 0x09), // loop: in r17, PIND    ; 1
             sts(0x7A, 16)[0],
             0x007A,        // sts ADCSRA, r16       ; 2
@@ -961,15 +1109,148 @@ mod tests {
         let pd2_nets = PinNets { input: Some(pd2), ..Default::default() };
         bench.mcu(&program, &[("PD2", pd2_nets)], Some(rst));
         bench.run(12_000);
-        // The loop starts at 5 and takes 7 cycles a pass but the last, which
-        // takes 6: `out SPCR` starts 5 + 7 · 1000 = 7005 cycles in. The reset
+        // The loop starts at 8 and takes 7 cycles a pass but the last, which
+        // takes 6: `out SPCR` starts 8 + 7 · 1000 = 7008 cycles in. The reset
         // runs from 50 µs to 60 µs, so the program starts again at cycle 960,
         // and the first run never got that far. The conversion it notices
-        // again at 961 was already noticed at 1.
+        // again at 964 was already noticed at 4.
         let notices = bench.mcu_state().notices();
         let cycles: Vec<(Peripheral, f64)> =
             notices.iter().map(|n| (n.peripheral, (n.time * F * 1e6).round() / 1e6)).collect();
-        assert_eq!(cycles, vec![(Peripheral::Adc, 1.0), (Peripheral::Spi, 960.0 + 7005.0)]);
+        assert_eq!(cycles, vec![(Peripheral::Thermometer, 4.0), (Peripheral::Spi, 960.0 + 7008.0)]);
+    }
+
+    /// Convert ADC0 against AVCC in a polling loop that also reads PD2, and
+    /// put each result's top eight bits (ADLAR) on port B. ADC0 is a ramp.
+    /// With nothing but the domain here, the bench stands in for the analog
+    /// solver: wherever the domain stops for a sample it hands over the ramp
+    /// at that instant, and records which instant that was.
+    ///
+    /// Each value on port B has to be the ramp at a sample-and-hold instant
+    /// the datasheet puts where it is, and a PD2 flipping under the program —
+    /// throwing speculations away part way through conversions — must change
+    /// nothing at all, nor have anything measured twice.
+    #[test]
+    fn a_conversion_reads_the_voltage_at_its_sample_and_hold_instant() {
+        //        ldi  r16, 0xFF       ; 0..1
+        //        out  DDRB, r16       ; 1..2
+        //        ldi  r16, 0x60       ; 2..3   REFS0 | ADLAR, ADC0
+        //        sts  ADMUX, r16      ; 3..5
+        // loop:  ldi  r16, 0xC4       ; 1      ADEN | ADSC, prescaler 16
+        //        sts  ADCSRA, r16     ; 2
+        // wait:  in   r17, PIND       ; 1
+        //        lds  r17, ADCSRA     ; 2
+        //        sbrc r17, 6          ; 1, or 2 skipping
+        //        rjmp wait            ; 2
+        //        lds  r18, ADCH       ; 2
+        //        out  PORTB, r18      ; 1
+        //        rjmp loop            ; 2
+        let program = [
+            ldi(16, 0xFF),
+            out(0x04, 16),
+            ldi(16, 0x60),
+            sts(0x7C, 16)[0],
+            0x007C,
+            ldi(16, 0xC4),
+            sts(0x7A, 16)[0],
+            0x007A,
+            in_(17, 0x09),
+            lds(17, 0x7A)[0],
+            0x007A,
+            sbrc(17, 6),
+            rjmp(-5),
+            lds(18, 0x79)[0],
+            0x0079,
+            out(0x05, 18),
+            rjmp(-12),
+        ];
+        let ramp = |t: f64| 5.0 * t / 300e-6;
+        let run = |flips: Vec<f64>| {
+            let mut bench = Bench::new();
+            let pd2 = bench.net("pd2");
+            bench
+                .domain
+                .add_device(Box::new(LogicSource::new("SW", pd2, Logic::Low).operated_at(flips)));
+            let port: Vec<NetId> = (0..8).map(|b| bench.net(&format!("pb{b}"))).collect();
+            let mut pins: Vec<(Pin, PinNets)> =
+                port.iter().enumerate().map(|(b, &n)| (Pin(b as u8), output(n))).collect();
+            pins.push((pin("PD2"), PinNets { input: Some(pd2), ..Default::default() }));
+            let wake = bench.net("wake");
+            let analog = AnalogPins {
+                channels: [Some(1), None, None, None, None, None],
+                avcc: Some(2),
+                ..Default::default()
+            };
+            let mcu = Mcu::new("U1", &image(&program), F, &pins, None, wake).with_analog(analog);
+            bench.domain.add_device(Box::new(mcu));
+
+            bench.domain.initialize();
+            let mut asked = Vec::new();
+            loop {
+                let settled = bench.domain.settle_until(280e-6, false, usize::MAX);
+                if settled.halt != Halt::Sample {
+                    break;
+                }
+                bench.domain.deliver_samples(settled.time, |at, node| {
+                    asked.push(at);
+                    if node == 1 {
+                        ramp(at)
+                    } else if node == 2 {
+                        5.0
+                    } else {
+                        0.0
+                    }
+                });
+            }
+            // Port B as a byte, wherever it changed.
+            let mut byte = 0u8;
+            let mut values: Vec<(u64, u8)> = Vec::new();
+            for t in bench.domain.take_log().iter().filter(|t| port.contains(&t.net)) {
+                let bit = port.iter().position(|&n| n == t.net).unwrap();
+                byte = (byte & !(1 << bit)) | (u8::from(t.state == Logic::High) << bit);
+                let cycle = (t.time * F).round() as u64;
+                match values.last_mut() {
+                    Some(last) if last.0 == cycle => last.1 = byte,
+                    _ => values.push((cycle, byte)),
+                }
+            }
+            // Nine nodes are measured at each instant: ADC0 to ADC5, AREF,
+            // AVCC, AGND.
+            assert!(asked.chunks(9).all(|c| c.iter().all(|t| *t == c[0])), "{asked:?}");
+            let instants: Vec<u64> = asked.chunks(9).map(|c| (c[0] * F).round() as u64).collect();
+            (values, instants)
+        };
+
+        let (values, instants) = run(Vec::new());
+        // ADEN and ADSC land together at 8, as the store ends, and the
+        // prescaler's first edge is 16 later: the first conversion starts at
+        // 24, samples 13.5 clocks in and is done 25 in, at 424. The `lds` of
+        // the wait loop runs at 9 + 6k, first seeing ADSC clear at 429; ADCH
+        // reaches port B as the `out` ends at 436, and the next ADSC lands at
+        // 441. Its conversion starts on the edge at 8 + 16 · 28 = 456 and
+        // samples 1.5 clocks in; done at 456 + 13 · 16 = 664, seen by the
+        // `lds` at 664 exactly, on port B at 671.
+        assert_eq!(instants[..2], [24 + 216, 456 + 24]);
+        assert_eq!(values[0], (2, 0), "port B an output, low");
+        assert_eq!(values[1].0, 436);
+        assert_eq!(values[2].0, 671);
+        // Every later conversion is a normal one, started on an ADC clock
+        // edge, so it samples 24 cycles past one.
+        assert!(instants[1..].iter().all(|c| (c - 8 - 24) % 16 == 0), "{instants:?}");
+        // And each value is the ramp's at its own instant, eight bits of it:
+        // floor(V · 1024 / 5) / 4.
+        assert!(values.len() > 8, "{values:?}");
+        for (k, &(_, byte)) in values[1..].iter().enumerate() {
+            let volts = ramp(instants[k] as f64 / F);
+            assert_eq!(byte, (volts * 256.0 / 5.0).floor() as u8, "conversion {k}");
+        }
+
+        // PD2 is read on every pass, so each flip throws away whatever ran
+        // past it, conversions half done included.
+        let flips: Vec<f64> = (1..60).map(|i| f64::from(i) * 4.37e-6).collect();
+        let (again, asked_again) = run(flips);
+        assert_eq!(again, values);
+        assert_eq!(asked_again, instants, "every instant measured once, and only once");
     }
 
     /// Show EEPROM byte 0 on port B, then write 42 to it. A reset just after

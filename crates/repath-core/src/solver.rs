@@ -34,6 +34,12 @@
 //! between a simulation that keeps up with the clock on the wall and one that
 //! does not.
 //!
+//! A digital device that measures a voltage — a microcontroller's converter —
+//! says ahead of time when it will sample, and the digital side is not run
+//! past that instant until the analog side has solved a timepoint on it and
+//! handed the device the node voltages there. The instant is a step limit
+//! rather than a corner: nothing changes there, it only has to be solved.
+//!
 //! And a bridged net switching faster than the step ceiling can show — more
 //! edges in one ceiling's worth of time than a screen has pixels for — is not
 //! resolved edge by edge either. Its bridge is held at the net's time average
@@ -1212,6 +1218,10 @@ impl Simulator {
                 break;
             }
 
+            // A sample owed at the instant already reached — the digital side
+            // stopped there for it — is the solution there.
+            self.deliver_samples(circuit, t, t);
+
             let integration =
                 if euler_steps > 0 { Integration::BackwardEuler } else { Integration::Trapezoidal };
 
@@ -1274,6 +1284,14 @@ impl Simulator {
                 step = next - t;
                 on_corner = true;
             }
+            // A converter samples there: the voltage it gets is the one solved
+            // at that instant, not one interpolated across a step.
+            if let Some(due) = circuit.digital.next_sample_due()
+                && due > t
+                && due < t + step
+            {
+                step = due - t;
+            }
             // Not a corner: the queue was simply not run any further, and the
             // analog side is not to get ahead of it.
             if settled.halt == Halt::Budget && settled.time < t + step {
@@ -1328,8 +1346,10 @@ impl Simulator {
                 }
             }
 
+            let from = t;
             t += attempt;
             self.accept_timepoint(circuit, Mode::Transient, integration, t, attempt);
+            self.deliver_samples(circuit, from, t);
             self.x_accepted.copy_from_slice(&self.x);
             stats.accepted_steps += 1;
             self.reach_changes(circuit, &mut run.ledger.pacing, t);
@@ -1458,6 +1478,24 @@ impl Simulator {
         for element in circuit.elements_mut() {
             element.accept(&ctx);
         }
+    }
+
+    /// Hand every device measuring analog nodes what it is owed by `to`: the
+    /// solution accepted at `from` and the one just solved at `to`, joined by a
+    /// straight line for an instant in between. A sample instant is a step
+    /// limit, so that is the exception — a step the floor stretched past it,
+    /// or one the instant appeared inside after the step was chosen.
+    fn deliver_samples(&self, circuit: &mut Circuit, from: f64, to: f64) {
+        let (old, new) = (&self.x_accepted, &self.x);
+        // The instant is a cycle count over a frequency and the step to it a
+        // difference, so landing on it is only exact to a rounding.
+        let until = to + 4.0 * f64::EPSILON * to.abs();
+        let span = to - from;
+        circuit.digital.deliver_samples(until, |at, node| {
+            let Some(i) = node_index(node).filter(|&i| i < new.len()) else { return 0.0 };
+            let alpha = if span > 0.0 { ((at - from) / span).clamp(0.0, 1.0) } else { 1.0 };
+            old[i] + (new[i] - old[i]) * alpha
+        });
     }
 
     /// Sample every ADC, let the digital domain settle to the accepted instant,

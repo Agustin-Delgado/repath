@@ -220,6 +220,29 @@ pub trait DigitalDevice: std::fmt::Debug + Send + AsAny {
     fn evaluate(&mut self, ctx: &mut EvalCtx);
 
     fn reset(&mut self) {}
+
+    /// Analog nodes this device measures, by the circuit's node numbers: a
+    /// microcontroller's converter inputs. Fixed once the device is added.
+    ///
+    /// A digital device never sees a voltage on its own, and cannot wait for
+    /// one either — the domain runs ahead of the analog solver. So a device
+    /// that measures says when, ahead of time, through
+    /// [`Self::sample_due`]; the domain is not run past that instant until the
+    /// solver has been there and handed the voltages over with
+    /// [`Self::take_sample`].
+    fn analog_nodes(&self) -> &[usize] {
+        &[]
+    }
+
+    /// The earliest instant this device needs `analog_nodes` measured at and
+    /// has not been given them.
+    fn sample_due(&self) -> Option<f64> {
+        None
+    }
+
+    /// The voltages of `analog_nodes`, in their order, at the instant
+    /// `sample_due` gave.
+    fn take_sample(&mut self, _voltages: &[f64]) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -980,6 +1003,8 @@ pub struct DigitalDomain {
     /// Nets whose changes the analog side has to be told about, because a
     /// bridge drives an analog node from them.
     watched: Vec<bool>,
+    /// The devices that measure analog nodes.
+    samplers: Vec<usize>,
     /// How far the queue has been run out, in seconds.
     now: f64,
 }
@@ -1003,6 +1028,10 @@ pub enum Halt {
     /// The event budget ran out; the domain stands at the last instant it
     /// finished.
     Budget,
+    /// A device needs analog nodes measured at this instant: the domain
+    /// stands there, with every event due at it applied and nothing later,
+    /// until [`DigitalDomain::deliver_samples`] has been called for it.
+    Sample,
 }
 
 /// Where a settle stopped, and why.
@@ -1061,10 +1090,37 @@ impl DigitalDomain {
             }
         }
 
+        if !device.analog_nodes().is_empty() {
+            self.samplers.push(index);
+        }
         self.driver_base.push(base);
         self.devices.push(device);
         self.touched_mark.push(0);
         index
+    }
+
+    /// The earliest instant a device needs analog nodes measured at.
+    pub fn next_sample_due(&self) -> Option<f64> {
+        self.samplers.iter().filter_map(|&d| self.devices[d].sample_due()).reduce(f64::min)
+    }
+
+    /// Hand every device whose sample is due by `until` the voltages of its
+    /// nodes, `voltage(instant, node)` giving each one at the instant asked.
+    pub fn deliver_samples(&mut self, until: f64, mut voltage: impl FnMut(f64, usize) -> f64) {
+        let mut voltages = Vec::new();
+        for &index in &self.samplers {
+            let device = &mut self.devices[index];
+            // A device may have several due by now, in order; one that does
+            // not take what it is given must not hold this up for good.
+            while let Some(due) = device.sample_due().filter(|t| *t <= until) {
+                voltages.clear();
+                voltages.extend(device.analog_nodes().iter().map(|&n| voltage(due, n)));
+                device.take_sample(&voltages);
+                if device.sample_due() == Some(due) {
+                    break;
+                }
+            }
+        }
     }
 
     /// Register an external driver — used by analog-to-digital bridges, which
@@ -1191,17 +1247,24 @@ impl DigitalDomain {
     /// events in the order they happen and measures its delay from the event,
     /// not from wherever the caller happened to stop.
     ///
-    /// Two things cut the span short. With `stop_at_watched`, the first instant
-    /// at which a watched net changes is the last one done, so the caller can
-    /// bring the analog side up to exactly there before going on. And a call is
-    /// never allowed more than `budget` events, so a fast clock cannot hold the
-    /// caller for as long as its span is wide.
+    /// Three things cut the span short. With `stop_at_watched`, the first
+    /// instant at which a watched net changes is the last one done, so the
+    /// caller can bring the analog side up to exactly there before going on.
+    /// A call is never allowed more than `budget` events, so a fast clock
+    /// cannot hold the caller for as long as its span is wide. And it never
+    /// goes past an instant a device needs a measurement at — which may be
+    /// one a device asked for along the way — since what the device does
+    /// after it depends on the answer.
     pub fn settle_until(&mut self, time: f64, stop_at_watched: bool, budget: usize) -> Settled {
         let mut events = 0;
         loop {
-            let Some(instant) = self.queue.next_time().filter(|t| *t <= time) else {
-                self.now = self.now.max(time);
-                return Settled { time: self.now, halt: Halt::Reached, events };
+            let (limit, halt) = match self.next_sample_due() {
+                Some(due) if due < time => (due, Halt::Sample),
+                _ => (time, Halt::Reached),
+            };
+            let Some(instant) = self.queue.next_time().filter(|t| *t <= limit) else {
+                self.now = self.now.max(limit);
+                return Settled { time: self.now, halt, events };
             };
             if events >= budget {
                 return Settled { time: self.now, halt: Halt::Budget, events };
