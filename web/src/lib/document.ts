@@ -12,7 +12,9 @@ export function saveToFile(app: App): void {
 	const url = URL.createObjectURL(blob);
 	const link = document.createElement('a');
 	link.href = url;
-	link.download = 'circuit.repath.json';
+	// `.repath`, so the file says what opens it; it is JSON inside, and a file
+	// saved as `.repath.json` before this still opens.
+	link.download = 'circuit.repath';
 	link.click();
 	// After the click has been dispatched, not during it. Revoking inside the
 	// same turn is a race the common browsers happen to win and Safari does
@@ -29,7 +31,7 @@ export function saveToFile(app: App): void {
 export function openFromFile(app: App): void {
 	const input = document.createElement('input');
 	input.type = 'file';
-	input.accept = 'application/json,.json';
+	input.accept = '.repath,.json,application/json';
 	input.onchange = async () => {
 		const file = input.files?.[0];
 		if (!file) return;

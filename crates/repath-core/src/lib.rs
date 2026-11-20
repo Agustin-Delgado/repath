@@ -58,7 +58,7 @@ pub mod prelude {
     };
     pub use crate::netlist::{Netlist, NetlistError};
     pub use crate::solver::{
-        AcConfig, AcResult, OperatingPoint, Running, SimError, Simulator, SolverConfig,
+        AcConfig, AcResult, Culprits, OperatingPoint, Running, SimError, Simulator, SolverConfig,
         TransientConfig, TransientResult,
     };
 }

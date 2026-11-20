@@ -7,20 +7,33 @@
  */
 
 import {
+	EngineError,
 	ensureEngine,
 	runFrequencySweep,
 	runTransient,
 	type FrequencyRun,
 	type McuNotice,
+	type SolveFailure,
 	type TransientRun
 } from './engine';
+import { locateFailure, type LocatedFailure } from './schematic/culprits';
 import { EXAMPLES, exampleById } from './examples';
 import { sampleIndexAt } from './schematic/flow';
 import { contactControl, isHighAt } from './schematic/contacts';
 import { Acquisition } from './acquire';
+import { liveChanges, type RetuneAt } from './retune';
 import type { Capture } from './capture';
 import { Trace, wireRef, type Step } from './trace';
 import type { CircuitSettings, SharedCircuit } from './share';
+import {
+	migrate,
+	parseDocument,
+	serializeDocument,
+	toDocument,
+	type EditorLevel,
+	type EditorState,
+	type RepathDocument
+} from './format';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { LCD_HISTORY, sameGlass, type LcdFrame } from './schematic/lcd';
@@ -248,28 +261,10 @@ interface HistoryEntry {
 }
 
 /**
- * The editor as a draft keeps it: see `AppState.draft`.
- *
- * `levels[0]` is the drawing; each level after it is the inside of the block
- * named by `block`, entered from the level before it.
+ * The editor as a draft keeps it: see `AppState.draft`. A document like any
+ * other, with the editor's own state in `editor`.
  */
-export interface DraftDocument {
-	version: number;
-	exampleId: string;
-	stopTime: number;
-	analysis: 'transient' | 'frequency';
-	acStart: number;
-	acStop: number;
-	temperature: number;
-	logicFamily: string;
-	sample: number;
-	sweepCount: number;
-	channels: Record<string, { gain: number; offset: number }>;
-	levels: Array<{ block?: string; schematic: Schematic; probes: string[] }>;
-}
-
-/** Bumped if a draft's shape ever changes incompatibly; an older one is then set aside, not misread. */
-const DRAFT_VERSION = 1;
+export type DraftDocument = RepathDocument & { editor: EditorState };
 
 const HISTORY_LIMIT = 100;
 /**
@@ -556,6 +551,23 @@ class AppState {
 	 */
 	operations = $state<Map<string, number[]>>(new Map());
 	/**
+	 * Every value changed while this run was going, and the instant of the run
+	 * it changed at, oldest first.
+	 *
+	 * Unlike an operation, the edit is also written into the drawing — a knob
+	 * turned stays turned, and the next run starts from where it was left. This
+	 * is the run's own record of when: the run's first part was solved with the
+	 * old values, and handing these to a fresh run of the circuit as it was
+	 * drawn at the start lands every change on the same instant.
+	 */
+	retunes = $state<RetuneAt[]>([]);
+	/**
+	 * The netlist the running sweep is solving now: what it started from, with
+	 * every retune since applied. What the next edit is compared with to decide
+	 * whether it can go in live. Null when no transient sweep is going.
+	 */
+	private liveNetlist: unknown = null;
+	/**
 	 * What each microcontroller has said during this run, by name: the bytes it
 	 * sent over serial, as text, and why its CPU stopped if it did.
 	 *
@@ -597,6 +609,30 @@ class AppState {
 	/** The servos in the run, and the last reading of each. */
 	private servoReads = new Map<string, ServoFrame | null>();
 	error = $state<string | null>(null);
+	/**
+	 * Where the solve behind `error` failed, in the engine's names, and the
+	 * message it came with. Kept against the message rather than cleared
+	 * alongside it: everything that clears or replaces the error then retires
+	 * this too, without each of those places having to know it exists.
+	 */
+	private failedWith = $state<{ error: string; failure: SolveFailure } | null>(null);
+	/**
+	 * The parts and nets on the drawing the last failed solve blames, and a
+	 * sentence in the drawing's own names. Null while the error showing is not
+	 * a solve's, or there is none.
+	 */
+	failure = $derived.by((): LocatedFailure | null => {
+		const failed = this.failedWith;
+		if (!failed || failed.error !== this.error) return null;
+		const located = locateFailure(failed.failure, this.compiled, this.schematic);
+		return located.nets.length > 0 || located.parts.length > 0 ? located : null;
+	});
+
+	/** Show an engine error, keeping what it said about where. */
+	private fail(message: string, failure: SolveFailure | null | undefined): void {
+		this.error = message;
+		this.failedWith = failure ? { error: message, failure } : null;
+	}
 	/**
 	 * Whether results are being kept up to date with the circuit.
 	 *
@@ -1900,6 +1936,39 @@ class AppState {
 	/** When a part was operated by hand during this run. */
 	operationsOf(id: string): number[] {
 		return this.operations.get(id) ?? [];
+	}
+
+	/**
+	 * Carry an edit into the sweep that is going, at the instant it has reached,
+	 * instead of starting a new run. Returns whether it did.
+	 *
+	 * Only for an edit the running circuit can take — a value, not a change of
+	 * what is connected to what: see `liveChanges`. Like a switch thrown during
+	 * a sweep, the change lands at the newest instant, never in the past, and
+	 * everything solved before it stays as it was solved. False sends the caller
+	 * back to a restart, which is still what any other edit gets.
+	 */
+	retuneLive(): boolean {
+		const acquiring = this.acquiring;
+		if (!acquiring || this.analysis !== 'transient' || this.liveNetlist === null) return false;
+		// A single shot that has finished is a captured window, and an edit to
+		// it asks for the window again with the new value in it.
+		if (acquiring.single && !acquiring.sweeping) return false;
+		const next = this.compiled.netlist;
+		if (!next) return false;
+		const changes = liveChanges(this.liveNetlist, next);
+		if (changes === null) return false;
+		const at = acquiring.time;
+		for (const { element, change } of changes) {
+			// A refusal halfway through leaves the run part-changed, which is
+			// fine only because the restart that follows throws it away.
+			if (!acquiring.retune(element, change)) return false;
+		}
+		this.liveNetlist = next;
+		if (changes.length > 0) {
+			this.retunes = [...this.retunes, ...changes.map((c) => ({ ...c, at }))];
+		}
+		return true;
 	}
 
 	/** Rename a component. Returns why it was refused, or null on success. */
@@ -3246,30 +3315,23 @@ class AppState {
 
 	// -- persistence ------------------------------------------------------
 
-	toJSON(): string {
-		return JSON.stringify(
-			{
-				version: 1,
-				schematic: this.schematic,
-				stopTime: this.stopTime,
-				probes: this.probes,
-				settings: this.settings()
-			},
-			null,
-			2
-		);
+	/** The circuit as a document: what a saved file holds. */
+	toDocument(): RepathDocument {
+		return toDocument({
+			schematic: this.schematic,
+			stopTime: this.stopTime,
+			probes: this.probes,
+			settings: this.settings()
+		});
 	}
 
+	toJSON(): string {
+		return serializeDocument(this.toDocument());
+	}
+
+	/** Open a saved file, of this format version or any older one. */
 	fromJSON(text: string): void {
-		const parsed = JSON.parse(text) as {
-			schematic?: Schematic;
-			stopTime?: number;
-			probes?: string[];
-			settings?: CircuitSettings;
-		};
-		if (!Array.isArray(parsed?.schematic?.instances)) {
-			throw new Error('That file is not a repath schematic.');
-		}
+		const parsed = parseDocument(text);
 		const schematic = parsed.schematic;
 		// Inside `replaceDocument` from the first registration on: a file refused
 		// halfway must not leave its definitions over the open drawing's own.
@@ -3364,30 +3426,23 @@ class AppState {
 	draft(): DraftDocument {
 		void this.depth;
 		const frames = this.outside;
-		const levels: DraftDocument['levels'] = frames.map((frame, k) => ({
-			block: k === 0 ? undefined : frames[k - 1].editing.id,
+		// The drawing underneath everything is the document's own; each block open
+		// above it is a level, named by the block it is the inside of.
+		const root = frames[0] ?? { schematic: this.schematic, probes: this.probes };
+		const open: EditorLevel[] = frames.slice(1).map((frame, k) => ({
+			block: frames[k].editing.id,
 			schematic: frame.schematic,
 			probes: frame.probes
 		}));
-		levels.push({
-			block: frames.length > 0 ? frames[frames.length - 1].editing.id : undefined,
-			schematic: this.schematic,
-			probes: this.probes
-		});
-		return $state.snapshot({
-			version: DRAFT_VERSION,
-			exampleId: this.exampleId,
-			stopTime: this.stopTime,
-			analysis: this.analysis,
-			acStart: this.acStart,
-			acStop: this.acStop,
-			temperature: this.temperature,
-			logicFamily: this.logicFamily,
-			sample: this.sample,
-			sweepCount: this.sweepCount,
-			channels: this.channels,
-			levels
-		}) as DraftDocument;
+		if (frames.length > 0) {
+			open.push({ block: frames[frames.length - 1].editing.id, schematic: this.schematic, probes: this.probes });
+		}
+		return $state.snapshot(
+			toDocument(
+				{ schematic: root.schematic, stopTime: this.stopTime, probes: root.probes, settings: this.settings() },
+				{ exampleId: this.exampleId, channels: this.channels, levels: open }
+			)
+		) as DraftDocument;
 	}
 
 	/**
@@ -3398,25 +3453,19 @@ class AppState {
 	 * something the person had put where they wanted it.
 	 */
 	restoreDraft(raw: unknown): void {
-		const doc = raw as Partial<DraftDocument> | null;
-		const root = doc?.levels?.[0];
-		if (doc?.version !== DRAFT_VERSION || !Array.isArray(root?.schematic?.instances)) {
-			throw new Error('That saved draft is not one this version of repath can read.');
-		}
+		// Migrated like a file, so a draft kept by an older build comes back too.
+		const doc = migrate(raw, 'saved draft');
+		const editor = doc.editor;
 		this.leaveEverything();
 		this.past = [];
 		this.future = [];
 		this.historyBytes = 0;
-		this.schematic = adopt(root.schematic);
-		this.probes = root.probes ?? [];
-		this.exampleId = typeof doc.exampleId === 'string' ? doc.exampleId : '';
-		const stopTime = doc.stopTime;
-		this.stopTime =
-			typeof stopTime === 'number' && Number.isFinite(stopTime) && stopTime > 0
-				? stopTime
-				: DEFAULT_STOP_TIME;
-		this.applySettings(doc);
-		this.channels = doc.channels && typeof doc.channels === 'object' ? doc.channels : {};
+		this.schematic = adopt(doc.schematic);
+		this.probes = doc.probes;
+		this.exampleId = editor?.exampleId ?? '';
+		this.stopTime = doc.stopTime;
+		this.applySettings(doc.settings);
+		this.channels = editor?.channels ?? {};
 		this.selection = [];
 		this.discardRun();
 		this.acResult = null;
@@ -3427,7 +3476,7 @@ class AppState {
 		// Back down into whatever block was open. A level whose block is gone —
 		// a draft from an editor that disagreed about it — is where this stops,
 		// on the last level that still makes sense.
-		for (const level of doc.levels!.slice(1)) {
+		for (const level of editor?.levels ?? []) {
 			const block = (this.schematic.blocks ?? []).find((b) => b.id === level.block);
 			if (!block || !Array.isArray(level.schematic?.instances)) break;
 			this.descend(block);
@@ -3829,6 +3878,9 @@ class AppState {
 						'No source is driving the sweep. Set a voltage source’s AC drive to 1 to make it the input.'
 					);
 				}
+				// Whatever transient sweep is left over is no longer what is on
+				// screen, and an edit is not to be slipped into it.
+				this.liveNetlist = null;
 				this.acResult = await runFrequencySweep(compiled.netlist, this.acStart, this.acStop);
 				if (this.probes.length === 0) this.autoProbe();
 			} else {
@@ -3837,8 +3889,8 @@ class AppState {
 				// line rather than two dots joined up.
 				const acquiring = new Acquisition(compiled.netlist, this.stopTime / 200, {
 					onChunk: () => this.absorb(),
-					onError: (message) => {
-						this.error = message;
+					onError: (message, failure) => {
+						this.fail(message, failure);
 						this.playing = false;
 					},
 					rate: () => this.playbackRate
@@ -3846,6 +3898,8 @@ class AppState {
 				this.acquiring = acquiring;
 				this.capture = acquiring.capture;
 				this.operations = new Map();
+				this.retunes = [];
+				this.liveNetlist = compiled.netlist;
 				this.mcuNames = devicesOfType(compiled.netlist, 'mcu');
 				this.lcdNames = devicesOfType(compiled.netlist, 'i2c_lcd');
 				this.lcdHistory = new Map();
@@ -3865,7 +3919,10 @@ class AppState {
 				else acquiring.start();
 			}
 		} catch (cause) {
-			this.error = cause instanceof Error ? cause.message : String(cause);
+			this.fail(
+				cause instanceof Error ? cause.message : String(cause),
+				cause instanceof EngineError ? cause.failure : null
+			);
 			if (this.analysis === 'frequency') this.acResult = null;
 			else this.discardRun();
 		} finally {
@@ -4044,6 +4101,8 @@ class AppState {
 		this.capture = null;
 		this.result = null;
 		this.operations = new Map();
+		this.retunes = [];
+		this.liveNetlist = null;
 		this.mcuLogs = {};
 		this.mcuNames = [];
 		this.lcdNames = [];

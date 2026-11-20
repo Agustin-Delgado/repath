@@ -7,6 +7,7 @@
 	import Toolbar from '$lib/components/toolbar/Toolbar.svelte';
 	import CommandPalette from '$lib/commands/CommandPalette.svelte';
 	import { Button, Splitter, Toaster } from '$lib/ui';
+	import { untrack } from 'svelte';
 	import { ensureEngine } from '$lib/engine';
 	import {
 		Autosaver,
@@ -145,7 +146,9 @@
 				id,
 				origin,
 				edited: resumed?.edited ?? false,
-				doc: id === resumed?.id ? resumed.doc : null
+				// As this build writes it, not as it was stored: a draft kept by an older
+				// build would otherwise look edited the first time it is written again.
+				doc: id === resumed?.id ? JSON.stringify(app.draft()) : null
 			},
 			{
 				onError: () => {
@@ -153,8 +156,8 @@
 						'Your work could not be saved in this browser, so a reload would lose it. Save it to a file to be safe.';
 				},
 				isEmpty: (doc) => {
-					const levels = (doc as ReturnType<typeof app.draft>).levels;
-					return levels.length === 1 && levels[0].schematic.instances.length === 0;
+					const draft = doc as ReturnType<typeof app.draft>;
+					return draft.editor.levels.length === 0 && draft.schematic.instances.length === 0;
 				}
 			}
 		);
@@ -262,6 +265,14 @@
 			return;
 		}
 		if (signature === lastSignature) return;
+		// A value turned under a running circuit goes in at the instant the sweep
+		// has reached, straight away and without the debounce: the run carries
+		// on, and a knob being dragged is followed rather than replayed.
+		if (!app.running && untrack(() => app.retuneLive())) {
+			clearTimeout(pending);
+			lastSignature = signature;
+			return;
+		}
 
 		const rerun = () => {
 			if (!app.live) return;
@@ -292,15 +303,7 @@
 	 * a side effect nobody asked for.
 	 */
 	async function share(): Promise<string> {
-		const url = await shareUrl(
-			{
-				schematic: app.schematic,
-				stopTime: app.stopTime,
-				probes: app.probes,
-				settings: app.settings()
-			},
-			new URL(location.href)
-		);
+		const url = await shareUrl(app.toDocument(), new URL(location.href));
 		// The draft now continues this link, so opening the link again in this
 		// browser finds the draft with whatever was changed since.
 		void saver?.setOrigin(new URL(url).hash, app.draft());
@@ -366,9 +369,9 @@
 			>
 		</div>
 	{:else if app.error}
-		<div class="banner error" role="alert">
+		<div class="banner error" role="alert" title={app.failure ? app.error : undefined}>
 			<strong>Could not simulate.</strong>
-			{app.error}
+			{app.failure?.message ?? app.error}
 		</div>
 	{:else if app.compiled.errors.length > 0}
 		<div class="banner warn" role="status">{app.compiled.errors[0]}</div>
