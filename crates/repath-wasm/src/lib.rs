@@ -5,6 +5,7 @@
 //! JSON and back is slower than the simulation that produced them.
 
 use repath_core::avr::Mcu;
+use repath_core::circuit::Retune;
 use repath_core::digital::Logic;
 use repath_core::prelude::*;
 use serde::Serialize;
@@ -237,6 +238,16 @@ impl Simulation {
     ) -> Result<bool, JsError> {
         let waveform: Waveform = serde_json::from_str(waveform_json).map_err(to_js_error)?;
         Ok(self.circuit.set_source_waveform(name, waveform))
+    }
+
+    /// Give an element a new value from `at` onwards — a hand on a knob.
+    ///
+    /// `change_json` is one of `{ "resistance": ohms }`, `{ "capacitance":
+    /// farads }`, `{ "inductance": henries }` or `{ "waveform": <netlist
+    /// waveform> }`. Returns whether the element exists and the change fits it.
+    pub fn retune(&mut self, name: &str, change_json: &str, at: f64) -> Result<bool, JsError> {
+        let change: Retune = serde_json::from_str(change_json).map_err(to_js_error)?;
+        Ok(self.circuit.retune(name, change, at))
     }
 
     /// Move a logic source to a level, from `at` onwards.

@@ -6,8 +6,34 @@ use crate::bridge::{AdcBridge, DacBridge, LogicFamily};
 use crate::complex::{C64, ComplexSystem};
 use crate::digital::{DigitalDevice, DigitalDomain, Logic, NetId};
 use crate::element::{AcCtx, Element, NodeId, StampCtx};
-use crate::elements::{VoltageSource, Waveform};
+use crate::elements::{Capacitor, CurrentSource, Inductor, Resistor, VoltageSource, Waveform};
 use crate::linalg::LinearSystem;
+use serde::{Deserialize, Serialize};
+
+/// A new value for one element, from some instant of a run on.
+///
+/// Only the values that can change under a running circuit without it being a
+/// different circuit: a resistance, a capacitance, an inductance, what a
+/// source puts out. A part changing type or a wire moving is a new netlist,
+/// and that is a new run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Retune {
+    Resistance(f64),
+    Capacitance(f64),
+    Inductance(f64),
+    /// A voltage or current source's whole waveform. Its time is the run's,
+    /// so a sine handed a new amplitude carries on at the phase it was at.
+    Waveform(Waveform),
+}
+
+/// A retune waiting for the run to reach its instant.
+#[derive(Debug, Clone)]
+struct Scheduled {
+    at: f64,
+    element: usize,
+    change: Retune,
+}
 
 /// Everything the simulator is asked to solve.
 #[derive(Debug, Default)]
@@ -21,6 +47,8 @@ pub struct Circuit {
     pub digital: DigitalDomain,
     extra_unknowns: usize,
     built: bool,
+    /// Retunes not yet reached, in the order they fall due.
+    retunes: Vec<Scheduled>,
 }
 
 impl Circuit {
@@ -303,6 +331,86 @@ impl Circuit {
             }
         }
         false
+    }
+
+    /// Give an element a new value from `at` onwards — a hand on a knob.
+    ///
+    /// Like [`Self::operate_logic`], an instant rather than "now": the solver
+    /// treats it as a corner, ends a step exactly on it and changes the value
+    /// there, so a run handed the same retunes up front lands on the same
+    /// instants as the one they were made on live. An instant already reached
+    /// takes effect from the next step. Everything solved before it stays
+    /// solved; what the element stores — a capacitor's voltage, an inductor's
+    /// current — carries across.
+    ///
+    /// Returns false, and schedules nothing, when there is no element by that
+    /// name, the change does not fit it, or the value is not a positive number.
+    pub fn retune(&mut self, name: &str, change: Retune, at: f64) -> bool {
+        let Some(element) = self.elements.iter().position(|e| e.name() == name) else {
+            return false;
+        };
+        let any = (*self.elements[element]).as_any();
+        let fits = match &change {
+            Retune::Resistance(_) => any.is::<Resistor>(),
+            Retune::Capacitance(_) => any.is::<Capacitor>(),
+            Retune::Inductance(_) => any.is::<Inductor>(),
+            Retune::Waveform(_) => any.is::<VoltageSource>() || any.is::<CurrentSource>(),
+        };
+        let valid = match &change {
+            Retune::Resistance(v) | Retune::Capacitance(v) | Retune::Inductance(v) => {
+                v.is_finite() && *v > 0.0
+            }
+            Retune::Waveform(_) => true,
+        };
+        if !fits || !valid || !at.is_finite() {
+            return false;
+        }
+        // After everything due at the same instant or earlier, so two edits at
+        // one instant apply in the order they were made.
+        let index = self.retunes.partition_point(|r| r.at <= at);
+        self.retunes.insert(index, Scheduled { at, element, change });
+        true
+    }
+
+    /// When the next retune falls due, if any is waiting.
+    pub fn next_retune(&self) -> Option<f64> {
+        self.retunes.first().map(|r| r.at)
+    }
+
+    /// Apply every retune due by `t`. Returns whether any was.
+    pub(crate) fn apply_retunes(&mut self, t: f64) -> bool {
+        let due = self.retunes.partition_point(|r| r.at <= t);
+        if due == 0 {
+            return false;
+        }
+        for Scheduled { element, change, .. } in self.retunes.drain(..due) {
+            let any = (*self.elements[element]).as_any_mut();
+            match change {
+                Retune::Resistance(r) => {
+                    if let Some(resistor) = any.downcast_mut::<Resistor>() {
+                        resistor.r = r;
+                    }
+                }
+                Retune::Capacitance(c) => {
+                    if let Some(capacitor) = any.downcast_mut::<Capacitor>() {
+                        capacitor.set_capacitance(c);
+                    }
+                }
+                Retune::Inductance(l) => {
+                    if let Some(inductor) = any.downcast_mut::<Inductor>() {
+                        inductor.set_inductance(l);
+                    }
+                }
+                Retune::Waveform(waveform) => {
+                    if let Some(source) = any.downcast_mut::<VoltageSource>() {
+                        source.waveform = waveform;
+                    } else if let Some(source) = any.downcast_mut::<CurrentSource>() {
+                        source.waveform = waveform;
+                    }
+                }
+            }
+        }
+        true
     }
 
     /// Move a named logic source to a level, from `at` onwards.

@@ -127,6 +127,16 @@ impl Capacitor {
         self
     }
 
+    /// Change the capacitance in the middle of a run, keeping the voltage.
+    ///
+    /// The voltage is the state the run carries across the change, so the
+    /// charge steps with the capacitance. The error estimate is restarted: it
+    /// watches the charge, and a step in it is the edit, not the circuit.
+    pub fn set_capacitance(&mut self, c: f64) {
+        self.c = c.abs().max(1e-18);
+        self.charge = Trace::default();
+    }
+
     /// Companion conductance and history current for the current step.
     fn companion(&self, ctx: &StampCtx) -> (f64, f64) {
         match ctx.integration {
@@ -275,6 +285,13 @@ impl Inductor {
         self.ic = Some(i0);
         self.i_prev = i0;
         self
+    }
+
+    /// Change the inductance in the middle of a run, keeping the current: the
+    /// mirror of [`Capacitor::set_capacitance`].
+    pub fn set_inductance(&mut self, l: f64) {
+        self.l = l.abs().max(1e-15);
+        self.flux = Trace::default();
     }
 }
 

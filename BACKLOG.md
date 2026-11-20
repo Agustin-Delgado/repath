@@ -23,6 +23,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | MOSFET | Gate capacitances are constant, not the bias-dependent Meyer model | Right for a datasheet's Ciss/Crss/Coss; a gate charge curve will not have its plateau in quite the right place |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Switch | A click during a sweep lands at the newest instant, never in the past | The run only goes forwards; to see an operation at a particular moment, schedule it and sweep through that moment |
+| Live edits | A value changed during a sweep — a resistance, a capacitance, an inductance, a source's level, a potentiometer's wiper or a variable capacitor's setting — lands at the newest instant, like a click on a switch, and everything solved before it stays as it was. Anything else still starts the run again: a part or wire added, moved or removed, a type changed, a program loaded, the temperature, a source's frequency, timing or waveform shape, a resistor's temperature coefficients, a capacitor's initial voltage, a transformer's or fuse's values | Scrubbing back past an edit shows the samples solved with the old value, but the part's label and inspector show the value as it is now, since the drawing keeps one value per part. The edit instants are kept with the run (`retunes`), not in a saved or shared file, so a reloaded circuit starts from the newest values rather than replaying the turns. A frequency changed live would make a sine's phase jump, which no real generator does, so it restarts on purpose |
 | Supply | Each symbol is its own ideal source to ground, not a named net | Three on one rail is three currents rather than one, and two wired together build one source and a warning |
 | Logic bridge | A tri-state net switching too fast to resolve is averaged as though it were always driven: its high-impedance intervals count as mid-rail through the bridge's output resistance | An LED or RC fed by a fast tri-state bus sits nearer mid-supply than it should; resolved edge by edge (slower nets, or a narrower window) it is right |
 | Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
@@ -195,7 +196,8 @@ because each step is what makes the next one worth having:
 ### Components
 
 - [x] Potentiometer and trimmer, and a variable capacitor (the setting is an
-      inspector value, not yet dragged live).
+      inspector value that a running sweep takes in at the instant it changes;
+      there is still no knob to drag on the drawing itself).
 - [x] Transformer and coupled inductors: two windings, a turns ratio and a
       coupling. The core never saturates.
 - [x] Relay, and an SPDT switch. The relay reads its coil current and has no

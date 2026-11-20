@@ -7,6 +7,7 @@
 	import Toolbar from '$lib/components/toolbar/Toolbar.svelte';
 	import CommandPalette from '$lib/commands/CommandPalette.svelte';
 	import { Button, Splitter, Toaster } from '$lib/ui';
+	import { untrack } from 'svelte';
 	import { ensureEngine } from '$lib/engine';
 	import {
 		Autosaver,
@@ -262,6 +263,14 @@
 			return;
 		}
 		if (signature === lastSignature) return;
+		// A value turned under a running circuit goes in at the instant the sweep
+		// has reached, straight away and without the debounce: the run carries
+		// on, and a knob being dragged is followed rather than replayed.
+		if (!app.running && untrack(() => app.retuneLive())) {
+			clearTimeout(pending);
+			lastSignature = signature;
+			return;
+		}
 
 		const rerun = () => {
 			if (!app.live) return;
