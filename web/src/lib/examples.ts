@@ -115,6 +115,93 @@ const BLINK_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: s
 	[[0xcfe2], 'rjmp loop']
 ];
 
+/**
+ * The LED matrix example's program, assembled by hand like the blink's: what
+ * a sketch with SPI.h and LedControl's register writes does, with nothing of
+ * the Arduino core in it. As a sketch:
+ *
+ *     void send(byte address, byte value) {
+ *       digitalWrite(10, LOW);
+ *       SPI.transfer(address);
+ *       SPI.transfer(value);
+ *       digitalWrite(10, HIGH);
+ *     }
+ *     void setup() {
+ *       pinMode(10, OUTPUT);
+ *       digitalWrite(10, HIGH);
+ *       SPI.begin();
+ *       SPI.beginTransaction(SPISettings(8000000, MSBFIRST, SPI_MODE0));
+ *       send(0x0F, 0); send(0x0B, 7); send(0x09, 0); send(0x0A, 8); send(0x0C, 1);
+ *     }
+ *     void loop() {
+ *       for (byte row = 0; row < 8; row++) send(row + 1, SMILEY[row]);
+ *       delay(500);
+ *       for (byte row = 0; row < 8; row++) send(row + 1, HEART[row]);
+ *       delay(500);
+ *     }
+ *
+ * Each word is CS low, the register's address and its value through the SPI
+ * at 8 MHz, and CS high, on whose rising edge the MAX7219 latches it. The
+ * tables are address-value pairs in flash, read with `lpm`.
+ */
+const MATRIX_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: string]> = [
+	[[0xe20c], 'ldi  r16, 0x2C         ; D10 (CS), D11 (MOSI) and D13 (SCK) are outputs'],
+	[[0xb904], 'out  DDRB, r16'],
+	[[0x9a2a], 'sbi  PORTB, 2          ; CS high: the module ignores the clock'],
+	[[0xe500], 'ldi  r16, 0x50         ; SPE | MSTR: a master, mode 0, MSB first'],
+	[[0xbd0c], 'out  SPCR, r16'],
+	[[0xe001], 'ldi  r16, 1            ; SPI2X: fosc/2, as SPISettings(8000000) sets'],
+	[[0xbd0d], 'out  SPSR, r16'],
+	[[0xe5e6], "ldi  r30, lo8(SETUP)   ; LedControl's five set-up words"],
+	[[0xe0f0], 'ldi  r31, hi8(SETUP)'],
+	[[0xe045], 'ldi  r20, 5'],
+	[[0xd011], 'rcall words'],
+	[[0xe6e0], 'loop: ldi r30, lo8(SMILEY)'],
+	[[0xe0f0], 'ldi  r31, hi8(SMILEY)'],
+	[[0xd004], 'rcall picture'],
+	[[0xe7e0], 'ldi  r30, lo8(HEART)'],
+	[[0xe0f0], 'ldi  r31, hi8(HEART)'],
+	[[0xd001], 'rcall picture'],
+	[[0xcff9], 'rjmp loop'],
+	[[0xe048], 'picture: ldi r20, 8    ; eight rows from Z, then half a second'],
+	[[0xd008], 'rcall words'],
+	[[0xe228], 'ldi  r18, 40'],
+	[[0xe580], 'outer: ldi r24, lo8(50000)'],
+	[[0xec93], 'ldi  r25, hi8(50000)'],
+	[[0x9701], 'inner: sbiw r24, 1'],
+	[[0xf7f1], 'brne inner             ; 4 cycles a pass: 40 × 50 000 × 4 = 8 000 000'],
+	[[0x952a], 'dec  r18'],
+	[[0xf7d1], 'brne outer'],
+	[[0x9508], 'ret'],
+	[[0x982a], 'words: cbi PORTB, 2    ; r20 address-value pairs from Z: CS low'],
+	[[0x9105], 'lpm  r16, Z+'],
+	[[0xd006], 'rcall transfer'],
+	[[0x9105], 'lpm  r16, Z+'],
+	[[0xd004], 'rcall transfer'],
+	[[0x9a2a], 'sbi  PORTB, 2          ; CS high: the word is latched'],
+	[[0x954a], 'dec  r20'],
+	[[0xf7c1], 'brne words'],
+	[[0x9508], 'ret'],
+	[[0xbd0e], 'transfer: out SPDR, r16 ; SPI.transfer(r16)'],
+	[[0xb51d], 'wait: in r17, SPSR'],
+	[[0xff17], 'sbrs r17, SPIF         ; until the byte is out'],
+	[[0xcffd], 'rjmp wait'],
+	[[0xb51e], 'in   r17, SPDR         ; reading SPDR clears SPIF'],
+	[[0x9508], 'ret'],
+	[
+		[0x000f, 0x070b, 0x0009, 0x080a, 0x010c],
+		'SETUP: .db 0x0F, 0, 0x0B, 7, 9, 0, 0x0A, 8, 0x0C, 1 ; test off, 8 rows, no decode, intensity 8, on'
+	],
+	[
+		[0x3c01, 0x4202, 0xa503, 0x8104, 0xa505, 0x9906, 0x4207, 0x3c08],
+		'SMILEY: .db 1, 0x3C, 2, 0x42, 3, 0xA5, 4, 0x81, 5, 0xA5, 6, 0x99, 7, 0x42, 8, 0x3C'
+	],
+	[
+		[0x0001, 0x6602, 0xff03, 0xff04, 0xff05, 0x7e06, 0x3c07, 0x1808],
+		'HEART: .db 1, 0, 2, 0x66, 3, 0xFF, 4, 0xFF, 5, 0xFF, 6, 0x7E, 7, 0x3C, 8, 0x18'
+	]
+];
+
 export const EXAMPLES: Example[] = [
 	{
 		id: 'rc-lowpass',
@@ -866,6 +953,55 @@ export const EXAMPLES: Example[] = [
 					// RESET, on the power header, through a button to ground.
 					[440, 610, 440, 660],
 					[500, 660, 530, 660]
+				]
+			)
+	},
+
+	{
+		id: 'uno-led-matrix',
+		name: 'Arduino Uno and an SPI LED matrix',
+		description:
+			"An 8×8 LED matrix module on a MAX7219, driven from the Uno's SPI: DIN on pin 11 (MOSI), CLK on pin 13 (SCK) and CS on pin 10, the wiring of every LedControl tutorial. The program sets the driver up and then shows a smiley and a heart in turn, half a second each, sending each row as a two-byte word — the register, then its dots — between CS going low and coming back up. The probes are on the three wires: zoom the scope in to a few microseconds round a picture change to see SCK clock at 8 MHz, MOSI change on its falling edges, and CS rise after every sixteenth bit. The program is assembled by hand to do what the same sketch with SPI.h does; load a .hex of your own from the board's inspector to run yours.",
+		stopTime: 2,
+		build: () =>
+			build(
+				[
+					{
+						kind: 'ic:ArduinoUno',
+						name: 'U1',
+						x: 500,
+						y: 400,
+						params: { firmware: intelHex(MATRIX_PROGRAM.flatMap(([words]) => words)) }
+					},
+					{ kind: 'max7219', name: 'MX1', x: 200, y: 0 },
+					{ kind: 'supply', name: 'PWR1', x: 40, y: -30, params: { voltage: 5 } },
+					{ kind: 'ground', name: 'GND1', x: 60, y: 0 },
+					{ kind: 'probe', name: 'SCK', x: 400, y: 170 },
+					{ kind: 'probe', name: 'MOSI', x: 440, y: 140 },
+					{ kind: 'probe', name: 'CS', x: 460, y: 170 }
+				],
+				[
+					// The module's own 5 V and ground.
+					[120, -20, 40, -20],
+					[120, -10, 60, -10],
+					// Pin 13 (SCK) up, across and in to CLK.
+					[400, 190, 400, 170],
+					[400, 170, 400, 150],
+					[400, 150, 100, 150],
+					[100, 150, 100, 20],
+					[100, 20, 120, 20],
+					// Pin 10 to CS.
+					[460, 190, 460, 170],
+					[460, 170, 460, 130],
+					[460, 130, 90, 130],
+					[90, 130, 90, 10],
+					[90, 10, 120, 10],
+					// Pin 11 (MOSI) to DIN.
+					[440, 190, 440, 170],
+					[440, 170, 440, 140],
+					[440, 140, 80, 140],
+					[80, 140, 80, 0],
+					[80, 0, 120, 0]
 				]
 			)
 	},

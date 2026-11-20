@@ -24,6 +24,7 @@ import type { CircuitSettings, SharedCircuit } from './share';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { LCD_HISTORY, sameGlass, type LcdFrame } from './schematic/lcd';
+import { MATRIX_HISTORY, sameMatrix, type MatrixFrame } from './schematic/max7219';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import { groupFrame, outside } from './schematic/groups';
 import {
@@ -554,6 +555,9 @@ class AppState {
 	 */
 	lcdHistory = new Map<string, LcdFrame[]>();
 	private lcdNames: string[] = [];
+	/** The same for each LED matrix, each frame timed at the change itself. */
+	matrixHistory = new Map<string, MatrixFrame[]>();
+	private matrixNames: string[] = [];
 	error = $state<string | null>(null);
 	/**
 	 * Whether results are being kept up to date with the circuit.
@@ -3784,6 +3788,8 @@ class AppState {
 				this.mcuNames = devicesOfType(compiled.netlist, 'mcu');
 				this.lcdNames = devicesOfType(compiled.netlist, 'i2c_lcd');
 				this.lcdHistory = new Map();
+				this.matrixNames = devicesOfType(compiled.netlist, 'max7219');
+				this.matrixHistory = new Map();
 				this.held = null;
 				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
@@ -3894,6 +3900,19 @@ class AppState {
 			if (history.length > LCD_HISTORY) history.splice(0, history.length - LCD_HISTORY);
 			this.lcdHistory.set(name, history);
 		}
+		// A matrix's driver is on the nets, not inside a chip, so it is as far
+		// on as the run, and says when its registers last changed: its frames
+		// are placed at that instant.
+		for (const name of this.matrixNames) {
+			const state = acquiring.max7219State(name);
+			if (!state) continue;
+			const history = this.matrixHistory.get(name) ?? [];
+			const last = history[history.length - 1];
+			if (last && (last.version === state.version || sameMatrix(last, state))) continue;
+			history.push(state);
+			if (history.length > MATRIX_HISTORY) history.splice(0, history.length - MATRIX_HISTORY);
+			this.matrixHistory.set(name, history);
+		}
 	}
 
 	private discardRun(): void {
@@ -3907,6 +3926,8 @@ class AppState {
 		this.mcuNames = [];
 		this.lcdNames = [];
 		this.lcdHistory = new Map();
+		this.matrixNames = [];
+		this.matrixHistory = new Map();
 		this.held = null;
 		this.envelope = null;
 		this.playing = false;

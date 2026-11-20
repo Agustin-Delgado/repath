@@ -133,7 +133,9 @@ impl Machine {
         // the old low byte of X.
         let value = self.data[r];
         let a = self.address(pointer, step);
+        self.store_lands = 2;
         self.write(a, value);
+        self.store_lands = 1;
         2
     }
 
@@ -417,7 +419,9 @@ impl Machine {
                     // STS
                     let a = self.fetch(self.pc);
                     self.pc = self.pc.wrapping_add(1) & PC_MASK;
+                    self.store_lands = 2;
                     self.write(a, rd);
+                    self.store_lands = 1;
                     2
                 }
                 0x1 => self.store(d, ZP, Step::PostIncrement),

@@ -18,6 +18,7 @@ use std::sync::Arc;
 use super::adc::{self, Adc, AnalogLevels};
 use super::eeprom::Eeprom;
 use super::receiver::{self, Format, Receiver};
+use super::spi::Spi;
 use super::timer::{ICF, OCFA, OCFB, TOV, Timer};
 use super::twi::Twi;
 use crate::i2c::Bus;
@@ -102,6 +103,11 @@ const UDR0: u8 = 0xC6;
 pub const PD0: u32 = 16;
 pub const PD1: u32 = 17;
 pub const PD2: u32 = 18;
+/// The SPI's pins: SS, MOSI, MISO and SCK.
+const PB2: u32 = 2;
+const PB3: u32 = 3;
+const PB4: u32 = 4;
+const PB5: u32 = 5;
 
 /// Bits that exist in each port. PC6 is RESET and there is no PC7.
 const PORT_MASK: [u8; 3] = [0xFF, 0x7F, 0xFF];
@@ -188,7 +194,9 @@ pub enum Peripheral {
     /// completion: a timer, the comparator, an external interrupt. No such
     /// conversion ever starts.
     AdcTrigger,
-    /// SPE set in SPCR.
+    /// The SPI enabled as a slave, which is not simulated: by the program,
+    /// or by SS taken low while it was a master (the mode fault), which on a
+    /// real board is the usual way to end up there by accident.
     Spi,
     /// An address went unanswered on the I2C bus: nothing on it at the
     /// address the program sent. Not a part left out — the bus is simulated —
@@ -410,6 +418,7 @@ pub struct Machine {
     usart: Usart,
     receiver: Receiver,
     twi: Twi,
+    spi: Spi,
     pub(super) eeprom: Eeprom,
     adc: Adc,
     /// The clock, for the devices on the I2C bus, which keep time in seconds.
@@ -428,6 +437,15 @@ pub struct Machine {
     outputs_dirty: bool,
     /// Start cycle of the latest instruction that read a PINx register.
     last_input_read: Option<u64>,
+    /// The latest cycle the SPI sampled MISO at.
+    last_miso_read: Option<u64>,
+    /// Whether, at any time since [`Self::begin_speculation`], the SPI was a
+    /// master with SS an input: then SS going low would have stopped it.
+    ss_seen: bool,
+    /// Cycles from the start of the instruction under way to where a store
+    /// it makes lands: one for `out`, two for `sts` and `st`. Set by the CPU
+    /// around those stores, for a peripheral that starts timing from one.
+    pub(super) store_lands: u64,
     /// Whether an external or pin-change interrupt was enabled at any time
     /// since [`Self::begin_speculation`]: then any input change matters.
     irq_armed_seen: bool,
@@ -499,6 +517,7 @@ impl Machine {
             usart: Usart::new(),
             receiver: Receiver::default(),
             twi: Twi::new(),
+            spi: Spi::new(),
             eeprom: Eeprom::new(frequency),
             adc: Adc::default(),
             frequency,
@@ -512,6 +531,9 @@ impl Machine {
             next_event: u64::MAX,
             outputs_dirty: false,
             last_input_read: None,
+            last_miso_read: None,
+            ss_seen: false,
+            store_lands: 1,
             irq_armed_seen: false,
             rx_seen: false,
             serial: Vec::new(),
@@ -580,6 +602,23 @@ impl Machine {
                 && out.driven & bit != 0
             {
                 out.level = (out.level & !bit) | if level { bit } else { 0 };
+            }
+        }
+        // A master's SCK and MOSI take the pins over as a compare output
+        // does, only where DDRB makes them outputs; MISO is an input whatever
+        // DDRB says, its pull-up still PORTB4's.
+        if let Some((sck, mosi)) = self.spi.pins() {
+            for (pin, level) in [(PB5, sck), (PB3, mosi)] {
+                let bit = 1 << pin;
+                if out.driven & bit != 0 {
+                    out.level = (out.level & !bit) | if level { bit } else { 0 };
+                }
+            }
+            let bit = 1 << PB4;
+            out.driven &= !bit;
+            out.level &= !bit;
+            if !pull_ups_off && self.port[0] & 0x10 != 0 {
+                out.pullup |= bit;
             }
         }
         // The receiver makes RXD an input whatever DDRD says, its pull-up
@@ -651,6 +690,26 @@ impl Machine {
                 self.pcifr |= 1 << p;
             }
         }
+        if changed & (1 << PB2) != 0 {
+            self.check_ss(at);
+        }
+    }
+
+    /// Whether SS going low would stop the SPI's master: it is one, and SS
+    /// is an input.
+    fn ss_listening(&self) -> bool {
+        self.spi.master() && self.ddr[0] & (1 << PB2) == 0
+    }
+
+    /// The datasheet's mode fault: a master whose SS is an input that reads
+    /// low becomes a slave, with SPIF set. It is a level, not an edge, so it
+    /// is checked whenever the level, the pin's direction or the mode changes.
+    fn check_ss(&mut self, at: u64) {
+        if self.ss_listening() && self.pin_bits() & (1 << PB2) == 0 {
+            self.spi.mode_fault();
+            self.note_at(at, Peripheral::Spi);
+            self.refresh_next_event();
+        }
     }
 
     fn pin_irqs_armed(&self) -> bool {
@@ -661,17 +720,22 @@ impl Machine {
     /// changed under it.
     pub fn begin_speculation(&mut self) {
         self.last_input_read = None;
+        self.last_miso_read = None;
+        self.ss_seen = self.ss_listening();
         self.irq_armed_seen = self.pin_irqs_armed();
         self.rx_seen = self.usart.receiving();
     }
 
     /// Whether this run would have gone differently had the pins in
     /// `changed` changed at `cycle`: it read a pin at or after it, a pin
-    /// could have interrupted, or the receiver was listening to RXD.
+    /// could have interrupted, the receiver was listening to RXD, the SPI
+    /// sampled MISO, or SS could have stopped the SPI's master.
     pub fn depends_on_inputs_from(&self, cycle: u64, changed: u32) -> bool {
         self.irq_armed_seen
             || self.last_input_read.is_some_and(|at| at >= cycle)
             || self.rx_seen && changed & (1 << PD0) != 0
+            || self.last_miso_read.is_some_and(|at| at >= cycle) && changed & (1 << PB4) != 0
+            || self.ss_seen && changed & (1 << PB2) != 0
     }
 
     /// CPU cycles a bit lasts at the rate the receiver is set to, while it is
@@ -759,12 +823,9 @@ impl Machine {
             TCNT0 => self.timer(0).count() as u8,
             OCR0A => self.timers[0].compare_value(0) as u8,
             OCR0B => self.timers[0].compare_value(1) as u8,
-            SPDR => {
-                // Reading the data clears the transfer-complete flag, as the
-                // datasheet's "SPSR then SPDR" sequence does.
-                self.data[SPSR as usize] &= 0x7F;
-                self.data[SPDR as usize]
-            }
+            SPCR => self.spi.control(),
+            SPSR => self.spi.status(),
+            SPDR => self.spi.read_data(),
             ACSR => {
                 if self.data[ACSR as usize] & 0x80 == 0 {
                     self.note(Peripheral::Comparator);
@@ -860,17 +921,14 @@ impl Machine {
             OCR0A => self.timer(0).set_compare_value(0, u16::from(v)),
             OCR0B => self.timer(0).set_compare_value(1, u16::from(v)),
             SPCR => {
-                if v & 0x40 != 0 {
+                self.spi.write_control(v);
+                if self.spi.slave() {
                     self.note(Peripheral::Spi);
                 }
-                self.data[SPCR as usize] = v;
             }
-            SPDR => {
-                // A transfer completes at once and shifts in nothing, so that a
-                // sketch waiting on SPIF goes on rather than hanging.
-                self.data[SPDR as usize] = v;
-                self.data[SPSR as usize] |= 0x80;
-            }
+            SPSR => self.spi.write_status(v),
+            // The clock starts as the store ends.
+            SPDR => self.spi.write_data(v, self.cycle + self.store_lands),
             ACSR => {
                 // ACD is bit 7, ACIE bit 3. The comparator is on from reset,
                 // so being on says nothing; an interrupt asked of it does.
@@ -976,6 +1034,10 @@ impl Machine {
         if self.usart.receiving() {
             self.rx_seen = true;
         }
+        if self.ss_listening() {
+            self.ss_seen = true;
+            self.check_ss(self.cycle);
+        }
         self.refresh_next_event();
     }
 
@@ -1010,6 +1072,7 @@ impl Machine {
             .chain([
                 self.usart.next_event(),
                 self.twi.next_event(),
+                self.spi.next_event(),
                 self.eeprom.next_event(),
                 self.adc.next_event(),
             ])
@@ -1029,6 +1092,13 @@ impl Machine {
         }
         if self.twi.next_event() <= at && self.twi.event(at as f64 / self.frequency) {
             self.note_at(at, Peripheral::I2c);
+        }
+        if self.spi.next_event() <= at {
+            let miso = self.spi.samples_next() && {
+                self.last_miso_read = Some(at);
+                self.pin_bits() & (1 << PB4) != 0
+            };
+            self.spi.event(miso);
         }
         if self.eeprom.next_event() <= at {
             self.eeprom.event();
@@ -1099,6 +1169,9 @@ impl Machine {
                 return Some(vector);
             }
         }
+        if self.spi.interrupt() {
+            return Some(17);
+        }
         if self.receiver.status() & receiver::RXC != 0 && self.usart.control_b & RXCIE != 0 {
             return Some(18);
         }
@@ -1139,6 +1212,7 @@ impl Machine {
             14 => clear(self, 0, OCFA),
             15 => clear(self, 0, OCFB),
             16 => clear(self, 0, TOV),
+            17 => self.spi.acknowledge(),
             20 => self.usart.status &= !TXC,
             21 => self.adc.acknowledge(),
             _ => {}
@@ -1170,6 +1244,13 @@ impl Machine {
         loop {
             while self.next_event <= self.cycle {
                 let at = self.next_event;
+                // An SPI edge that samples MISO reads a pin, and what the pin
+                // does from `limit` on is not known yet: held to the limit, as
+                // the receiver is below, rather than to the end of the
+                // instruction that crossed it.
+                if at >= limit && self.spi.next_event() == at && self.spi.samples_next() {
+                    break;
+                }
                 // A conversion cannot finish without what it sampled, and only
                 // the analog side knows that.
                 if self.adc.waiting(at) {
@@ -1612,7 +1693,11 @@ pub(super) mod tests {
         // `wdt_enable(WDTO_1S)`: WDCE | WDE, then WDE and the prescaler.
         at(&mut m, 60, WDTCSR, 0x18);
         at(&mut m, 61, WDTCSR, 0x0E);
-        at(&mut m, 70, SPCR, 0x50);
+        // SPI as a master is simulated, SS an output as SPI.begin() leaves
+        // it; as a slave it is not.
+        at(&mut m, 68, 0x24, 0x04);
+        at(&mut m, 69, SPCR, 0x50);
+        at(&mut m, 70, SPCR, 0x40);
         // The TWI switched on is not a notice: the bus is simulated, and only
         // an address nobody answers is.
         at(&mut m, 80, TWCR, 0x45);
@@ -1642,6 +1727,116 @@ pub(super) mod tests {
         let mut m = machine(&[ldi(16, 0x40), out(0x2C, 16), idle()]);
         assert_eq!(m.run(1_000, &Watch::default()), Stop::Changed(2));
         assert_eq!(m.notices, vec![(1, Peripheral::Spi)]);
+    }
+
+    /// `SPI.begin()` and `SPI.transfer(0xA5)` cut down: SS, MOSI and SCK
+    /// outputs, master in mode 0 at fosc/4, SPDR written, SPIF polled, SPDR
+    /// read. MISO is held high outside.
+    fn spi_transfer() -> Machine {
+        let mut m = machine(&[
+            ldi(16, 0x2C), // ldi r16, DDB2 | DDB3 | DDB5   ; 0..1
+            out(0x04, 16), // out DDRB, r16                 ; 1..2
+            ldi(16, 0x50), // ldi r16, SPE | MSTR           ; 2..3
+            out(0x2C, 16), // out SPCR, r16                 ; 3..4
+            ldi(16, 0xA5), // ldi r16, 0xA5                 ; 4..5
+            out(0x2E, 16), // out SPDR, r16                 ; 5..6
+            in_(17, 0x2D), // wait: in r17, SPSR
+            sbrs(17, 7),   // sbrs r17, SPIF
+            rjmp(-3),      // rjmp wait
+            in_(18, 0x2E), // in r18, SPDR
+            idle(),
+        ]);
+        m.set_inputs(PinLevels { high: 1 << PB4, floating: !(1 << PB4) }, 0);
+        m
+    }
+
+    /// The SPI's byte on SCK and MOSI, edge by edge: each stop of the run is
+    /// one change of the two pins, at the cycle it happened.
+    #[test]
+    fn an_spi_transfer_drives_sck_and_mosi_edge_by_edge() {
+        let mut m = spi_transfer();
+        let watch = Watch { drive: 1 << PB3 | 1 << PB5, pullup: 0 };
+        let mut seen = Vec::new();
+        while m.pc != 10 {
+            match m.run(1_000, &watch) {
+                Stop::Changed(at) => {
+                    let out = m.outputs();
+                    seen.push((at, out.level >> PB5 & 1, out.level >> PB3 & 1));
+                }
+                Stop::Limit if m.pc == 10 => break,
+                stop => panic!("{stop:?} at {m:?}"),
+            }
+        }
+        // DDRB makes the pins outputs at 2, both low. The SPDR write lands at
+        // 6 with the first bit, a one, on MOSI; the clock runs from two
+        // cycles later, rising every four, and each falling edge puts the
+        // next bit of 1010_0101 out with it, the last leaving MOSI as it is.
+        let bits = [1, 0, 1, 0, 0, 1, 0, 1];
+        let mut expected = vec![(2, 0, 0), (6, 0, 1)];
+        for (n, bit) in bits.iter().enumerate() {
+            let rise = 8 + 4 * n as u64;
+            expected.push((rise, 1, *bit));
+            expected.push((rise + 2, 0, *bits.get(n + 1).unwrap_or(bit)));
+        }
+        assert_eq!(seen, expected);
+        // The loop saw SPIF and the read cleared it; MISO read high throughout.
+        assert_eq!(m.data[18], 0xFF);
+        assert_eq!(m.read(u16::from(SPSR)) & 0x80, 0);
+        assert!(m.notices.is_empty(), "master mode is simulated: {:?}", m.notices);
+    }
+
+    #[test]
+    fn spi_pins_follow_ddrb_and_miso_is_always_an_input() {
+        let mut m = machine(&[idle()]);
+        // MOSI and SCK not outputs yet, MISO made one with its pull-up bit set.
+        m.write(0x24, 1 << PB2 | 1 << PB4);
+        m.write(0x25, 1 << PB4);
+        m.write(u16::from(SPCR), 0x58); // SPE | MSTR | CPOL
+        let out = m.outputs();
+        assert_eq!(out.driven & (1 << PB3 | 1 << PB4 | 1 << PB5), 0);
+        assert_eq!(out.pullup & 1 << PB4, 1 << PB4, "PORTB4 is still its pull-up");
+        m.write(0x24, 1 << PB2 | 1 << PB3 | 1 << PB5);
+        let out = m.outputs();
+        assert_eq!(out.level & (1 << PB3 | 1 << PB5), 1 << PB5, "SCK idles at CPOL");
+        // Off, the port has the pins back.
+        m.write(u16::from(SPCR), 0x00);
+        assert_eq!(m.outputs().level & 1 << PB5, 0);
+    }
+
+    #[test]
+    fn the_spi_interrupt_is_vector_17_and_running_it_clears_spif() {
+        let mut m = machine(&[idle()]);
+        m.write(0x24, 1 << PB2);
+        m.write(u16::from(SPCR), 0xD0); // SPIE | SPE | MSTR
+        m.write(u16::from(SPDR), 0x00);
+        let _ = m.run(100, &Watch::default());
+        assert_eq!(m.pending_interrupt(), Some(17));
+        m.acknowledge(17);
+        assert_eq!(m.pending_interrupt(), None);
+    }
+
+    /// SS an input and low while the SPI is a master: it drops to slave
+    /// mode with SPIF set, and says so. With the pull-up on it stays a master
+    /// until something outside pulls SS down.
+    #[test]
+    fn ss_low_as_an_input_drops_the_master_to_slave() {
+        let mut m = machine(&[idle()]);
+        m.write(0x24, 1 << PB3 | 1 << PB5);
+        m.cycle = 7;
+        m.write(u16::from(SPCR), 0x50);
+        assert_eq!(m.read(u16::from(SPCR)), 0x40, "MSTR cleared");
+        assert_eq!(m.read(u16::from(SPSR)) & 0x80, 0x80);
+        assert_eq!(m.notices, vec![(7, Peripheral::Spi)]);
+
+        let mut m = machine(&[idle()]);
+        m.write(0x25, 1 << PB2);
+        m.write(u16::from(SPCR), 0x50);
+        assert_eq!(m.read(u16::from(SPCR)), 0x50, "the pull-up holds SS high");
+        m.begin_speculation();
+        assert!(m.depends_on_inputs_from(0, 1 << PB2), "SS low would change the run");
+        m.set_inputs(PinLevels { high: 0, floating: !(1 << PB2) }, 40);
+        assert_eq!(m.read(u16::from(SPCR)), 0x40);
+        assert_eq!(m.notices, vec![(40, Peripheral::Spi)]);
     }
 
     /// Levels with ADC0 at `volts` and AVCC at 5 V.

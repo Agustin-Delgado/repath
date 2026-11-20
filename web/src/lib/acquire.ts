@@ -16,6 +16,7 @@
 import { Capture } from './capture';
 import { EngineError, LiveRun, type LogicState, type McuState } from './engine';
 import type { LcdFrame } from './schematic/lcd';
+import type { MatrixFrame } from './schematic/max7219';
 
 export interface AcquisitionHost {
 	/** New samples have landed. */
@@ -183,6 +184,11 @@ export class Acquisition {
 	/** What an I2C LCD module shows right now. */
 	lcdState(name: string): LcdFrame | null {
 		return this.run.lcdState(name);
+	}
+
+	/** What a MAX7219 matrix lights right now. */
+	max7219State(name: string): MatrixFrame | null {
+		return this.run.max7219State(name);
 	}
 
 	/**

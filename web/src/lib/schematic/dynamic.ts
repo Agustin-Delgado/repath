@@ -60,6 +60,15 @@ import {
 	shownCells,
 	type LcdFrame
 } from './lcd';
+import {
+	DOT_RADIUS,
+	MATRIX_FACE,
+	MATRIX_KIND,
+	MATRIX_SIZE,
+	dotLit,
+	matrixDot,
+	type MatrixFrame
+} from './max7219';
 
 export interface DynamicView {
 	schematic: Schematic;
@@ -83,6 +92,8 @@ export interface DynamicView {
 	burnouts: ReadonlyMap<string, Burnout>;
 	/** What each LCD module showed during the run, by name, oldest first. */
 	displays: ReadonlyMap<string, readonly LcdFrame[]>;
+	/** What each LED matrix lit during the run, by name, oldest first. */
+	matrices?: ReadonlyMap<string, readonly MatrixFrame[]>;
 	/**
 	 * Nets whose voltage is an artifact rather than a measurement.
 	 *
@@ -230,6 +241,7 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 		else if (instance.kind === 'bargraph') drawBars(painter, view, instance);
 		else if (instance.kind === 'lamp') drawLamp(painter, view, instance);
 		else if (instance.kind === LCD_KIND) drawLcd(painter, view, instance);
+		else if (instance.kind === MATRIX_KIND) drawMatrix(painter, view, instance);
 	}
 }
 
@@ -536,7 +548,46 @@ function drawFuse(painter: Painter, view: DynamicView, instance: Instance): void
 }
 
 /** Parts that give off light, and so are drawn again once something flows. */
-const LIT = new Set(['led', 'display7', 'display7x4', 'bargraph', 'lamp', 'fuse', LCD_KIND]);
+const LIT = new Set([
+	'led',
+	'display7',
+	'display7x4',
+	'bargraph',
+	'lamp',
+	'fuse',
+	LCD_KIND,
+	MATRIX_KIND
+]);
+
+/**
+ * The LEDs of a matrix module, as the run had them at the playback instant:
+ * the lit ones red, brighter with the intensity register, the rest the dull
+ * red of an LED that is off. A module the run knows nothing of — one that was
+ * not powered — is left as the layer below draws it.
+ *
+ * Not gated on `showLight`, for the same reason as the LCD: what it shows is
+ * the circuit's output.
+ */
+function drawMatrix(painter: Painter, view: DynamicView, instance: Instance): void {
+	const frame = frameAt(view.matrices?.get(instance.name) ?? [], view.time);
+	if (!frame) return;
+	const on = new Path2D();
+	const off = new Path2D();
+	for (let row = 0; row < MATRIX_SIZE; row++) {
+		for (let column = 0; column < MATRIX_SIZE; column++) {
+			const { x, y } = matrixDot(row, column);
+			const target = dotLit(frame.lit, row, column) ? on : off;
+			target.moveTo(x + DOT_RADIUS, y);
+			target.arc(x, y, DOT_RADIUS, 0, Math.PI * 2);
+		}
+	}
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		painter.rect(MATRIX_FACE, { color: '#161616' });
+		painter.fillPath(off, { color: '#3d1716' });
+		// The lowest intensity is a thirty-second duty cycle, and still plainly lit.
+		painter.fillPath(on, { color: '#ff3a2e', alpha: 0.55 + 0.45 * Math.sqrt(frame.duty) });
+	});
+}
 
 /**
  * The glass of an LCD module, as the run had it at the playback instant.

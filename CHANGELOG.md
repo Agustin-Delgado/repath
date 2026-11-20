@@ -11,6 +11,31 @@ early entries point at those instead.
 
 ---
 
+## 20 November 2026 — SPI on the wires, and an LED matrix to drive with it
+
+**The chip's SPI works now.** `SPI.transfer()` clocks the byte out on D13
+(SCK) and D11 (MOSI), bit by bit at the rate `SPISettings` asks for, in any of
+the four modes and either bit order, and reads D12 (MISO) as it goes, so what
+comes back is whatever the other side sent. Until now a transfer finished at
+once and brought back nothing. A scope on D11 and D13 shows the clock and the
+data — zoom in to a few microseconds, since at a coarse timebase the edges fold
+into a burst — and a 74HC595 built from the logic parts takes the bits in.
+
+**An 8×8 LED matrix on a MAX7219 is in the palette,** under Semiconductors with
+the other displays: the red module with DIN, CS and CLK down one side. Searching
+for max7219, led matrix, 8x8 or ledcontrol finds it. Wire DIN to 11, CLK to 13
+and CS to 10, as every LedControl tutorial does, and the dots light the way the
+sketch sets them, with the intensity it asks for. The new example **Arduino Uno
+and an SPI LED matrix** shows a smiley and a heart in turn.
+
+**When the SPI stops being a master, the run says so.** Making D10 an input and
+letting it go low after `SPI.begin()` turns the chip into an SPI slave, as on
+the real part, and slave mode is not simulated: the inspector and the issues box
+say what happened rather than leaving the matrix dark with no reason given.
+[#75](https://github.com/Agustin-Delgado/repath/pull/75)
+
+---
+
 ## 13 November 2026 — A 16×2 LCD for the microcontroller to talk to
 
 **The I²C character display is in the palette,** under Semiconductors with the

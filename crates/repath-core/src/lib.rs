@@ -39,6 +39,7 @@ pub mod linalg;
 pub mod lte;
 pub mod netlist;
 pub mod solver;
+pub mod spi;
 
 /// Everything you need to build and run a circuit.
 pub mod prelude {

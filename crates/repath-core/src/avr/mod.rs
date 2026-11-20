@@ -61,6 +61,7 @@ mod eeprom;
 pub mod hex;
 mod machine;
 mod receiver;
+mod spi;
 mod timer;
 mod twi;
 mod usb_serial;

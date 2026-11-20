@@ -29,6 +29,14 @@ import {
 	LCD_LEGS,
 	lcdLegY
 } from './lcd';
+import {
+	MATRIX_BOARD,
+	MATRIX_KIND,
+	MATRIX_LEG_X,
+	MATRIX_LEGS,
+	MATRIX_OUT_X,
+	matrixLegY
+} from './max7219';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -1653,6 +1661,32 @@ export const CATALOG: ComponentDef[] = [
 					'Set by the A0–A2 jumpers on the backpack. The sketch has to use the same one: 0x27 and 0x3F are the usual two.'
 			}
 		]
+	},
+	{
+		/**
+		 * An 8×8 LED matrix on a MAX7219: the module of the Arduino SPI
+		 * tutorials, and of LedControl.
+		 *
+		 * A module, like the LCD: the driver, its current-setting resistor and
+		 * the matrix are all on the board, so the drawing is the board, its input
+		 * header and DOUT for the next one in a chain. What it lights is painted
+		 * from the run (`max7219.ts`).
+		 */
+		kind: MATRIX_KIND,
+		box: { x: MATRIX_LEG_X, y: MATRIX_BOARD.y, w: MATRIX_OUT_X - MATRIX_LEG_X, h: MATRIX_BOARD.h },
+		body: MATRIX_BOARD,
+		label: '8×8 LED matrix (MAX7219)',
+		group: 'semiconductor',
+		prefix: 'MX',
+		pins: [
+			...MATRIX_LEGS.map((leg, i) =>
+				leg === 'VCC' || leg === 'GND'
+					? analog(leg, MATRIX_LEG_X, matrixLegY(i))
+					: digitalIn(leg, MATRIX_LEG_X, matrixLegY(i))
+			),
+			digitalOut('DOUT', MATRIX_OUT_X, 0)
+		],
+		params: []
 	},
 	{
 		kind: 'nmos',

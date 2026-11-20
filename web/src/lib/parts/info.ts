@@ -120,6 +120,13 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 			'liquidcrystal_i2c', 'character display', 'display', 'text', 'screen'
 		]
 	},
+	max7219: {
+		description: 'Sixty-four red LEDs driven over SPI: VCC, GND, DIN, CS, CLK, and DOUT to chain the next',
+		keywords: [
+			'max7219', 'led matrix', 'matrix', '8x8', 'dot matrix', 'spi', 'ledcontrol', '1088as',
+			'display', 'max7221'
+		]
+	},
 	nmos: {
 		description: 'N-channel MOSFET, Shichman-Hodges',
 		keywords: ['mosfet', 'fet', 'transistor', 'n-channel', 'switch', '2n7000']

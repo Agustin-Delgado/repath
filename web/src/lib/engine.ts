@@ -8,6 +8,7 @@
 
 import init, { Simulation, runFrequencySweep as sweep, version } from './wasm/repath.js';
 import type { LcdFrame } from './schematic/lcd';
+import type { MatrixFrame } from './schematic/max7219';
 
 export type LogicState = 'low' | 'high' | 'unknown' | 'highz';
 
@@ -361,6 +362,22 @@ export class LiveRun {
 			overdriven: state.overdriven,
 			blinkInterval: state.blink_interval
 		};
+	}
+
+	/**
+	 * What a MAX7219 matrix lights, or null when there is none by that name.
+	 * Its time is when the program last changed its registers.
+	 */
+	max7219State(name: string): MatrixFrame | null {
+		if (this.freed) return null;
+		const state = JSON.parse(this.simulation.max7219State(name)) as {
+			time: number;
+			version: number;
+			lit: number[];
+			duty: number;
+		} | null;
+		if (!state) return null;
+		return { time: state.time, version: state.version, lit: state.lit, duty: state.duty };
 	}
 
 	/**

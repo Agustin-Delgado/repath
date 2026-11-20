@@ -23,6 +23,7 @@ use crate::elements::{
     VoltageSource, Waveform,
 };
 use crate::i2c::{self, LcdModule, Target};
+use crate::spi::Max7219;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetlistError {
@@ -479,6 +480,18 @@ pub enum Device {
         #[serde(default)]
         scl: Option<String>,
     },
+    /// A MAX7219 LED driver on its three wires, as on the 8×8 matrix
+    /// modules. See `spi::Max7219`: an ordinary device on the nets, which
+    /// the SPI's pins or anything else can clock.
+    Max7219 {
+        name: String,
+        din: String,
+        clk: String,
+        /// LOAD, printed CS on the modules.
+        load: String,
+        #[serde(default)]
+        dout: Option<String>,
+    },
 }
 
 /// Whether `net` is one of the nets a microcontroller's `pin` reaches.
@@ -501,7 +514,8 @@ impl Device {
             | Device::LogicSource { name, .. }
             | Device::Mcu { name, .. }
             | Device::UsbSerial { name, .. }
-            | Device::I2cLcd { name, .. } => name,
+            | Device::I2cLcd { name, .. }
+            | Device::Max7219 { name, .. } => name,
         }
     }
 }
@@ -993,6 +1007,11 @@ impl Netlist {
                     let target = Target::Lcd(LcdModule::new(name, *address));
                     c.add_device(Box::new(i2c::Unattached { target }));
                 }
+            }
+            Device::Max7219 { name, din, clk, load, dout } => {
+                let (din, clk, load) = (c.net(din), c.net(clk), c.net(load));
+                let dout = dout.as_ref().map(|n| c.net(n));
+                c.add_device(Box::new(Max7219::new(name, din, clk, load, dout)));
             }
         }
         Ok(())

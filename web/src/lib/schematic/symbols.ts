@@ -38,6 +38,18 @@ import {
 	dotAt,
 	lcdLegY
 } from './lcd';
+import {
+	DOT_RADIUS,
+	MATRIX_BOARD,
+	MATRIX_FACE,
+	MATRIX_KIND,
+	MATRIX_LEG_X,
+	MATRIX_LEGS,
+	MATRIX_OUT_X,
+	MATRIX_SIZE,
+	matrixDot,
+	matrixLegY
+} from './max7219';
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
@@ -370,6 +382,41 @@ const STATIC: Record<string, SymbolGeometry> = {
 			fine: true
 		})),
 		extent: { x: -LCD_LEG_X, y: LCD_BOARD.h / 2 }
+	},
+
+	// The matrix module from the front: the board, the black face of the
+	// 1088AS with its sixty-four LEDs, the input header on the left and DOUT
+	// on the right. What lights the dots is painted on the live layer.
+	[MATRIX_KIND]: {
+		shapes: [
+			rectShape(MATRIX_BOARD),
+			rectShape(MATRIX_FACE),
+			...Array.from({ length: MATRIX_SIZE * MATRIX_SIZE }, (_, i) => {
+				const { x, y } = matrixDot(Math.floor(i / MATRIX_SIZE), i % MATRIX_SIZE);
+				return { kind: 'circle' as const, cx: x, cy: y, r: DOT_RADIUS };
+			}),
+			...MATRIX_LEGS.map((_, i) => path(`M${MATRIX_LEG_X} ${matrixLegY(i)} H${MATRIX_BOARD.x}`)),
+			path(`M${MATRIX_BOARD.x + MATRIX_BOARD.w} 0 H${MATRIX_OUT_X}`)
+		],
+		labels: [
+			...MATRIX_LEGS.map((leg, i) => ({
+				x: MATRIX_BOARD.x + 2,
+				y: matrixLegY(i) + 2,
+				text: leg,
+				size: 5,
+				anchor: 'start' as const,
+				fine: true
+			})),
+			{
+				x: MATRIX_BOARD.x + MATRIX_BOARD.w - 2,
+				y: 2,
+				text: 'DOUT',
+				size: 5,
+				anchor: 'end' as const,
+				fine: true
+			}
+		],
+		extent: { x: MATRIX_OUT_X, y: MATRIX_BOARD.h / 2 }
 	},
 
 	// The resistor with an arrow brought down onto it: the wiper, pressing on

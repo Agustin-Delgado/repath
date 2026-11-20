@@ -361,6 +361,55 @@ impl Simulation {
         });
         serde_json::to_string(&state).map_err(to_js_error)
     }
+
+    /// What a MAX7219 lights, as JSON, or `null` if there is none by that
+    /// name: `{ time, version, lit, duty, registers }`.
+    ///
+    /// `lit` is the eight digits as they are driven, DP as bit 7 and segment
+    /// A to G as bits 6 to 0 — on an 8×8 matrix module, rows 0 to 7 with the
+    /// leftmost dot as bit 7 — after the display test, shutdown, the scan
+    /// limit and Code B decoding have had their say. `duty` is the
+    /// brightness, 1/32 to 31/32. `registers` is what the program wrote:
+    /// `{ digits, decode, intensity, scan_limit, shutdown, test }`. `time` is
+    /// the instant they last changed, and `version` changes with them.
+    #[wasm_bindgen(js_name = max7219State)]
+    pub fn max7219_state(&self, name: &str) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct Registers {
+            digits: [u8; 8],
+            decode: u8,
+            intensity: u8,
+            scan_limit: u8,
+            shutdown: bool,
+            test: bool,
+        }
+        #[derive(Serialize)]
+        struct State {
+            time: f64,
+            version: u64,
+            lit: [u8; 8],
+            duty: f64,
+            registers: Registers,
+        }
+        let state = repath_core::spi::find_max7219(&self.circuit.digital, name).map(|chip| {
+            let r = chip.registers();
+            State {
+                time: chip.changed_at(),
+                version: chip.version(),
+                lit: r.lit(),
+                duty: r.duty(),
+                registers: Registers {
+                    digits: r.digits,
+                    decode: r.decode,
+                    intensity: r.intensity,
+                    scan_limit: r.scan_limit,
+                    shutdown: r.shutdown,
+                    test: r.test,
+                },
+            }
+        });
+        serde_json::to_string(&state).map_err(to_js_error)
+    }
 }
 
 /// What a run, or one piece of one, has to say for itself.
