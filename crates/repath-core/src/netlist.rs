@@ -23,6 +23,7 @@ use crate::elements::{
     VoltageSource, Waveform,
 };
 use crate::i2c::{self, LcdModule, Target};
+use crate::servo::Servo;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetlistError {
@@ -479,6 +480,15 @@ pub enum Device {
         #[serde(default)]
         scl: Option<String>,
     },
+    /// A hobby servo motor reading the pulses on `signal`. See `servo::Servo`.
+    ///
+    /// Only the signal: what it draws from its supply is a resistor the
+    /// netlist carries beside it, and a servo with no supply is left out.
+    Servo {
+        name: String,
+        #[serde(default)]
+        signal: Option<String>,
+    },
 }
 
 /// Whether `net` is one of the nets a microcontroller's `pin` reaches.
@@ -501,7 +511,8 @@ impl Device {
             | Device::LogicSource { name, .. }
             | Device::Mcu { name, .. }
             | Device::UsbSerial { name, .. }
-            | Device::I2cLcd { name, .. } => name,
+            | Device::I2cLcd { name, .. }
+            | Device::Servo { name, .. } => name,
         }
     }
 }
@@ -993,6 +1004,11 @@ impl Netlist {
                     let target = Target::Lcd(LcdModule::new(name, *address));
                     c.add_device(Box::new(i2c::Unattached { target }));
                 }
+            }
+            Device::Servo { name, signal } => {
+                // Unwired, its signal is a net of its own that nothing drives.
+                let net = c.net(signal.as_deref().unwrap_or(&format!("{name}__signal")));
+                c.add_device(Box::new(Servo::new(name, net)));
             }
         }
         Ok(())

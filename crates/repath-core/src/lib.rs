@@ -38,6 +38,7 @@ pub mod i2c;
 pub mod linalg;
 pub mod lte;
 pub mod netlist;
+pub mod servo;
 pub mod solver;
 
 /// Everything you need to build and run a circuit.

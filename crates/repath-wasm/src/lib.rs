@@ -361,6 +361,51 @@ impl Simulation {
         });
         serde_json::to_string(&state).map_err(to_js_error)
     }
+
+    /// Where a servo's horn is, as JSON, or `null` if there is no servo by
+    /// that name: `{ time, angle, target, version, pulse }`.
+    ///
+    /// `angle` is in degrees from the 0° end at `time`, the instant the
+    /// digital side has reached; `target` is where the last pulse taken
+    /// asked it to go. `pulse` is the last pulse measured, taken or not, as
+    /// `{ at, width, taken }` in seconds, or `null` before the first.
+    /// `version` changes whenever a pulse is measured.
+    #[wasm_bindgen(js_name = servoState)]
+    pub fn servo_state(&self, name: &str) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct Pulse {
+            at: f64,
+            width: f64,
+            taken: bool,
+        }
+        #[derive(Serialize)]
+        struct State {
+            time: f64,
+            angle: f64,
+            target: f64,
+            version: u64,
+            pulse: Option<Pulse>,
+        }
+        let digital = &self.circuit.digital;
+        let servo = digital
+            .device(name)
+            .and_then(|device| device.as_any().downcast_ref::<repath_core::servo::Servo>());
+        let state = servo.map(|servo| {
+            let time = digital.now();
+            State {
+                time,
+                angle: servo.angle(time),
+                target: servo.target(),
+                version: servo.version(),
+                pulse: servo.last_pulse().map(|p| Pulse {
+                    at: p.at,
+                    width: p.width,
+                    taken: p.taken,
+                }),
+            }
+        });
+        serde_json::to_string(&state).map_err(to_js_error)
+    }
 }
 
 /// What a run, or one piece of one, has to say for itself.
