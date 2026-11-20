@@ -25,11 +25,13 @@ battery projects sleep for seconds at a time. Both at once — an interrupt
 first, a reset the time after if the sketch does not answer — works as the
 datasheet has it.
 
-**A sketch can tell why it restarted.** MCUSR says the watchdog did it, and
-keeps saying so until the sketch clears it. One thing differs from an Uno on
-the bench: no bootloader runs here, so after a watchdog reset the watchdog is
-still on, at 16 ms, as on a bare chip, and a sketch has to switch it off early
-in `setup()` — `MCUSR = 0; wdt_disable();` — or be reset again.
+**The Uno restarts the way a real one does.** Its bootloader clears MCUSR and
+switches the watchdog off after every reset before the sketch runs, and that
+is done here too, so the usual software reset — `wdt_enable(WDTO_15MS);` and
+an endless loop — restarts the sketch once and it runs on. The bare ATmega328P
+has no bootloader: there MCUSR says the watchdog reset it, the watchdog is
+still on at 16 ms, as the datasheet has it, and a sketch has to switch it off
+early in `setup()` — `MCUSR = 0; wdt_disable();` — or be reset again.
 [#82](https://github.com/Agustin-Delgado/repath/pull/82)
 
 ---

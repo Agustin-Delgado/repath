@@ -932,6 +932,7 @@ function compileFresh(
 			// Left unwired, reset is held off by its pull-up: the chip runs.
 			reset: reset && wired(reset) ? net(reset) : null,
 			wake: net('wake'),
+			bootloader: block.bootloader ?? null,
 			aref: converter ? converterNode(converter.aref) : null,
 			avcc: converter ? converterNode(converter.avcc) : null,
 			agnd: converter ? converterNode(converter.agnd) : null

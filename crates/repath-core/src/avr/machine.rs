@@ -425,6 +425,8 @@ pub struct Machine {
     watchdog: Watchdog,
     /// MCUSR's four reset flags.
     mcusr: u8,
+    /// Whether an Uno's bootloader runs before the program after each reset.
+    optiboot: bool,
     /// The clock, for the devices on the I2C bus, which keep time in seconds.
     frequency: f64,
     /// Cycles the CPU is halted for after the instruction under way, as an
@@ -524,6 +526,7 @@ impl Machine {
             watchdog: Watchdog::new(frequency, cycle),
             // Power-on reset is the reason for the last reset.
             mcusr: PORF,
+            optiboot: false,
             frequency,
             stall: 0,
             eicra: 0,
@@ -578,8 +581,34 @@ impl Machine {
         fresh.ss_seen = self.ss_seen;
         fresh.irq_armed_seen = self.irq_armed_seen;
         fresh.rx_seen = self.rx_seen;
+        fresh.optiboot = self.optiboot;
         fresh.refresh_next_event();
         *self = fresh;
+        if self.optiboot {
+            self.run_optiboot();
+        }
+    }
+
+    /// Put an Uno's bootloader in front of the program, from this power-on
+    /// on.
+    pub fn set_optiboot(&mut self) {
+        self.optiboot = true;
+        self.run_optiboot();
+    }
+
+    /// What Optiboot 4.4, the one the Arduino AVR core flashes on an Uno,
+    /// leaves the chip as when it starts the program: it reads MCUSR and
+    /// clears it, and after anything but an external reset switches the
+    /// watchdog off (WDCE | WDE, then 0) and jumps to address 0. After an
+    /// external reset it waits a second for an upload first and leaves by
+    /// its own watchdog's reset, which ends the same way; that second is not
+    /// waited here, nor the dozen cycles the rest takes, so the program
+    /// starts at once with MCUSR clear and the watchdog off whatever reset
+    /// it. Unlike later Optiboots, 4.4 does not hand the old MCUSR over in r2.
+    fn run_optiboot(&mut self) {
+        self.mcusr = 0;
+        self.watchdog = Watchdog::new(self.frequency, self.cycle);
+        self.refresh_next_event();
     }
 
     /// `wdr`.
@@ -1866,6 +1895,22 @@ pub(super) mod tests {
         // A flag cannot be set by writing a one.
         m.write(u16::from(MCUSR), 0x0F);
         assert_eq!(m.read(u16::from(MCUSR)), 0x00);
+    }
+
+    #[test]
+    fn optiboot_clears_mcusr_and_switches_the_watchdog_off_after_every_reset() {
+        let mut m = machine(&[idle()]);
+        m.set_optiboot();
+        assert_eq!(m.read(u16::from(MCUSR)), 0, "from power-on");
+        m.cycle = 10;
+        m.write(u16::from(WDTCSR), 0x18);
+        m.write(u16::from(WDTCSR), 0x48);
+        for cause in [WDRF, EXTRF] {
+            m.reset(100, cause);
+            assert_eq!(m.read(u16::from(MCUSR)), 0);
+            assert_eq!(m.read(u16::from(WDTCSR)), 0);
+            assert_eq!(m.watchdog.next_event(100), u64::MAX);
+        }
     }
 
     #[test]

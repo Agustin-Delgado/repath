@@ -269,6 +269,8 @@ pub struct Mcu {
     samples: Samples,
     /// The devices on its I2C bus as they power up, for each new run.
     i2c: Bus,
+    /// Whether an Uno's bootloader runs before the program.
+    optiboot: bool,
 }
 
 impl std::fmt::Debug for Mcu {
@@ -347,6 +349,7 @@ impl Mcu {
             analog: Vec::new(),
             samples: Samples::default(),
             i2c: Bus::default(),
+            optiboot: false,
         }
     }
 
@@ -367,6 +370,14 @@ impl Mcu {
     pub fn with_i2c(mut self, bus: Bus) -> Self {
         self.committed.set_i2c(bus.clone());
         self.i2c = bus;
+        self
+    }
+
+    /// The chip on an Uno, with Optiboot ahead of its program after every
+    /// reset: see `Machine::set_optiboot`.
+    pub fn with_optiboot(mut self) -> Self {
+        self.optiboot = true;
+        self.committed.set_optiboot();
         self
     }
 
@@ -416,6 +427,9 @@ impl Mcu {
     fn restart(&mut self) {
         self.committed = Machine::new(self.flash.clone(), 0, self.frequency);
         self.committed.set_i2c(self.i2c.clone());
+        if self.optiboot {
+            self.committed.set_optiboot();
+        }
         self.speculation = None;
         self.pending.clear();
         self.sampled = None;

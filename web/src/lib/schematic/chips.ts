@@ -106,6 +106,11 @@ export interface ChipBlock {
 	legs?: Readonly<Record<string, string>>;
 	/** The engine's name for the chip, where the part is not named for it: a board. */
 	model?: string;
+	/**
+	 * What runs before the program after every reset, by the engine's name:
+	 * `optiboot` on an Uno. Absent, nothing does, as on a bare chip.
+	 */
+	bootloader?: string;
 }
 
 /**
