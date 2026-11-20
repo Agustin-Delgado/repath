@@ -119,21 +119,71 @@ impl TransientConfig {
     }
 }
 
+/// Where in the circuit a failed solve went wrong: the nodes and the elements
+/// to look at, most to blame first.
+///
+/// Worked out only once a solve has failed for good, never on the way: the
+/// retries a run makes along the way — a rejected step, a fallback to gmin
+/// stepping — fail all the time, and none of them should pay for an
+/// explanation nobody reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Culprits {
+    /// Node names as the circuit knows them: `a`, not `v(a)`. Never ground.
+    pub nodes: Vec<String>,
+    /// Element names.
+    pub elements: Vec<String>,
+}
+
+impl Culprits {
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty() && self.elements.is_empty()
+    }
+}
+
+/// `" (V1 and V2, at node a)"`, or nothing when there is nobody to name.
+impl std::fmt::Display for Culprits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn list(items: &[String]) -> String {
+            match items {
+                [] => String::new(),
+                [one] => one.clone(),
+                [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+            }
+        }
+        let nodes = match self.nodes.len() {
+            0 => String::new(),
+            1 => format!("node {}", self.nodes[0]),
+            _ => format!("nodes {}", list(&self.nodes)),
+        };
+        match (self.elements.is_empty(), nodes.is_empty()) {
+            (true, true) => Ok(()),
+            (false, true) => write!(f, " ({})", list(&self.elements)),
+            (true, false) => write!(f, " (at {nodes})"),
+            (false, false) => write!(f, " ({}, at {nodes})", list(&self.elements)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SimError {
     /// The matrix has no unique solution — usually a floating section of circuit
-    /// or a loop of ideal voltage sources.
-    Singular { unknown: String },
+    /// or a loop of ideal voltage sources. `culprits` holds the unknowns no
+    /// equation pins down, and what they belong to.
+    Singular { unknown: String, culprits: Culprits },
     /// Newton ran out of iterations, and every fallback also failed.
-    NoConvergence { time: f64, iterations: usize },
+    /// `culprits` holds the nodes still moving on the last iteration and the
+    /// nonlinear devices on them.
+    NoConvergence { time: f64, iterations: usize, culprits: Culprits },
     /// The step had to shrink below anything meaningful to make progress.
-    TimestepTooSmall { time: f64, step: f64 },
+    /// `culprits` is what the last attempt at the step failed on.
+    TimestepTooSmall { time: f64, step: f64, culprits: Culprits },
     /// The run hit `max_steps`.
     StepLimit { time: f64 },
     /// Nothing to solve.
     Empty,
     /// The solve produced infinities or not-a-number, and every retry did too.
-    NonFinite { time: f64 },
+    /// `culprits` holds the nodes that ran off to infinity.
+    NonFinite { time: f64, culprits: Culprits },
     /// A loop of logic was still changing at one instant after every delta
     /// cycle it was allowed: zero-delay gates chasing each other.
     DigitalLoop { time: f64, nets: Vec<String> },
@@ -148,23 +198,24 @@ pub enum SimError {
 impl std::fmt::Display for SimError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SimError::Singular { unknown } => write!(
+            SimError::Singular { unknown, culprits } => write!(
                 f,
-                "circuit matrix is singular near {unknown}; check for a floating node or a loop of voltage sources"
+                "circuit matrix is singular near {unknown}{culprits}; check for a floating node or a loop of voltage sources"
             ),
-            SimError::NoConvergence { time, iterations } => {
-                write!(f, "failed to converge at t = {time:.6e} s after {iterations} iterations")
-            }
-            SimError::TimestepTooSmall { time, step } => {
-                write!(f, "timestep collapsed to {step:.3e} s at t = {time:.6e} s")
+            SimError::NoConvergence { time, iterations, culprits } => write!(
+                f,
+                "failed to converge at t = {time:.6e} s after {iterations} iterations{culprits}"
+            ),
+            SimError::TimestepTooSmall { time, step, culprits } => {
+                write!(f, "timestep collapsed to {step:.3e} s at t = {time:.6e} s{culprits}")
             }
             SimError::StepLimit { time } => {
                 write!(f, "hit the step limit at t = {time:.6e} s")
             }
             SimError::Empty => write!(f, "the circuit has nothing to solve"),
-            SimError::NonFinite { time } => write!(
+            SimError::NonFinite { time, culprits } => write!(
                 f,
-                "the solution became infinite at t = {time:.6e} s; check for a part value of zero or one far out of range"
+                "the solution became infinite at t = {time:.6e} s{culprits}; check for a part value of zero or one far out of range"
             ),
             SimError::DigitalLoop { time, nets } => write!(
                 f,
@@ -185,6 +236,19 @@ impl std::fmt::Display for SimError {
 }
 
 impl std::error::Error for SimError {}
+
+impl SimError {
+    /// Where in the circuit it went wrong, for the errors that can say.
+    pub fn culprits(&self) -> Option<&Culprits> {
+        match self {
+            SimError::Singular { culprits, .. }
+            | SimError::NoConvergence { culprits, .. }
+            | SimError::TimestepTooSmall { culprits, .. }
+            | SimError::NonFinite { culprits, .. } => Some(culprits),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Stats {
@@ -611,7 +675,24 @@ pub struct Simulator {
     /// The step Newton took last, while damping, to tell a step that doubles
     /// back on it.
     last_step: Vec<f64>,
+    /// What the last Newton solve was asked to solve, so a failure can be
+    /// stamped again element by element to find who was involved.
+    attempt: Attempt,
 }
+
+/// The arguments of one Newton solve, kept for explaining its failure.
+#[derive(Debug, Clone, Copy)]
+struct Attempt {
+    mode: Mode,
+    integration: Integration,
+    time: f64,
+    dt: f64,
+    gmin: f64,
+}
+
+/// Most nodes, and most elements, a diagnosis names. Past a handful the list
+/// stops pointing at anything.
+const MOST_BLAMED: usize = 4;
 
 /// Longest move, in volts on any node, a damped Newton step may make.
 const DAMPED_STEP: f64 = 0.5;
@@ -662,6 +743,72 @@ fn unsettled(circuit: &mut Circuit) -> Result<(), SimError> {
     }
 }
 
+/// What one element was stamped against at the failed iterate, and whether it
+/// was still limiting its own step there.
+struct Footprint {
+    touched: Vec<usize>,
+    limited: bool,
+}
+
+/// Which element owns each unknown past the node voltages, in the order
+/// [`Circuit::build`] hands them out.
+fn branch_owners(circuit: &Circuit) -> Vec<usize> {
+    let mut owners = Vec::new();
+    for (index, element) in circuit.elements().iter().enumerate() {
+        owners.extend(std::iter::repeat_n(index, element.extra_unknowns()));
+    }
+    owners
+}
+
+/// Name what a set of unknowns belongs to: the nodes among them, and the
+/// elements whose branch currents they are.
+///
+/// With footprints to go on, either list left empty is filled from the other:
+/// a node with nothing of its own to blame is blamed on what is attached to
+/// it, and a branch current on the nodes its element sits between.
+fn blame(circuit: &Circuit, unknowns: &[usize], prints: Option<&[Footprint]>) -> Culprits {
+    let node_rows = circuit.node_count().saturating_sub(1);
+    let owners = branch_owners(circuit);
+    let node_name = |i: usize| circuit.node_name(i + 1).unwrap_or("?").to_string();
+    let element_name = |e: usize| circuit.elements()[e].name().to_string();
+
+    let mut nodes: Vec<usize> = Vec::new();
+    let mut elements: Vec<usize> = Vec::new();
+    for &u in unknowns {
+        if u < node_rows {
+            if !nodes.contains(&u) {
+                nodes.push(u);
+            }
+        } else if let Some(&owner) = owners.get(u - node_rows)
+            && !elements.contains(&owner)
+        {
+            elements.push(owner);
+        }
+    }
+    if let Some(prints) = prints {
+        if elements.is_empty() {
+            elements = (0..prints.len())
+                .filter(|&e| prints[e].touched.iter().any(|t| nodes.contains(t)))
+                .collect();
+        }
+        if nodes.is_empty() {
+            for &e in &elements {
+                for &t in &prints[e].touched {
+                    if t < node_rows && !nodes.contains(&t) {
+                        nodes.push(t);
+                    }
+                }
+            }
+        }
+    }
+    nodes.truncate(MOST_BLAMED);
+    elements.truncate(MOST_BLAMED);
+    Culprits {
+        nodes: nodes.into_iter().map(node_name).collect(),
+        elements: elements.into_iter().map(element_name).collect(),
+    }
+}
+
 impl Default for Simulator {
     fn default() -> Self {
         Self::new(SolverConfig::default())
@@ -678,6 +825,13 @@ impl Simulator {
             x_accepted: Vec::new(),
             damping: None,
             last_step: Vec::new(),
+            attempt: Attempt {
+                mode: Mode::OperatingPoint,
+                integration: Integration::BackwardEuler,
+                time: 0.0,
+                dt: 0.0,
+                gmin: 0.0,
+            },
         }
     }
 
@@ -722,6 +876,7 @@ impl Simulator {
         let node_rows = circuit.node_count().saturating_sub(1);
         let nonlinear = circuit.has_nonlinear();
         let max_iterations = if nonlinear { max_iterations } else { 1 };
+        self.attempt = Attempt { mode, integration, time, dt, gmin };
 
         for iteration in 0..max_iterations {
             self.sys.clear();
@@ -746,8 +901,11 @@ impl Simulator {
                         .get(row)
                         .cloned()
                         .unwrap_or_else(|| format!("unknown #{row}")),
+                    culprits: Culprits::default(),
                 },
-                SolveError::NonFinite => SimError::NonFinite { time },
+                SolveError::NonFinite => {
+                    SimError::NonFinite { time, culprits: Culprits::default() }
+                }
             })?;
             stats.newton_iterations += 1;
 
@@ -794,7 +952,11 @@ impl Simulator {
             }
         }
 
-        Err(SimError::NoConvergence { time, iterations: max_iterations })
+        Err(SimError::NoConvergence {
+            time,
+            iterations: max_iterations,
+            culprits: Culprits::default(),
+        })
     }
 
     /// Whether `x_next` is within tolerance of `x` on every unknown.
@@ -806,11 +968,150 @@ impl Simulator {
         })
     }
 
+    /// Stamp each element on its own at the last iterate, to see what it is
+    /// attached to. Only ever run on a solve that has already failed for good:
+    /// it costs an element's worth of matrix per element.
+    fn footprints(&self, circuit: &mut Circuit) -> Vec<Footprint> {
+        let n = circuit.unknown_count();
+        if self.x.len() != n {
+            return Vec::new();
+        }
+        let a = self.attempt;
+        let ctx = StampCtx {
+            mode: a.mode,
+            integration: a.integration,
+            time: a.time,
+            dt: a.dt,
+            gmin: a.gmin,
+            // Sources at full value: one stepped down to nothing would stamp
+            // nothing, and look attached to nothing.
+            source_scale: 1.0,
+            x: &self.x,
+            // Past the first iteration, so a junction linearizes around the
+            // iterate rather than around its own starting guess.
+            iteration: 1,
+        };
+        let mut scratch = LinearSystem::new(n);
+        circuit
+            .elements_mut()
+            .iter_mut()
+            .map(|element| {
+                scratch.clear();
+                let report = element.stamp(&mut scratch, &ctx);
+                Footprint { touched: scratch.touched(), limited: report.limited }
+            })
+            .collect()
+    }
+
+    /// Fill in who is to blame on an error that has finished failing.
+    ///
+    /// Called where a failure leaves the engine, never inside the retries:
+    /// the buffers still hold the last attempt, and it is read from them.
+    fn explain(&mut self, circuit: &mut Circuit, err: SimError) -> SimError {
+        match err {
+            SimError::Singular { unknown, culprits } if culprits.is_empty() => {
+                let free = self.sys.undetermined();
+                let prints = self.footprints(circuit);
+                SimError::Singular { unknown, culprits: blame(circuit, &free, Some(&prints)) }
+            }
+            SimError::NoConvergence { time, iterations, culprits } if culprits.is_empty() => {
+                let culprits = self.unsettled_culprits(circuit);
+                SimError::NoConvergence { time, iterations, culprits }
+            }
+            SimError::NonFinite { time, culprits } if culprits.is_empty() => {
+                // The failed solve left its answer in `x_next`: whatever came
+                // out infinite there is what ran away.
+                let blown: Vec<usize> =
+                    (0..self.x_next.len()).filter(|&i| !self.x_next[i].is_finite()).collect();
+                let prints = self.footprints(circuit);
+                SimError::NonFinite { time, culprits: blame(circuit, &blown, Some(&prints)) }
+            }
+            other => other,
+        }
+    }
+
+    /// The nodes Newton was still moving when it ran out of iterations, and
+    /// the nonlinear devices on them.
+    ///
+    /// The last two iterates are still in `x` and `x_next`. An unknown whose
+    /// last step was outside tolerance is still moving; the ones moving most
+    /// are named first. A damped Newton may have shrunk every step inside
+    /// tolerance and still not be done, so where nothing is outside it the
+    /// unknowns moving most of all are taken instead.
+    fn unsettled_culprits(&self, circuit: &mut Circuit) -> Culprits {
+        let node_rows = circuit.node_count().saturating_sub(1);
+        let cfg = self.config;
+        let ratio: Vec<f64> = self
+            .x
+            .iter()
+            .zip(&self.x_next)
+            .enumerate()
+            .map(|(i, (new, old))| {
+                let floor = if i < node_rows { cfg.vntol } else { cfg.abstol };
+                let tol = cfg.reltol * old.abs().max(new.abs()) + floor;
+                let r = (new - old).abs() / tol;
+                if r.is_finite() { r } else { f64::MAX }
+            })
+            .collect();
+        let most = ratio.iter().copied().fold(0.0, f64::max);
+        let threshold = if most > 1.0 { 1.0 } else { most / 10.0 };
+        let mut moving: Vec<usize> =
+            (0..ratio.len()).filter(|&i| most > 0.0 && ratio[i] > threshold).collect();
+        moving.sort_by(|&p, &q| ratio[q].total_cmp(&ratio[p]).then(p.cmp(&q)));
+
+        let prints = self.footprints(circuit);
+        // A device is to blame when it is nonlinear and sits on something still
+        // moving, or when it is still limiting its own step: limiting alone
+        // keeps Newton from calling anything converged.
+        let mut suspects: Vec<(usize, bool, f64)> = prints
+            .iter()
+            .enumerate()
+            .filter_map(|(e, print)| {
+                let score = print
+                    .touched
+                    .iter()
+                    .filter(|t| moving.contains(t))
+                    .map(|&t| ratio[t])
+                    .fold(0.0, f64::max);
+                let nonlinear = circuit.elements()[e].is_nonlinear();
+                (print.limited || (nonlinear && score > 0.0)).then_some((e, print.limited, score))
+            })
+            .collect();
+        suspects.sort_by(|p, q| q.1.cmp(&p.1).then(q.2.total_cmp(&p.2)).then(p.0.cmp(&q.0)));
+
+        suspects.truncate(MOST_BLAMED);
+        // The nodes to name are the moving ones the suspects sit on: a linear
+        // node still catching up with them is following, not failing.
+        let on_suspect = |i: &usize| suspects.iter().any(|&(e, ..)| prints[e].touched.contains(i));
+        let moving_nodes: Vec<usize> = moving
+            .iter()
+            .copied()
+            .filter(|i| *i < node_rows && (suspects.is_empty() || on_suspect(i)))
+            .collect();
+        let mut culprits = blame(circuit, &moving_nodes, None);
+        culprits.elements =
+            suspects.iter().map(|&(e, ..)| circuit.elements()[e].name().to_string()).collect();
+        if culprits.elements.is_empty() {
+            // Nothing nonlinear on what is moving: blame whatever owns the
+            // branch currents that are, or failing that what sits on the nodes.
+            culprits.elements = blame(circuit, &moving, Some(&prints)).elements;
+        }
+        if culprits.nodes.is_empty() {
+            let touched: Vec<usize> = suspects
+                .iter()
+                .flat_map(|&(e, ..)| prints[e].touched.iter().copied())
+                .filter(|&t| t < node_rows)
+                .collect();
+            culprits.nodes = blame(circuit, &touched, None).nodes;
+        }
+        culprits
+    }
+
     /// Solve the DC operating point, escalating through the convergence aids.
     pub fn operating_point(&mut self, circuit: &mut Circuit) -> Result<OperatingPoint, SimError> {
         self.prepare(circuit)?;
         let mut stats = Stats::default();
-        self.solve_operating_point(circuit, &mut stats)?;
+        self.solve_operating_point(circuit, &mut stats).map_err(|e| self.explain(circuit, e))?;
         Ok(OperatingPoint {
             unknown_names: circuit.unknown_names(),
             node_count: circuit.node_count().saturating_sub(1),
@@ -965,7 +1266,8 @@ impl Simulator {
                     )
                     .is_ok();
             if !seeded {
-                self.solve_operating_point(circuit, &mut stats)?;
+                self.solve_operating_point(circuit, &mut stats)
+                    .map_err(|e| self.explain(circuit, e))?;
             }
             out.push(self.x.clone());
         }
@@ -987,7 +1289,7 @@ impl Simulator {
         circuit.reset();
 
         let mut stats = Stats::default();
-        self.solve_operating_point(circuit, &mut stats)?;
+        self.solve_operating_point(circuit, &mut stats).map_err(|e| self.explain(circuit, e))?;
 
         let frequencies = cfg.frequencies();
         let unknown_names = circuit.unknown_names();
@@ -1004,9 +1306,12 @@ impl Simulator {
 
             sys.solve_into(&mut x).map_err(|e| match e.row {
                 // Not a node's fault: the numbers themselves overflowed.
-                None => SimError::NonFinite { time: 0.0 },
+                None => SimError::NonFinite { time: 0.0, culprits: Culprits::default() },
+                // Only the row the complex solve stopped at is known here: blame
+                // that unknown and whatever owns it.
                 Some(row) => SimError::Singular {
                     unknown: unknown_names.get(row).cloned().unwrap_or_else(|| format!("#{row}")),
+                    culprits: blame(circuit, &[row], None),
                 },
             })?;
 
@@ -1105,10 +1410,12 @@ impl Simulator {
                 1.0,
                 self.config.dc_max_iterations,
                 &mut stats,
-            )?;
+            )
+            .map_err(|e| self.explain(circuit, e))?;
             Mode::InitialConditions
         } else {
-            self.solve_operating_point(circuit, &mut stats)?;
+            self.solve_operating_point(circuit, &mut stats)
+                .map_err(|e| self.explain(circuit, e))?;
             Mode::OperatingPoint
         };
 
@@ -1339,7 +1646,7 @@ impl Simulator {
                     Ok(_) => break,
                     // An iterate that overflowed is a step too long for the
                     // exponentials in it, as much as one that did not settle.
-                    Err(SimError::NoConvergence { .. }) | Err(SimError::NonFinite { .. }) => {
+                    Err(failed @ (SimError::NoConvergence { .. } | SimError::NonFinite { .. })) => {
                         stats.rejected_steps += 1;
                         attempt /= 8.0;
                         // Backward Euler is more forgiving; fall back to it while
@@ -1348,12 +1655,21 @@ impl Simulator {
                         euler_steps = euler_steps.max(2);
                         if attempt < step_floor(min_step, t) {
                             restore(run, t, dt, euler_steps, stats);
-                            return Err(SimError::TimestepTooSmall { time: t, step: attempt });
+                            let culprits = match self.explain(circuit, failed) {
+                                SimError::NoConvergence { culprits, .. }
+                                | SimError::NonFinite { culprits, .. } => culprits,
+                                _ => Culprits::default(),
+                            };
+                            return Err(SimError::TimestepTooSmall {
+                                time: t,
+                                step: attempt,
+                                culprits,
+                            });
                         }
                     }
                     Err(other) => {
                         restore(run, t, dt, euler_steps, stats);
-                        return Err(other);
+                        return Err(self.explain(circuit, other));
                     }
                 }
             }

@@ -136,8 +136,15 @@ because each step is what makes the next one worth having:
       makes `CGS` and `CGD` follow the operating region instead of sitting still.
       What a gate charge curve needs; the constant values are already enough for
       Miller and for a switching time.
-- [ ] **Convergence diagnostics** — when a solve fails, say *which node* and *which
-      device* stopped converging, not just that it did.
+- [x] **Convergence diagnostics** — when a solve fails, say *which node* and *which
+      device* stopped converging, not just that it did. A singular matrix names
+      the unknowns nothing pins down (two sources fighting, a coil across a
+      source, a node fed by nothing), a Newton failure the nodes still moving
+      on its last step and the nonlinear devices on them, and a collapsed
+      timestep what its last attempt failed on. *What is left:* the AC sweep
+      only names the one row its complex solve stopped at; a source shorted by
+      a wire has no node of its own in the matrix, so only the part is named
+      (the editor marks the net from its pins).
 
 ### Editor
 
@@ -146,8 +153,13 @@ because each step is what makes the next one worth having:
 - [ ] **Keyboard-only editing and screen reader support.** Currently the canvas is
       opaque to assistive technology. At minimum: tab through components, announce
       selection, edit values from the inspector without a mouse.
-- [ ] **Errors that point at the circuit.** "Singular matrix near v(n3)" should
+- [x] **Errors that point at the circuit.** "Singular matrix near v(n3)" should
       highlight that net on the canvas, not just print a name the user never chose.
+      A failed solve now marks the parts and nets it blames in the danger colour,
+      lists them in the issues box (hover a net to light it, click a part to
+      select it), and the banner says it in the drawing's names. *What is left:*
+      the "check the wiring" warnings still only print; they could mark the
+      canvas the same way.
 - [ ] **Wire editing, the rest of it** — splitting a run in two, and deleting a
       single corner. Dragging a leg to reshape a wire is done; these are not.
 - [ ] **Opening a box on a crowded page.** On the counter drawing

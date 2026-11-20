@@ -6,7 +6,7 @@
  * simulation that produced them.
  */
 
-import init, { Simulation, runFrequencySweep as sweep, version } from './wasm/repath.js';
+import init, { Simulation, lastFailure, runFrequencySweep as sweep, version } from './wasm/repath.js';
 import type { LcdFrame } from './schematic/lcd';
 import type { MatrixFrame } from './schematic/max7219';
 import type { BuzzerState } from './schematic/buzzer';
@@ -131,12 +131,41 @@ export function engineVersion(): string {
 	return version();
 }
 
+/**
+ * Where in the circuit a solve failed, in the engine's names: nodes as the
+ * netlist named them (`n3`), components as it named them (`D1`, `X1.Q2`,
+ * `DS1:b`). Most to blame first.
+ */
+export interface SolveFailure {
+	kind: 'singular' | 'no_convergence' | 'timestep' | 'non_finite' | 'other';
+	/** Simulated time it failed at, where there is one. */
+	time: number | null;
+	nodes: string[];
+	elements: string[];
+}
+
 /** Anything the engine rejects arrives here with its message intact. */
-export class EngineError extends Error {}
+export class EngineError extends Error {
+	/** Where the solve went wrong, when the failure was the solve's. */
+	failure: SolveFailure | null = null;
+}
 
 function toEngineError(cause: unknown): EngineError {
+	if (cause instanceof EngineError) return cause;
 	const message = cause instanceof Error ? cause.message : String(cause);
-	return new EngineError(message);
+	const error = new EngineError(message);
+	error.failure = readFailure();
+	return error;
+}
+
+/** What the engine kept about the error it raised last, if it was a solve's. */
+function readFailure(): SolveFailure | null {
+	try {
+		const raw = lastFailure();
+		return raw ? (JSON.parse(raw) as SolveFailure) : null;
+	} catch {
+		return null;
+	}
 }
 
 export async function runTransient(

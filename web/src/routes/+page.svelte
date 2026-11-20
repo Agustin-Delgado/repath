@@ -366,9 +366,9 @@
 			>
 		</div>
 	{:else if app.error}
-		<div class="banner error" role="alert">
+		<div class="banner error" role="alert" title={app.failure ? app.error : undefined}>
 			<strong>Could not simulate.</strong>
-			{app.error}
+			{app.failure?.message ?? app.error}
 		</div>
 	{:else if app.compiled.errors.length > 0}
 		<div class="banner warn" role="status">{app.compiled.errors[0]}</div>

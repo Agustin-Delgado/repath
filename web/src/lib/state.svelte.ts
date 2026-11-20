@@ -7,13 +7,16 @@
  */
 
 import {
+	EngineError,
 	ensureEngine,
 	runFrequencySweep,
 	runTransient,
 	type FrequencyRun,
 	type McuNotice,
+	type SolveFailure,
 	type TransientRun
 } from './engine';
+import { locateFailure, type LocatedFailure } from './schematic/culprits';
 import { EXAMPLES, exampleById } from './examples';
 import { sampleIndexAt } from './schematic/flow';
 import { contactControl, isHighAt } from './schematic/contacts';
@@ -597,6 +600,30 @@ class AppState {
 	/** The servos in the run, and the last reading of each. */
 	private servoReads = new Map<string, ServoFrame | null>();
 	error = $state<string | null>(null);
+	/**
+	 * Where the solve behind `error` failed, in the engine's names, and the
+	 * message it came with. Kept against the message rather than cleared
+	 * alongside it: everything that clears or replaces the error then retires
+	 * this too, without each of those places having to know it exists.
+	 */
+	private failedWith = $state<{ error: string; failure: SolveFailure } | null>(null);
+	/**
+	 * The parts and nets on the drawing the last failed solve blames, and a
+	 * sentence in the drawing's own names. Null while the error showing is not
+	 * a solve's, or there is none.
+	 */
+	failure = $derived.by((): LocatedFailure | null => {
+		const failed = this.failedWith;
+		if (!failed || failed.error !== this.error) return null;
+		const located = locateFailure(failed.failure, this.compiled, this.schematic);
+		return located.nets.length > 0 || located.parts.length > 0 ? located : null;
+	});
+
+	/** Show an engine error, keeping what it said about where. */
+	private fail(message: string, failure: SolveFailure | null | undefined): void {
+		this.error = message;
+		this.failedWith = failure ? { error: message, failure } : null;
+	}
 	/**
 	 * Whether results are being kept up to date with the circuit.
 	 *
@@ -3837,8 +3864,8 @@ class AppState {
 				// line rather than two dots joined up.
 				const acquiring = new Acquisition(compiled.netlist, this.stopTime / 200, {
 					onChunk: () => this.absorb(),
-					onError: (message) => {
-						this.error = message;
+					onError: (message, failure) => {
+						this.fail(message, failure);
 						this.playing = false;
 					},
 					rate: () => this.playbackRate
@@ -3865,7 +3892,10 @@ class AppState {
 				else acquiring.start();
 			}
 		} catch (cause) {
-			this.error = cause instanceof Error ? cause.message : String(cause);
+			this.fail(
+				cause instanceof Error ? cause.message : String(cause),
+				cause instanceof EngineError ? cause.failure : null
+			);
 			if (this.analysis === 'frequency') this.acResult = null;
 			else this.discardRun();
 		} finally {

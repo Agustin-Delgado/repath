@@ -11,6 +11,25 @@ early entries point at those instead.
 
 ---
 
+## 20 November 2026 — When a circuit cannot be solved, it says where
+
+**A failed run points at the circuit.** Two batteries straight across each
+other, a coil across a source, a source with a wire drawn across it, a diode or
+an op-amp the solver cannot settle: instead of "singular matrix near v(n3)",
+the parts and the nets to blame turn red on the drawing, and the issues box
+lists them — hover a net there to light it up, click a part to select it. The
+banner says what went wrong in the names you see on the page, and the engine's
+own message is still there on hover.
+
+**The engine names its culprits.** Every failed operating point or transient
+step now carries the nodes and the devices responsible, so a script driving
+repath-core gets "(V1 and V2, at node a)" rather than a bare error. Working
+that out happens only once a run has failed for good; a run that succeeds does
+exactly the same work as before.
+[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+
+---
+
 ## 20 November 2026 — SPI on the wires, and an LED matrix to drive with it
 
 **The chip's SPI works now.** `SPI.transfer()` clocks the byte out on D13

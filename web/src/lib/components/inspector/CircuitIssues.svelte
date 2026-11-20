@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Cpu, Flame, Info, TriangleAlert } from '@lucide/svelte';
+	import { CircleX, Cpu, Flame, Info, TriangleAlert } from '@lucide/svelte';
 	import { isUnsimulated, unsimulatedMessage } from '$lib/schematic/chips-mcu';
 	import { burnoutKey } from '$lib/schematic/led';
 	import { app } from '$lib/state.svelte';
@@ -38,7 +38,50 @@
 	 * stays blank.
 	 */
 	const unanswered = $derived(notices.filter((notice) => !isUnsimulated(notice.peripheral)));
+	/**
+	 * Where the last solve failed, in the drawing's own names. The same parts
+	 * and nets are marked on the canvas; hovering a net here lights it the way
+	 * hovering it there does, and a part's name selects it.
+	 */
+	const failure = $derived(app.failure);
 </script>
+
+{#if failure}
+	<section
+		class="flex flex-col gap-1.5 rounded-md border border-danger/40 bg-danger/10 p-2"
+		aria-label="Where the solve failed"
+	>
+		<h3 class="m-0 flex items-center gap-1.5 text-[0.7rem] font-semibold text-danger">
+			<CircleX class="size-3.5" />
+			{failure.kind === 'singular' ? 'No single answer' : 'Did not settle'}
+			{#if failure.time !== null && failure.time > 0}
+				<span class="ml-auto font-mono text-[0.62rem] font-normal opacity-70"
+					>at {formatWithUnit(failure.time, 's')}</span
+				>
+			{/if}
+		</h3>
+		<ul class="m-0 flex list-none flex-col gap-1 p-0 text-[0.7rem] leading-snug text-strong">
+			{#each failure.parts as id, i (id)}
+				<li>
+					<button
+						class="cursor-pointer border-0 bg-transparent p-0 text-left font-semibold text-fg hover:underline"
+						onclick={() => (app.selection = [id])}>{failure.partNames[i]}</button
+					>
+				</li>
+			{/each}
+			{#each failure.nets as net, i (net)}
+				<li
+					class="rounded-sm {app.hoverNet === net ? 'bg-hover' : ''}"
+					onpointerenter={() => (app.hoverNet = net)}
+					onpointerleave={() => (app.hoverNet = null)}
+				>
+					net <span class="font-mono text-fg">{failure.netLabels[i]}</span>
+				</li>
+			{/each}
+		</ul>
+		<p class="m-0 text-[0.68rem] text-muted">{failure.message}</p>
+	</section>
+{/if}
 
 {#if stopped.length > 0}
 	<section class="flex flex-col gap-1.5 rounded-md border border-danger/40 bg-danger/10 p-2">

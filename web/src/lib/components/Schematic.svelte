@@ -236,9 +236,15 @@
 			probes: probeLabels,
 			switchStates,
 			junctions,
-			renamingGroup: app.renamingGroup
+			renamingGroup: app.renamingGroup,
+			faultNets,
+			faultParts
 		};
 	}
+
+	/** What the last failed solve blames, as the drawing looks it up. */
+	const faultNets = $derived(new Set(app.failure?.nets ?? []));
+	const faultParts = $derived(new Set(app.failure?.parts ?? []));
 
 	/**
 	 * The box a group's name is typed into, over the name itself.
@@ -519,7 +525,7 @@
 	// drawing between them changes, and the paths are rebuilt on their own
 	// because the standard is part of their cache key.
 	$effect(() => {
-		void [selectionSet, probeColours, app.hoverNet, app.symbolStandard];
+		void [selectionSet, probeColours, app.hoverNet, app.symbolStandard, faultNets, faultParts];
 		// Groups are drawn from the parts, so only their names and membership
 		// are theirs to watch; the index does not know they exist.
 		void app.schematic.groups?.map((g) => `${g.name}:${g.members.length}`);

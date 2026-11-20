@@ -14,7 +14,7 @@
  */
 
 import { Capture } from './capture';
-import { EngineError, LiveRun, type LogicState, type McuState } from './engine';
+import { EngineError, LiveRun, type LogicState, type McuState, type SolveFailure } from './engine';
 import type { LcdFrame } from './schematic/lcd';
 import type { MatrixFrame } from './schematic/max7219';
 import type { BuzzerState } from './schematic/buzzer';
@@ -23,8 +23,11 @@ import type { ServoFrame } from './schematic/servo';
 export interface AcquisitionHost {
 	/** New samples have landed. */
 	onChunk(): void;
-	/** The run gave up. The message is the engine's own. */
-	onError(message: string): void;
+	/**
+	 * The run gave up. The message is the engine's own, and `failure` says
+	 * where in the circuit, when the solve itself is what failed.
+	 */
+	onError(message: string, failure?: SolveFailure | null): void;
 	/** Simulated seconds per second of wall clock. */
 	rate(): number;
 }
@@ -267,7 +270,8 @@ export class Acquisition {
 		} catch (cause) {
 			this.stop();
 			this.host.onError(
-				cause instanceof EngineError || cause instanceof Error ? cause.message : String(cause)
+				cause instanceof EngineError || cause instanceof Error ? cause.message : String(cause),
+				cause instanceof EngineError ? cause.failure : null
 			);
 			return;
 		}
