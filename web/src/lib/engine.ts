@@ -8,6 +8,7 @@
 
 import init, { Simulation, runFrequencySweep as sweep, version } from './wasm/repath.js';
 import type { LcdFrame } from './schematic/lcd';
+import type { ServoFrame } from './schematic/servo';
 
 export type LogicState = 'low' | 'high' | 'unknown' | 'highz';
 
@@ -361,6 +362,15 @@ export class LiveRun {
 			overdriven: state.overdriven,
 			blinkInterval: state.blink_interval
 		};
+	}
+
+	/**
+	 * Where a servo's horn is, as of the instant the digital side has reached,
+	 * or null when there is no servo device by that name.
+	 */
+	servoState(device: string): ServoFrame | null {
+		if (this.freed) return null;
+		return JSON.parse(this.simulation.servoState(device)) as ServoFrame | null;
 	}
 
 	/**

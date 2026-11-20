@@ -9,6 +9,9 @@ import type { Schematic } from './schematic/model';
 import { defaultParams, definitionOf } from './schematic/model';
 import { SEGMENTS } from './schematic/led';
 import { intelHex } from './schematic/firmware';
+// The Servo library's Knob example, as arduino-cli compiles it for an Uno;
+// the source is beside it.
+import KNOB_HEX from './sketches/ServoKnob.ino.hex?raw';
 
 export interface Example {
 	id: string;
@@ -866,6 +869,45 @@ export const EXAMPLES: Example[] = [
 					// RESET, on the power header, through a button to ground.
 					[440, 610, 440, 660],
 					[500, 660, 530, 660]
+				]
+			)
+	},
+
+	{
+		id: 'uno-servo-knob',
+		name: 'Servo on a knob',
+		description:
+			"The Servo library's Knob sketch, compiled: an Uno reads the potentiometer on A0 every 15 ms and sends the servo on pin 9 to the matching angle, 0° with the wiper at ground and 180° at 5V. The servo reads the width of the pulses the library sends every 20 ms — 544 µs for 0°, 2400 µs for 180° — and its horn swings there at the motor's speed, a tenth of a second for 60°. It starts at 90°, so the first thing it does is turn to the quarter the knob is set at. Set the wiper somewhere else in the potentiometer's inspector and the run starts over with the horn swinging to the new angle; select the servo to read its angle, the last pulse and the 10 mA it draws from the board's 5V.",
+		stopTime: 2,
+		build: () =>
+			build(
+				[
+					{ kind: 'ic:ArduinoUno', name: 'U1', x: 500, y: 400, params: { firmware: KNOB_HEX } },
+					{ kind: 'servo', name: 'SV1', x: 700, y: 80 },
+					{ kind: 'potentiometer', name: 'RV1', x: 580, y: 700, params: { position: 0.25 } },
+					{ kind: 'ground', name: 'GND1', x: 530, y: 710 },
+					{ kind: 'probe', name: 'PIN9', x: 460, y: 130 }
+				],
+				[
+					// Pin 9 to the servo's signal wire, with a probe on it to see the
+					// pulses by, and the board's other GND to its ground wire.
+					[480, 190, 480, 130],
+					[480, 130, 480, 90],
+					[480, 130, 460, 130],
+					[480, 90, 640, 90],
+					[380, 190, 380, 70],
+					[380, 70, 640, 70],
+					// The wiper to A0, the track across ground and 5V.
+					[580, 610, 580, 670],
+					[550, 700, 530, 700],
+					[480, 610, 480, 760],
+					[480, 760, 640, 760],
+					[640, 760, 640, 700],
+					[640, 700, 610, 700],
+					// 5V on round to the servo's supply wire.
+					[640, 760, 800, 760],
+					[800, 760, 800, 80],
+					[800, 80, 640, 80]
 				]
 			)
 	},

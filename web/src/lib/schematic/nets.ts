@@ -966,10 +966,19 @@ function short(pin: string): string {
  * and a probe are high impedances by definition. A switch is not on this list:
  * it is an open circuit when it is open and a piece of wire when it is closed,
  * which is a fact about the moment rather than about the drawing. The LCD
- * module draws a current, but as a load across its supply: it holds neither
- * leg at the other's level.
+ * module and the servo draw a current, but as a load across their supply:
+ * neither holds one leg at the other's level.
  */
-const NO_DC_PATH = new Set(['capacitor', 'varcap', 'crystal', 'isource', 'probe', 'port', 'lcd1602']);
+const NO_DC_PATH = new Set([
+	'capacitor',
+	'varcap',
+	'crystal',
+	'isource',
+	'probe',
+	'port',
+	'lcd1602',
+	'servo'
+]);
 
 /** One conductive route between two nets. `via` is a switch that has to be closed. */
 interface DcEdge {

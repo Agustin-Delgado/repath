@@ -24,6 +24,7 @@ import type { CircuitSettings, SharedCircuit } from './share';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { LCD_HISTORY, sameGlass, type LcdFrame } from './schematic/lcd';
+import { recordServo, servoAt, servoDeviceName, type ServoFrame } from './schematic/servo';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import { groupFrame, outside } from './schematic/groups';
 import {
@@ -366,6 +367,15 @@ function devicesOfType(netlist: unknown, type: string): string[] {
 	return (devices ?? []).filter((device) => device.type === type).map((device) => device.name);
 }
 
+/**
+ * The names of the servo parts in a compiled netlist: each is an engine
+ * device under `servoDeviceName` of the part's name.
+ */
+function servoParts(netlist: unknown): string[] {
+	const suffix = servoDeviceName('');
+	return devicesOfType(netlist, 'servo').map((device) => device.slice(0, -suffix.length));
+}
+
 class AppState {
 	/**
 	 * An empty sheet.
@@ -554,6 +564,14 @@ class AppState {
 	 */
 	lcdHistory = new Map<string, LcdFrame[]>();
 	private lcdNames: string[] = [];
+	/**
+	 * Where each servo's horn was during this run, by the part's name: a frame
+	 * whenever it moved or measured a different pulse, oldest first. Not
+	 * reactive, like `lcdHistory`; `servoAt` reads it for the inspector.
+	 */
+	servoHistory = new Map<string, ServoFrame[]>();
+	/** The servos in the run, and the last reading of each. */
+	private servoReads = new Map<string, ServoFrame | null>();
 	error = $state<string | null>(null);
 	/**
 	 * Whether results are being kept up to date with the circuit.
@@ -3784,6 +3802,10 @@ class AppState {
 				this.mcuNames = devicesOfType(compiled.netlist, 'mcu');
 				this.lcdNames = devicesOfType(compiled.netlist, 'i2c_lcd');
 				this.lcdHistory = new Map();
+				this.servoReads = new Map(
+					servoParts(compiled.netlist).map((name) => [name, null] as [string, ServoFrame | null])
+				);
+				this.servoHistory = new Map();
 				this.held = null;
 				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
@@ -3813,6 +3835,7 @@ class AppState {
 		this.result = capture.run();
 		this.readMcus(acquiring);
 		this.readDisplays(acquiring);
+		this.readServos(acquiring);
 		// While the sweep is going, the instant on the drawing is the newest one
 		// there is. Stopped, it stays where it was left, to be measured.
 		if (acquiring.sweeping) {
@@ -3896,6 +3919,28 @@ class AppState {
 		}
 	}
 
+	/** Add a frame to each servo's history where its horn moved or its pulse changed. */
+	private readServos(acquiring: Acquisition): void {
+		for (const [name, previous] of this.servoReads) {
+			const state = acquiring.servoState(servoDeviceName(name));
+			if (!state) continue;
+			const history = this.servoHistory.get(name) ?? [];
+			recordServo(history, state, previous);
+			this.servoHistory.set(name, history);
+			this.servoReads.set(name, state);
+		}
+	}
+
+	/**
+	 * A servo as the run had it at the playback instant, or null with no run
+	 * or before the run has read it. Reactive through the result and the
+	 * playback instant, which move whenever its history can have.
+	 */
+	servoAt(name: string): ServoFrame | null {
+		if (!this.result || this.analysis !== 'transient') return null;
+		return servoAt(this.servoHistory.get(name) ?? [], this.playbackTime);
+	}
+
 	private discardRun(): void {
 		this.runGeneration++;
 		this.acquiring?.close();
@@ -3907,6 +3952,8 @@ class AppState {
 		this.mcuNames = [];
 		this.lcdNames = [];
 		this.lcdHistory = new Map();
+		this.servoReads = new Map();
+		this.servoHistory = new Map();
 		this.held = null;
 		this.envelope = null;
 		this.playing = false;

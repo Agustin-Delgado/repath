@@ -29,6 +29,7 @@ import {
 	LCD_LEGS,
 	lcdLegY
 } from './lcd';
+import { SERVO_BODY, SERVO_KIND, SERVO_LEG_X, SERVO_LEGS, SERVO_SCALE, SERVO_SHAFT, servoLegY } from './servo';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -1653,6 +1654,36 @@ export const CATALOG: ComponentDef[] = [
 					'Set by the A0–A2 jumpers on the backpack. The sketch has to use the same one: 0x27 and 0x3F are the usual two.'
 			}
 		]
+	},
+	{
+		/**
+		 * A hobby servo, an SG90 or anything wired like one: ground, supply and
+		 * signal, and a horn that turns to the angle the signal's pulses ask for.
+		 *
+		 * The engine measures the pulses and turns the horn (`servo` in
+		 * repath-core); the supply sees a fixed load (`servo.ts`). The horn is
+		 * drawn where the run has it, on the live layer.
+		 */
+		kind: SERVO_KIND,
+		box: {
+			x: SERVO_LEG_X,
+			y: SERVO_SHAFT.y - SERVO_SCALE.outer,
+			w: SERVO_SHAFT.x + SERVO_SCALE.outer - SERVO_LEG_X,
+			h: SERVO_BODY.y + SERVO_BODY.h - (SERVO_SHAFT.y - SERVO_SCALE.outer)
+		},
+		body: {
+			x: SERVO_BODY.x,
+			y: SERVO_SHAFT.y - SERVO_SCALE.outer,
+			w: SERVO_SHAFT.x + SERVO_SCALE.outer - SERVO_BODY.x,
+			h: SERVO_BODY.y + SERVO_BODY.h - (SERVO_SHAFT.y - SERVO_SCALE.outer)
+		},
+		label: 'Servo motor',
+		group: 'semiconductor',
+		prefix: 'SV',
+		pins: SERVO_LEGS.map((leg, i) =>
+			leg === 'SIG' ? digitalIn(leg, SERVO_LEG_X, servoLegY(i)) : analog(leg, SERVO_LEG_X, servoLegY(i))
+		),
+		params: []
 	},
 	{
 		kind: 'nmos',

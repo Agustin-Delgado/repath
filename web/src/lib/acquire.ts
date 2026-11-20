@@ -16,6 +16,7 @@
 import { Capture } from './capture';
 import { EngineError, LiveRun, type LogicState, type McuState } from './engine';
 import type { LcdFrame } from './schematic/lcd';
+import type { ServoFrame } from './schematic/servo';
 
 export interface AcquisitionHost {
 	/** New samples have landed. */
@@ -183,6 +184,11 @@ export class Acquisition {
 	/** What an I2C LCD module shows right now. */
 	lcdState(name: string): LcdFrame | null {
 		return this.run.lcdState(name);
+	}
+
+	/** Where a servo's horn is right now, by the name of its engine device. */
+	servoState(device: string): ServoFrame | null {
+		return this.run.servoState(device);
 	}
 
 	/**

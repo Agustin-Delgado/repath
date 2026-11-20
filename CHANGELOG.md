@@ -11,6 +11,26 @@ early entries point at those instead.
 
 ---
 
+## 20 November 2026 — A servo for the sketch to turn
+
+**A hobby servo is in the palette,** under Semiconductors beside the displays:
+the SG90 seen from above, its three wires GND, VCC and SIG, and a horn on the
+output shaft. Searching for servo, sg90 or motor finds it.
+
+**Wire SIG to a pin and a Servo library sketch turns it.** The servo times
+each pulse on SIG — 544 µs is 0°, 2400 µs is 180°, so `write(angle)` lands on
+that angle — and the horn swings there at an SG90's speed, a tenth of a second
+for 60°, drawn where the run has it and scrubbed back with the timeline. With
+the pulses gone, after `detach()` or with nothing on the pin, it holds where it
+is, and a pulse that is not a position — `analogWrite()` on the same pin, say
+— is ignored. Selected, it says its angle, the last pulse and whether that
+pulse was taken, and what it draws from its supply: a steady 10 mA.
+
+**Servo on a knob** is the Servo library's Knob sketch on an Uno: set the
+potentiometer's wiper in its inspector and the horn swings to match.
+
+---
+
 ## 13 November 2026 — A 16×2 LCD for the microcontroller to talk to
 
 **The I²C character display is in the palette,** under Semiconductors with the
