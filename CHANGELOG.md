@@ -30,7 +30,7 @@ holds every note four times as long.
 
 **There is an example to start from:** an Uno playing Twinkle, Twinkle, Little
 Star on pin 11.
-[#75](https://github.com/Agustin-Delgado/repath/pull/75)
+[#77](https://github.com/Agustin-Delgado/repath/pull/77)
 
 ---
 
