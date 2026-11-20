@@ -24,7 +24,7 @@ browser by the previous build. Files saved as `.repath.json` open too.
 to be read as far as this one understood it, and a link said only that it came
 from a different version; now either is refused whole, with a message saying
 to reload for the latest repath. Links are no longer than before.
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#79](https://github.com/Agustin-Delgado/repath/pull/79)
 
 ---
 
