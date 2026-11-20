@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Cpu, Flame, Info, TriangleAlert } from '@lucide/svelte';
 	import { isUnsimulated, unsimulatedMessage } from '$lib/schematic/chips-mcu';
+	import { burnoutKey } from '$lib/schematic/led';
 	import { app } from '$lib/state.svelte';
 	import { formatWithUnit } from '$lib/units';
 
@@ -66,7 +67,7 @@
 			{leds === 0 ? 'Blown' : fuses === 0 ? 'Burnt out' : 'Burnt out and blown'}
 		</h3>
 		<ul class="m-0 flex list-none flex-col gap-1 p-0 text-[0.7rem] leading-snug text-strong">
-			{#each burnouts as burnout (burnout.instanceId)}
+			{#each burnouts as burnout (burnoutKey(burnout))}
 				<li>
 					<strong class="text-fg">{burnout.name}</strong> reached {formatWithUnit(burnout.peak, 'A')}
 					against a {formatWithUnit(burnout.rated, 'A')} rating, and {burnout.kind === 'fuse'

@@ -14,6 +14,8 @@ import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, pointKey } from './model';
 import { LCD_KIND, lcdAddress } from './lcd';
 import { MATRIX_KIND } from './max7219';
+import { BUZZER_KIND, PIEZO_CAPACITANCE, buzzerDevice, piezoResistance } from './buzzer';
+import { SERVO_KIND, SERVO_LOAD_OHMS, servoDeviceName } from './servo';
 import {
 	analogTerminals,
 	mcuBlock,
@@ -348,8 +350,9 @@ function dcGraph(schematic: Schematic, connectivity: Connectivity) {
 
 /**
  * Parts that carry no current at DC, the same list the floating-input check
- * uses — and the display modules, which do, from VCC to GND, but as a load: a
- * chip's supply that reached ground through one would be no supply at all.
+ * uses — and the display modules and the servo, which do, from VCC to GND,
+ * but as a load: a chip's supply that reached ground through one would be no
+ * supply at all.
  */
 const NO_DC_PATH = new Set([
 	'capacitor',
@@ -359,7 +362,8 @@ const NO_DC_PATH = new Set([
 	'probe',
 	'port',
 	LCD_KIND,
-	MATRIX_KIND
+	MATRIX_KIND,
+	SERVO_KIND
 ]);
 
 /** The last compile, and what it was a compile of. */
@@ -1266,6 +1270,33 @@ function compileFresh(
 				});
 				break;
 			}
+			// The disc's load, and the engine's ear on what drives it (`buzzer.ts`). The
+			// ear listens to the logic each leg is driven by; a buzzer driven from
+			// the analog side — a 555, a source — has its + leg read through the
+			// logic thresholds instead, against ground.
+			case BUZZER_KIND: {
+				const plus = analogOf(instance, 'plus');
+				const minus = analogOf(instance, 'minus');
+				components.push({
+					type: 'resistor',
+					name,
+					a: plus,
+					b: minus,
+					resistance: piezoResistance(num(instance, 'capacitance', PIEZO_CAPACITANCE))
+				});
+				const logic = (pin: string) => {
+					const index = connectivity.netOfPin.get(pinKey(instance.id, pin));
+					return (index !== undefined && names.get(index)?.digital) || null;
+				};
+				let driving = logic('plus');
+				const returning = logic('minus');
+				if (!driving && !returning && plus !== 'gnd') {
+					driving = `${instance.id}_sense`;
+					chipBridges.push({ direction: 'to_digital', name: `${name}:sense`, node: plus, net: driving, delay: 0 });
+				}
+				devices.push({ type: 'buzzer', name: buzzerDevice(name), plus: driving, minus: returning });
+				break;
+			}
 			case 'switch':
 			case 'pushbutton': {
 				// The engine's switch is voltage-controlled, which is the general
@@ -1560,6 +1591,31 @@ function compileFresh(
 					clk: digitalOf(instance, 'CLK'),
 					load: digitalOf(instance, 'CS'),
 					dout: digitalOf(instance, 'DOUT')
+				});
+				break;
+			}
+			// The engine's `servo`, reading the pulses on SIG, and its load on the
+			// supply as a resistor under the part's own name, so the current it
+			// draws reads off it like any part's. One with no supply never moves,
+			// and draws nothing worth a resistor.
+			case SERVO_KIND: {
+				const unpowered = chipUnpowered(instance, schematic, connectivity);
+				if (unpowered) {
+					unpoweredChips++;
+					warnings.push(`${name} is not powered: ${unpowered} Its horn stays where it is.`);
+					break;
+				}
+				components.push({
+					type: 'resistor',
+					name,
+					a: analogOf(instance, 'VCC'),
+					b: analogOf(instance, 'GND'),
+					resistance: SERVO_LOAD_OHMS
+				});
+				devices.push({
+					type: 'servo',
+					name: servoDeviceName(name),
+					signal: digitalOf(instance, 'SIG')
 				});
 				break;
 			}

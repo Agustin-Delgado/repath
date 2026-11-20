@@ -17,6 +17,8 @@ import { Capture } from './capture';
 import { EngineError, LiveRun, type LogicState, type McuState } from './engine';
 import type { LcdFrame } from './schematic/lcd';
 import type { MatrixFrame } from './schematic/max7219';
+import type { BuzzerState } from './schematic/buzzer';
+import type { ServoFrame } from './schematic/servo';
 
 export interface AcquisitionHost {
 	/** New samples have landed. */
@@ -189,6 +191,16 @@ export class Acquisition {
 	/** What a MAX7219 matrix lights right now. */
 	max7219State(name: string): MatrixFrame | null {
 		return this.run.max7219State(name);
+	}
+
+	/** What a buzzer has played since its `from`-th tone. */
+	buzzerState(name: string, from: number): BuzzerState | null {
+		return this.run.buzzerState(name, from);
+	}
+
+	/** Where a servo's horn is right now, by the name of its engine device. */
+	servoState(device: string): ServoFrame | null {
+		return this.run.servoState(device);
 	}
 
 	/**

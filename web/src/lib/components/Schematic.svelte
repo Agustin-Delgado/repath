@@ -33,6 +33,7 @@
 	import { prepareFlow, rescale, sampleFlow, sampleIndexAt } from '$lib/schematic/flow';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { burnoutsById } from '$lib/schematic/led';
+	import { SERVO_KIND } from '$lib/schematic/servo';
 	import { CONTACTS, GRID, OPERABLE, SINGLE_CONTACTS } from '$lib/schematic/model';
 	import { groupLabelBox, groupLabelSize, placeGroups } from '$lib/schematic/groups';
 	import { routeWire } from '$lib/schematic/route';
@@ -376,6 +377,17 @@
 				}
 				continue;
 			}
+			// A servo's horn turns with the run, so it is drawn on the live layer
+			// while there is one, and the symbol here goes without it.
+			if (instance.kind === SERVO_KIND) {
+				if (time === null) continue;
+				seen.add(instance.id);
+				if (switchStates.get(instance.id) !== true) {
+					switchStates.set(instance.id, true);
+					changed = true;
+				}
+				continue;
+			}
 			const operable = OPERABLE.has(instance.kind);
 			if (!operable) continue;
 			seen.add(instance.id);
@@ -671,6 +683,9 @@
 					burnouts: burnoutMap,
 					displays: app.lcdHistory,
 					matrices: app.matrixHistory,
+					buzzers: app.buzzerTracks,
+					servos: app.servoHistory,
+					ink: theme!.symbol,
 					// Two ways of being at no particular potential, drawn the same way:
 					// an analog node nothing holds, and a digital net nothing drives.
 					floating: floatingFor(closed, frame.netUndriven),
@@ -707,6 +722,8 @@
 			} else if (dynamicView) {
 				dynamicView = null;
 				active.invalidate('dynamic');
+				// A servo's horn was on the layer just cleared: back on the drawing.
+				if (trackSwitches(null)) active.invalidate('schematic');
 			}
 
 			// Nothing live to read a contact position off: back to resting.

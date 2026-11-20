@@ -36,6 +36,70 @@ say what happened rather than leaving the matrix dark with no reason given.
 
 ---
 
+## 20 November 2026 — A buzzer you can hear
+
+**The piezo buzzer is in the palette,** under Passive, found by piezo, buzzer,
+tone or speaker. Its + leg goes to a pin, the other to ground, the way the
+two-legged ones in Arduino kits are wired.
+
+**It shows what it is being played at.** While a sketch's `tone()` drives it —
+or a pin toggled by hand, or a PWM output — the drawing puts the frequency and
+the note over it, 523 Hz · C5, and the inspector says the same for the instant
+on the screen. Between notes it says nothing, and `noTone()` is silence.
+
+**Turn Sound on and you hear it.** The button sits beside the speeds when the
+circuit has a buzzer, and in the buzzer's inspector. It is off until you click
+it, as a page has to be. Each note keeps the pitch the circuit drives it at;
+the speed sets how long it lasts, so 1:1 plays a tune at its tempo and 0.25×
+holds every note four times as long.
+
+**There is an example to start from:** an Uno playing Twinkle, Twinkle, Little
+Star on pin 11.
+[#77](https://github.com/Agustin-Delgado/repath/pull/77)
+
+---
+
+## 20 November 2026 — A servo for the sketch to turn
+
+**A hobby servo is in the palette,** under Semiconductors beside the displays:
+the SG90 seen from above, its three wires GND, VCC and SIG, and a horn on the
+output shaft. Searching for servo, sg90 or motor finds it.
+
+**Wire SIG to a pin and a Servo library sketch turns it.** The servo times
+each pulse on SIG — 544 µs is 0°, 2400 µs is 180°, so `write(angle)` lands on
+that angle — and the horn swings there at an SG90's speed, a tenth of a second
+for 60°, drawn where the run has it and scrubbed back with the timeline. With
+the pulses gone, after `detach()` or with nothing on the pin, it holds where it
+is, and a pulse that is not a position — `analogWrite()` on the same pin, say
+— is ignored. Selected, it says its angle, the last pulse and whether that
+pulse was taken, and what it draws from its supply: a steady 10 mA.
+
+**Servo on a knob** does what the Servo library's Knob sketch does, on an
+Uno, with Timer1 making the pulses: set the
+potentiometer's wiper in its inspector and the horn swings to match.
+[#76](https://github.com/Agustin-Delgado/repath/pull/76)
+
+---
+
+## 20 November 2026 — An Uno counting on a seven-segment digit
+
+**A new example, Uno counting on a digit:** an Arduino Uno shifting 0 to 9
+into a 74HC595, a number every half second, and the 595 lighting a
+common-cathode digit through a resistor per segment. Three pins drive all
+eight segments, the way most sketches do it.
+
+**A segment burns out on its own now, and says so.** Wire one bar of a digit
+straight to a pin with no resistor and that bar goes dark and charred while
+the rest stay lit, and the circuit panel names it: "DS1 segment b". The same
+goes for each LED of the four-digit display and the bar graph. Before, the
+segment went dark with nothing to say why.
+
+**A 74HC595 with QHS left open no longer warns.** That pin is only for
+chaining a second 595, so with one chip it is meant to be left unconnected.
+[#75](https://github.com/Agustin-Delgado/repath/pull/75)
+
+---
+
 ## 13 November 2026 — A 16×2 LCD for the microcontroller to talk to
 
 **The I²C character display is in the palette,** under Semiconductors with the

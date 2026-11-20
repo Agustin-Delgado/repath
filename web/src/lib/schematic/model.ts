@@ -20,6 +20,7 @@ import {
 	type ChipDef
 } from './chips';
 import { DEFAULT_CLOCK } from './chips-mcu';
+import { BUZZER_KIND, PIEZO_CAPACITANCE } from './buzzer';
 import {
 	DEFAULT_LCD_ADDRESS,
 	LCD_ADDRESSES,
@@ -37,6 +38,7 @@ import {
 	MATRIX_OUT_X,
 	matrixLegY
 } from './max7219';
+import { SERVO_BODY, SERVO_KIND, SERVO_LEG_X, SERVO_LEGS, SERVO_SCALE, SERVO_SHAFT, servoLegY } from './servo';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -1228,6 +1230,36 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		/**
+		 * A passive piezo buzzer: a ceramic disc that sounds at whatever it is
+		 * driven at, which is what `tone()` is for.
+		 *
+		 * Electrically the load a disc is to its pin (`buzzer.ts`); what it is
+		 * playing is read off the logic driving it and drawn on the live layer.
+		 * Marked + on one leg, as the parts are, though a disc has no polarity:
+		 * the mark is the leg that goes to the pin, the other to ground.
+		 */
+		kind: BUZZER_KIND,
+		box: { x: -20, y: -16, w: 40, h: 46 },
+		label: 'Piezo buzzer',
+		group: 'passive',
+		prefix: 'BZ',
+		pins: [analog('plus', -10, 30), analog('minus', 10, 30)],
+		params: [
+			{
+				key: 'capacitance',
+				label: 'Capacitance',
+				unit: 'F',
+				default: PIEZO_CAPACITANCE,
+				min: 0,
+				nonZero: true,
+				advanced: true,
+				description:
+					'Of the disc: 10 to 30 nF for the 12 mm ones in Arduino kits. Sets the current it draws, the average a disc this size takes at 1 kHz.'
+			}
+		]
+	},
+	{
+		/**
 		 * A terminal of a block, from the inside.
 		 *
 		 * A port is what makes a pin of a boxed-up circuit reachable from outside:
@@ -1686,6 +1718,36 @@ export const CATALOG: ComponentDef[] = [
 			),
 			digitalOut('DOUT', MATRIX_OUT_X, 0)
 		],
+		params: []
+	},
+	{
+		/**
+		 * A hobby servo, an SG90 or anything wired like one: ground, supply and
+		 * signal, and a horn that turns to the angle the signal's pulses ask for.
+		 *
+		 * The engine measures the pulses and turns the horn (`servo` in
+		 * repath-core); the supply sees a fixed load (`servo.ts`). The horn is
+		 * drawn where the run has it, on the live layer.
+		 */
+		kind: SERVO_KIND,
+		box: {
+			x: SERVO_LEG_X,
+			y: SERVO_SHAFT.y - SERVO_SCALE.outer,
+			w: SERVO_SHAFT.x + SERVO_SCALE.outer - SERVO_LEG_X,
+			h: SERVO_BODY.y + SERVO_BODY.h - (SERVO_SHAFT.y - SERVO_SCALE.outer)
+		},
+		body: {
+			x: SERVO_BODY.x,
+			y: SERVO_SHAFT.y - SERVO_SCALE.outer,
+			w: SERVO_SHAFT.x + SERVO_SCALE.outer - SERVO_BODY.x,
+			h: SERVO_BODY.y + SERVO_BODY.h - (SERVO_SHAFT.y - SERVO_SCALE.outer)
+		},
+		label: 'Servo motor',
+		group: 'semiconductor',
+		prefix: 'SV',
+		pins: SERVO_LEGS.map((leg, i) =>
+			leg === 'SIG' ? digitalIn(leg, SERVO_LEG_X, servoLegY(i)) : analog(leg, SERVO_LEG_X, servoLegY(i))
+		),
 		params: []
 	},
 	{

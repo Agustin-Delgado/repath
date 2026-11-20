@@ -51,6 +51,7 @@ import {
 	type WireSegment
 } from './model';
 import { instanceBounds, instancePins } from './scene';
+import { BUZZER_KIND, noteName, toneAt, type BuzzerTrack } from './buzzer';
 import {
 	DOT_SIZE,
 	LCD_GLASS,
@@ -69,6 +70,7 @@ import {
 	matrixDot,
 	type MatrixFrame
 } from './max7219';
+import { SERVO_KIND, SERVO_START_ANGLE, hornPath, servoAt, type ServoFrame } from './servo';
 
 export interface DynamicView {
 	schematic: Schematic;
@@ -94,6 +96,12 @@ export interface DynamicView {
 	displays: ReadonlyMap<string, readonly LcdFrame[]>;
 	/** What each LED matrix lit during the run, by name, oldest first. */
 	matrices?: ReadonlyMap<string, readonly MatrixFrame[]>;
+	/** What each buzzer played during the run, by name. */
+	buzzers: ReadonlyMap<string, BuzzerTrack>;
+	/** Where each servo's horn was during the run, by name, oldest first. */
+	servos: ReadonlyMap<string, readonly ServoFrame[]>;
+	/** The colour symbols are drawn in, for what this layer draws of one. */
+	ink: string;
 	/**
 	 * Nets whose voltage is an artifact rather than a measurement.
 	 *
@@ -231,7 +239,7 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 	// scope trace that steps at the moment it failed.
 	for (const instance of schematic.instances) {
 		const lights = chipOf(instance.kind)?.board?.lights;
-		if (!LIT.has(instance.kind) && !lights) continue;
+		if (!LIT.has(instance.kind) && !lights && instance.kind !== SERVO_KIND) continue;
 		if (!instanceVisible(instance, region, 0)) continue;
 		if (lights) drawBoardLights(painter, view, instance, lights);
 		else if (instance.kind === 'led') drawLed(painter, view, instance);
@@ -242,6 +250,8 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 		else if (instance.kind === 'lamp') drawLamp(painter, view, instance);
 		else if (instance.kind === LCD_KIND) drawLcd(painter, view, instance);
 		else if (instance.kind === MATRIX_KIND) drawMatrix(painter, view, instance);
+		else if (instance.kind === BUZZER_KIND) drawBuzzer(painter, view, instance);
+		else if (instance.kind === SERVO_KIND) drawServo(painter, view, instance);
 	}
 }
 
@@ -489,20 +499,21 @@ function drawSegments(
 	bars: ReadonlyArray<readonly [string, readonly [number, number, number, number]]>,
 	width: number
 ): void {
-	if (!view.showLight) return;
 	const rated = ledRating(instance);
 	const { rgb } = ledColour(instance.params.colour);
 	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
 	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
 		for (const [key, [x1, y1, x2, y2]] of bars) {
+			const from = { x: x1, y: y1 };
+			const to = { x: x2, y: y2 };
+			if (drawBurntBar(painter, view, `${instance.id}:${key}`, from, to, width)) continue;
+			if (!view.showLight) continue;
 			const current = view.frame.segmentCurrent.get(`${instance.id}:${key}`) ?? 0;
 			const lit = brightness(current, rated);
 			// Same floor as a single LED: below this it is leakage, and painting it
 			// would leave every bar faintly on and the digit unreadable.
 			if (lit < 0.05) continue;
-			const from = { x: x1, y: y1 };
-			const to = { x: x2, y: y2 };
 			// A soft pass under a hard one: the spill says how hard it is driven and
 			// the bar itself stays the same width, so a dim digit is still a digit.
 			painter.polyline([from, to], { color: ink, width: width * 2, alpha: 0.18 + 0.22 * lit });
@@ -513,6 +524,36 @@ function drawSegments(
 			});
 		}
 	});
+}
+
+/**
+ * One LED of a display or a bar graph that has burnt: the bar charred, with
+ * the flash a single LED goes out with at its middle. Like a single LED's
+ * wreckage it is drawn whether or not the light layer is on, and only the
+ * flash answers to it. True when the bar is burnt, so it is not also lit.
+ */
+function drawBurntBar(
+	painter: Painter,
+	view: DynamicView,
+	key: string,
+	from: Vec2,
+	to: Vec2,
+	width: number
+): boolean {
+	const burn = view.burnouts.get(key);
+	if (!burn || view.time < burn.time) return false;
+	painter.polyline([from, to], { color: CHAR, width });
+	const middle = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+	painter.polyline(
+		[
+			{ x: middle.x - width / 2, y: middle.y - width / 2 },
+			{ x: middle.x + width / 2, y: middle.y + width / 2 }
+		],
+		{ color: CRACK, width: 1.2 }
+	);
+	const progress = (view.time - burn.time) / Math.max(view.stopTime * BURST_SPAN, 1e-15);
+	if (view.showLight && progress <= 1) drawBurst(painter, middle, progress, key);
+	return true;
 }
 
 /**
@@ -556,7 +597,8 @@ const LIT = new Set([
 	'lamp',
 	'fuse',
 	LCD_KIND,
-	MATRIX_KIND
+	MATRIX_KIND,
+	BUZZER_KIND
 ]);
 
 /**
@@ -633,21 +675,71 @@ function drawLcd(painter: Painter, view: DynamicView, instance: Instance): void 
 	});
 }
 
+/** The colour of a buzzer's sound on the drawing. */
+const SOUND = '#ffd166';
+
+/**
+ * A buzzer, while it is sounding at the playback instant: waves off both
+ * sides of the dome, and the pitch above it — the frequency, and the note
+ * when it is one. Not gated on `showLight`, for the reason the LCD is not:
+ * the sound is what the part is for.
+ */
+function drawBuzzer(painter: Painter, view: DynamicView, instance: Instance): void {
+	const tone = toneAt(view.buzzers.get(instance.name), view.time);
+	if (!tone) return;
+	const waves = new Path2D();
+	for (const radius of [24, 30]) {
+		const sweep = Math.PI / 5;
+		waves.moveTo(Math.cos(-sweep * 1.6) * radius, 6 + Math.sin(-sweep * 1.6) * radius);
+		waves.arc(0, 6, radius, -sweep * 1.6, -sweep * 0.4);
+		waves.moveTo(Math.cos(Math.PI + sweep * 0.4) * radius, 6 + Math.sin(Math.PI + sweep * 0.4) * radius);
+		waves.arc(0, 6, radius, Math.PI + sweep * 0.4, Math.PI + sweep * 1.6);
+	}
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		painter.strokePath(waves, { color: SOUND, width: 2, cap: 'round', alpha: 0.85 });
+	});
+	const size = Math.min(11 * painter.viewport.scale, 14);
+	const above = rotatePoint(0, -24, instance.rotation);
+	const note = noteName(tone.frequency);
+	painter.text(
+		`${formatWithUnit(tone.frequency, 'Hz', 3)}${note ? ` · ${note}` : ''}`,
+		{ x: instance.x + above.x, y: instance.y + above.y },
+		{ size, color: SOUND, baseline: 'bottom', minSize: 6 }
+	);
+}
+
+/**
+ * A servo's horn, where the run had it at the playback instant. The symbol
+ * underneath leaves it off while a run is live, so this is the only horn on
+ * the drawing; before the run has read the servo at all, it is where every
+ * servo starts. Not gated on `showLight`, for the reason the LCD is not: the
+ * angle is what the part is for.
+ */
+function drawServo(painter: Painter, view: DynamicView, instance: Instance): void {
+	const frame = servoAt(view.servos.get(instance.name) ?? [], view.time);
+	const angle = frame?.angle ?? SERVO_START_ANGLE;
+	const colour = view.selection.has(instance.id) ? view.selectionColour : view.ink;
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		painter.fillPath(new Path2D(hornPath(angle)), { color: colour });
+	});
+}
+
 /** A bar graph: the digit's lighting, one bar at a time. */
 function drawBars(painter: Painter, view: DynamicView, instance: Instance): void {
-	if (!view.showLight) return;
 	const rated = ledRating(instance);
 	const { rgb } = ledColour(instance.params.colour);
 	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
 	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
 		for (const [i, bar] of BARS.entries()) {
-			const current = view.frame.segmentCurrent.get(`${instance.id}:${bar}`) ?? 0;
-			const lit = brightness(current, rated);
-			if (lit < 0.05) continue;
 			const y = (i - 5) * 10;
 			const from = { x: -14, y };
 			const to = { x: 14, y };
+			if (drawBurntBar(painter, view, `${instance.id}:${bar}`, from, to, 5)) continue;
+			if (!view.showLight) continue;
+			const current = view.frame.segmentCurrent.get(`${instance.id}:${bar}`) ?? 0;
+			const lit = brightness(current, rated);
+			if (lit < 0.05) continue;
 			painter.polyline([from, to], { color: ink, width: 9, alpha: 0.18 + 0.22 * lit });
 			painter.polyline([from, to], {
 				color: whiteHot(rgb, Math.max(lit - 0.7, 0) * 0.6),

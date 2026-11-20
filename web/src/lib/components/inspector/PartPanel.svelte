@@ -3,7 +3,9 @@
 	import { Button } from '$lib/ui';
 	import { mcuBlock } from '$lib/schematic/chips';
 	import { ledRating } from '$lib/schematic/led';
+	import { BUZZER_KIND } from '$lib/schematic/buzzer';
 	import { pinKey } from '$lib/schematic/nets';
+	import { MAX_PULSE_US, MIN_PULSE_US, SERVO_KIND } from '$lib/schematic/servo';
 	import {
 		chipOf,
 		definitionFor,
@@ -17,6 +19,7 @@
 	import BlockPanel from './BlockPanel.svelte';
 	import NameField from './NameField.svelte';
 	import McuPanel from './McuPanel.svelte';
+	import BuzzerPanel from './BuzzerPanel.svelte';
 	import MemoryContents from './MemoryContents.svelte';
 	import ParamField from './ParamField.svelte';
 	import SpiceCard from './SpiceCard.svelte';
@@ -74,6 +77,19 @@
 		const rated = ledRating(instance);
 		const flowing = Math.max(current, 0);
 		return { current: flowing, rated, percent: Math.round((flowing / rated) * 1000) / 10 };
+	});
+
+	/**
+	 * Where a servo's horn is at the playback instant, and the pulse that put
+	 * it there, or null with no run to say. Kept beside the drawing because a
+	 * horn a few degrees off reads the same as one on target, and because a
+	 * pulse the servo ignored leaves it looking as if nothing had been sent.
+	 */
+	const servo = $derived.by(() => {
+		if (instance.kind !== SERVO_KIND) return null;
+		const frame = app.servoAt(instance.name);
+		if (!frame) return null;
+		return { ...frame, current: app.currentThrough(instance.name) };
 	});
 
 	const takesCard = $derived(def.params.some((param) => param.key === 'spice'));
@@ -178,6 +194,26 @@
 		</p>
 	{/if}
 
+	{#if servo}
+		<p class="{hint} rounded-md border border-border bg-canvas px-2 py-1.5">
+			Horn at <strong class="text-fg">{servo.angle.toFixed(1)}°</strong>{#if Math.abs(servo.angle - servo.target) > 0.05},
+				turning to {servo.target.toFixed(1)}°{/if}.
+			{#if !servo.pulse}
+				No pulse on SIG yet, so it holds where it started. The Servo library sends one every 20 ms
+				once <code>attach()</code> has run.
+			{:else if servo.pulse.taken}
+				Last pulse {formatWithUnit(servo.pulse.width, 's', 4)}, at {formatWithUnit(servo.pulse.at, 's', 4)}.
+			{:else}
+				The last pulse, {formatWithUnit(servo.pulse.width, 's', 4)} at {formatWithUnit(servo.pulse.at, 's', 4)},
+				was ignored: a position is a pulse of {MIN_PULSE_US}–{MAX_PULSE_US} µs at least 3 ms after the
+				last one, as the Servo library sends. The horn holds.
+			{/if}
+			{#if servo.current !== null}
+				Drawing {formatWithUnit(Math.max(servo.current, 0), 'A')} from VCC.
+			{/if}
+		</p>
+	{/if}
+
 	{#if programmable}
 		{#key instance.id}
 			<MemoryContents {instance} chip={programmable} />
@@ -188,6 +224,10 @@
 		{#key instance.id}
 			<McuPanel {instance} />
 		{/key}
+	{/if}
+
+	{#if instance.kind === BUZZER_KIND}
+		<BuzzerPanel {instance} />
 	{/if}
 
 	{#if takesCard}
