@@ -21,6 +21,15 @@ import { Acquisition } from './acquire';
 import type { Capture } from './capture';
 import { Trace, wireRef, type Step } from './trace';
 import type { CircuitSettings, SharedCircuit } from './share';
+import {
+	migrate,
+	parseDocument,
+	serializeDocument,
+	toDocument,
+	type EditorLevel,
+	type EditorState,
+	type RepathDocument
+} from './format';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { LCD_HISTORY, sameGlass, type LcdFrame } from './schematic/lcd';
@@ -248,28 +257,10 @@ interface HistoryEntry {
 }
 
 /**
- * The editor as a draft keeps it: see `AppState.draft`.
- *
- * `levels[0]` is the drawing; each level after it is the inside of the block
- * named by `block`, entered from the level before it.
+ * The editor as a draft keeps it: see `AppState.draft`. A document like any
+ * other, with the editor's own state in `editor`.
  */
-export interface DraftDocument {
-	version: number;
-	exampleId: string;
-	stopTime: number;
-	analysis: 'transient' | 'frequency';
-	acStart: number;
-	acStop: number;
-	temperature: number;
-	logicFamily: string;
-	sample: number;
-	sweepCount: number;
-	channels: Record<string, { gain: number; offset: number }>;
-	levels: Array<{ block?: string; schematic: Schematic; probes: string[] }>;
-}
-
-/** Bumped if a draft's shape ever changes incompatibly; an older one is then set aside, not misread. */
-const DRAFT_VERSION = 1;
+export type DraftDocument = RepathDocument & { editor: EditorState };
 
 const HISTORY_LIMIT = 100;
 /**
@@ -3246,30 +3237,23 @@ class AppState {
 
 	// -- persistence ------------------------------------------------------
 
-	toJSON(): string {
-		return JSON.stringify(
-			{
-				version: 1,
-				schematic: this.schematic,
-				stopTime: this.stopTime,
-				probes: this.probes,
-				settings: this.settings()
-			},
-			null,
-			2
-		);
+	/** The circuit as a document: what a saved file holds. */
+	toDocument(): RepathDocument {
+		return toDocument({
+			schematic: this.schematic,
+			stopTime: this.stopTime,
+			probes: this.probes,
+			settings: this.settings()
+		});
 	}
 
+	toJSON(): string {
+		return serializeDocument(this.toDocument());
+	}
+
+	/** Open a saved file, of this format version or any older one. */
 	fromJSON(text: string): void {
-		const parsed = JSON.parse(text) as {
-			schematic?: Schematic;
-			stopTime?: number;
-			probes?: string[];
-			settings?: CircuitSettings;
-		};
-		if (!Array.isArray(parsed?.schematic?.instances)) {
-			throw new Error('That file is not a repath schematic.');
-		}
+		const parsed = parseDocument(text);
 		const schematic = parsed.schematic;
 		// Inside `replaceDocument` from the first registration on: a file refused
 		// halfway must not leave its definitions over the open drawing's own.
@@ -3364,30 +3348,23 @@ class AppState {
 	draft(): DraftDocument {
 		void this.depth;
 		const frames = this.outside;
-		const levels: DraftDocument['levels'] = frames.map((frame, k) => ({
-			block: k === 0 ? undefined : frames[k - 1].editing.id,
+		// The drawing underneath everything is the document's own; each block open
+		// above it is a level, named by the block it is the inside of.
+		const root = frames[0] ?? { schematic: this.schematic, probes: this.probes };
+		const open: EditorLevel[] = frames.slice(1).map((frame, k) => ({
+			block: frames[k].editing.id,
 			schematic: frame.schematic,
 			probes: frame.probes
 		}));
-		levels.push({
-			block: frames.length > 0 ? frames[frames.length - 1].editing.id : undefined,
-			schematic: this.schematic,
-			probes: this.probes
-		});
-		return $state.snapshot({
-			version: DRAFT_VERSION,
-			exampleId: this.exampleId,
-			stopTime: this.stopTime,
-			analysis: this.analysis,
-			acStart: this.acStart,
-			acStop: this.acStop,
-			temperature: this.temperature,
-			logicFamily: this.logicFamily,
-			sample: this.sample,
-			sweepCount: this.sweepCount,
-			channels: this.channels,
-			levels
-		}) as DraftDocument;
+		if (frames.length > 0) {
+			open.push({ block: frames[frames.length - 1].editing.id, schematic: this.schematic, probes: this.probes });
+		}
+		return $state.snapshot(
+			toDocument(
+				{ schematic: root.schematic, stopTime: this.stopTime, probes: root.probes, settings: this.settings() },
+				{ exampleId: this.exampleId, channels: this.channels, levels: open }
+			)
+		) as DraftDocument;
 	}
 
 	/**
@@ -3398,25 +3375,19 @@ class AppState {
 	 * something the person had put where they wanted it.
 	 */
 	restoreDraft(raw: unknown): void {
-		const doc = raw as Partial<DraftDocument> | null;
-		const root = doc?.levels?.[0];
-		if (doc?.version !== DRAFT_VERSION || !Array.isArray(root?.schematic?.instances)) {
-			throw new Error('That saved draft is not one this version of repath can read.');
-		}
+		// Migrated like a file, so a draft kept by an older build comes back too.
+		const doc = migrate(raw, 'saved draft');
+		const editor = doc.editor;
 		this.leaveEverything();
 		this.past = [];
 		this.future = [];
 		this.historyBytes = 0;
-		this.schematic = adopt(root.schematic);
-		this.probes = root.probes ?? [];
-		this.exampleId = typeof doc.exampleId === 'string' ? doc.exampleId : '';
-		const stopTime = doc.stopTime;
-		this.stopTime =
-			typeof stopTime === 'number' && Number.isFinite(stopTime) && stopTime > 0
-				? stopTime
-				: DEFAULT_STOP_TIME;
-		this.applySettings(doc);
-		this.channels = doc.channels && typeof doc.channels === 'object' ? doc.channels : {};
+		this.schematic = adopt(doc.schematic);
+		this.probes = doc.probes;
+		this.exampleId = editor?.exampleId ?? '';
+		this.stopTime = doc.stopTime;
+		this.applySettings(doc.settings);
+		this.channels = editor?.channels ?? {};
 		this.selection = [];
 		this.discardRun();
 		this.acResult = null;
@@ -3427,7 +3398,7 @@ class AppState {
 		// Back down into whatever block was open. A level whose block is gone —
 		// a draft from an editor that disagreed about it — is where this stops,
 		// on the last level that still makes sense.
-		for (const level of doc.levels!.slice(1)) {
+		for (const level of editor?.levels ?? []) {
 			const block = (this.schematic.blocks ?? []).find((b) => b.id === level.block);
 			if (!block || !Array.isArray(level.schematic?.instances)) break;
 			this.descend(block);
