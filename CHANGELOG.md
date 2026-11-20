@@ -26,7 +26,7 @@ step now carries the nodes and the devices responsible, so a script driving
 repath-core gets "(V1 and V2, at node a)" rather than a bare error. Working
 that out happens only once a run has failed for good; a run that succeeds does
 exactly the same work as before.
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#81](https://github.com/Agustin-Delgado/repath/pull/81)
 
 ---
 
