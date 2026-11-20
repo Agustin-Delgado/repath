@@ -61,6 +61,7 @@ import {
 	shownCells,
 	type LcdFrame
 } from './lcd';
+import { SERVO_KIND, SERVO_START_ANGLE, hornPath, servoAt, type ServoFrame } from './servo';
 
 export interface DynamicView {
 	schematic: Schematic;
@@ -86,6 +87,10 @@ export interface DynamicView {
 	displays: ReadonlyMap<string, readonly LcdFrame[]>;
 	/** What each buzzer played during the run, by name. */
 	buzzers: ReadonlyMap<string, BuzzerTrack>;
+	/** Where each servo's horn was during the run, by name, oldest first. */
+	servos: ReadonlyMap<string, readonly ServoFrame[]>;
+	/** The colour symbols are drawn in, for what this layer draws of one. */
+	ink: string;
 	/**
 	 * Nets whose voltage is an artifact rather than a measurement.
 	 *
@@ -223,7 +228,7 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 	// scope trace that steps at the moment it failed.
 	for (const instance of schematic.instances) {
 		const lights = chipOf(instance.kind)?.board?.lights;
-		if (!LIT.has(instance.kind) && !lights) continue;
+		if (!LIT.has(instance.kind) && !lights && instance.kind !== SERVO_KIND) continue;
 		if (!instanceVisible(instance, region, 0)) continue;
 		if (lights) drawBoardLights(painter, view, instance, lights);
 		else if (instance.kind === 'led') drawLed(painter, view, instance);
@@ -234,6 +239,7 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 		else if (instance.kind === 'lamp') drawLamp(painter, view, instance);
 		else if (instance.kind === LCD_KIND) drawLcd(painter, view, instance);
 		else if (instance.kind === BUZZER_KIND) drawBuzzer(painter, view, instance);
+		else if (instance.kind === SERVO_KIND) drawServo(painter, view, instance);
 	}
 }
 
@@ -648,6 +654,22 @@ function drawBuzzer(painter: Painter, view: DynamicView, instance: Instance): vo
 		{ x: instance.x + above.x, y: instance.y + above.y },
 		{ size, color: SOUND, baseline: 'bottom', minSize: 6 }
 	);
+}
+
+/**
+ * A servo's horn, where the run had it at the playback instant. The symbol
+ * underneath leaves it off while a run is live, so this is the only horn on
+ * the drawing; before the run has read the servo at all, it is where every
+ * servo starts. Not gated on `showLight`, for the reason the LCD is not: the
+ * angle is what the part is for.
+ */
+function drawServo(painter: Painter, view: DynamicView, instance: Instance): void {
+	const frame = servoAt(view.servos.get(instance.name) ?? [], view.time);
+	const angle = frame?.angle ?? SERVO_START_ANGLE;
+	const colour = view.selection.has(instance.id) ? view.selectionColour : view.ink;
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		painter.fillPath(new Path2D(hornPath(angle)), { color: colour });
+	});
 }
 
 /** A bar graph: the digit's lighting, one bar at a time. */

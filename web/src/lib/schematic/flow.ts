@@ -64,6 +64,8 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 	// The motional arm and the holder side by side between the same two pins.
 	crystal: [['a', -1], ['b', 1, ':c1'], ['a', -1, ':c0'], ['b', 1, ':c0']],
 	lamp: [['a', -1], ['b', 1]],
+	// Its load on the supply, a resistor from VCC to GND under its own name.
+	servo: [['VCC', -1], ['GND', 1]],
 	// Common to NO first, so a thrown changeover animates along the side it is on.
 	spdt: [['com', -1], ['no', 1], ['com', -1, ':nc'], ['nc', 1, ':nc']],
 	relay: [

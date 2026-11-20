@@ -14,6 +14,7 @@ import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, pointKey } from './model';
 import { LCD_KIND, lcdAddress } from './lcd';
 import { BUZZER_KIND, PIEZO_CAPACITANCE, buzzerDevice, piezoResistance } from './buzzer';
+import { SERVO_KIND, SERVO_LOAD_OHMS, servoDeviceName } from './servo';
 import {
 	analogTerminals,
 	mcuBlock,
@@ -348,10 +349,20 @@ function dcGraph(schematic: Schematic, connectivity: Connectivity) {
 
 /**
  * Parts that carry no current at DC, the same list the floating-input check
- * uses — and the LCD module, which does, from VCC to GND, but as a load: a
- * chip's supply that reached ground through it would be no supply at all.
+ * uses — and the LCD module and the servo, which do, from VCC to GND, but as
+ * a load: a chip's supply that reached ground through one would be no supply
+ * at all.
  */
-const NO_DC_PATH = new Set(['capacitor', 'varcap', 'crystal', 'isource', 'probe', 'port', LCD_KIND]);
+const NO_DC_PATH = new Set([
+	'capacitor',
+	'varcap',
+	'crystal',
+	'isource',
+	'probe',
+	'port',
+	LCD_KIND,
+	SERVO_KIND
+]);
 
 /** The last compile, and what it was a compile of. */
 let lastCompile: { signature: string; result: CompileResult } | null = null;
@@ -1557,6 +1568,31 @@ function compileFresh(
 						? `${name}'s SDA and SCL are swapped: SDA goes to ${swapped.part.name}'s A4 (PC4) and SCL to its A5 (PC5). As it is, nothing answers at its address.`
 						: `${name} is not on a microcontroller's I²C bus: its SDA has to go to A4 (PC4) and its SCL to A5 (PC5), or on an Uno to SDA and SCL. As it is, nothing talks to it.`
 				);
+				break;
+			}
+			// The engine's `servo`, reading the pulses on SIG, and its load on the
+			// supply as a resistor under the part's own name, so the current it
+			// draws reads off it like any part's. One with no supply never moves,
+			// and draws nothing worth a resistor.
+			case SERVO_KIND: {
+				const unpowered = chipUnpowered(instance, schematic, connectivity);
+				if (unpowered) {
+					unpoweredChips++;
+					warnings.push(`${name} is not powered: ${unpowered} Its horn stays where it is.`);
+					break;
+				}
+				components.push({
+					type: 'resistor',
+					name,
+					a: analogOf(instance, 'VCC'),
+					b: analogOf(instance, 'GND'),
+					resistance: SERVO_LOAD_OHMS
+				});
+				devices.push({
+					type: 'servo',
+					name: servoDeviceName(name),
+					signal: digitalOf(instance, 'SIG')
+				});
 				break;
 			}
 			case 'display7': {

@@ -224,6 +224,58 @@ const COUNT_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: s
 	]
 ];
 
+/**
+ * The program the servo example runs, assembled by hand the same way: what the
+ * Servo library's Knob sketch does, without the library. It reads A0 over and
+ * over and sends the servo on D9 a pulse of 544 to 2400 µs every 20 ms.
+ *
+ * Timer1 makes the pulses in hardware, in fast PWM with ICR1 as TOP (mode 14)
+ * at 16 MHz / 8: a tick is 0.5 µs and 40 000 of them are 20 ms. OC1A, which is
+ * D9, goes high at BOTTOM and low when the count reaches OCR1A. The pulse in
+ * ticks is 1088 + ADC · 29 / 8, 1088 (544 µs) to 4796 (2398 µs): the
+ * library's map() to 0–180° and back, within half a degree, and no division.
+ * One conversion a period, started each time Timer1 reaches TOP: OCR1A takes
+ * a new value only at BOTTOM, so a pulse is never cut short. The timer is
+ * started once the first conversion has set the width; writing TCCR1B again
+ * on every pass changes nothing.
+ */
+const KNOB_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: string]> = [
+	[[0xe400], 'ldi  r16, 0x40        ; AVCC the reference, A0 the input'],
+	[[0x9300, 0x007c], 'sts  ADMUX, r16'],
+	[[0xe807], 'ldi  r16, 0x87        ; converter on, its clock 16 MHz / 128'],
+	[[0x9300, 0x007a], 'sts  ADCSRA, r16'],
+	[[0x9a21], 'sbi  DDRB, 1          ; D9 an output'],
+	[[0xe90c], 'ldi  r16, hi8(39999)  ; TOP: 20 ms of 0.5 µs ticks'],
+	[[0x9300, 0x0087], 'sts  ICR1H, r16'],
+	[[0xe30f], 'ldi  r16, lo8(39999)'],
+	[[0x9300, 0x0086], 'sts  ICR1L, r16'],
+	[[0xe802], 'ldi  r16, 0x82        ; OC1A high at BOTTOM, low at OCR1A'],
+	[[0x9300, 0x0080], 'sts  TCCR1A, r16'],
+	[[0xe14d], 'ldi  r20, 29'],
+	[[0xec07], 'loop: ldi r16, 0xC7   ; start a conversion'],
+	[[0x9300, 0x007a], 'sts  ADCSRA, r16'],
+	[[0x9100, 0x007a], 'wait: lds r16, ADCSRA'],
+	[[0xfd06], 'sbrc r16, ADSC        ; until it is done'],
+	[[0xcffc], 'rjmp wait'],
+	[[0x9180, 0x0078], 'lds  r24, ADCL        ; low byte first'],
+	[[0x9190, 0x0079], 'lds  r25, ADCH'],
+	[[0x9f84], 'mul  r24, r20         ; ADC · 29'],
+	[[0x01d0], 'movw r26, r0'],
+	[[0x9f94], 'mul  r25, r20'],
+	[[0x0db0], 'add  r27, r0'],
+	[[0x95b6, 0x95a7, 0x95b6, 0x95a7, 0x95b6, 0x95a7], 'lsr r27 / ror r26 ×3 ; / 8'],
+	[[0x5ca0], 'subi r26, lo8(-1088)  ; + 1088'],
+	[[0x4fbb], 'sbci r27, hi8(-1088)'],
+	[[0x93b0, 0x0089], 'sts  OCR1AH, r27      ; high byte first'],
+	[[0x93a0, 0x0088], 'sts  OCR1AL, r26'],
+	[[0xe10a], 'ldi  r16, 0x1A        ; mode 14, clock / 8: the timer runs'],
+	[[0x9300, 0x0081], 'sts  TCCR1B, r16'],
+	[[0x9bb0], 'period: sbis TIFR1, TOV1 ; wait for TOP, every 20 ms'],
+	[[0xcffe], 'rjmp period'],
+	[[0x9ab0], 'sbi  TIFR1, TOV1      ; a one clears it'],
+	[[0xcfde], 'rjmp loop']
+];
+
 export const EXAMPLES: Example[] = [
 	{
 		id: 'rc-lowpass',
@@ -1004,6 +1056,45 @@ export const EXAMPLES: Example[] = [
 					[440, 190, 440, 170],
 					[440, 170, 440, 140],
 					[460, 140, 500, 140]
+				]
+			)
+	},
+
+	{
+		id: 'uno-servo-knob',
+		name: 'Servo on a knob',
+		description:
+			"What the Servo library's Knob sketch does: an Uno reads the potentiometer on A0 and sends the servo on pin 9 to the matching angle, 0° with the wiper at ground and 180° at 5V. Timer1 makes the pulses in hardware, one every 20 ms, and the servo reads their width — 544 µs for 0°, 2400 µs for 180° — and its horn swings there at the motor's speed, a tenth of a second for 60°. It starts at 90°, so the first thing it does is turn to the quarter the knob is set at. Set the wiper somewhere else in the potentiometer's inspector and the run starts over with the horn swinging to the new angle; select the servo to read its angle, the last pulse and the 10 mA it draws from the board's 5V. The program is a few dozen instructions assembled by hand; a sketch using the Servo library runs the same way, loaded as a .hex from the board's inspector.",
+		stopTime: 2,
+		build: () =>
+			build(
+				[
+					{ kind: 'ic:ArduinoUno', name: 'U1', x: 500, y: 400, params: { firmware: intelHex(KNOB_PROGRAM.flatMap(([words]) => words)) } },
+					{ kind: 'servo', name: 'SV1', x: 700, y: 80 },
+					{ kind: 'potentiometer', name: 'RV1', x: 580, y: 700, params: { position: 0.25 } },
+					{ kind: 'ground', name: 'GND1', x: 530, y: 710 },
+					{ kind: 'probe', name: 'PIN9', x: 460, y: 130 }
+				],
+				[
+					// Pin 9 to the servo's signal wire, with a probe on it to see the
+					// pulses by, and the board's other GND to its ground wire.
+					[480, 190, 480, 130],
+					[480, 130, 480, 90],
+					[480, 130, 460, 130],
+					[480, 90, 640, 90],
+					[380, 190, 380, 70],
+					[380, 70, 640, 70],
+					// The wiper to A0, the track across ground and 5V.
+					[580, 610, 580, 670],
+					[550, 700, 530, 700],
+					[480, 610, 480, 760],
+					[480, 760, 640, 760],
+					[640, 760, 640, 700],
+					[640, 700, 610, 700],
+					// 5V on round to the servo's supply wire.
+					[640, 760, 800, 760],
+					[800, 760, 800, 80],
+					[800, 80, 640, 80]
 				]
 			)
 	},

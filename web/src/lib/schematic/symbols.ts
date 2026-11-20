@@ -38,6 +38,19 @@ import {
 	dotAt,
 	lcdLegY
 } from './lcd';
+import {
+	SERVO_BODY,
+	SERVO_BOSS,
+	SERVO_KIND,
+	SERVO_LEG_X,
+	SERVO_LEGS,
+	SERVO_SCALE,
+	SERVO_SHAFT,
+	SERVO_START_ANGLE,
+	hornPath,
+	servoDirection,
+	servoLegY
+} from './servo';
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
@@ -162,6 +175,8 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 			return `toggle:${String(params.state ?? 'low')}`;
 		case 'port':
 			return `port:${String(params.flow ?? 'in')}`;
+		case SERVO_KIND:
+			return `servo:${params.horn === 'live' ? 'live' : 'rest'}`;
 		case 'and':
 		case 'nand':
 		case 'or':
@@ -948,6 +963,7 @@ export function symbolGeometry(
 	else if (kind === 'spdt') geometry = changeoverSymbol(String(params.start ?? 'open'));
 	else if (kind === 'toggle') geometry = toggleSymbol(String(params.state ?? 'low'));
 	else if (kind === 'port') geometry = portSymbol(String(params.flow ?? 'in'));
+	else if (kind === SERVO_KIND) geometry = servoSymbol(params.horn !== 'live');
 	else if (GATES.has(kind)) {
 		geometry = gate(kind, gateInputCount(params as Record<string, number | string>), standard);
 	}
@@ -963,6 +979,39 @@ export function symbolGeometry(
 	if (variantCache.size >= 2000) variantCache.clear();
 	variantCache.set(variant, geometry);
 	return geometry;
+}
+
+/**
+ * A servo seen from above: the case, the boss round the output shaft, the
+ * marks at every 45° of its travel, and the three wires coming out of the
+ * end. The horn is drawn at rest, at 90°, with `horn` — and left off while a
+ * run is drawing it where the run has it, on the live layer.
+ */
+function servoSymbol(horn: boolean): SymbolGeometry {
+	const marks = [0, 45, 90, 135, 180].map((angle) => {
+		const u = servoDirection(angle);
+		const from = { x: SERVO_SHAFT.x + u.x * SERVO_SCALE.inner, y: SERVO_SHAFT.y + u.y * SERVO_SCALE.inner };
+		const to = { x: SERVO_SHAFT.x + u.x * SERVO_SCALE.outer, y: SERVO_SHAFT.y + u.y * SERVO_SCALE.outer };
+		return path(`M${from.x.toFixed(2)} ${from.y.toFixed(2)} L${to.x.toFixed(2)} ${to.y.toFixed(2)}`);
+	});
+	return {
+		shapes: [
+			rectShape(SERVO_BODY),
+			{ kind: 'circle', cx: SERVO_SHAFT.x, cy: SERVO_SHAFT.y, r: SERVO_BOSS },
+			...marks,
+			...SERVO_LEGS.map((_, i) => path(`M${SERVO_LEG_X} ${servoLegY(i)} H${SERVO_BODY.x}`)),
+			...(horn ? [path(hornPath(SERVO_START_ANGLE), true)] : [])
+		],
+		labels: SERVO_LEGS.map((leg, i) => ({
+			x: SERVO_BODY.x + 4,
+			y: servoLegY(i) + 2.5,
+			text: leg,
+			size: 6.5,
+			anchor: 'start' as const,
+			fine: true
+		})),
+		extent: { x: -SERVO_LEG_X, y: SERVO_SCALE.outer }
+	};
 }
 
 /**

@@ -124,6 +124,10 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 			'liquidcrystal_i2c', 'character display', 'display', 'text', 'screen'
 		]
 	},
+	servo: {
+		description: 'A hobby servo (SG90): its horn turns to the angle the pulses on SIG ask for, 544–2400 µs for 0–180°',
+		keywords: ['servo', 'sg90', 'mg90', 'motor', 'rc servo', 'hobby servo', 'pwm', 'angle', 'horn', 'actuator']
+	},
 	nmos: {
 		description: 'N-channel MOSFET, Shichman-Hodges',
 		keywords: ['mosfet', 'fet', 'transistor', 'n-channel', 'switch', '2n7000']
