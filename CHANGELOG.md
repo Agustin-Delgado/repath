@@ -28,6 +28,7 @@ pulse was taken, and what it draws from its supply: a steady 10 mA.
 
 **Servo on a knob** is the Servo library's Knob sketch on an Uno: set the
 potentiometer's wiper in its inspector and the horn swings to match.
+[#76](https://github.com/Agustin-Delgado/repath/pull/76)
 
 ---
 
