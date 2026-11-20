@@ -60,6 +60,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | LCD | CGRAM starts at zero, and the module draws no supply current | Real CGRAM powers up with whatever is in it, so a custom character used before `createChar()` is blank here and noise on a bench. The supply sees none of the 20–100 mA a backlight takes |
 | LED | Reverse breakdown not modelled | A real LED dies a few volts backwards; here it simply blocks |
 | LED | Failure is thermal-free: one dose rule, no junction temperature | A part in still air and one on a heatsink fail at the same instant |
+| 7-segment | Each segment is its own LED with its own heat, sharing none of it with the rest of the package; and what drives one, a logic chip's output or a microcontroller pin, is the logic family's 50 Ω with no current limit and no package total | A segment with no resistor off an Uno pin draws 60 mA and burns in about 0.6 ms, where a real pin's output sags harder as the current climbs and the segment may take longer to go, or the pin may go first. A 74HC595 lighting all eight at 20 mA each is 160 mA through a chip rated for 70 mA, and nothing says so |
 | Animation | BJT base current approximated as zero when distributing wire current | Base-net current dots are missing rather than wrong |
 | Animation | Wires closing a loop show no current | Genuinely undefined for ideal wires in parallel; shown as nothing rather than guessed |
 | Animation | Speed is scaled to the 90th percentile of what is on screen, not the peak | A spike ten times everything else is drawn at full speed rather than flattening the rest of the circuit to a standstill |
@@ -203,7 +204,8 @@ because each step is what makes the next one worth having:
       at the part's own pace: page loads, write time, data polling on I/O7.
       *What is left:* the toggle bit and software data protection.
 - [x] 7-segment display, a four-digit multiplexed one, and a bar graph, built
-      on the LED that already lights.
+      on the LED that already lights; driven from an Uno directly or through a
+      74HC595, and each segment burns out on its own.
 - [x] A 16×2 character LCD on an I2C backpack (HD44780 behind a PCF8574), the
       first part on a microcontroller's I2C bus.
 - [x] A fuse that blows on its `I²t` and stays open. It and the LEDs heat as

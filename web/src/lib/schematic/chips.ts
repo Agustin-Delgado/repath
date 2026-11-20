@@ -170,7 +170,8 @@ export interface ChipDef {
 	pullUps?: Readonly<Record<string, number>>;
 	/**
 	 * Legs that are fine left unconnected, which the drawing does not nag about:
-	 * the pins a program does not use.
+	 * the pins a program does not use, or the carry-on output of a chip meant
+	 * to be chained when there is only one of it.
 	 */
 	optional?: readonly string[];
 	/**
@@ -1565,7 +1566,9 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 					}
 				];
 			})
-		]
+		],
+		// Only a second 595 takes QHS; with one chip on the board it is left open.
+		optional: ['QHS']
 	},
 
 	// JK flip-flops that act on the falling edge.

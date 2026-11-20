@@ -115,6 +115,59 @@ const BLINK_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: s
 	[[0xcfe2], 'rjmp loop']
 ];
 
+/**
+ * The program the Uno counting example runs, assembled by hand the same way:
+ * `shiftOut()` into a 74HC595 and a pulse on its latch, the next digit every
+ * half second, 0 to 9 and round again.
+ *
+ * D8 (PB0) is the 595's SER, D12 (PB4) its SRCLK and D10 (PB2) its RCLK. A
+ * pattern goes out top bit first, so bit 7 lands on QH and bit 0 on QA: bit 0
+ * is segment a, bit 6 is g and bit 7, the point, is never set.
+ *
+ * Every path is the same length, so the half second is exact: 7 cycles to
+ * fetch the pattern, 8 · 10 − 1 to shift it out, 4 to latch it, 88 passes of
+ * the delay at 4 · 22 726 + 4 each and 6 to step to the next digit, wrapping
+ * or not — 7 + 79 + 4 + 7 999 904 + 6 = 8 000 000.
+ */
+const COUNT_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: string]> = [
+	[[0xe105], 'ldi  r16, 0x15        ; D8, D10 and D12 are outputs'],
+	[[0xb904], 'out  DDRB, r16'],
+	[[0xe030], 'ldi  r19, 0           ; the digit on show'],
+	[[0xe4e0], 'next: ldi r30, lo8(table)'],
+	[[0xe0f0], 'ldi  r31, hi8(table)  ; the table is inside one 256-byte page'],
+	[[0x0fe3], 'add  r30, r19'],
+	[[0x9144], 'lpm  r20, Z           ; that digit\'s segments'],
+	[[0xe028], 'ldi  r18, 8'],
+	[[0x2755], 'bit: clr r21'],
+	[[0xfb47], 'bst  r20, 7           ; the top bit onto D8,'],
+	[[0xf950], 'bld  r21, 0'],
+	[[0xb955], 'out  PORTB, r21       ; with D10 and D12 low'],
+	[[0x9a2c], 'sbi  PORTB, 4         ; D12 rises: the 595 takes it'],
+	[[0x0f44], 'lsl  r20'],
+	[[0x952a], 'dec  r18'],
+	[[0xf7c1], 'brne bit'],
+	[[0xe054], 'ldi  r21, 0x04'],
+	[[0xb955], 'out  PORTB, r21       ; D10 rises: all eight reach the outputs'],
+	[[0x2755], 'clr  r21'],
+	[[0xb955], 'out  PORTB, r21'],
+	[[0xe568], 'ldi  r22, 88'],
+	[[0xec86], 'outer: ldi r24, lo8(22726)'],
+	[[0xe598], 'ldi  r25, hi8(22726)'],
+	[[0x9701], 'inner: sbiw r24, 1'],
+	[[0xf7f1], 'brne inner'],
+	[[0x956a], 'dec  r22'],
+	[[0xf7d1], 'brne outer'],
+	[[0x9533], 'inc  r19'],
+	[[0x303a], 'cpi  r19, 10'],
+	[[0xf409], 'brne same'],
+	[[0xe030], 'ldi  r19, 0'],
+	[[0xcfe3], 'same: rjmp next'],
+	[
+		[0x063f, 0x4f5b, 0x6d66, 0x077d, 0x6f7f, 0x0000],
+		'table: 3F 06 5B 4F 66 6D 7D 07 7F 6F  ; 0 to 9, and two bytes of padding'
+	]
+];
+
 export const EXAMPLES: Example[] = [
 	{
 		id: 'rc-lowpass',
@@ -913,6 +966,100 @@ export const EXAMPLES: Example[] = [
 					[150, y, 350, y],
 					[410, y, column, y],
 					[column, y, column, pin],
+					[column, pin, DIGIT_X - 50, pin]
+				);
+			}
+
+			return build(parts, wires);
+		}
+	},
+
+	{
+		id: 'uno-count-digit',
+		name: 'Uno counting on a digit',
+		description:
+			"An Arduino Uno counting 0 to 9 on a seven-segment digit, a number every half second, through a 74HC595 — which is how a sketch drives eight segments from three pins. The program shifts each digit's pattern into the 595 a bit at a time on D8 and D12, then pulses D10, and the outputs take all eight bits at once, so the digit never shows the bits passing through. Each segment is still an LED with a resistor of its own: the 595 drives, it does not limit. OE is held low so the outputs are on, and SRCLR high so nothing clears them. The program is a few dozen instructions assembled by hand; select the board to load a sketch of your own.",
+		stopTime: 5.25,
+		build: () => {
+			/** The 595's legs: 20 apart, pin 1 at the top left, pin 16 at the top right. */
+			const CHIP_X = 1000;
+			const CHIP_Y = 400;
+			const LEFT = CHIP_X - 60;
+			const RIGHT = CHIP_X + 60;
+			const leg = (fromTop: number) => CHIP_Y - 70 + fromTop * 20;
+			/** The digit, whose eight segment pins are 10 apart down its left. */
+			const DIGIT_X = 1450;
+			const DIGIT_Y = 250;
+			/** Where each segment's resistor sits, one row per output. */
+			const RES_X = 1250;
+			/** The Uno's top header: D12 at x 1120, D10 at 1160, D8 at 1200. */
+			const HEADER = 620;
+
+			const parts: Placed[] = [
+				{
+					kind: 'ic:ArduinoUno',
+					name: 'U1',
+					x: 1200,
+					y: 830,
+					params: { firmware: intelHex(COUNT_PROGRAM.flatMap(([words]) => words)) }
+				},
+				{ kind: 'ic:74595', name: 'U2', x: CHIP_X, y: CHIP_Y },
+				{ kind: 'display7', name: 'DS1', x: DIGIT_X, y: DIGIT_Y, params: { colour: 'red' } },
+				{ kind: 'supply', name: 'PWR1', x: RIGHT + 20, y: leg(0) - 10, params: { voltage: 5 } },
+				{ kind: 'supply', name: 'PWR2', x: RIGHT + 40, y: 540, params: { voltage: 5 } },
+				{ kind: 'ground', name: 'GND1', x: LEFT - 20, y: leg(7) + 10 },
+				{ kind: 'ground', name: 'GND2', x: 1180, y: 510 },
+				{ kind: 'ground', name: 'GND3', x: DIGIT_X, y: 340 }
+			];
+			const wires: Array<[number, number, number, number]> = [
+				// VCC, pin 16, and GND, pin 8.
+				[RIGHT, leg(0), RIGHT + 20, leg(0)],
+				[LEFT, leg(7), LEFT - 20, leg(7)],
+				// SER, pin 14, from D8.
+				[1200, HEADER, 1200, leg(2)],
+				[1200, leg(2), RIGHT, leg(2)],
+				// OE, pin 13, is active low: held down, the outputs drive.
+				[RIGHT, leg(3), 1180, leg(3)],
+				[1180, leg(3), 1180, 500],
+				// RCLK, pin 12, from D10, and SRCLK, pin 11, from D12.
+				[1160, HEADER, 1160, leg(4)],
+				[1160, leg(4), RIGHT, leg(4)],
+				[1120, HEADER, 1120, leg(5)],
+				[1120, leg(5), RIGHT, leg(5)],
+				// SRCLR, pin 10, is active low too: held up, nothing clears the register.
+				[RIGHT, leg(6), RIGHT + 20, leg(6)],
+				[RIGHT + 20, leg(6), RIGHT + 20, 550],
+				[RIGHT + 20, 550, RIGHT + 40, 550],
+				// The digit's common pin is its cathode, so a high output lights a bar.
+				[DIGIT_X, DIGIT_Y + 62, DIGIT_X, 330]
+			];
+
+			// QA is pin 15, on the right beside SER; QB to QH are pins 1 to 7 down the
+			// left, so each of those goes out in a column of its own and over the top
+			// of the chip, the highest leg innermost so that none of them cross.
+			const rowOf = (k: number) => (k === 0 ? leg(1) : 290 - 20 * k);
+			for (const k of SEGMENTS.keys()) {
+				const row = rowOf(k);
+				if (k === 0) {
+					wires.push([RIGHT, row, RES_X - 30, row]);
+				} else {
+					const column = LEFT - 10 - 10 * k;
+					const y = leg(k - 1);
+					wires.push([LEFT, y, column, y], [column, y, column, row], [column, row, RES_X - 30, row]);
+				}
+				parts.push({
+					kind: 'resistor',
+					name: `R${k + 1}`,
+					x: RES_X,
+					y: row,
+					params: { resistance: 330 }
+				});
+				// Then across to the digit's pin for that segment, in a column each.
+				const pin = DIGIT_Y + (k - 3.5) * 10;
+				const column = 1300 + 10 * k;
+				wires.push(
+					[RES_X + 30, row, column, row],
+					[column, row, column, pin],
 					[column, pin, DIGIT_X - 50, pin]
 				);
 			}

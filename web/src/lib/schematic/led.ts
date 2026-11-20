@@ -197,7 +197,13 @@ export function ledInk(value: unknown): string {
 
 export interface Burnout {
 	instanceId: string;
+	/** What to call it: the part's name, and which of its LEDs for a package of several. */
 	name: string;
+	/**
+	 * Which LED of a display or bar graph went, as the drawing keys its bars:
+	 * `b`, `3g`, `7`. Absent for a part that is one LED, or a fuse.
+	 */
+	segment?: string;
 	/** An LED burns out; a fuse blows, and was meant to. */
 	kind: 'led' | 'fuse';
 	/** Simulated time at which the overcurrent finished it off. */
@@ -208,12 +214,31 @@ export interface Burnout {
 }
 
 /**
+ * The parts that are several LEDs in one package, each with the name of the
+ * LED the netlist gives the plain instance name to and how to say which one a
+ * suffix is. A failure is reported per diode, so `DS1:b` is segment b of DS1
+ * and plain `DS1` its segment a.
+ */
+const PACKAGES: Readonly<Record<string, { first: string; describe: (key: string) => string }>> = {
+	display7: { first: SEGMENTS[0], describe: (key) => `segment ${key}` },
+	display7x4: {
+		first: `${DIGITS[0]}${SEGMENTS[0]}`,
+		describe: (key) => `digit ${key[0]}, segment ${key.slice(1)}`
+	},
+	bargraph: { first: String(BARS[0]), describe: (key) => `bar ${key}` }
+};
+
+/**
  * Which drawn parts the engine destroyed, soonest first.
  *
  * The deciding is already done — it happened inside the transient loop, where
  * the part went open and the rest of the run carried on without it. This only
  * matches the names the engine reports back to the instances on the canvas, so
  * the drawing can char the right symbol.
+ *
+ * A display or a bar graph is a package of LEDs, and each of them burns on its
+ * own: a segment driven with no resistor goes, and its neighbours with one do
+ * not. Those are reported one LED at a time, with the bar that went.
  *
  * A failure the schematic no longer has a part for is dropped rather than
  * reported against nothing: results outlive edits, so a run can be describing a
@@ -222,26 +247,45 @@ export interface Burnout {
 export function findBurnouts(schematic: Schematic, run: TransientRun): Burnout[] {
 	const byName = new Map(
 		schematic.instances
-			.filter((i) => i.kind === 'led' || i.kind === 'fuse')
+			.filter((i) => i.kind === 'led' || i.kind === 'fuse' || i.kind in PACKAGES)
 			.map((i) => [i.name, i] as const)
 	);
 
 	const out: Burnout[] = [];
 	for (const failure of run.failures) {
-		const instance = byName.get(failure.name);
+		const colon = failure.name.lastIndexOf(':');
+		const whole = byName.get(failure.name);
+		const instance = whole ?? (colon > 0 ? byName.get(failure.name.slice(0, colon)) : undefined);
 		if (!instance) continue;
-		out.push({
+		const pack = PACKAGES[instance.kind];
+		const burnout: Burnout = {
 			instanceId: instance.id,
 			name: failure.name,
 			kind: instance.kind === 'fuse' ? 'fuse' : 'led',
 			time: failure.time,
 			peak: failure.peak,
 			rated: failure.rated
-		});
+		};
+		if (pack) {
+			const segment = whole ? pack.first : failure.name.slice(colon + 1);
+			burnout.segment = segment;
+			burnout.name = `${instance.name} ${pack.describe(segment)}`;
+		}
+		out.push(burnout);
 	}
 	return out;
 }
 
+/**
+ * The burnouts by what the drawing looks them up by: a whole part by its
+ * instance id, one LED of a package by the id and its bar, `id:b`, which is
+ * the key its current is under in a frame.
+ */
 export function burnoutsById(list: readonly Burnout[]): Map<string, Burnout> {
-	return new Map(list.map((b) => [b.instanceId, b] as const));
+	return new Map(list.map((b) => [burnoutKey(b), b] as const));
+}
+
+/** Where a burnout is filed: unique per LED, so two segments of one digit are two. */
+export function burnoutKey(burnout: Burnout): string {
+	return burnout.segment === undefined ? burnout.instanceId : `${burnout.instanceId}:${burnout.segment}`;
 }

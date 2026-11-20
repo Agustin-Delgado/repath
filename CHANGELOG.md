@@ -11,6 +11,25 @@ early entries point at those instead.
 
 ---
 
+## 20 November 2026 — An Uno counting on a seven-segment digit
+
+**A new example, Uno counting on a digit:** an Arduino Uno shifting 0 to 9
+into a 74HC595, a number every half second, and the 595 lighting a
+common-cathode digit through a resistor per segment. Three pins drive all
+eight segments, the way most sketches do it.
+
+**A segment burns out on its own now, and says so.** Wire one bar of a digit
+straight to a pin with no resistor and that bar goes dark and charred while
+the rest stay lit, and the circuit panel names it: "DS1 segment b". The same
+goes for each LED of the four-digit display and the bar graph. Before, the
+segment went dark with nothing to say why.
+
+**A 74HC595 with QHS left open no longer warns.** That pin is only for
+chaining a second 595, so with one chip it is meant to be left unconnected.
+[#75](https://github.com/Agustin-Delgado/repath/pull/75)
+
+---
+
 ## 13 November 2026 — A 16×2 LCD for the microcontroller to talk to
 
 **The I²C character display is in the palette,** under Semiconductors with the
