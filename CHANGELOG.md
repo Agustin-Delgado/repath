@@ -30,7 +30,7 @@ keeps saying so until the sketch clears it. One thing differs from an Uno on
 the bench: no bootloader runs here, so after a watchdog reset the watchdog is
 still on, at 16 ms, as on a bare chip, and a sketch has to switch it off early
 in `setup()` — `MCUSR = 0; wdt_disable();` — or be reset again.
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#82](https://github.com/Agustin-Delgado/repath/pull/82)
 
 ---
 
