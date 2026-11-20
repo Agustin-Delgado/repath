@@ -14,7 +14,14 @@
  */
 
 import { Capture } from './capture';
-import { EngineError, LiveRun, type LogicState, type McuState, type SolveFailure } from './engine';
+import {
+	EngineError,
+	LiveRun,
+	type LogicState,
+	type McuState,
+	type Retune,
+	type SolveFailure
+} from './engine';
 import type { LcdFrame } from './schematic/lcd';
 import type { MatrixFrame } from './schematic/max7219';
 import type { BuzzerState } from './schematic/buzzer';
@@ -174,6 +181,11 @@ export class Acquisition {
 	/** Move a logic source now. */
 	setLogic(name: string, state: LogicState): boolean {
 		return this.run.setLogic(name, state, this.run.time);
+	}
+
+	/** Give an element a new value now: at the instant the run has reached. */
+	retune(name: string, change: Retune): boolean {
+		return this.run.retune(name, change, this.run.time);
 	}
 
 	/** Type bytes into a serial monitor now. */

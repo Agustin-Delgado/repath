@@ -1525,6 +1525,19 @@ impl Simulator {
                 break;
             }
 
+            // A value somebody changed at this instant changes here, between
+            // the timepoint solved with the old one and the step solved with
+            // the new. That is a corner like any other edge, and damped like one.
+            //
+            // And the step starts short again, as at t = 0: the step size was
+            // chosen for a circuit that has just stopped existing, and the
+            // error estimates that would cut it down are measured on history
+            // the change has made meaningless.
+            if circuit.apply_retunes(t + step_floor(min_step, t)) {
+                euler_steps = euler_steps.max(CORNER_DAMPING);
+                dt = dt.min(cfg.initial_step.max(min_step));
+            }
+
             // A sample owed at the instant already reached — the digital side
             // stopped there for it — is the solution there.
             self.deliver_samples(circuit, t, t);
@@ -1789,8 +1802,10 @@ impl Simulator {
     fn next_breakpoint(&self, circuit: &Circuit, t: f64) -> Option<f64> {
         let from_elements = circuit.elements().iter().filter_map(|e| e.next_breakpoint(t));
         let from_dacs = circuit.dacs().iter().filter_map(|d| d.next_breakpoint(t));
+        let retune = circuit.next_retune().filter(|&at| at > t);
         from_elements
             .chain(from_dacs)
+            .chain(retune)
             .fold(None::<f64>, |acc, bp| Some(acc.map_or(bp, |a| a.min(bp))))
     }
 

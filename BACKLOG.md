@@ -23,6 +23,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | MOSFET | Gate capacitances are constant, not the bias-dependent Meyer model | Right for a datasheet's Ciss/Crss/Coss; a gate charge curve will not have its plateau in quite the right place |
 | Switch | AC stamp ignores the control-voltage dependence | Correct for a switch used as a switch, wrong for one used as a modulator |
 | Switch | A click during a sweep lands at the newest instant, never in the past | The run only goes forwards; to see an operation at a particular moment, schedule it and sweep through that moment |
+| Live edits | A value changed during a sweep — a resistance, a capacitance, an inductance, a source's level, a potentiometer's wiper or a variable capacitor's setting — lands at the newest instant, like a click on a switch, and everything solved before it stays as it was. Anything else still starts the run again: a part or wire added, moved or removed, a type changed, a program loaded, the temperature, a source's frequency, timing or waveform shape, a resistor's temperature coefficients, a capacitor's initial voltage, a transformer's or fuse's values | Scrubbing back past an edit shows the samples solved with the old value, but the part's label and inspector show the value as it is now, since the drawing keeps one value per part. The edit instants are kept with the run (`retunes`), not in a `.repath` file, link or draft, so a reopened circuit starts from the newest values rather than replaying the turns. Left out of the versioned format on purpose: a document holds the circuit and how it is run, never a run — the samples and the switch operations are not in it either — and the retunes alone cannot replay one, since the drawing already holds the values they changed to and not the ones they changed from. Saving a run would mean a new format version carrying the starting netlist's values, the operations and the retunes together. A frequency changed live would make a sine's phase jump, which no real generator does, so it restarts on purpose |
 | Supply | Each symbol is its own ideal source to ground, not a named net | Three on one rail is three currents rather than one, and two wired together build one source and a warning |
 | Logic bridge | A tri-state net switching too fast to resolve is averaged as though it were always driven: its high-impedance intervals count as mid-rail through the bridge's output resistance | An LED or RC fed by a fast tri-state bus sits nearer mid-supply than it should; resolved edge by edge (slower nets, or a narrower window) it is right |
 | Op-amp | One pole, and no CMRR, PSRR or output current limit | Bandwidth, slew rate, offset, bias current and output resistance are modelled; a design that fails on common-mode rejection will not fail here |
@@ -58,6 +59,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Arduino Uno | Pin 13 carries a 10 MΩ to ground that the board does not have, standing in for the pin's leakage and protection diodes, which are not modelled: without it the buffer's bias current alone ran an unwired pin 13 to kilovolts | Half a microamp at 5 V; an unwired pin 13 left as an input reads low with L dark, where a real one floats |
 | LCD | The display is read once a frame of the run, from the chip as far as the engine has committed it | What the glass shows trails the sketch by up to a millisecond of simulated time, and a change is placed in the playback history at the frame it was read, not the instant it was written |
 | LCD | The A00 ROM's lower half (0x20–0x7F, with ¥ and the two arrows) is the datasheet's; its upper half shows a hollow box for every katakana and Greek character, except 0xDF (°) and 0xFF (the full block). The 5×10 font is not modelled, nor is the contrast pot | A sketch printing Japanese text shows boxes; one choosing the 5×10 font gets 5×8 characters. The glass is always at a readable contrast |
+| File format | There is no way back: a document from a newer build is refused whole, and a build from before format 2 refuses a format-2 link as made by a different version. Part-level upgrades (an LED drawn as a diode, a switch's old defaults) are still recognised by their untouched values on every load, not keyed to the document's version | Someone on a stale tab who is sent a new link has to reload first. A part upgrade that cannot be recognised from the values alone has to become a document migration instead |
 | LCD | CGRAM starts at zero, and the module draws no supply current | Real CGRAM powers up with whatever is in it, so a custom character used before `createChar()` is blank here and noise on a bench. The supply sees none of the 20–100 mA a backlight takes |
 | Buzzer | Electrically a resistor, 1 / (2·C·1 kHz) — 25 kΩ for the default 20 nF — not the capacitor a piezo disc is: the average current a disc draws on a 1 kHz square wave, at every frequency, without the spike of charge at each edge. Resolving that microsecond spike at every edge tripled the cost of a run and left an Uno playing a tune at 30–60 % of real time | The pin and supply carry about 0.2 mA from 5 V whatever the tone, where a real disc draws in proportion to the frequency: 0.1 mA at 500 Hz, 0.8 mA at 4 kHz. No resonance, loudness or timbre either: the speaker plays a square wave at a fixed level |
 | Buzzer | What it plays is read off the logic nets that drive its legs, as runs of rising edges whose periods agree within 4 %; a lone period is a click and is not shown, and a gap past 50 ms (20 Hz) is silence. A leg driven from the analog side alone (a 555, a source) is read through the logic thresholds against ground | A tone starts two periods after its first edge, a siren that glides is shown in steps of about 4 %, and a buzzer across two analog nodes that are not referenced to ground is not heard |
@@ -181,8 +183,10 @@ because each step is what makes the next one worth having:
 
 ### Product
 
-- [ ] **A real file format** with a version field and a migration path. `share.ts`
-      has one; the save file does not.
+- [x] **A real file format** with a version field and a migration path. A `.repath`
+      file, a share link and a draft are one versioned document (`format.ts`),
+      read through an ordered list of migrations; a document from a newer build
+      is refused with the reason.
 - [ ] **Performance budget and benchmarks** — a 500-component circuit that pans at
       60 fps and simulates in under a second, measured in CI rather than assumed.
 
@@ -207,7 +211,8 @@ because each step is what makes the next one worth having:
 ### Components
 
 - [x] Potentiometer and trimmer, and a variable capacitor (the setting is an
-      inspector value, not yet dragged live).
+      inspector value that a running sweep takes in at the instant it changes;
+      there is still no knob to drag on the drawing itself).
 - [x] Transformer and coupled inductors: two windings, a turns ratio and a
       coupling. The core never saturates.
 - [x] Relay, and an SPDT switch. The relay reads its coil current and has no

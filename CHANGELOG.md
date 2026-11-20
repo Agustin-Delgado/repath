@@ -30,6 +30,39 @@ exactly the same work as before.
 
 ---
 
+## 20 November 2026 — Turn a knob while the circuit runs
+
+**Changing a value no longer starts the run over.** Set a potentiometer's
+wiper, a resistor, a capacitor, an inductor, a variable capacitor or a
+source's level while a sweep is going, and the change happens at the instant
+the run has reached, the way flipping a switch does. Everything before it stays
+as it was solved. In **Servo on a knob**, moving the wiper now makes the servo
+swing to the new angle from where it is, where before the whole run replayed
+from 90°. On a scope, an RC with its resistor changed mid-run bends right at
+that moment. Changes to what the circuit is made of still start a new run:
+adding, moving or removing parts and wires, loading a program, changing the
+temperature, or changing a source's frequency.
+[#80](https://github.com/Agustin-Delgado/repath/pull/80)
+
+---
+
+## 20 November 2026 — A file format that says which version it is
+
+**Saved circuits are `.repath` files now,** and they, share links and the draft
+a reload comes back to are one document that says which version of the format
+it is. Every link and file made before this still opens exactly as it did —
+the tests keep a link to every built-in example, made before the change, and
+check each one still decodes to the same circuit — and so do drafts left in the
+browser by the previous build. Files saved as `.repath.json` open too.
+
+**A circuit from a newer repath says so.** A file saved by a newer version used
+to be read as far as this one understood it, and a link said only that it came
+from a different version; now either is refused whole, with a message saying
+to reload for the latest repath. Links are no longer than before.
+[#79](https://github.com/Agustin-Delgado/repath/pull/79)
+
+---
+
 ## 20 November 2026 — SPI on the wires, and an LED matrix to drive with it
 
 **The chip's SPI works now.** `SPI.transfer()` clocks the byte out on D13

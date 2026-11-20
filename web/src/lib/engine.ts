@@ -245,6 +245,16 @@ export interface McuState {
 	listening: number | null;
 }
 
+/**
+ * A new value for one engine element, in the engine's own shape: the change
+ * that can be made under a running circuit without it becoming another one.
+ */
+export type Retune =
+	| { resistance: number }
+	| { capacitance: number }
+	| { inductance: number }
+	| { waveform: unknown };
+
 /** One piece of a live run: the timepoints solved since the last call. */
 export interface Chunk {
 	time: Float64Array;
@@ -324,6 +334,22 @@ export class LiveRun {
 	setWaveform(name: string, waveform: unknown): boolean {
 		if (this.freed) return false;
 		return this.simulation.setSourceWaveform(name, JSON.stringify(waveform));
+	}
+
+	/**
+	 * Give an element a new value from `at` onwards — somebody's hand on a knob.
+	 *
+	 * The engine ends a step exactly on `at` and changes the value there, so a
+	 * run handed the same retunes lands on the same instants. False when there is
+	 * no such element or the change does not fit it.
+	 */
+	retune(name: string, change: Retune, at: number): boolean {
+		if (this.freed) return false;
+		try {
+			return this.simulation.retune(name, JSON.stringify(change), at);
+		} catch (cause) {
+			throw toEngineError(cause);
+		}
 	}
 
 	/** Move a logic source to a level, from `at` onwards. */
