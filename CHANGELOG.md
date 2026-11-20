@@ -32,7 +32,7 @@ and an SPI LED matrix** shows a smiley and a heart in turn.
 letting it go low after `SPI.begin()` turns the chip into an SPI slave, as on
 the real part, and slave mode is not simulated: the inspector and the issues box
 say what happened rather than leaving the matrix dark with no reason given.
-[#75](https://github.com/Agustin-Delgado/repath/pull/75)
+[#78](https://github.com/Agustin-Delgado/repath/pull/78)
 
 ---
 
