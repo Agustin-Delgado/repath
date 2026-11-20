@@ -18,47 +18,22 @@ import {
 	registerSubcircuits,
 	type BlockDef,
 	type Instance,
-	type Schematic,
 	type Wire
 } from './schematic/model';
 import { registerBlocks } from './schematic/blocks';
 import { probePin } from './schematic/nets';
+import { FORMAT_VERSION, NewerFormatError, migrate, type CircuitSettings, type SharedCircuit } from './format';
+
+export type { CircuitSettings, SharedCircuit } from './format';
 
 /**
- * How the circuit is run, as opposed to what it is.
+ * A link's version is the document format's: the payload is the document
+ * packed tighter, so a link from an older build is unpacked into the document
+ * it was and brought up to date by the same migrations a file goes through.
  *
- * Travels with it because it changes the answer: the same drawing at 85 °C, in
- * another logic family or on another sample of its tolerances is a different
- * result, and a link that dropped these showed the person receiving it the
- * sender's circuit under their own settings. Every field is optional so a link
- * or file from before they travelled still reads — as the defaults.
- */
-export interface CircuitSettings {
-	temperature?: number;
-	logicFamily?: string;
-	sample?: number;
-	sweepCount?: number;
-	analysis?: 'transient' | 'frequency';
-	acStart?: number;
-	acStop?: number;
-}
-
-export interface SharedCircuit {
-	schematic: Schematic;
-	stopTime: number;
-	probes?: string[];
-	settings?: CircuitSettings;
-}
-
-/** Bumped if the payload shape ever changes incompatibly. */
-const VERSION = 1;
-
-/**
  * A probe as it travels: a pin, as the position of its part and the pin's name,
- * or a grid point written out as it stands.
- *
- * Added without bumping the version, because it can be: a link written before
- * this simply has no probes in it, and a build from before this ignores the field.
+ * or a grid point written out as it stands. Added without bumping the version,
+ * because it could be: a link written before this simply has no probes in it.
  */
 type TravellingProbe = string | [number, string];
 
@@ -169,7 +144,7 @@ function compact(circuit: SharedCircuit): unknown {
 	// far side. An index survives that by construction, and is shorter besides.
 	const at = new Map(circuit.schematic.instances.map((n, index) => [n.id, index] as const));
 	return {
-		v: VERSION,
+		v: FORMAT_VERSION,
 		t: circuit.stopTime,
 		i: circuit.schematic.instances.map(packInstance),
 		// Corners flattened to a number list: a wire is mostly coordinates, and
@@ -316,7 +291,10 @@ function expand(raw: unknown): SharedCircuit {
 		g?: Array<[string, number[]]>;
 		s?: unknown;
 	};
-	if (data.v !== VERSION) throw new Error('That link was made by a different version of repath.');
+	// Every link so far has said which version it is; one that does not is
+	// treated as the oldest there is, and walked up like any other.
+	const found = typeof data.v === 'number' && Number.isInteger(data.v) && data.v >= 0 ? data.v : 0;
+	if (found > FORMAT_VERSION) throw new NewerFormatError(found, 'link');
 	check(data as Record<string, unknown>);
 
 	// Every part is one the catalog knows or one the link defines, checked before
@@ -352,31 +330,37 @@ function expand(raw: unknown): SharedCircuit {
 
 	const instances = (data.i ?? []).map((packed) => unpackInstance(packed, id()));
 
-	return {
-		stopTime: data.t ?? 1e-3,
-		settings: readSettings(data.s),
-		// A pin probe travelled as the position of its part, so it is pointed back
-		// at whatever id that part has just been given. A probe on bare wire
-		// travelled as the grid point it sits on, which did not move.
-		probes: (data.p ?? []).flatMap((entry) => {
-			if (typeof entry === 'string') return [entry];
-			const instance = instances[entry[0]];
-			return instance ? [probePin(instance.id, entry[1])] : [];
-		}),
-		schematic: {
-			subcircuits,
-			blocks,
-			instances,
-			wires: unpackWires(data.w, id),
-			groups: (data.g ?? [])
-				.map(([name, members]) => ({
-					id: id(),
-					name,
-					members: members.map((index) => instances[index]?.id).filter((m) => m !== undefined)
-				}))
-				.filter((group) => group.members.length > 0)
-		}
-	};
+	// Unpacked into the document it was written as, then brought up to date.
+	const doc = migrate(
+		{
+			version: found,
+			stopTime: data.t ?? 1e-3,
+			settings: readSettings(data.s),
+			// A pin probe travelled as the position of its part, so it is pointed back
+			// at whatever id that part has just been given. A probe on bare wire
+			// travelled as the grid point it sits on, which did not move.
+			probes: (data.p ?? []).flatMap((entry) => {
+				if (typeof entry === 'string') return [entry];
+				const instance = instances[entry[0]];
+				return instance ? [probePin(instance.id, entry[1])] : [];
+			}),
+			schematic: {
+				subcircuits,
+				blocks,
+				instances,
+				wires: unpackWires(data.w, id),
+				groups: (data.g ?? [])
+					.map(([name, members]) => ({
+						id: id(),
+						name,
+						members: members.map((index) => instances[index]?.id).filter((m) => m !== undefined)
+					}))
+					.filter((group) => group.members.length > 0)
+			}
+		},
+		'link'
+	);
+	return { schematic: doc.schematic, stopTime: doc.stopTime, probes: doc.probes, settings: doc.settings };
 }
 
 /** Encode a circuit into a URL fragment (without the leading `#`). */
