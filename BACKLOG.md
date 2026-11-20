@@ -58,6 +58,7 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Arduino Uno | Pin 13 carries a 10 MΩ to ground that the board does not have, standing in for the pin's leakage and protection diodes, which are not modelled: without it the buffer's bias current alone ran an unwired pin 13 to kilovolts | Half a microamp at 5 V; an unwired pin 13 left as an input reads low with L dark, where a real one floats |
 | LCD | The display is read once a frame of the run, from the chip as far as the engine has committed it | What the glass shows trails the sketch by up to a millisecond of simulated time, and a change is placed in the playback history at the frame it was read, not the instant it was written |
 | LCD | The A00 ROM's lower half (0x20–0x7F, with ¥ and the two arrows) is the datasheet's; its upper half shows a hollow box for every katakana and Greek character, except 0xDF (°) and 0xFF (the full block). The 5×10 font is not modelled, nor is the contrast pot | A sketch printing Japanese text shows boxes; one choosing the 5×10 font gets 5×8 characters. The glass is always at a readable contrast |
+| File format | There is no way back: a document from a newer build is refused whole, and a build from before format 2 refuses a format-2 link as made by a different version. Part-level upgrades (an LED drawn as a diode, a switch's old defaults) are still recognised by their untouched values on every load, not keyed to the document's version | Someone on a stale tab who is sent a new link has to reload first. A part upgrade that cannot be recognised from the values alone has to become a document migration instead |
 | LCD | CGRAM starts at zero, and the module draws no supply current | Real CGRAM powers up with whatever is in it, so a custom character used before `createChar()` is blank here and noise on a bench. The supply sees none of the 20–100 mA a backlight takes |
 | Buzzer | Electrically a resistor, 1 / (2·C·1 kHz) — 25 kΩ for the default 20 nF — not the capacitor a piezo disc is: the average current a disc draws on a 1 kHz square wave, at every frequency, without the spike of charge at each edge. Resolving that microsecond spike at every edge tripled the cost of a run and left an Uno playing a tune at 30–60 % of real time | The pin and supply carry about 0.2 mA from 5 V whatever the tone, where a real disc draws in proportion to the frequency: 0.1 mA at 500 Hz, 0.8 mA at 4 kHz. No resonance, loudness or timbre either: the speaker plays a square wave at a fixed level |
 | Buzzer | What it plays is read off the logic nets that drive its legs, as runs of rising edges whose periods agree within 4 %; a lone period is a click and is not shown, and a gap past 50 ms (20 Hz) is silence. A leg driven from the analog side alone (a 555, a source) is read through the logic thresholds against ground | A tone starts two periods after its first edge, a siren that glides is shown in steps of about 4 %, and a buzzer across two analog nodes that are not referenced to ground is not heard |
@@ -169,8 +170,10 @@ because each step is what makes the next one worth having:
 
 ### Product
 
-- [ ] **A real file format** with a version field and a migration path. `share.ts`
-      has one; the save file does not.
+- [x] **A real file format** with a version field and a migration path. A `.repath`
+      file, a share link and a draft are one versioned document (`format.ts`),
+      read through an ordered list of migrations; a document from a newer build
+      is refused with the reason.
 - [ ] **Performance budget and benchmarks** — a 500-component circuit that pans at
       60 fps and simulates in under a second, measured in CI rather than assumed.
 
