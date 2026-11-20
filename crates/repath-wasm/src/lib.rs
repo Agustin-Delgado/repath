@@ -361,6 +361,137 @@ impl Simulation {
         });
         serde_json::to_string(&state).map_err(to_js_error)
     }
+
+    /// What a MAX7219 lights, as JSON, or `null` if there is none by that
+    /// name: `{ time, version, lit, duty, registers }`.
+    ///
+    /// `lit` is the eight digits as they are driven, DP as bit 7 and segment
+    /// A to G as bits 6 to 0 — on an 8×8 matrix module, rows 0 to 7 with the
+    /// leftmost dot as bit 7 — after the display test, shutdown, the scan
+    /// limit and Code B decoding have had their say. `duty` is the
+    /// brightness, 1/32 to 31/32. `registers` is what the program wrote:
+    /// `{ digits, decode, intensity, scan_limit, shutdown, test }`. `time` is
+    /// the instant they last changed, and `version` changes with them.
+    #[wasm_bindgen(js_name = max7219State)]
+    pub fn max7219_state(&self, name: &str) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct Registers {
+            digits: [u8; 8],
+            decode: u8,
+            intensity: u8,
+            scan_limit: u8,
+            shutdown: bool,
+            test: bool,
+        }
+        #[derive(Serialize)]
+        struct State {
+            time: f64,
+            version: u64,
+            lit: [u8; 8],
+            duty: f64,
+            registers: Registers,
+        }
+        let state = repath_core::spi::find_max7219(&self.circuit.digital, name).map(|chip| {
+            let r = chip.registers();
+            State {
+                time: chip.changed_at(),
+                version: chip.version(),
+                lit: r.lit(),
+                duty: r.duty(),
+                registers: Registers {
+                    digits: r.digits,
+                    decode: r.decode,
+                    intensity: r.intensity,
+                    scan_limit: r.scan_limit,
+                    shutdown: r.shutdown,
+                    test: r.test,
+                },
+            }
+        });
+        serde_json::to_string(&state).map_err(to_js_error)
+    }
+
+    /// What a buzzer has been driven at, as JSON, or `null` if there is none
+    /// by that name: `{ tones, finished, open }`.
+    ///
+    /// `tones` is every tone finished from the `from`-th of the run on, as
+    /// `{ start, end, frequency }` in seconds and hertz, so a caller polling a
+    /// live run asks only for what it has not seen; `finished` is how many
+    /// there have been in all, the `from` to ask with next. `open` is the
+    /// tone still going on, in the same shape: sounding up to its `end`, and
+    /// silent after it unless a later poll says it went on.
+    #[wasm_bindgen(js_name = buzzerState)]
+    pub fn buzzer_state(&self, name: &str, from: usize) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct ToneOut {
+            start: f64,
+            end: f64,
+            frequency: f64,
+        }
+        #[derive(Serialize)]
+        struct State {
+            tones: Vec<ToneOut>,
+            finished: usize,
+            open: Option<ToneOut>,
+        }
+        let out = |tone: &repath_core::buzzer::Tone| ToneOut {
+            start: tone.start,
+            end: tone.end,
+            frequency: tone.frequency(),
+        };
+        let state =
+            repath_core::buzzer::find_buzzer(&self.circuit.digital, name).map(|buzzer| State {
+                tones: buzzer.tones_from(from).iter().map(out).collect(),
+                finished: buzzer.finished(),
+                open: buzzer.open().as_ref().map(out),
+            });
+        serde_json::to_string(&state).map_err(to_js_error)
+    }
+
+    /// Where a servo's horn is, as JSON, or `null` if there is no servo by
+    /// that name: `{ time, angle, target, version, pulse }`.
+    ///
+    /// `angle` is in degrees from the 0° end at `time`, the instant the
+    /// digital side has reached; `target` is where the last pulse taken
+    /// asked it to go. `pulse` is the last pulse measured, taken or not, as
+    /// `{ at, width, taken }` in seconds, or `null` before the first.
+    /// `version` changes whenever a pulse is measured.
+    #[wasm_bindgen(js_name = servoState)]
+    pub fn servo_state(&self, name: &str) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct Pulse {
+            at: f64,
+            width: f64,
+            taken: bool,
+        }
+        #[derive(Serialize)]
+        struct State {
+            time: f64,
+            angle: f64,
+            target: f64,
+            version: u64,
+            pulse: Option<Pulse>,
+        }
+        let digital = &self.circuit.digital;
+        let servo = digital
+            .device(name)
+            .and_then(|device| device.as_any().downcast_ref::<repath_core::servo::Servo>());
+        let state = servo.map(|servo| {
+            let time = digital.now();
+            State {
+                time,
+                angle: servo.angle(time),
+                target: servo.target(),
+                version: servo.version(),
+                pulse: servo.last_pulse().map(|p| Pulse {
+                    at: p.at,
+                    width: p.width,
+                    taken: p.taken,
+                }),
+            }
+        });
+        serde_json::to_string(&state).map_err(to_js_error)
+    }
 }
 
 /// What a run, or one piece of one, has to say for itself.

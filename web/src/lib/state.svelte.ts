@@ -24,6 +24,16 @@ import type { CircuitSettings, SharedCircuit } from './share';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { LCD_HISTORY, sameGlass, type LcdFrame } from './schematic/lcd';
+import { MATRIX_HISTORY, sameMatrix, type MatrixFrame } from './schematic/max7219';
+import {
+	absorbTones,
+	buzzerDevice,
+	buzzerPart,
+	emptyTrack,
+	type BuzzerTrack
+} from './schematic/buzzer';
+import { Speaker } from './sound';
+import { recordServo, servoAt, servoDeviceName, type ServoFrame } from './schematic/servo';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import { groupFrame, outside } from './schematic/groups';
 import {
@@ -366,6 +376,15 @@ function devicesOfType(netlist: unknown, type: string): string[] {
 	return (devices ?? []).filter((device) => device.type === type).map((device) => device.name);
 }
 
+/**
+ * The names of the servo parts in a compiled netlist: each is an engine
+ * device under `servoDeviceName` of the part's name.
+ */
+function servoParts(netlist: unknown): string[] {
+	const suffix = servoDeviceName('');
+	return devicesOfType(netlist, 'servo').map((device) => device.slice(0, -suffix.length));
+}
+
 class AppState {
 	/**
 	 * An empty sheet.
@@ -554,6 +573,29 @@ class AppState {
 	 */
 	lcdHistory = new Map<string, LcdFrame[]>();
 	private lcdNames: string[] = [];
+	/** The same for each LED matrix, each frame timed at the change itself. */
+	matrixHistory = new Map<string, MatrixFrame[]>();
+	private matrixNames: string[] = [];
+	/**
+	 * What each buzzer has played during this run, by name. Not reactive, for
+	 * the same reason as `lcdHistory`; a readout follows `playbackTime`.
+	 */
+	buzzerTracks = new Map<string, BuzzerTrack>();
+	private buzzerNames: string[] = [];
+	/** Plays the buzzers. Silent until `setSound(true)`, which only a click may call. */
+	readonly speaker = new Speaker();
+	/** Whether the buzzers are being played aloud. */
+	soundOn = $state(false);
+	/** When the run last moved, by the wall clock, in milliseconds; null while it is not moving. */
+	private movedAt: number | null = null;
+	/**
+	 * Where each servo's horn was during this run, by the part's name: a frame
+	 * whenever it moved or measured a different pulse, oldest first. Not
+	 * reactive, like `lcdHistory`; `servoAt` reads it for the inspector.
+	 */
+	servoHistory = new Map<string, ServoFrame[]>();
+	/** The servos in the run, and the last reading of each. */
+	private servoReads = new Map<string, ServoFrame | null>();
 	error = $state<string | null>(null);
 	/**
 	 * Whether results are being kept up to date with the circuit.
@@ -696,6 +738,29 @@ class AppState {
 	stop(): void {
 		this.playing = false;
 		this.acquiring?.stop();
+		this.hush();
+	}
+
+	/**
+	 * Turn the buzzers' sound on or off. On has to come from a click: a
+	 * browser lets a page start making sound only then. False if this browser
+	 * cannot play it.
+	 */
+	async setSound(on: boolean): Promise<boolean> {
+		if (!on) {
+			this.speaker.disable();
+			this.soundOn = false;
+			return true;
+		}
+		const ok = await this.speaker.enable();
+		this.soundOn = ok;
+		return ok;
+	}
+
+	/** Stop the speaker where it is: the instant stopped moving. */
+	private hush(): void {
+		this.movedAt = null;
+		this.speaker.silence();
 	}
 
 	/**
@@ -3784,6 +3849,14 @@ class AppState {
 				this.mcuNames = devicesOfType(compiled.netlist, 'mcu');
 				this.lcdNames = devicesOfType(compiled.netlist, 'i2c_lcd');
 				this.lcdHistory = new Map();
+				this.matrixNames = devicesOfType(compiled.netlist, 'max7219');
+				this.matrixHistory = new Map();
+				this.buzzerNames = devicesOfType(compiled.netlist, 'buzzer').map(buzzerPart);
+				this.buzzerTracks = new Map();
+				this.servoReads = new Map(
+					servoParts(compiled.netlist).map((name) => [name, null] as [string, ServoFrame | null])
+				);
+				this.servoHistory = new Map();
 				this.held = null;
 				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
@@ -3813,12 +3886,17 @@ class AppState {
 		this.result = capture.run();
 		this.readMcus(acquiring);
 		this.readDisplays(acquiring);
+		this.readBuzzers(acquiring);
+		this.readServos(acquiring);
 		// While the sweep is going, the instant on the drawing is the newest one
 		// there is. Stopped, it stays where it was left, to be measured.
 		if (acquiring.sweeping) {
+			const from = this.playbackTime;
 			this.playbackTime = capture.now;
+			this.sound(from, capture.now);
 			return;
 		}
+		this.hush();
 		const ended = this.playing;
 		this.playing = false;
 		// A single sweep that has finished is a window with two ends, which is the
@@ -3894,10 +3972,73 @@ class AppState {
 			if (history.length > LCD_HISTORY) history.splice(0, history.length - LCD_HISTORY);
 			this.lcdHistory.set(name, history);
 		}
+		// A matrix's driver is on the nets, not inside a chip, so it is as far
+		// on as the run, and says when its registers last changed: its frames
+		// are placed at that instant.
+		for (const name of this.matrixNames) {
+			const state = acquiring.max7219State(name);
+			if (!state) continue;
+			const history = this.matrixHistory.get(name) ?? [];
+			const last = history[history.length - 1];
+			if (last && (last.version === state.version || sameMatrix(last, state))) continue;
+			history.push(state);
+			if (history.length > MATRIX_HISTORY) history.splice(0, history.length - MATRIX_HISTORY);
+			this.matrixHistory.set(name, history);
+		}
+	}
+
+	/**
+	 * Add each buzzer's new tones to its track. Polled once a piece of the
+	 * run, like the displays; a tone is placed where the engine timed its
+	 * edges, not where the poll found it.
+	 */
+	private readBuzzers(acquiring: Acquisition): void {
+		for (const name of this.buzzerNames) {
+			const track = this.buzzerTracks.get(name) ?? emptyTrack();
+			const state = acquiring.buzzerState(buzzerDevice(name), track.finished);
+			if (!state) continue;
+			this.buzzerTracks.set(name, absorbTones(track, state));
+		}
+	}
+
+	/** Play the stretch from `from` to `to` the run has just covered. */
+	private sound(from: number, to: number): void {
+		const now = performance.now();
+		const wall = this.movedAt === null ? 0 : (now - this.movedAt) / 1000;
+		this.movedAt = now;
+		if (this.soundOn && this.buzzerNames.length > 0) {
+			this.speaker.play(this.buzzerTracks, from, to, wall);
+		}
+	}
+
+	/** Add a frame to each servo's history where its horn moved or its pulse changed. */
+	private readServos(acquiring: Acquisition): void {
+		for (const [name, previous] of this.servoReads) {
+			const state = acquiring.servoState(servoDeviceName(name));
+			if (!state) continue;
+			const history = this.servoHistory.get(name) ?? [];
+			recordServo(history, state, previous);
+			this.servoHistory.set(name, history);
+			this.servoReads.set(name, state);
+		}
+	}
+
+	/**
+	 * A servo as the run had it at the playback instant, or null with no run
+	 * or before the run has read it. Reactive through the result and the
+	 * playback instant, which move whenever its history can have.
+	 */
+	servoAt(name: string): ServoFrame | null {
+		if (!this.result || this.analysis !== 'transient') return null;
+		return servoAt(this.servoHistory.get(name) ?? [], this.playbackTime);
 	}
 
 	private discardRun(): void {
 		this.runGeneration++;
+		this.speaker.release();
+		this.movedAt = null;
+		this.buzzerNames = [];
+		this.buzzerTracks = new Map();
 		this.acquiring?.close();
 		this.acquiring = null;
 		this.capture = null;
@@ -3907,6 +4048,10 @@ class AppState {
 		this.mcuNames = [];
 		this.lcdNames = [];
 		this.lcdHistory = new Map();
+		this.matrixNames = [];
+		this.matrixHistory = new Map();
+		this.servoReads = new Map();
+		this.servoHistory = new Map();
 		this.held = null;
 		this.envelope = null;
 		this.playing = false;

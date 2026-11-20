@@ -116,6 +116,149 @@ const BLINK_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: s
 ];
 
 /**
+ * The LED matrix example's program, assembled by hand like the blink's: what
+ * a sketch with SPI.h and LedControl's register writes does, with nothing of
+ * the Arduino core in it. As a sketch:
+ *
+ *     void send(byte address, byte value) {
+ *       digitalWrite(10, LOW);
+ *       SPI.transfer(address);
+ *       SPI.transfer(value);
+ *       digitalWrite(10, HIGH);
+ *     }
+ *     void setup() {
+ *       pinMode(10, OUTPUT);
+ *       digitalWrite(10, HIGH);
+ *       SPI.begin();
+ *       SPI.beginTransaction(SPISettings(8000000, MSBFIRST, SPI_MODE0));
+ *       send(0x0F, 0); send(0x0B, 7); send(0x09, 0); send(0x0A, 8); send(0x0C, 1);
+ *     }
+ *     void loop() {
+ *       for (byte row = 0; row < 8; row++) send(row + 1, SMILEY[row]);
+ *       delay(500);
+ *       for (byte row = 0; row < 8; row++) send(row + 1, HEART[row]);
+ *       delay(500);
+ *     }
+ *
+ * Each word is CS low, the register's address and its value through the SPI
+ * at 8 MHz, and CS high, on whose rising edge the MAX7219 latches it. The
+ * tables are address-value pairs in flash, read with `lpm`.
+ */
+const MATRIX_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: string]> = [
+	[[0xe20c], 'ldi  r16, 0x2C         ; D10 (CS), D11 (MOSI) and D13 (SCK) are outputs'],
+	[[0xb904], 'out  DDRB, r16'],
+	[[0x9a2a], 'sbi  PORTB, 2          ; CS high: the module ignores the clock'],
+	[[0xe500], 'ldi  r16, 0x50         ; SPE | MSTR: a master, mode 0, MSB first'],
+	[[0xbd0c], 'out  SPCR, r16'],
+	[[0xe001], 'ldi  r16, 1            ; SPI2X: fosc/2, as SPISettings(8000000) sets'],
+	[[0xbd0d], 'out  SPSR, r16'],
+	[[0xe5e6], "ldi  r30, lo8(SETUP)   ; LedControl's five set-up words"],
+	[[0xe0f0], 'ldi  r31, hi8(SETUP)'],
+	[[0xe045], 'ldi  r20, 5'],
+	[[0xd011], 'rcall words'],
+	[[0xe6e0], 'loop: ldi r30, lo8(SMILEY)'],
+	[[0xe0f0], 'ldi  r31, hi8(SMILEY)'],
+	[[0xd004], 'rcall picture'],
+	[[0xe7e0], 'ldi  r30, lo8(HEART)'],
+	[[0xe0f0], 'ldi  r31, hi8(HEART)'],
+	[[0xd001], 'rcall picture'],
+	[[0xcff9], 'rjmp loop'],
+	[[0xe048], 'picture: ldi r20, 8    ; eight rows from Z, then half a second'],
+	[[0xd008], 'rcall words'],
+	[[0xe228], 'ldi  r18, 40'],
+	[[0xe580], 'outer: ldi r24, lo8(50000)'],
+	[[0xec93], 'ldi  r25, hi8(50000)'],
+	[[0x9701], 'inner: sbiw r24, 1'],
+	[[0xf7f1], 'brne inner             ; 4 cycles a pass: 40 × 50 000 × 4 = 8 000 000'],
+	[[0x952a], 'dec  r18'],
+	[[0xf7d1], 'brne outer'],
+	[[0x9508], 'ret'],
+	[[0x982a], 'words: cbi PORTB, 2    ; r20 address-value pairs from Z: CS low'],
+	[[0x9105], 'lpm  r16, Z+'],
+	[[0xd006], 'rcall transfer'],
+	[[0x9105], 'lpm  r16, Z+'],
+	[[0xd004], 'rcall transfer'],
+	[[0x9a2a], 'sbi  PORTB, 2          ; CS high: the word is latched'],
+	[[0x954a], 'dec  r20'],
+	[[0xf7c1], 'brne words'],
+	[[0x9508], 'ret'],
+	[[0xbd0e], 'transfer: out SPDR, r16 ; SPI.transfer(r16)'],
+	[[0xb51d], 'wait: in r17, SPSR'],
+	[[0xff17], 'sbrs r17, SPIF         ; until the byte is out'],
+	[[0xcffd], 'rjmp wait'],
+	[[0xb51e], 'in   r17, SPDR         ; reading SPDR clears SPIF'],
+	[[0x9508], 'ret'],
+	[
+		[0x000f, 0x070b, 0x0009, 0x080a, 0x010c],
+		'SETUP: .db 0x0F, 0, 0x0B, 7, 9, 0, 0x0A, 8, 0x0C, 1 ; test off, 8 rows, no decode, intensity 8, on'
+	],
+	[
+		[0x3c01, 0x4202, 0xa503, 0x8104, 0xa505, 0x9906, 0x4207, 0x3c08],
+		'SMILEY: .db 1, 0x3C, 2, 0x42, 3, 0xA5, 4, 0x81, 5, 0xA5, 6, 0x99, 7, 0x42, 8, 0x3C'
+	],
+	[
+		[0x0001, 0x6602, 0xff03, 0xff04, 0xff05, 0x7e06, 0x3c07, 0x1808],
+		'HEART: .db 1, 0, 2, 0x66, 3, 0xFF, 4, 0xFF, 5, 0xFF, 6, 0x7E, 7, 0x3C, 8, 0x18'
+	]
+];
+
+/**
+ * The program the buzzer example runs, assembled by hand like the blink's.
+ *
+ * A hardware tone: Timer2 in CTC mode with OC2A — the Uno's pin 11 — set to
+ * toggle on every compare match, so the pin is a square wave at 16 MHz / 64 /
+ * 2 / (OCR2A + 1), 125 000 / (OCR2A + 1) Hz, with no interrupt in the way.
+ * Each note writes its count to OCR2A, zeroes the timer and connects OC2A; at
+ * its end OC2A is let go, which hands the pin back to PORTB3, low, for 50 ms
+ * of silence before the next. A rest only waits. The wait is 39 998 turns of a
+ * four-cycle loop and six cycles more, 10 ms less a quarter of a microsecond,
+ * a unit.
+ *
+ * The tune is the first line of Twinkle, Twinkle, Little Star, in the fifth
+ * octave, where the counts land within five cents of every note: C 238
+ * (523.0 Hz), D 212 (586.9), E 189 (657.9), F 178 (698.3), G 158 (786.2), A
+ * 141 (880.3). A beat is 250 ms of note and 50 of gap, a half note 550 and 50,
+ * and the line ends on 700 ms of rest before it starts again.
+ */
+const MELODY_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: string]> = [
+	[[0xe008], 'ldi  r16, 0x08        ; D11 (PB3) an output, low'],
+	[[0xb904], 'out  DDRB, r16'],
+	[[0xe004], 'ldi  r16, 0x04        ; Timer2 counts at 16 MHz / 64'],
+	[[0x9300, 0x00b1], 'sts  TCCR2B, r16'],
+	[[0x2733], 'clr  r19'],
+	[[0xe4e6], 'restart: ldi r30, lo8(melody)'],
+	[[0xe0f0], 'ldi  r31, hi8(melody)'],
+	[[0x9115], "next: lpm r17, Z+     ; the note's count; 0 for a rest"],
+	[[0x9125], 'lpm  r18, Z+          ; how long, in 10 ms; 0 to start over'],
+	[[0x2322], 'tst  r18'],
+	[[0xf3d1], 'breq restart'],
+	[[0x2311], 'tst  r17'],
+	[[0xf039], 'breq rest'],
+	[[0x9310, 0x00b3], 'sts  OCR2A, r17'],
+	[[0x9330, 0x00b2], 'sts  TCNT2, r19       ; from the bottom'],
+	[[0xe402], 'ldi  r16, 0x42        ; CTC, OC2A toggling on each match'],
+	[[0x9300, 0x00b0], 'sts  TCCR2A, r16'],
+	[[0xd006], 'rest: rcall wait'],
+	[[0xe002], 'ldi  r16, 0x02        ; CTC, OC2A let go: the pin low'],
+	[[0x9300, 0x00b0], 'sts  TCCR2A, r16'],
+	[[0xe025], 'ldi  r18, 5           ; 50 ms between notes'],
+	[[0xd001], 'rcall wait'],
+	[[0xcfec], 'rjmp next'],
+	[[0xe38e], 'wait: ldi r24, lo8(39998)'],
+	[[0xe99c], 'ldi  r25, hi8(39998)'],
+	[[0x9701], 'tick: sbiw r24, 1'],
+	[[0xf7f1], 'brne tick'],
+	[[0x952a], 'dec  r18'],
+	[[0xf7d1], 'brne wait'],
+	[[0x9508], 'ret'],
+	// The tune, a count and a length a note: the count in the low byte of
+	// each word, which is the one `lpm` reads first.
+	[[0x19ee, 0x19ee, 0x199e, 0x199e, 0x198d, 0x198d, 0x379e], 'melody: C C G G A A G-'],
+	[[0x19b2, 0x19b2, 0x19bd, 0x19bd, 0x19d4, 0x19d4, 0x37ee], 'F F E E D D C-'],
+	[[0x4600, 0x0000], 'rest 700 ms, then start over']
+];
+
+/**
  * The program the Uno counting example runs, assembled by hand the same way:
  * `shiftOut()` into a 74HC595 and a pulse on its latch, the next digit every
  * half second, 0 to 9 and round again.
@@ -166,6 +309,58 @@ const COUNT_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: s
 		[0x063f, 0x4f5b, 0x6d66, 0x077d, 0x6f7f, 0x0000],
 		'table: 3F 06 5B 4F 66 6D 7D 07 7F 6F  ; 0 to 9, and two bytes of padding'
 	]
+];
+
+/**
+ * The program the servo example runs, assembled by hand the same way: what the
+ * Servo library's Knob sketch does, without the library. It reads A0 over and
+ * over and sends the servo on D9 a pulse of 544 to 2400 µs every 20 ms.
+ *
+ * Timer1 makes the pulses in hardware, in fast PWM with ICR1 as TOP (mode 14)
+ * at 16 MHz / 8: a tick is 0.5 µs and 40 000 of them are 20 ms. OC1A, which is
+ * D9, goes high at BOTTOM and low when the count reaches OCR1A. The pulse in
+ * ticks is 1088 + ADC · 29 / 8, 1088 (544 µs) to 4796 (2398 µs): the
+ * library's map() to 0–180° and back, within half a degree, and no division.
+ * One conversion a period, started each time Timer1 reaches TOP: OCR1A takes
+ * a new value only at BOTTOM, so a pulse is never cut short. The timer is
+ * started once the first conversion has set the width; writing TCCR1B again
+ * on every pass changes nothing.
+ */
+const KNOB_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: string]> = [
+	[[0xe400], 'ldi  r16, 0x40        ; AVCC the reference, A0 the input'],
+	[[0x9300, 0x007c], 'sts  ADMUX, r16'],
+	[[0xe807], 'ldi  r16, 0x87        ; converter on, its clock 16 MHz / 128'],
+	[[0x9300, 0x007a], 'sts  ADCSRA, r16'],
+	[[0x9a21], 'sbi  DDRB, 1          ; D9 an output'],
+	[[0xe90c], 'ldi  r16, hi8(39999)  ; TOP: 20 ms of 0.5 µs ticks'],
+	[[0x9300, 0x0087], 'sts  ICR1H, r16'],
+	[[0xe30f], 'ldi  r16, lo8(39999)'],
+	[[0x9300, 0x0086], 'sts  ICR1L, r16'],
+	[[0xe802], 'ldi  r16, 0x82        ; OC1A high at BOTTOM, low at OCR1A'],
+	[[0x9300, 0x0080], 'sts  TCCR1A, r16'],
+	[[0xe14d], 'ldi  r20, 29'],
+	[[0xec07], 'loop: ldi r16, 0xC7   ; start a conversion'],
+	[[0x9300, 0x007a], 'sts  ADCSRA, r16'],
+	[[0x9100, 0x007a], 'wait: lds r16, ADCSRA'],
+	[[0xfd06], 'sbrc r16, ADSC        ; until it is done'],
+	[[0xcffc], 'rjmp wait'],
+	[[0x9180, 0x0078], 'lds  r24, ADCL        ; low byte first'],
+	[[0x9190, 0x0079], 'lds  r25, ADCH'],
+	[[0x9f84], 'mul  r24, r20         ; ADC · 29'],
+	[[0x01d0], 'movw r26, r0'],
+	[[0x9f94], 'mul  r25, r20'],
+	[[0x0db0], 'add  r27, r0'],
+	[[0x95b6, 0x95a7, 0x95b6, 0x95a7, 0x95b6, 0x95a7], 'lsr r27 / ror r26 ×3 ; / 8'],
+	[[0x5ca0], 'subi r26, lo8(-1088)  ; + 1088'],
+	[[0x4fbb], 'sbci r27, hi8(-1088)'],
+	[[0x93b0, 0x0089], 'sts  OCR1AH, r27      ; high byte first'],
+	[[0x93a0, 0x0088], 'sts  OCR1AL, r26'],
+	[[0xe10a], 'ldi  r16, 0x1A        ; mode 14, clock / 8: the timer runs'],
+	[[0x9300, 0x0081], 'sts  TCCR1B, r16'],
+	[[0x9bb0], 'period: sbis TIFR1, TOV1 ; wait for TOP, every 20 ms'],
+	[[0xcffe], 'rjmp period'],
+	[[0x9ab0], 'sbi  TIFR1, TOV1      ; a one clears it'],
+	[[0xcfde], 'rjmp loop']
 ];
 
 export const EXAMPLES: Example[] = [
@@ -919,6 +1114,123 @@ export const EXAMPLES: Example[] = [
 					// RESET, on the power header, through a button to ground.
 					[440, 610, 440, 660],
 					[500, 660, 530, 660]
+				]
+			)
+	},
+
+	{
+		id: 'uno-led-matrix',
+		name: 'Arduino Uno and an SPI LED matrix',
+		description:
+			"An 8×8 LED matrix module on a MAX7219, driven from the Uno's SPI: DIN on pin 11 (MOSI), CLK on pin 13 (SCK) and CS on pin 10, the wiring of every LedControl tutorial. The program sets the driver up and then shows a smiley and a heart in turn, half a second each, sending each row as a two-byte word — the register, then its dots — between CS going low and coming back up. The probes are on the three wires: zoom the scope in to a few microseconds round a picture change to see SCK clock at 8 MHz, MOSI change on its falling edges, and CS rise after every sixteenth bit. The program is assembled by hand to do what the same sketch with SPI.h does; load a .hex of your own from the board's inspector to run yours.",
+		stopTime: 2,
+		build: () =>
+			build(
+				[
+					{
+						kind: 'ic:ArduinoUno',
+						name: 'U1',
+						x: 500,
+						y: 400,
+						params: { firmware: intelHex(MATRIX_PROGRAM.flatMap(([words]) => words)) }
+					},
+					{ kind: 'max7219', name: 'MX1', x: 200, y: 0 },
+					{ kind: 'supply', name: 'PWR1', x: 40, y: -30, params: { voltage: 5 } },
+					{ kind: 'ground', name: 'GND1', x: 60, y: 0 },
+					{ kind: 'probe', name: 'SCK', x: 400, y: 170 },
+					{ kind: 'probe', name: 'MOSI', x: 440, y: 140 },
+					{ kind: 'probe', name: 'CS', x: 460, y: 170 }
+				],
+				[
+					// The module's own 5 V and ground.
+					[120, -20, 40, -20],
+					[120, -10, 60, -10],
+					// Pin 13 (SCK) up, across and in to CLK.
+					[400, 190, 400, 170],
+					[400, 170, 400, 150],
+					[400, 150, 100, 150],
+					[100, 150, 100, 20],
+					[100, 20, 120, 20],
+					// Pin 10 to CS.
+					[460, 190, 460, 170],
+					[460, 170, 460, 130],
+					[460, 130, 90, 130],
+					[90, 130, 90, 10],
+					[90, 10, 120, 10],
+					// Pin 11 (MOSI) to DIN.
+					[440, 190, 440, 170],
+					[440, 170, 440, 140],
+					[440, 140, 80, 140],
+					[80, 140, 80, 0],
+					[80, 0, 120, 0]
+				]
+			)
+	},
+
+	{
+		id: 'uno-buzzer',
+		name: 'Arduino Uno melody',
+		description:
+			"A piezo buzzer on pin 11 playing the first line of Twinkle, Twinkle, Little Star, over and over. The program drives the pin straight from Timer2, toggling it on every compare match — what tone() does with an interrupt, done in hardware — so each note is a square wave at the frequency the timer's count gives: C 523 Hz up to A 880 Hz. The buzzer shows the pitch it is being driven at while it sounds; turn Sound on below the drawing to hear it. A 4-second window at 1× is real time, so the tune plays at its tempo; at 0.25× each note keeps its pitch and lasts four times as long. The probe on pin 11 shows the square wave on the scope.",
+		stopTime: 4,
+		build: () =>
+			build(
+				[
+					{
+						kind: 'ic:ArduinoUno',
+						name: 'U1',
+						x: 500,
+						y: 400,
+						params: { firmware: intelHex(MELODY_PROGRAM.flatMap(([words]) => words)) }
+					},
+					{ kind: 'buzzer', name: 'BZ1', x: 450, y: 110 },
+					{ kind: 'ground', name: 'GND1', x: 500, y: 150 },
+					{ kind: 'probe', name: 'D11', x: 440, y: 170 }
+				],
+				[
+					// Pin 11 up to the buzzer's + leg, its other leg to ground.
+					[440, 190, 440, 170],
+					[440, 170, 440, 140],
+					[460, 140, 500, 140]
+				]
+			)
+	},
+
+	{
+		id: 'uno-servo-knob',
+		name: 'Servo on a knob',
+		description:
+			"What the Servo library's Knob sketch does: an Uno reads the potentiometer on A0 and sends the servo on pin 9 to the matching angle, 0° with the wiper at ground and 180° at 5V. Timer1 makes the pulses in hardware, one every 20 ms, and the servo reads their width — 544 µs for 0°, 2400 µs for 180° — and its horn swings there at the motor's speed, a tenth of a second for 60°. It starts at 90°, so the first thing it does is turn to the quarter the knob is set at. Set the wiper somewhere else in the potentiometer's inspector and the run starts over with the horn swinging to the new angle; select the servo to read its angle, the last pulse and the 10 mA it draws from the board's 5V. The program is a few dozen instructions assembled by hand; a sketch using the Servo library runs the same way, loaded as a .hex from the board's inspector.",
+		stopTime: 2,
+		build: () =>
+			build(
+				[
+					{ kind: 'ic:ArduinoUno', name: 'U1', x: 500, y: 400, params: { firmware: intelHex(KNOB_PROGRAM.flatMap(([words]) => words)) } },
+					{ kind: 'servo', name: 'SV1', x: 700, y: 80 },
+					{ kind: 'potentiometer', name: 'RV1', x: 580, y: 700, params: { position: 0.25 } },
+					{ kind: 'ground', name: 'GND1', x: 530, y: 710 },
+					{ kind: 'probe', name: 'PIN9', x: 460, y: 130 }
+				],
+				[
+					// Pin 9 to the servo's signal wire, with a probe on it to see the
+					// pulses by, and the board's other GND to its ground wire.
+					[480, 190, 480, 130],
+					[480, 130, 480, 90],
+					[480, 130, 460, 130],
+					[480, 90, 640, 90],
+					[380, 190, 380, 70],
+					[380, 70, 640, 70],
+					// The wiper to A0, the track across ground and 5V.
+					[580, 610, 580, 670],
+					[550, 700, 530, 700],
+					[480, 610, 480, 760],
+					[480, 760, 640, 760],
+					[640, 760, 640, 700],
+					[640, 700, 610, 700],
+					// 5V on round to the servo's supply wire.
+					[640, 760, 800, 760],
+					[800, 760, 800, 80],
+					[800, 80, 640, 80]
 				]
 			)
 	},

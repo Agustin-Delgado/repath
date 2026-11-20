@@ -65,6 +65,10 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		description: 'Filament bulb, rated in volts and watts, that glows with the power in it',
 		keywords: ['bulb', 'light', 'incandescent', 'filament', 'indicator', 'torch']
 	},
+	buzzer: {
+		description: 'Passive piezo disc that sounds at the frequency it is driven at: tone(), noTone()',
+		keywords: ['piezo', 'buzzer', 'speaker', 'beeper', 'sound', 'tone', 'notone', 'melody', 'audio', 'beep', 'transducer']
+	},
 	port: {
 		description: 'A terminal of a block: wire a pin to it and the box gets a pin',
 		keywords: ['terminal', 'pin', 'io', 'label', 'net']
@@ -119,6 +123,17 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 			'lcd', '1602', '16x2', 'i2c lcd', 'lcd i2c', 'pcf8574', 'hd44780', 'liquidcrystal',
 			'liquidcrystal_i2c', 'character display', 'display', 'text', 'screen'
 		]
+	},
+	max7219: {
+		description: 'Sixty-four red LEDs driven over SPI: VCC, GND, DIN, CS, CLK, and DOUT to chain the next',
+		keywords: [
+			'max7219', 'led matrix', 'matrix', '8x8', 'dot matrix', 'spi', 'ledcontrol', '1088as',
+			'display', 'max7221'
+		]
+	},
+	servo: {
+		description: 'A hobby servo (SG90): its horn turns to the angle the pulses on SIG ask for, 544–2400 µs for 0–180°',
+		keywords: ['servo', 'sg90', 'mg90', 'motor', 'rc servo', 'hobby servo', 'pwm', 'angle', 'horn', 'actuator']
 	},
 	nmos: {
 		description: 'N-channel MOSFET, Shichman-Hodges',

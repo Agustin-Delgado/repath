@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::avr::{self, AnalogPins, Mcu, Pin, PinNets, UsbSerial};
 use crate::bridge::LogicFamily;
+use crate::buzzer::Buzzer;
 use crate::circuit::Circuit;
 use crate::digital::{
     AsyncInputs, Clock, DFlipFlop, Gate, GateKind, Logic, LogicSource, Memory, Programming,
@@ -23,6 +24,8 @@ use crate::elements::{
     VoltageSource, Waveform,
 };
 use crate::i2c::{self, LcdModule, Target};
+use crate::servo::Servo;
+use crate::spi::Max7219;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetlistError {
@@ -479,6 +482,36 @@ pub enum Device {
         #[serde(default)]
         scl: Option<String>,
     },
+    /// A MAX7219 LED driver on its three wires, as on the 8×8 matrix
+    /// modules. See `spi::Max7219`: an ordinary device on the nets, which
+    /// the SPI's pins or anything else can clock.
+    Max7219 {
+        name: String,
+        din: String,
+        clk: String,
+        /// LOAD, printed CS on the modules.
+        load: String,
+        #[serde(default)]
+        dout: Option<String>,
+    },
+    /// A passive piezo buzzer's ear: the tones on the logic nets driving its
+    /// legs. See `buzzer::Buzzer`; the disc's load is among the components.
+    Buzzer {
+        name: String,
+        #[serde(default)]
+        plus: Option<String>,
+        #[serde(default)]
+        minus: Option<String>,
+    },
+    /// A hobby servo motor reading the pulses on `signal`. See `servo::Servo`.
+    ///
+    /// Only the signal: what it draws from its supply is a resistor the
+    /// netlist carries beside it, and a servo with no supply is left out.
+    Servo {
+        name: String,
+        #[serde(default)]
+        signal: Option<String>,
+    },
 }
 
 /// Whether `net` is one of the nets a microcontroller's `pin` reaches.
@@ -501,7 +534,10 @@ impl Device {
             | Device::LogicSource { name, .. }
             | Device::Mcu { name, .. }
             | Device::UsbSerial { name, .. }
-            | Device::I2cLcd { name, .. } => name,
+            | Device::I2cLcd { name, .. }
+            | Device::Max7219 { name, .. }
+            | Device::Buzzer { name, .. }
+            | Device::Servo { name, .. } => name,
         }
     }
 }
@@ -993,6 +1029,21 @@ impl Netlist {
                     let target = Target::Lcd(LcdModule::new(name, *address));
                     c.add_device(Box::new(i2c::Unattached { target }));
                 }
+            }
+            Device::Max7219 { name, din, clk, load, dout } => {
+                let (din, clk, load) = (c.net(din), c.net(clk), c.net(load));
+                let dout = dout.as_ref().map(|n| c.net(n));
+                c.add_device(Box::new(Max7219::new(name, din, clk, load, dout)));
+            }
+            Device::Buzzer { name, plus, minus } => {
+                let plus = plus.as_ref().map(|n| c.net(n));
+                let minus = minus.as_ref().map(|n| c.net(n));
+                c.add_device(Box::new(Buzzer::new(name, plus, minus)));
+            }
+            Device::Servo { name, signal } => {
+                // Unwired, its signal is a net of its own that nothing drives.
+                let net = c.net(signal.as_deref().unwrap_or(&format!("{name}__signal")));
+                c.add_device(Box::new(Servo::new(name, net)));
             }
         }
         Ok(())

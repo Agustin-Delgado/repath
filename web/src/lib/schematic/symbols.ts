@@ -38,6 +38,31 @@ import {
 	dotAt,
 	lcdLegY
 } from './lcd';
+import {
+	DOT_RADIUS,
+	MATRIX_BOARD,
+	MATRIX_FACE,
+	MATRIX_KIND,
+	MATRIX_LEG_X,
+	MATRIX_LEGS,
+	MATRIX_OUT_X,
+	MATRIX_SIZE,
+	matrixDot,
+	matrixLegY
+} from './max7219';
+import {
+	SERVO_BODY,
+	SERVO_BOSS,
+	SERVO_KIND,
+	SERVO_LEG_X,
+	SERVO_LEGS,
+	SERVO_SCALE,
+	SERVO_SHAFT,
+	SERVO_START_ANGLE,
+	hornPath,
+	servoDirection,
+	servoLegY
+} from './servo';
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
@@ -162,6 +187,8 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 			return `toggle:${String(params.state ?? 'low')}`;
 		case 'port':
 			return `port:${String(params.flow ?? 'in')}`;
+		case SERVO_KIND:
+			return `servo:${params.horn === 'live' ? 'live' : 'rest'}`;
 		case 'and':
 		case 'nand':
 		case 'or':
@@ -372,6 +399,41 @@ const STATIC: Record<string, SymbolGeometry> = {
 		extent: { x: -LCD_LEG_X, y: LCD_BOARD.h / 2 }
 	},
 
+	// The matrix module from the front: the board, the black face of the
+	// 1088AS with its sixty-four LEDs, the input header on the left and DOUT
+	// on the right. What lights the dots is painted on the live layer.
+	[MATRIX_KIND]: {
+		shapes: [
+			rectShape(MATRIX_BOARD),
+			rectShape(MATRIX_FACE),
+			...Array.from({ length: MATRIX_SIZE * MATRIX_SIZE }, (_, i) => {
+				const { x, y } = matrixDot(Math.floor(i / MATRIX_SIZE), i % MATRIX_SIZE);
+				return { kind: 'circle' as const, cx: x, cy: y, r: DOT_RADIUS };
+			}),
+			...MATRIX_LEGS.map((_, i) => path(`M${MATRIX_LEG_X} ${matrixLegY(i)} H${MATRIX_BOARD.x}`)),
+			path(`M${MATRIX_BOARD.x + MATRIX_BOARD.w} 0 H${MATRIX_OUT_X}`)
+		],
+		labels: [
+			...MATRIX_LEGS.map((leg, i) => ({
+				x: MATRIX_BOARD.x + 2,
+				y: matrixLegY(i) + 2,
+				text: leg,
+				size: 5,
+				anchor: 'start' as const,
+				fine: true
+			})),
+			{
+				x: MATRIX_BOARD.x + MATRIX_BOARD.w - 2,
+				y: 2,
+				text: 'DOUT',
+				size: 5,
+				anchor: 'end' as const,
+				fine: true
+			}
+		],
+		extent: { x: MATRIX_OUT_X, y: MATRIX_BOARD.h / 2 }
+	},
+
 	// The resistor with an arrow brought down onto it: the wiper, pressing on
 	// the track somewhere along it.
 	potentiometer: {
@@ -412,6 +474,17 @@ const STATIC: Record<string, SymbolGeometry> = {
 			path('M-7 -7 L7 7 M-7 7 L7 -7')
 		],
 		labels: []
+	},
+
+	// The usual buzzer: a dome on a flat base, its legs out of the bottom, and
+	// an arc inside it for the disc. The + is the leg that goes to the pin.
+	buzzer: {
+		shapes: [
+			path('M-18 6 A18 18 0 0 1 18 6 Z'),
+			path('M-10 6 A10 10 0 0 1 10 6'),
+			path('M-10 6 V30 M10 6 V30')
+		],
+		labels: [{ x: -14, y: 22, text: '+', anchor: 'end', size: 10 }]
 	},
 
 	// Two cells, long plate positive. Two rather than one because one cell is
@@ -937,6 +1010,7 @@ export function symbolGeometry(
 	else if (kind === 'spdt') geometry = changeoverSymbol(String(params.start ?? 'open'));
 	else if (kind === 'toggle') geometry = toggleSymbol(String(params.state ?? 'low'));
 	else if (kind === 'port') geometry = portSymbol(String(params.flow ?? 'in'));
+	else if (kind === SERVO_KIND) geometry = servoSymbol(params.horn !== 'live');
 	else if (GATES.has(kind)) {
 		geometry = gate(kind, gateInputCount(params as Record<string, number | string>), standard);
 	}
@@ -952,6 +1026,39 @@ export function symbolGeometry(
 	if (variantCache.size >= 2000) variantCache.clear();
 	variantCache.set(variant, geometry);
 	return geometry;
+}
+
+/**
+ * A servo seen from above: the case, the boss round the output shaft, the
+ * marks at every 45° of its travel, and the three wires coming out of the
+ * end. The horn is drawn at rest, at 90°, with `horn` — and left off while a
+ * run is drawing it where the run has it, on the live layer.
+ */
+function servoSymbol(horn: boolean): SymbolGeometry {
+	const marks = [0, 45, 90, 135, 180].map((angle) => {
+		const u = servoDirection(angle);
+		const from = { x: SERVO_SHAFT.x + u.x * SERVO_SCALE.inner, y: SERVO_SHAFT.y + u.y * SERVO_SCALE.inner };
+		const to = { x: SERVO_SHAFT.x + u.x * SERVO_SCALE.outer, y: SERVO_SHAFT.y + u.y * SERVO_SCALE.outer };
+		return path(`M${from.x.toFixed(2)} ${from.y.toFixed(2)} L${to.x.toFixed(2)} ${to.y.toFixed(2)}`);
+	});
+	return {
+		shapes: [
+			rectShape(SERVO_BODY),
+			{ kind: 'circle', cx: SERVO_SHAFT.x, cy: SERVO_SHAFT.y, r: SERVO_BOSS },
+			...marks,
+			...SERVO_LEGS.map((_, i) => path(`M${SERVO_LEG_X} ${servoLegY(i)} H${SERVO_BODY.x}`)),
+			...(horn ? [path(hornPath(SERVO_START_ANGLE), true)] : [])
+		],
+		labels: SERVO_LEGS.map((leg, i) => ({
+			x: SERVO_BODY.x + 4,
+			y: servoLegY(i) + 2.5,
+			text: leg,
+			size: 6.5,
+			anchor: 'start' as const,
+			fine: true
+		})),
+		extent: { x: -SERVO_LEG_X, y: SERVO_SCALE.outer }
+	};
 }
 
 /**

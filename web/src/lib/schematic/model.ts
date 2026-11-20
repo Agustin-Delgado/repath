@@ -20,6 +20,7 @@ import {
 	type ChipDef
 } from './chips';
 import { DEFAULT_CLOCK } from './chips-mcu';
+import { BUZZER_KIND, PIEZO_CAPACITANCE } from './buzzer';
 import {
 	DEFAULT_LCD_ADDRESS,
 	LCD_ADDRESSES,
@@ -29,6 +30,15 @@ import {
 	LCD_LEGS,
 	lcdLegY
 } from './lcd';
+import {
+	MATRIX_BOARD,
+	MATRIX_KIND,
+	MATRIX_LEG_X,
+	MATRIX_LEGS,
+	MATRIX_OUT_X,
+	matrixLegY
+} from './max7219';
+import { SERVO_BODY, SERVO_KIND, SERVO_LEG_X, SERVO_LEGS, SERVO_SCALE, SERVO_SHAFT, servoLegY } from './servo';
 
 /** Snap resolution, in schematic units. All pins sit on multiples of this. */
 export const GRID = 10;
@@ -1220,6 +1230,36 @@ export const CATALOG: ComponentDef[] = [
 	},
 	{
 		/**
+		 * A passive piezo buzzer: a ceramic disc that sounds at whatever it is
+		 * driven at, which is what `tone()` is for.
+		 *
+		 * Electrically the load a disc is to its pin (`buzzer.ts`); what it is
+		 * playing is read off the logic driving it and drawn on the live layer.
+		 * Marked + on one leg, as the parts are, though a disc has no polarity:
+		 * the mark is the leg that goes to the pin, the other to ground.
+		 */
+		kind: BUZZER_KIND,
+		box: { x: -20, y: -16, w: 40, h: 46 },
+		label: 'Piezo buzzer',
+		group: 'passive',
+		prefix: 'BZ',
+		pins: [analog('plus', -10, 30), analog('minus', 10, 30)],
+		params: [
+			{
+				key: 'capacitance',
+				label: 'Capacitance',
+				unit: 'F',
+				default: PIEZO_CAPACITANCE,
+				min: 0,
+				nonZero: true,
+				advanced: true,
+				description:
+					'Of the disc: 10 to 30 nF for the 12 mm ones in Arduino kits. Sets the current it draws, the average a disc this size takes at 1 kHz.'
+			}
+		]
+	},
+	{
+		/**
 		 * A terminal of a block, from the inside.
 		 *
 		 * A port is what makes a pin of a boxed-up circuit reachable from outside:
@@ -1653,6 +1693,62 @@ export const CATALOG: ComponentDef[] = [
 					'Set by the A0–A2 jumpers on the backpack. The sketch has to use the same one: 0x27 and 0x3F are the usual two.'
 			}
 		]
+	},
+	{
+		/**
+		 * An 8×8 LED matrix on a MAX7219: the module of the Arduino SPI
+		 * tutorials, and of LedControl.
+		 *
+		 * A module, like the LCD: the driver, its current-setting resistor and
+		 * the matrix are all on the board, so the drawing is the board, its input
+		 * header and DOUT for the next one in a chain. What it lights is painted
+		 * from the run (`max7219.ts`).
+		 */
+		kind: MATRIX_KIND,
+		box: { x: MATRIX_LEG_X, y: MATRIX_BOARD.y, w: MATRIX_OUT_X - MATRIX_LEG_X, h: MATRIX_BOARD.h },
+		body: MATRIX_BOARD,
+		label: '8×8 LED matrix (MAX7219)',
+		group: 'semiconductor',
+		prefix: 'MX',
+		pins: [
+			...MATRIX_LEGS.map((leg, i) =>
+				leg === 'VCC' || leg === 'GND'
+					? analog(leg, MATRIX_LEG_X, matrixLegY(i))
+					: digitalIn(leg, MATRIX_LEG_X, matrixLegY(i))
+			),
+			digitalOut('DOUT', MATRIX_OUT_X, 0)
+		],
+		params: []
+	},
+	{
+		/**
+		 * A hobby servo, an SG90 or anything wired like one: ground, supply and
+		 * signal, and a horn that turns to the angle the signal's pulses ask for.
+		 *
+		 * The engine measures the pulses and turns the horn (`servo` in
+		 * repath-core); the supply sees a fixed load (`servo.ts`). The horn is
+		 * drawn where the run has it, on the live layer.
+		 */
+		kind: SERVO_KIND,
+		box: {
+			x: SERVO_LEG_X,
+			y: SERVO_SHAFT.y - SERVO_SCALE.outer,
+			w: SERVO_SHAFT.x + SERVO_SCALE.outer - SERVO_LEG_X,
+			h: SERVO_BODY.y + SERVO_BODY.h - (SERVO_SHAFT.y - SERVO_SCALE.outer)
+		},
+		body: {
+			x: SERVO_BODY.x,
+			y: SERVO_SHAFT.y - SERVO_SCALE.outer,
+			w: SERVO_SHAFT.x + SERVO_SCALE.outer - SERVO_BODY.x,
+			h: SERVO_BODY.y + SERVO_BODY.h - (SERVO_SHAFT.y - SERVO_SCALE.outer)
+		},
+		label: 'Servo motor',
+		group: 'semiconductor',
+		prefix: 'SV',
+		pins: SERVO_LEGS.map((leg, i) =>
+			leg === 'SIG' ? digitalIn(leg, SERVO_LEG_X, servoLegY(i)) : analog(leg, SERVO_LEG_X, servoLegY(i))
+		),
+		params: []
 	},
 	{
 		kind: 'nmos',

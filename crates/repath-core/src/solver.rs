@@ -1240,10 +1240,22 @@ impl Simulator {
             // is a change on its way to the digital side, and a device that has
             // already run past it — a microcontroller cannot take back cycles
             // it has run — would answer it a whole step late.
-            let horizon = match self.next_breakpoint(circuit, t) {
+            let mut horizon = match self.next_breakpoint(circuit, t) {
                 Some(bp) if bp > t => proposal.min(bp - t),
                 _ => proposal,
             };
+            // Nor past a change it has already reached and the analog side has
+            // not: that change is where this step ends anyway. Without this the
+            // queue went on to the next edge at every step the solver took on
+            // its way there, the few after each ramp included, and on a fast
+            // clock read back through the circuit it ended up whole edges
+            // ahead. A crossing the analog side then found was handed to a
+            // device that had already seen the edges after it: a shift
+            // register clocked through the Uno's LED buffer on pin 13 took in
+            // its data bits from four clocks later.
+            if let Some(next) = next_resolved(&run.ledger.pacing, t) {
+                horizon = horizon.min(next - t);
+            }
             let settled = circuit.digital.settle_until(t + horizon, true, events_allowed);
             stats.digital_events += settled.events;
             if let Err(e) = unsettled(circuit) {

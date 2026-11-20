@@ -29,6 +29,7 @@ import {
 import { GROUP_LABEL_GAP, groupLabelSize, placeGroups } from './groups';
 import { instanceBounds, instancePins } from './scene';
 import { symbolGeometry, symbolVariant, type Shape, type SymbolLabel } from './symbols';
+import { SERVO_KIND } from './servo';
 
 export interface Theme {
 	background: string;
@@ -662,7 +663,9 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 				? instance.params
 				: instance.kind === 'toggle'
 					? { ...instance.params, state: live ? 'high' : 'low' }
-					: { ...instance.params, start: live ? 'closed' : 'open' }
+					: instance.kind === SERVO_KIND
+						? { ...instance.params, horn: 'live' }
+						: { ...instance.params, start: live ? 'closed' : 'open' }
 		);
 
 		painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {

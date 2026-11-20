@@ -122,8 +122,9 @@ export function sameGlass(a: LcdFrame, b: LcdFrame): boolean {
  * What the display showed at `time`: the newest frame as of then, or the
  * first there is for an instant before any — a display is read at the end
  * of each piece of a run, so the first frame stands for everything before.
+ * Any display's history will do: the LED matrix keeps one the same way.
  */
-export function frameAt(history: readonly LcdFrame[], time: number): LcdFrame | null {
+export function frameAt<F extends { time: number }>(history: readonly F[], time: number): F | null {
 	if (history.length === 0) return null;
 	let lo = 0;
 	let hi = history.length - 1;

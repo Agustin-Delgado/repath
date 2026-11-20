@@ -12,9 +12,10 @@
 	 * It is also the scope's title bar, so it stays when the scope is folded
 	 * away: the overlays and the transport are what a folded scope still needs.
 	 */
-	import { ChevronDown, Play, RotateCcw, StepForward } from '@lucide/svelte';
+	import { ChevronDown, Play, RotateCcw, StepForward, Volume2, VolumeX } from '@lucide/svelte';
 	import { Button } from '$lib/ui';
 	import { VOLTAGE_SCALE } from '$lib/schematic/animate';
+	import { BUZZER_KIND } from '$lib/schematic/buzzer';
 	import { layout } from '$lib/layout.svelte';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
@@ -49,6 +50,9 @@
 		return app.acquiring?.keeping ?? 1;
 	});
 	const lagging = $derived(app.playing && keeping < 0.85);
+
+	/** Whether there is anything to hear: the sound switch is only on the panel then. */
+	const audible = $derived(app.schematic.instances.some((instance) => instance.kind === BUZZER_KIND));
 
 	const LAYERS = [
 		{ key: 'showVoltage', label: 'Voltage', title: 'Colour wires by voltage' },
@@ -124,6 +128,25 @@
 		{/if}
 
 		<span class="flex-1"></span>
+
+		<!--
+			Off until clicked: a page may only start making sound after a click, and
+			one that beeps the moment an example opens is one people close.
+		-->
+		{#if audible}
+			<Button
+				size="sm"
+				class="h-6.5"
+				active={app.soundOn}
+				aria-pressed={app.soundOn}
+				onclick={() => void app.setSound(!app.soundOn)}
+				title={app.soundOn
+					? 'Stop playing the buzzers'
+					: 'Play the buzzers through the speakers, at the pitch the circuit drives them at'}
+			>
+				{#if app.soundOn}<Volume2 /> Sound{:else}<VolumeX /> Sound{/if}
+			</Button>
+		{/if}
 
 		<!--
 			How fast the sweep goes, and what that comes to against a clock: a wide

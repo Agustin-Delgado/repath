@@ -29,6 +29,7 @@
 
 pub mod avr;
 pub mod bridge;
+pub mod buzzer;
 pub mod circuit;
 pub mod complex;
 pub mod digital;
@@ -38,7 +39,9 @@ pub mod i2c;
 pub mod linalg;
 pub mod lte;
 pub mod netlist;
+pub mod servo;
 pub mod solver;
+pub mod spi;
 
 /// Everything you need to build and run a circuit.
 pub mod prelude {

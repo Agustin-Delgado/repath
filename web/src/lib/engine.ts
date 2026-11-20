@@ -8,6 +8,9 @@
 
 import init, { Simulation, runFrequencySweep as sweep, version } from './wasm/repath.js';
 import type { LcdFrame } from './schematic/lcd';
+import type { MatrixFrame } from './schematic/max7219';
+import type { BuzzerState } from './schematic/buzzer';
+import type { ServoFrame } from './schematic/servo';
 
 export type LogicState = 'low' | 'high' | 'unknown' | 'highz';
 
@@ -335,6 +338,16 @@ export class LiveRun {
 	}
 
 	/**
+	 * What a buzzer has been driven at: the tones finished from the `from`-th
+	 * of the run on, how many there have been, and the one still going. Null
+	 * when there is no buzzer by that name.
+	 */
+	buzzerState(name: string, from: number): BuzzerState | null {
+		if (this.freed) return null;
+		return JSON.parse(this.simulation.buzzerState(name, from)) as BuzzerState | null;
+	}
+
+	/**
 	 * What an I2C LCD module shows, or null when there is none by that name.
 	 * One on no bus never changes, and is reported as of the start of the run.
 	 */
@@ -361,6 +374,31 @@ export class LiveRun {
 			overdriven: state.overdriven,
 			blinkInterval: state.blink_interval
 		};
+	}
+
+	/**
+	 * What a MAX7219 matrix lights, or null when there is none by that name.
+	 * Its time is when the program last changed its registers.
+	 */
+	max7219State(name: string): MatrixFrame | null {
+		if (this.freed) return null;
+		const state = JSON.parse(this.simulation.max7219State(name)) as {
+			time: number;
+			version: number;
+			lit: number[];
+			duty: number;
+		} | null;
+		if (!state) return null;
+		return { time: state.time, version: state.version, lit: state.lit, duty: state.duty };
+	}
+
+	/**
+	 * Where a servo's horn is, as of the instant the digital side has reached,
+	 * or null when there is no servo device by that name.
+	 */
+	servoState(device: string): ServoFrame | null {
+		if (this.freed) return null;
+		return JSON.parse(this.simulation.servoState(device)) as ServoFrame | null;
 	}
 
 	/**

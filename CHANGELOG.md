@@ -11,6 +11,76 @@ early entries point at those instead.
 
 ---
 
+## 20 November 2026 — SPI on the wires, and an LED matrix to drive with it
+
+**The chip's SPI works now.** `SPI.transfer()` clocks the byte out on D13
+(SCK) and D11 (MOSI), bit by bit at the rate `SPISettings` asks for, in any of
+the four modes and either bit order, and reads D12 (MISO) as it goes, so what
+comes back is whatever the other side sent. Until now a transfer finished at
+once and brought back nothing. A scope on D11 and D13 shows the clock and the
+data — zoom in to a few microseconds, since at a coarse timebase the edges fold
+into a burst — and a 74HC595 built from the logic parts takes the bits in.
+
+**An 8×8 LED matrix on a MAX7219 is in the palette,** under Semiconductors with
+the other displays: the red module with DIN, CS and CLK down one side. Searching
+for max7219, led matrix, 8x8 or ledcontrol finds it. Wire DIN to 11, CLK to 13
+and CS to 10, as every LedControl tutorial does, and the dots light the way the
+sketch sets them, with the intensity it asks for. The new example **Arduino Uno
+and an SPI LED matrix** shows a smiley and a heart in turn.
+
+**When the SPI stops being a master, the run says so.** Making D10 an input and
+letting it go low after `SPI.begin()` turns the chip into an SPI slave, as on
+the real part, and slave mode is not simulated: the inspector and the issues box
+say what happened rather than leaving the matrix dark with no reason given.
+[#78](https://github.com/Agustin-Delgado/repath/pull/78)
+
+---
+
+## 20 November 2026 — A buzzer you can hear
+
+**The piezo buzzer is in the palette,** under Passive, found by piezo, buzzer,
+tone or speaker. Its + leg goes to a pin, the other to ground, the way the
+two-legged ones in Arduino kits are wired.
+
+**It shows what it is being played at.** While a sketch's `tone()` drives it —
+or a pin toggled by hand, or a PWM output — the drawing puts the frequency and
+the note over it, 523 Hz · C5, and the inspector says the same for the instant
+on the screen. Between notes it says nothing, and `noTone()` is silence.
+
+**Turn Sound on and you hear it.** The button sits beside the speeds when the
+circuit has a buzzer, and in the buzzer's inspector. It is off until you click
+it, as a page has to be. Each note keeps the pitch the circuit drives it at;
+the speed sets how long it lasts, so 1:1 plays a tune at its tempo and 0.25×
+holds every note four times as long.
+
+**There is an example to start from:** an Uno playing Twinkle, Twinkle, Little
+Star on pin 11.
+[#77](https://github.com/Agustin-Delgado/repath/pull/77)
+
+---
+
+## 20 November 2026 — A servo for the sketch to turn
+
+**A hobby servo is in the palette,** under Semiconductors beside the displays:
+the SG90 seen from above, its three wires GND, VCC and SIG, and a horn on the
+output shaft. Searching for servo, sg90 or motor finds it.
+
+**Wire SIG to a pin and a Servo library sketch turns it.** The servo times
+each pulse on SIG — 544 µs is 0°, 2400 µs is 180°, so `write(angle)` lands on
+that angle — and the horn swings there at an SG90's speed, a tenth of a second
+for 60°, drawn where the run has it and scrubbed back with the timeline. With
+the pulses gone, after `detach()` or with nothing on the pin, it holds where it
+is, and a pulse that is not a position — `analogWrite()` on the same pin, say
+— is ignored. Selected, it says its angle, the last pulse and whether that
+pulse was taken, and what it draws from its supply: a steady 10 mA.
+
+**Servo on a knob** does what the Servo library's Knob sketch does, on an
+Uno, with Timer1 making the pulses: set the
+potentiometer's wiper in its inspector and the horn swings to match.
+[#76](https://github.com/Agustin-Delgado/repath/pull/76)
+
+---
+
 ## 20 November 2026 — An Uno counting on a seven-segment digit
 
 **A new example, Uno counting on a digit:** an Arduino Uno shifting 0 to 9

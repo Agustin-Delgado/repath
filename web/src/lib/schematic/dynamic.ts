@@ -51,6 +51,7 @@ import {
 	type WireSegment
 } from './model';
 import { instanceBounds, instancePins } from './scene';
+import { BUZZER_KIND, noteName, toneAt, type BuzzerTrack } from './buzzer';
 import {
 	DOT_SIZE,
 	LCD_GLASS,
@@ -60,6 +61,16 @@ import {
 	shownCells,
 	type LcdFrame
 } from './lcd';
+import {
+	DOT_RADIUS,
+	MATRIX_FACE,
+	MATRIX_KIND,
+	MATRIX_SIZE,
+	dotLit,
+	matrixDot,
+	type MatrixFrame
+} from './max7219';
+import { SERVO_KIND, SERVO_START_ANGLE, hornPath, servoAt, type ServoFrame } from './servo';
 
 export interface DynamicView {
 	schematic: Schematic;
@@ -83,6 +94,14 @@ export interface DynamicView {
 	burnouts: ReadonlyMap<string, Burnout>;
 	/** What each LCD module showed during the run, by name, oldest first. */
 	displays: ReadonlyMap<string, readonly LcdFrame[]>;
+	/** What each LED matrix lit during the run, by name, oldest first. */
+	matrices?: ReadonlyMap<string, readonly MatrixFrame[]>;
+	/** What each buzzer played during the run, by name. */
+	buzzers: ReadonlyMap<string, BuzzerTrack>;
+	/** Where each servo's horn was during the run, by name, oldest first. */
+	servos: ReadonlyMap<string, readonly ServoFrame[]>;
+	/** The colour symbols are drawn in, for what this layer draws of one. */
+	ink: string;
 	/**
 	 * Nets whose voltage is an artifact rather than a measurement.
 	 *
@@ -220,7 +239,7 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 	// scope trace that steps at the moment it failed.
 	for (const instance of schematic.instances) {
 		const lights = chipOf(instance.kind)?.board?.lights;
-		if (!LIT.has(instance.kind) && !lights) continue;
+		if (!LIT.has(instance.kind) && !lights && instance.kind !== SERVO_KIND) continue;
 		if (!instanceVisible(instance, region, 0)) continue;
 		if (lights) drawBoardLights(painter, view, instance, lights);
 		else if (instance.kind === 'led') drawLed(painter, view, instance);
@@ -230,6 +249,9 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 		else if (instance.kind === 'bargraph') drawBars(painter, view, instance);
 		else if (instance.kind === 'lamp') drawLamp(painter, view, instance);
 		else if (instance.kind === LCD_KIND) drawLcd(painter, view, instance);
+		else if (instance.kind === MATRIX_KIND) drawMatrix(painter, view, instance);
+		else if (instance.kind === BUZZER_KIND) drawBuzzer(painter, view, instance);
+		else if (instance.kind === SERVO_KIND) drawServo(painter, view, instance);
 	}
 }
 
@@ -567,7 +589,47 @@ function drawFuse(painter: Painter, view: DynamicView, instance: Instance): void
 }
 
 /** Parts that give off light, and so are drawn again once something flows. */
-const LIT = new Set(['led', 'display7', 'display7x4', 'bargraph', 'lamp', 'fuse', LCD_KIND]);
+const LIT = new Set([
+	'led',
+	'display7',
+	'display7x4',
+	'bargraph',
+	'lamp',
+	'fuse',
+	LCD_KIND,
+	MATRIX_KIND,
+	BUZZER_KIND
+]);
+
+/**
+ * The LEDs of a matrix module, as the run had them at the playback instant:
+ * the lit ones red, brighter with the intensity register, the rest the dull
+ * red of an LED that is off. A module the run knows nothing of — one that was
+ * not powered — is left as the layer below draws it.
+ *
+ * Not gated on `showLight`, for the same reason as the LCD: what it shows is
+ * the circuit's output.
+ */
+function drawMatrix(painter: Painter, view: DynamicView, instance: Instance): void {
+	const frame = frameAt(view.matrices?.get(instance.name) ?? [], view.time);
+	if (!frame) return;
+	const on = new Path2D();
+	const off = new Path2D();
+	for (let row = 0; row < MATRIX_SIZE; row++) {
+		for (let column = 0; column < MATRIX_SIZE; column++) {
+			const { x, y } = matrixDot(row, column);
+			const target = dotLit(frame.lit, row, column) ? on : off;
+			target.moveTo(x + DOT_RADIUS, y);
+			target.arc(x, y, DOT_RADIUS, 0, Math.PI * 2);
+		}
+	}
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		painter.rect(MATRIX_FACE, { color: '#161616' });
+		painter.fillPath(off, { color: '#3d1716' });
+		// The lowest intensity is a thirty-second duty cycle, and still plainly lit.
+		painter.fillPath(on, { color: '#ff3a2e', alpha: 0.55 + 0.45 * Math.sqrt(frame.duty) });
+	});
+}
 
 /**
  * The glass of an LCD module, as the run had it at the playback instant.
@@ -610,6 +672,55 @@ function drawLcd(painter: Painter, view: DynamicView, instance: Instance): void 
 		// the row of blocks of a module nothing initialised.
 		painter.fillPath(overdriven, { color: blocks, alpha: 0.85 });
 		painter.fillPath(on, { color: ink });
+	});
+}
+
+/** The colour of a buzzer's sound on the drawing. */
+const SOUND = '#ffd166';
+
+/**
+ * A buzzer, while it is sounding at the playback instant: waves off both
+ * sides of the dome, and the pitch above it — the frequency, and the note
+ * when it is one. Not gated on `showLight`, for the reason the LCD is not:
+ * the sound is what the part is for.
+ */
+function drawBuzzer(painter: Painter, view: DynamicView, instance: Instance): void {
+	const tone = toneAt(view.buzzers.get(instance.name), view.time);
+	if (!tone) return;
+	const waves = new Path2D();
+	for (const radius of [24, 30]) {
+		const sweep = Math.PI / 5;
+		waves.moveTo(Math.cos(-sweep * 1.6) * radius, 6 + Math.sin(-sweep * 1.6) * radius);
+		waves.arc(0, 6, radius, -sweep * 1.6, -sweep * 0.4);
+		waves.moveTo(Math.cos(Math.PI + sweep * 0.4) * radius, 6 + Math.sin(Math.PI + sweep * 0.4) * radius);
+		waves.arc(0, 6, radius, Math.PI + sweep * 0.4, Math.PI + sweep * 1.6);
+	}
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		painter.strokePath(waves, { color: SOUND, width: 2, cap: 'round', alpha: 0.85 });
+	});
+	const size = Math.min(11 * painter.viewport.scale, 14);
+	const above = rotatePoint(0, -24, instance.rotation);
+	const note = noteName(tone.frequency);
+	painter.text(
+		`${formatWithUnit(tone.frequency, 'Hz', 3)}${note ? ` · ${note}` : ''}`,
+		{ x: instance.x + above.x, y: instance.y + above.y },
+		{ size, color: SOUND, baseline: 'bottom', minSize: 6 }
+	);
+}
+
+/**
+ * A servo's horn, where the run had it at the playback instant. The symbol
+ * underneath leaves it off while a run is live, so this is the only horn on
+ * the drawing; before the run has read the servo at all, it is where every
+ * servo starts. Not gated on `showLight`, for the reason the LCD is not: the
+ * angle is what the part is for.
+ */
+function drawServo(painter: Painter, view: DynamicView, instance: Instance): void {
+	const frame = servoAt(view.servos.get(instance.name) ?? [], view.time);
+	const angle = frame?.angle ?? SERVO_START_ANGLE;
+	const colour = view.selection.has(instance.id) ? view.selectionColour : view.ink;
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		painter.fillPath(new Path2D(hornPath(angle)), { color: colour });
 	});
 }
 
