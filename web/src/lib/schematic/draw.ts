@@ -288,6 +288,12 @@ export interface SchematicView {
 	 */
 	switchStates?: ReadonlyMap<string, boolean>;
 	junctions: readonly Vec2[];
+	/**
+	 * Nets and part ids the last failed solve blames, drawn in the danger
+	 * colour so the error points at the circuit rather than at a name.
+	 */
+	faultNets?: ReadonlySet<number>;
+	faultParts?: ReadonlySet<string>;
 }
 
 const keyOf = (x: number, y: number) => `${Math.round(x)},${Math.round(y)}`;
@@ -331,6 +337,7 @@ function wireColour(wire: Wire, view: SchematicView): { colour: string; width: n
 	const start = wireStart(wire);
 	const net = view.netOfPoint.get(keyOf(start.x, start.y));
 	if (net !== undefined && net === view.hoverNet) return { colour: view.theme.accent, width: 2.4 };
+	if (net !== undefined && view.faultNets?.has(net)) return { colour: view.theme.danger, width: 2.4 };
 	const probe = net === undefined ? undefined : view.probeColours.get(net);
 	if (probe) return { colour: probe, width: 2 };
 	return { colour: view.theme.wire, width: 1.5 };
@@ -637,6 +644,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 		const net = view.netOfPoint.get(keyOf(dot.x, dot.y));
 		const colour =
 			(net !== undefined && net === view.hoverNet && theme.accent) ||
+			(net !== undefined && view.faultNets?.has(net) && theme.danger) ||
 			(net !== undefined && view.probeColours.get(net)) ||
 			theme.wire;
 		painter.dot(dot, JUNCTION_RADIUS, { color: colour });
@@ -650,7 +658,9 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 		const selected = view.selection.has(instance.id);
 		const colour = selected
 			? theme.selection
-			: instance.kind === 'led'
+			: view.faultParts?.has(instance.id)
+				? theme.danger
+				: instance.kind === 'led'
 				? ledInk(instance.params.colour)
 				: theme.symbol;
 		// A switch is drawn where the run has it rather than where it rests. Fed

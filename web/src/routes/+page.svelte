@@ -7,6 +7,7 @@
 	import Toolbar from '$lib/components/toolbar/Toolbar.svelte';
 	import CommandPalette from '$lib/commands/CommandPalette.svelte';
 	import { Button, Splitter, Toaster } from '$lib/ui';
+	import { untrack } from 'svelte';
 	import { ensureEngine } from '$lib/engine';
 	import {
 		Autosaver,
@@ -264,6 +265,14 @@
 			return;
 		}
 		if (signature === lastSignature) return;
+		// A value turned under a running circuit goes in at the instant the sweep
+		// has reached, straight away and without the debounce: the run carries
+		// on, and a knob being dragged is followed rather than replayed.
+		if (!app.running && untrack(() => app.retuneLive())) {
+			clearTimeout(pending);
+			lastSignature = signature;
+			return;
+		}
 
 		const rerun = () => {
 			if (!app.live) return;
@@ -360,9 +369,9 @@
 			>
 		</div>
 	{:else if app.error}
-		<div class="banner error" role="alert">
+		<div class="banner error" role="alert" title={app.failure ? app.error : undefined}>
 			<strong>Could not simulate.</strong>
-			{app.error}
+			{app.failure?.message ?? app.error}
 		</div>
 	{:else if app.compiled.errors.length > 0}
 		<div class="banner warn" role="status">{app.compiled.errors[0]}</div>

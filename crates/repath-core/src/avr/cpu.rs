@@ -588,8 +588,13 @@ impl Machine {
                     }
                     1
                 }
-                // BREAK (no debugger to stop for) and WDR (no watchdog).
-                0x9 | 0xA => 1,
+                // BREAK: no debugger to stop for.
+                0x9 => 1,
+                0xA => {
+                    // WDR
+                    self.watchdog_restart();
+                    1
+                }
                 0xC => self.program_memory(0, false),
                 // SPM: the flash is not written.
                 0xE => 1,

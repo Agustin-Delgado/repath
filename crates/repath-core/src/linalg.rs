@@ -14,6 +14,9 @@ pub struct LinearSystem {
     perm: Vec<usize>,
     /// Reciprocal of each row's largest entry, for scaled pivoting. Scratch.
     scale: Vec<f64>,
+    /// Where the last solve gave up, if it did: the elimination step, and
+    /// whether it was a row with nothing in it rather than a pivot too small.
+    failed: Option<(usize, bool)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +80,7 @@ impl LinearSystem {
             b: vec![0.0; n],
             perm: (0..n).collect(),
             scale: vec![0.0; n],
+            failed: None,
         }
     }
 
@@ -148,6 +152,7 @@ impl LinearSystem {
         let n = self.n;
         x.clear();
         x.resize(n, 0.0);
+        self.failed = None;
         if n == 0 {
             return Ok(());
         }
@@ -172,6 +177,7 @@ impl LinearSystem {
             if largest == 0.0 {
                 // An empty row: nothing anywhere in the circuit refers to this
                 // unknown, so there is nothing to solve for it.
+                self.failed = Some((r, true));
                 return Err(SolveError::Singular { row: r });
             }
             self.scale[r] = 1.0 / largest;
@@ -191,6 +197,7 @@ impl LinearSystem {
             // worth less than this beside the row it came from carries no
             // information a double can still represent.
             if pivot_mag < 1e-14 {
+                self.failed = Some((k, false));
                 return Err(SolveError::Singular { row: k });
             }
             if pivot_row != k {
@@ -227,6 +234,58 @@ impl LinearSystem {
             return Err(SolveError::NonFinite);
         }
         Ok(())
+    }
+
+    /// The unknowns anything has been stamped against since the last
+    /// [`Self::clear`]: a row, a column or a right-hand side entry of theirs is
+    /// not zero.
+    pub fn touched(&self) -> Vec<usize> {
+        let n = self.n;
+        (0..n)
+            .filter(|&i| {
+                self.b[i] != 0.0
+                    || self.a[i * n..i * n + n].iter().any(|&v| v != 0.0)
+                    || (0..n).any(|r| self.a[r * n + i] != 0.0)
+            })
+            .collect()
+    }
+
+    /// The unknowns that no equation pins down, after a solve that came back
+    /// [`SolveError::Singular`]: largest share first, empty if the last solve
+    /// did not fail that way.
+    ///
+    /// Read off the half-finished factors rather than worked out afresh, so it
+    /// costs nothing until it is asked for. Elimination stopped at a column
+    /// with no pivot left, which makes that column a combination of the ones
+    /// before it; solving the finished triangle for the combination gives a
+    /// vector the matrix sends to zero, and the unknowns it has weight on are
+    /// the ones free to take any value. Two sources fighting over one node put
+    /// their two branch currents in it, and a node with nothing holding it
+    /// puts itself.
+    pub fn undetermined(&self) -> Vec<usize> {
+        let n = self.n;
+        let Some((k, empty)) = self.failed else {
+            return Vec::new();
+        };
+        // An equation that says nothing: the row is the unknown with the same
+        // index, which is all there is to go on.
+        if empty {
+            return vec![k];
+        }
+        let a = |r: usize, c: usize| self.a[r * n + c];
+        let mut z = vec![0.0; k + 1];
+        z[k] = 1.0;
+        for i in (0..k).rev() {
+            let sum: f64 = (i + 1..=k).map(|j| a(i, j) * z[j]).sum();
+            z[i] = -sum / a(i, i);
+        }
+        let largest = z.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        if !largest.is_finite() {
+            return vec![k];
+        }
+        let mut involved: Vec<usize> = (0..=k).filter(|&i| z[i].abs() > 1e-6 * largest).collect();
+        involved.sort_by(|&p, &q| z[q].abs().total_cmp(&z[p].abs()).then(p.cmp(&q)));
+        involved
     }
 }
 
@@ -275,6 +334,38 @@ mod tests {
         sys.add(Some(1), Some(1), 1.0);
         let mut x = Vec::new();
         assert!(matches!(sys.solve_into(&mut x), Err(SolveError::Singular { .. })));
+    }
+
+    #[test]
+    fn a_singular_solve_names_the_unknowns_left_free() {
+        // Unknown 0 is pinned on its own; 1 and 2 only ever appear as a sum, so
+        // either can take any value as long as the other makes up the rest.
+        let mut sys = LinearSystem::new(3);
+        sys.add(Some(0), Some(0), 2.0);
+        sys.add(Some(1), Some(1), 1.0);
+        sys.add(Some(1), Some(2), 1.0);
+        sys.add(Some(2), Some(1), 3.0);
+        sys.add(Some(2), Some(2), 3.0);
+        let mut x = Vec::new();
+        assert!(sys.solve_into(&mut x).is_err());
+        let mut free = sys.undetermined();
+        free.sort();
+        assert_eq!(free, vec![1, 2]);
+
+        // And a solve that works leaves nothing to blame.
+        let mut sys = LinearSystem::new(1);
+        sys.add(Some(0), Some(0), 1.0);
+        sys.solve_into(&mut x).unwrap();
+        assert!(sys.undetermined().is_empty());
+    }
+
+    #[test]
+    fn an_empty_row_is_its_own_unknown() {
+        let mut sys = LinearSystem::new(2);
+        sys.add(Some(0), Some(0), 1.0);
+        let mut x = Vec::new();
+        assert!(sys.solve_into(&mut x).is_err());
+        assert_eq!(sys.undetermined(), vec![1]);
     }
 
     #[test]

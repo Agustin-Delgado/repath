@@ -463,6 +463,10 @@ pub enum Device {
         avcc: Option<String>,
         #[serde(default)]
         agnd: Option<String>,
+        /// What runs before the program after a reset: `optiboot`, an Uno's
+        /// bootloader, or nothing, a bare chip.
+        #[serde(default)]
+        bootloader: Option<String>,
     },
     /// The serial monitor's end of a serial line: bytes typed into it go out
     /// on `output` as UART frames. See `avr::UsbSerial`.
@@ -949,6 +953,7 @@ impl Netlist {
                 aref,
                 avcc,
                 agnd,
+                bootloader,
             } => {
                 let bad_value =
                     |reason: String| NetlistError::BadValue { component: name.clone(), reason };
@@ -957,6 +962,15 @@ impl Netlist {
                         "'{model}' is not a microcontroller this simulates; atmega328p is"
                     )));
                 }
+                let optiboot = match bootloader.as_deref() {
+                    None => false,
+                    Some(b) if b.eq_ignore_ascii_case("optiboot") => true,
+                    Some(b) => {
+                        return Err(bad_value(format!(
+                            "'{b}' is not a bootloader this simulates; optiboot is"
+                        )));
+                    }
+                };
                 if !(frequency.is_finite() && *frequency > 0.0) {
                     return Err(bad_value(format!(
                         "the clock must be a positive frequency, not {frequency}"
@@ -1007,9 +1021,12 @@ impl Netlist {
                 }
                 let reset = reset.as_ref().map(|n| c.net(n));
                 let wake = c.net(wake);
-                let mcu = Mcu::new(name, &image, *frequency, &connected, reset, wake)
+                let mut mcu = Mcu::new(name, &image, *frequency, &connected, reset, wake)
                     .with_analog(analog)
                     .with_i2c(self.i2c_bus(name));
+                if optiboot {
+                    mcu = mcu.with_optiboot();
+                }
                 c.add_device(Box::new(mcu));
             }
             Device::UsbSerial { name, output } => {

@@ -65,6 +65,7 @@ mod spi;
 mod timer;
 mod twi;
 mod usb_serial;
+mod watchdog;
 
 use std::sync::Arc;
 
@@ -268,6 +269,8 @@ pub struct Mcu {
     samples: Samples,
     /// The devices on its I2C bus as they power up, for each new run.
     i2c: Bus,
+    /// Whether an Uno's bootloader runs before the program.
+    optiboot: bool,
 }
 
 impl std::fmt::Debug for Mcu {
@@ -346,6 +349,7 @@ impl Mcu {
             analog: Vec::new(),
             samples: Samples::default(),
             i2c: Bus::default(),
+            optiboot: false,
         }
     }
 
@@ -366,6 +370,14 @@ impl Mcu {
     pub fn with_i2c(mut self, bus: Bus) -> Self {
         self.committed.set_i2c(bus.clone());
         self.i2c = bus;
+        self
+    }
+
+    /// The chip on an Uno, with Optiboot ahead of its program after every
+    /// reset: see `Machine::set_optiboot`.
+    pub fn with_optiboot(mut self) -> Self {
+        self.optiboot = true;
+        self.committed.set_optiboot();
         self
     }
 
@@ -415,6 +427,9 @@ impl Mcu {
     fn restart(&mut self) {
         self.committed = Machine::new(self.flash.clone(), 0, self.frequency);
         self.committed.set_i2c(self.i2c.clone());
+        if self.optiboot {
+            self.committed.set_optiboot();
+        }
         self.speculation = None;
         self.pending.clear();
         self.sampled = None;
@@ -640,12 +655,9 @@ impl DigitalDevice for Mcu {
             // start-up delay; see BACKLOG.md.
             self.in_reset = false;
             // A reset is not a power cycle: the EEPROM keeps what it holds,
-            // and the devices on the bus, powered apart, what they were told.
-            let kept = self.committed.eeprom.cells;
-            let bus = self.committed.take_i2c();
-            self.committed = Machine::new(self.flash.clone(), now, self.frequency);
-            self.committed.eeprom.cells = kept;
-            self.committed.set_i2c(bus);
+            // the devices on the bus, powered apart, what they were told, and
+            // MCUSR its flags, EXTRF added.
+            self.committed.reset(now, machine::EXTRF);
             self.committed.set_inputs(levels, now);
             self.sampled = Some(levels);
             self.publish(ctx, now);

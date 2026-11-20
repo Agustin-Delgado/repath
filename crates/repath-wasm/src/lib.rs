@@ -5,6 +5,7 @@
 //! JSON and back is slower than the simulation that produced them.
 
 use repath_core::avr::Mcu;
+use repath_core::circuit::Retune;
 use repath_core::digital::Logic;
 use repath_core::prelude::*;
 use serde::Serialize;
@@ -75,7 +76,50 @@ fn logic_name(state: Logic) -> &'static str {
 }
 
 fn to_js_error(e: impl std::fmt::Display) -> JsError {
+    LAST_FAILURE.with(|last| last.borrow_mut().take());
     JsError::new(&e.to_string())
+}
+
+/// Where in the circuit a failed solve went wrong, in the names the netlist
+/// gave the nodes and the components.
+#[derive(Serialize)]
+struct FailureOut {
+    /// `singular`, `no_convergence`, `timestep`, `non_finite`, or `other`.
+    kind: &'static str,
+    /// Simulated time it failed at, where the error has one.
+    time: Option<f64>,
+    nodes: Vec<String>,
+    elements: Vec<String>,
+}
+
+thread_local! {
+    /// The last failure a call raised, for [`last_failure`] to hand over. An
+    /// error crosses the boundary as a message and nothing else, so what goes
+    /// with it waits here to be asked for.
+    static LAST_FAILURE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+fn sim_js_error(e: SimError) -> JsError {
+    let (kind, time) = match &e {
+        SimError::Singular { .. } => ("singular", None),
+        SimError::NoConvergence { time, .. } => ("no_convergence", Some(*time)),
+        SimError::TimestepTooSmall { time, .. } => ("timestep", Some(*time)),
+        SimError::NonFinite { time, .. } => ("non_finite", Some(*time)),
+        _ => ("other", None),
+    };
+    let culprits = e.culprits().cloned().unwrap_or_default();
+    let out = FailureOut { kind, time, nodes: culprits.nodes, elements: culprits.elements };
+    let json = serde_json::to_string(&out).ok();
+    let error = JsError::new(&e.to_string());
+    LAST_FAILURE.with(|last| *last.borrow_mut() = json);
+    error
+}
+
+/// What the last failed call knew about where it failed, as JSON, or an
+/// empty string when it was not a failure of the solve.
+#[wasm_bindgen(js_name = lastFailure)]
+pub fn last_failure() -> String {
+    LAST_FAILURE.with(|last| last.borrow().clone().unwrap_or_default())
 }
 
 /// A compiled circuit plus its solver state.
@@ -101,7 +145,7 @@ impl Simulation {
     /// Solve the DC operating point. Returns `{ names, values }` as JSON.
     #[wasm_bindgen(js_name = operatingPoint)]
     pub fn operating_point(&mut self) -> Result<String, JsError> {
-        let op = self.simulator.operating_point(&mut self.circuit).map_err(to_js_error)?;
+        let op = self.simulator.operating_point(&mut self.circuit).map_err(sim_js_error)?;
         #[derive(Serialize)]
         struct Op {
             names: Vec<String>,
@@ -127,7 +171,7 @@ impl Simulation {
             cfg.max_step = max_step;
             cfg.initial_step = max_step.min(cfg.initial_step);
         }
-        let result = self.simulator.transient(&mut self.circuit, cfg).map_err(to_js_error)?;
+        let result = self.simulator.transient(&mut self.circuit, cfg).map_err(sim_js_error)?;
         let meta = meta_of(&result, true);
         self.running = None;
         self.result = Some(result);
@@ -170,7 +214,7 @@ impl Simulation {
         cfg.initial_step = step / 5.0;
 
         let (run, result) =
-            self.simulator.begin_transient(&mut self.circuit, cfg).map_err(to_js_error)?;
+            self.simulator.begin_transient(&mut self.circuit, cfg).map_err(sim_js_error)?;
         let meta = meta_of(&result, true);
         self.running = Some(run);
         self.result = Some(result);
@@ -185,8 +229,10 @@ impl Simulation {
         let Some(run) = self.running.as_mut() else {
             return Err(JsError::new("no live run has been started"));
         };
-        let chunk =
-            self.simulator.advance_transient(&mut self.circuit, run, until).map_err(to_js_error)?;
+        let chunk = self
+            .simulator
+            .advance_transient(&mut self.circuit, run, until)
+            .map_err(sim_js_error)?;
         let meta = meta_of(&chunk, false);
         self.result = Some(chunk);
         serde_json::to_string(&meta).map_err(to_js_error)
@@ -237,6 +283,16 @@ impl Simulation {
     ) -> Result<bool, JsError> {
         let waveform: Waveform = serde_json::from_str(waveform_json).map_err(to_js_error)?;
         Ok(self.circuit.set_source_waveform(name, waveform))
+    }
+
+    /// Give an element a new value from `at` onwards — a hand on a knob.
+    ///
+    /// `change_json` is one of `{ "resistance": ohms }`, `{ "capacitance":
+    /// farads }`, `{ "inductance": henries }` or `{ "waveform": <netlist
+    /// waveform> }`. Returns whether the element exists and the change fits it.
+    pub fn retune(&mut self, name: &str, change_json: &str, at: f64) -> Result<bool, JsError> {
+        let change: Retune = serde_json::from_str(change_json).map_err(to_js_error)?;
+        Ok(self.circuit.retune(name, change, at))
     }
 
     /// Move a logic source to a level, from `at` onwards.
@@ -601,7 +657,7 @@ pub fn run_frequency_sweep(
     if points_per_decade > 0 {
         config.points_per_decade = points_per_decade;
     }
-    let result = Simulator::default().ac_sweep(&mut circuit, config).map_err(to_js_error)?;
+    let result = Simulator::default().ac_sweep(&mut circuit, config).map_err(sim_js_error)?;
     Ok(FrequencyRun { result })
 }
 

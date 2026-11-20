@@ -191,6 +191,9 @@ export const ARDUINO_UNO: ChipDef = {
 		{
 			kind: 'mcu',
 			model: 'atmega328p',
+			// It clears MCUSR and switches the watchdog off after every reset,
+			// so a sketch that resets itself through the watchdog comes back once.
+			bootloader: 'optiboot',
 			ports: Object.keys(UNO_PORT_PINS),
 			reset: 'RESET',
 			legs: { ...UNO_PORT_PINS, AVCC: '5V', AGND: 'GND', AREF: 'AREF' },

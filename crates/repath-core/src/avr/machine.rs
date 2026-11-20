@@ -21,6 +21,7 @@ use super::receiver::{self, Format, Receiver};
 use super::spi::Spi;
 use super::timer::{ICF, OCFA, OCFB, TOV, Timer};
 use super::twi::Twi;
+use super::watchdog::{Timeout, Watchdog};
 use crate::i2c::Bus;
 
 pub const FLASH_WORDS: usize = 16 * 1024;
@@ -63,6 +64,10 @@ const SPDR: u8 = 0x4E;
 const ACSR: u8 = 0x50;
 pub(super) const SMCR: u8 = 0x53;
 const MCUSR: u8 = 0x54;
+/// MCUSR's reset flags: power-on, external, watchdog.
+const PORF: u8 = 1 << 0;
+pub const EXTRF: u8 = 1 << 1;
+const WDRF: u8 = 1 << 3;
 const MCUCR: u8 = 0x55;
 const SPL: u8 = 0x5D;
 const SPH: u8 = 0x5E;
@@ -205,9 +210,6 @@ pub enum Peripheral {
     I2c,
     /// ACSR read, or its interrupt enabled, while the comparator is on.
     Comparator,
-    /// WDE or WDIE left set by a write: the watchdog armed, not just touched
-    /// on the way to switching it off.
-    Watchdog,
 }
 
 impl Peripheral {
@@ -218,7 +220,6 @@ impl Peripheral {
             Self::Spi => "spi",
             Self::I2c => "i2c",
             Self::Comparator => "comparator",
-            Self::Watchdog => "watchdog",
         }
     }
 }
@@ -421,6 +422,11 @@ pub struct Machine {
     spi: Spi,
     pub(super) eeprom: Eeprom,
     adc: Adc,
+    watchdog: Watchdog,
+    /// MCUSR's four reset flags.
+    mcusr: u8,
+    /// Whether an Uno's bootloader runs before the program after each reset.
+    optiboot: bool,
     /// The clock, for the devices on the I2C bus, which keep time in seconds.
     frequency: f64,
     /// Cycles the CPU is halted for after the instruction under way, as an
@@ -491,12 +497,9 @@ impl Machine {
     /// know. Its EEPROM is erased: a reset that is not a power-on keeps the
     /// old one's.
     pub fn new(flash: Arc<[u16]>, cycle: u64, frequency: f64) -> Self {
-        let mut data = [0u8; DATA_SIZE];
-        // Power-on reset is the reason for the last reset.
-        data[MCUSR as usize] = 0x01;
         Self {
             flash,
-            data,
+            data: [0; DATA_SIZE],
             pc: 0,
             sp: RAMEND,
             sreg: 0,
@@ -520,6 +523,10 @@ impl Machine {
             spi: Spi::new(),
             eeprom: Eeprom::new(frequency),
             adc: Adc::default(),
+            watchdog: Watchdog::new(frequency, cycle),
+            // Power-on reset is the reason for the last reset.
+            mcusr: PORF,
+            optiboot: false,
             frequency,
             stall: 0,
             eicra: 0,
@@ -546,6 +553,70 @@ impl Machine {
         self.fault
     }
 
+    /// The chip reset at `cycle` by `cause`, one of MCUSR's flags, as it
+    /// comes out of reset: every I/O register back to its reset value, but
+    /// not the EEPROM, which is non-volatile, nor the register file and the
+    /// SRAM, which a reset does not clear — avr-gcc's start-up clears what
+    /// it needs, and a `.noinit` variable keeps its value — nor the devices
+    /// on the I2C bus, powered apart, nor MCUSR, whose flags only a power-on
+    /// or the program clears. What was sent and noticed before is kept for
+    /// whoever takes it, and so is what a speculation has seen of the inputs.
+    pub fn reset(&mut self, cycle: u64, cause: u8) {
+        let mut fresh = Self::new(self.flash.clone(), cycle, self.frequency);
+        fresh.data[..0x20].copy_from_slice(&self.data[..0x20]);
+        fresh.data[0x100..].copy_from_slice(&self.data[0x100..]);
+        fresh.eeprom.cells = self.eeprom.cells;
+        fresh.twi.bus = std::mem::take(&mut self.twi.bus);
+        fresh.inputs = self.inputs;
+        fresh.mcusr = self.mcusr | cause;
+        // While WDRF is set WDE is too: a watchdog reset leaves the watchdog
+        // on, at 16 ms, until the program clears WDRF and switches it off.
+        fresh.watchdog.set_forced(fresh.mcusr & WDRF != 0, cycle);
+        fresh.progress = self.progress;
+        fresh.serial = std::mem::take(&mut self.serial);
+        fresh.notices = std::mem::take(&mut self.notices);
+        fresh.noticed = self.noticed;
+        fresh.last_input_read = self.last_input_read;
+        fresh.last_miso_read = self.last_miso_read;
+        fresh.ss_seen = self.ss_seen;
+        fresh.irq_armed_seen = self.irq_armed_seen;
+        fresh.rx_seen = self.rx_seen;
+        fresh.optiboot = self.optiboot;
+        fresh.refresh_next_event();
+        *self = fresh;
+        if self.optiboot {
+            self.run_optiboot();
+        }
+    }
+
+    /// Put an Uno's bootloader in front of the program, from this power-on
+    /// on.
+    pub fn set_optiboot(&mut self) {
+        self.optiboot = true;
+        self.run_optiboot();
+    }
+
+    /// What Optiboot 4.4, the one the Arduino AVR core flashes on an Uno,
+    /// leaves the chip as when it starts the program: it reads MCUSR and
+    /// clears it, and after anything but an external reset switches the
+    /// watchdog off (WDCE | WDE, then 0) and jumps to address 0. After an
+    /// external reset it waits a second for an upload first and leaves by
+    /// its own watchdog's reset, which ends the same way; that second is not
+    /// waited here, nor the dozen cycles the rest takes, so the program
+    /// starts at once with MCUSR clear and the watchdog off whatever reset
+    /// it. Unlike later Optiboots, 4.4 does not hand the old MCUSR over in r2.
+    fn run_optiboot(&mut self) {
+        self.mcusr = 0;
+        self.watchdog = Watchdog::new(self.frequency, self.cycle);
+        self.refresh_next_event();
+    }
+
+    /// `wdr`.
+    pub(super) fn watchdog_restart(&mut self) {
+        self.watchdog.restart(self.cycle);
+        self.refresh_next_event();
+    }
+
     pub fn progress(&self) -> u64 {
         self.progress
     }
@@ -560,10 +631,6 @@ impl Machine {
     /// chip.
     pub fn set_i2c(&mut self, bus: Bus) {
         self.twi.bus = bus;
-    }
-
-    pub fn take_i2c(&mut self) -> Bus {
-        std::mem::take(&mut self.twi.bus)
     }
 
     pub(super) fn fetch(&self, pc: u16) -> u16 {
@@ -832,9 +899,11 @@ impl Machine {
                 }
                 self.data[ACSR as usize]
             }
+            MCUSR => self.mcusr,
             SPL => self.sp as u8,
             SPH => (self.sp >> 8) as u8,
             SREG => self.sreg,
+            WDTCSR => self.watchdog.control(self.cycle),
             PCICR => self.pcicr,
             EICRA => self.eicra,
             PCMSK0..=PCMSK2 => self.pcmsk[usize::from(a - PCMSK0)],
@@ -937,18 +1006,15 @@ impl Machine {
                 }
                 self.data[ACSR as usize] = v;
             }
+            // A flag is cleared by writing a zero to it, and cannot be set.
+            MCUSR => {
+                self.mcusr &= v;
+                self.watchdog.set_forced(self.mcusr & WDRF != 0, self.cycle);
+            }
             SPL => self.sp = (self.sp & 0xFF00) | u16::from(v),
             SPH => self.sp = (self.sp & 0x00FF) | u16::from(v) << 8,
             SREG => self.sreg = v,
-            WDTCSR => {
-                // WDCE | WDE is the first half of the timed sequence that
-                // changes the watchdog, and `wdt_disable()` writes it too; what
-                // arms it is WDIE, or WDE written without WDCE.
-                if v & 0x40 != 0 || v & 0x18 == 0x08 {
-                    self.note(Peripheral::Watchdog);
-                }
-                self.data[WDTCSR as usize] = v;
-            }
+            WDTCSR => self.watchdog.write_control(v, self.cycle),
             PCICR => self.pcicr = v & 7,
             EICRA => self.eicra = v & 0x0F,
             PCMSK0..=PCMSK2 => self.pcmsk[usize::from(a - PCMSK0)] = v,
@@ -1075,6 +1141,7 @@ impl Machine {
                 self.spi.next_event(),
                 self.eeprom.next_event(),
                 self.adc.next_event(),
+                self.watchdog.next_event(self.cycle),
             ])
             .min()
             .unwrap_or(u64::MAX);
@@ -1105,6 +1172,15 @@ impl Machine {
         }
         if self.adc.next_event() <= at {
             self.adc.complete();
+        }
+        if self.watchdog.next_event(at) <= at
+            && self.watchdog.event(at) == Some(Timeout::Reset)
+            // A CPU stopped on a fault stays stopped where it said it did.
+            && self.fault.is_none()
+        {
+            // At the instruction boundary the time-out is seen at, which an
+            // instruction under way can have run a few cycles past.
+            self.reset(self.cycle.max(at), WDRF);
         }
         self.progress += 1;
         self.refresh_next_event();
@@ -1157,6 +1233,9 @@ impl Machine {
         if changed != 0 {
             return Some(3 + changed.trailing_zeros() as u8);
         }
+        if self.watchdog.pending() {
+            return Some(6);
+        }
         // Timer2, Timer1, Timer0: each with its own order of flags.
         let order: [(usize, [(u8, u8); 4]); 3] = [
             (2, [(OCFA, 7), (OCFB, 8), (TOV, 9), (0, 0)]),
@@ -1202,6 +1281,7 @@ impl Machine {
         match vector {
             1 | 2 => self.eifr &= !(1 << (vector - 1)),
             3..=5 => self.pcifr &= !(1 << (vector - 3)),
+            6 => self.watchdog.acknowledge(),
             7 => clear(self, 2, OCFA),
             8 => clear(self, 2, OCFB),
             9 => clear(self, 2, TOV),
@@ -1681,18 +1761,12 @@ pub(super) mod tests {
         at(&mut m, 20, adc::ADCSRA, 0xC7);
         at(&mut m, 30, adc::ADCSRA, 0x00);
         at(&mut m, 31, adc::ADCSRA, 0xC7);
-        // `wdt_disable()`: WDCE | WDE, then nothing.
-        at(&mut m, 40, WDTCSR, 0x18);
-        at(&mut m, 41, WDTCSR, 0x00);
         // `sbi ACSR, ACD` switches the comparator off, and reading it off is
         // not using it.
         m.cycle = 50;
         m.write_bit(u16::from(ACSR), 7, true);
         let _ = m.read(u16::from(ACSR));
         assert_eq!(m.notices, vec![(20, Peripheral::Thermometer)]);
-        // `wdt_enable(WDTO_1S)`: WDCE | WDE, then WDE and the prescaler.
-        at(&mut m, 60, WDTCSR, 0x18);
-        at(&mut m, 61, WDTCSR, 0x0E);
         // SPI as a master is simulated, SS an output as SPI.begin() leaves
         // it; as a slave it is not.
         at(&mut m, 68, 0x24, 0x04);
@@ -1713,12 +1787,182 @@ pub(super) mod tests {
             m.notices,
             vec![
                 (20, Peripheral::Thermometer),
-                (61, Peripheral::Watchdog),
                 (70, Peripheral::Spi),
                 (91, Peripheral::Comparator),
                 (101, Peripheral::AdcTrigger),
             ]
         );
+    }
+
+    const WDR: u16 = 0x95A8;
+
+    /// 16 ms at 16 MHz: 2048 ticks of 125 cycles.
+    const WDT_16MS: u64 = 256_000;
+
+    /// `wdt_enable()` as avr-libc writes it, from word 26: `wdr`, then WDCE |
+    /// WDE and `setting` by two `sts`, `gap` cycles of `nop` between them,
+    /// then `tail`. From power-on the `wdr` finds the watchdog off, so the
+    /// count starts at 5, with the first `sts` switching it on. Vector 6, word 12, jumps to a handler at word 40 that
+    /// counts in r20 and returns.
+    fn watchdog_program(setting: u8, gap: usize, tail: &[u16]) -> Vec<u16> {
+        let mut program = vec![nop(); 42];
+        program[0] = rjmp(25); // reset -> main, word 26
+        program[12] = rjmp(27); // WDT, vector 6 -> isr, word 40
+        let [s1, s2] = sts(u16::from(WDTCSR), 16);
+        let mut main = vec![
+            ldi(16, 0x18),    // ldi r16, WDCE | WDE  ; 2..3
+            ldi(17, setting), // ldi r17, setting     ; 3..4
+            WDR,              // wdr                  ; 4..5
+            s1,               // sts WDTCSR, r16      ; 5..7, switched on
+            s2,
+        ];
+        main.extend(std::iter::repeat_n(nop(), gap));
+        main.extend(sts(u16::from(WDTCSR), 17)); // sts WDTCSR, r17 ; from 7 + gap
+        main.extend(tail);
+        program[26..26 + main.len()].copy_from_slice(&main);
+        program[40] = inc(20);
+        program[41] = reti();
+        program
+    }
+
+    /// `sei`, and `rjmp .` from 10 + gap.
+    const IDLE: [u16; 2] = [0x9478, 0xCFFF];
+
+    #[test]
+    fn the_watchdog_resets_the_chip_and_says_so_in_mcusr() {
+        // WDE, 16 ms. The idle loop starts at 10, so its boundaries are even.
+        let mut m = machine(&watchdog_program(0x08, 0, &IDLE));
+        run_to(&mut m, 34, 100);
+        assert_eq!(m.read(u16::from(WDTCSR)), 0x08);
+        assert_eq!(m.read(u16::from(MCUSR)), PORF);
+        // Due 16 ms after the first `sts`, and seen a cycle later.
+        let first = run_to(&mut m, 0, 2 * WDT_16MS);
+        assert_eq!(first, 5 + WDT_16MS + 1);
+        assert_eq!(m.read(u16::from(MCUSR)), PORF | WDRF, "WDRF set, PORF kept");
+        assert_eq!(m.read(u16::from(WDTCSR)), 0x08, "WDRF holds WDE on, at 16 ms");
+        // The program runs again, on now from the reset, and its `wdr` four
+        // cycles in restarts the count; the next reset is 16 ms on from there.
+        run_to(&mut m, 34, first + 100);
+        let second = run_to(&mut m, 0, first + 2 * WDT_16MS);
+        assert_eq!(second, first + 4 + WDT_16MS);
+    }
+
+    #[test]
+    fn the_second_write_has_to_come_within_four_cycles() {
+        // WDE at 1 s. Two `nop`s between the `sts`: the second starts four
+        // cycles after the first, and makes it.
+        let mut m = machine(&watchdog_program(0x0E, 2, &IDLE));
+        run_to(&mut m, 36, 100);
+        assert_eq!(m.read(u16::from(WDTCSR)), 0x0E);
+        // Three: five cycles, too late. The first write's WDE stands, at the
+        // reset value of 16 ms, and resets the chip on time.
+        let mut m = machine(&watchdog_program(0x0E, 3, &IDLE));
+        run_to(&mut m, 37, 100);
+        assert_eq!(m.read(u16::from(WDTCSR)), 0x08);
+        // The idle loop is at 13, odd, and sees it on its cycle.
+        assert_eq!(run_to(&mut m, 0, 2 * WDT_16MS), 5 + WDT_16MS);
+    }
+
+    #[test]
+    fn wdr_keeps_the_watchdog_from_resetting() {
+        // WDE at 16 ms, and a loop that runs `wdr` every 3 cycles.
+        let mut m = machine(&watchdog_program(0x08, 0, &[WDR, rjmp(-2)]));
+        let _ = m.run(4 * WDT_16MS, &Watch::default());
+        assert!(m.cycle >= 4 * WDT_16MS);
+        assert_eq!(m.read(u16::from(MCUSR)), PORF, "never reset");
+        // Without it, the same program resets.
+        let mut m = machine(&watchdog_program(0x08, 0, &[nop(), rjmp(-2)]));
+        let _ = m.run(4 * WDT_16MS, &Watch::default());
+        assert_eq!(m.read(u16::from(MCUSR)), PORF | WDRF);
+    }
+
+    #[test]
+    fn wde_cannot_be_cleared_while_wdrf_is_set() {
+        let mut m = machine(&[idle()]);
+        m.reset(0, WDRF);
+        assert_eq!(m.read(u16::from(WDTCSR)), 0x08, "on, at 16 ms, after the reset");
+        m.cycle = 10;
+        m.write(u16::from(WDTCSR), 0x18);
+        m.write(u16::from(WDTCSR), 0x00);
+        assert_eq!(m.read(u16::from(WDTCSR)), 0x08);
+        // `MCUSR = 0` first, as avr-libc's documentation says to.
+        m.cycle = 20;
+        m.write(u16::from(MCUSR), 0x00);
+        m.write(u16::from(WDTCSR), 0x18);
+        m.write(u16::from(WDTCSR), 0x00);
+        assert_eq!(m.read(u16::from(WDTCSR)), 0x00);
+        assert_eq!(m.watchdog.next_event(m.cycle), u64::MAX);
+        // A flag cannot be set by writing a one.
+        m.write(u16::from(MCUSR), 0x0F);
+        assert_eq!(m.read(u16::from(MCUSR)), 0x00);
+    }
+
+    #[test]
+    fn optiboot_clears_mcusr_and_switches_the_watchdog_off_after_every_reset() {
+        let mut m = machine(&[idle()]);
+        m.set_optiboot();
+        assert_eq!(m.read(u16::from(MCUSR)), 0, "from power-on");
+        m.cycle = 10;
+        m.write(u16::from(WDTCSR), 0x18);
+        m.write(u16::from(WDTCSR), 0x48);
+        for cause in [WDRF, EXTRF] {
+            m.reset(100, cause);
+            assert_eq!(m.read(u16::from(MCUSR)), 0);
+            assert_eq!(m.read(u16::from(WDTCSR)), 0);
+            assert_eq!(m.watchdog.next_event(100), u64::MAX);
+        }
+    }
+
+    #[test]
+    fn the_watchdog_interrupt_comes_every_period_from_its_vector() {
+        // WDIE, 16 ms: due at 5 + 256 000 and seen a cycle later, four
+        // cycles to the vector and two for its `rjmp`.
+        let mut m = machine(&watchdog_program(0x40, 0, &IDLE));
+        assert_eq!(run_to(&mut m, 40, 2 * WDT_16MS), 5 + WDT_16MS + 1 + 4 + 2);
+        assert_eq!(m.read(u16::from(WDTCSR)) & 0xC0, 0x40, "WDIF cleared, WDIE kept");
+        // The count went on from the time-out, not from when it was seen, so
+        // the next is one period after it; the `inc` and `reti` have left
+        // the idle loop on odd boundaries, and that one is seen on its cycle.
+        run_to(&mut m, 34, 2 * WDT_16MS);
+        assert_eq!(run_to(&mut m, 40, 3 * WDT_16MS), 5 + 2 * WDT_16MS + 4 + 2);
+        assert_eq!(m.data[20], 1, "the first handler ran; the second is about to");
+        assert_eq!(m.read(u16::from(MCUSR)), PORF, "and no reset");
+    }
+
+    #[test]
+    fn interrupt_and_reset_mode_interrupts_first_then_resets() {
+        // WDIE | WDE, 16 ms; the handler does not set WDIE again.
+        let mut m = machine(&watchdog_program(0x48, 0, &IDLE));
+        assert_eq!(run_to(&mut m, 40, 2 * WDT_16MS), 5 + WDT_16MS + 1 + 4 + 2);
+        assert_eq!(m.read(u16::from(WDTCSR)), 0x08, "the vector cleared WDIE");
+        run_to(&mut m, 34, 2 * WDT_16MS);
+        assert_eq!(run_to(&mut m, 0, 3 * WDT_16MS), 5 + 2 * WDT_16MS);
+        assert_eq!(m.read(u16::from(MCUSR)), PORF | WDRF);
+        assert_eq!(m.data[20], 1, "a reset does not clear the registers");
+    }
+
+    #[test]
+    fn the_watchdog_interrupt_wakes_the_chip_from_power_down() {
+        // WDIE at 1 s, then SMCR = SE | power-down and `sleep` in a loop.
+        let tail = [
+            ldi(18, 0x05), // ldi r18, SE | SM1    ; 9..10
+            out(0x33, 18), // out SMCR, r18        ; 10..11
+            sei(),         // sei                  ; 11..12
+            sleep(),       // sleep                ; 12..13
+            rjmp(-2),      // rjmp .-2
+        ];
+        let mut m = machine(&watchdog_program(0x46, 0, &tail));
+        assert_eq!(m.run(100, &Watch::default()), Stop::Limit);
+        assert!(m.sleeping);
+        // 1 s is 64 × 16 ms. Woken by the time-out, with four cycles more to
+        // the vector for having been asleep, then two for its `rjmp`.
+        for n in 1..=2 {
+            let due = 5 + 64 * n * WDT_16MS;
+            assert_eq!(m.run(due, &Watch::default()), Stop::Limit);
+            assert!(m.sleeping, "asleep until {due}");
+            assert_eq!(run_to(&mut m, 40, due + 100), due + 8 + 2);
+        }
+        assert_eq!(m.data[20], 1, "the first handler ran; the second is about to");
     }
 
     #[test]

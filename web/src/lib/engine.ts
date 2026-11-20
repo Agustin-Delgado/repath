@@ -6,7 +6,7 @@
  * simulation that produced them.
  */
 
-import init, { Simulation, runFrequencySweep as sweep, version } from './wasm/repath.js';
+import init, { Simulation, lastFailure, runFrequencySweep as sweep, version } from './wasm/repath.js';
 import type { LcdFrame } from './schematic/lcd';
 import type { MatrixFrame } from './schematic/max7219';
 import type { BuzzerState } from './schematic/buzzer';
@@ -131,12 +131,41 @@ export function engineVersion(): string {
 	return version();
 }
 
+/**
+ * Where in the circuit a solve failed, in the engine's names: nodes as the
+ * netlist named them (`n3`), components as it named them (`D1`, `X1.Q2`,
+ * `DS1:b`). Most to blame first.
+ */
+export interface SolveFailure {
+	kind: 'singular' | 'no_convergence' | 'timestep' | 'non_finite' | 'other';
+	/** Simulated time it failed at, where there is one. */
+	time: number | null;
+	nodes: string[];
+	elements: string[];
+}
+
 /** Anything the engine rejects arrives here with its message intact. */
-export class EngineError extends Error {}
+export class EngineError extends Error {
+	/** Where the solve went wrong, when the failure was the solve's. */
+	failure: SolveFailure | null = null;
+}
 
 function toEngineError(cause: unknown): EngineError {
+	if (cause instanceof EngineError) return cause;
 	const message = cause instanceof Error ? cause.message : String(cause);
-	return new EngineError(message);
+	const error = new EngineError(message);
+	error.failure = readFailure();
+	return error;
+}
+
+/** What the engine kept about the error it raised last, if it was a solve's. */
+function readFailure(): SolveFailure | null {
+	try {
+		const raw = lastFailure();
+		return raw ? (JSON.parse(raw) as SolveFailure) : null;
+	} catch {
+		return null;
+	}
 }
 
 export async function runTransient(
@@ -197,8 +226,7 @@ export interface SerialByte {
 
 /**
  * A part of the chip the program used that is not simulated, and when it
- * first did: `temperature`, `adc-trigger`, `spi`, `i2c`, `comparator` or
- * `watchdog`.
+ * first did: `temperature`, `adc-trigger`, `spi`, `i2c` or `comparator`.
  */
 export interface McuNotice {
 	peripheral: string;
@@ -215,6 +243,16 @@ export interface McuState {
 	/** The baud rate its receiver is set to, or null while the receiver is off. */
 	listening: number | null;
 }
+
+/**
+ * A new value for one engine element, in the engine's own shape: the change
+ * that can be made under a running circuit without it becoming another one.
+ */
+export type Retune =
+	| { resistance: number }
+	| { capacitance: number }
+	| { inductance: number }
+	| { waveform: unknown };
 
 /** One piece of a live run: the timepoints solved since the last call. */
 export interface Chunk {
@@ -295,6 +333,22 @@ export class LiveRun {
 	setWaveform(name: string, waveform: unknown): boolean {
 		if (this.freed) return false;
 		return this.simulation.setSourceWaveform(name, JSON.stringify(waveform));
+	}
+
+	/**
+	 * Give an element a new value from `at` onwards — somebody's hand on a knob.
+	 *
+	 * The engine ends a step exactly on `at` and changes the value there, so a
+	 * run handed the same retunes lands on the same instants. False when there is
+	 * no such element or the change does not fit it.
+	 */
+	retune(name: string, change: Retune, at: number): boolean {
+		if (this.freed) return false;
+		try {
+			return this.simulation.retune(name, JSON.stringify(change), at);
+		} catch (cause) {
+			throw toEngineError(cause);
+		}
 	}
 
 	/** Move a logic source to a level, from `at` onwards. */

@@ -11,6 +11,66 @@ early entries point at those instead.
 
 ---
 
+## 20 November 2026 — The watchdog bites
+
+**The chip's watchdog works now.** A sketch that calls `wdt_enable()` and then
+stops calling `wdt_reset()` — because it hung, or because that is how it means
+to restart — is reset when the time-out runs out, 16 ms to 8 s as it asked,
+and starts again from `setup()`. Until now the watchdog was registers and
+nothing more, and the run only warned that it was armed; that warning is gone.
+
+**It can wake a sleeping chip, too.** With the watchdog's interrupt on, a
+sketch that puts the chip to sleep is woken by it every time-out, which is how
+battery projects sleep for seconds at a time. Both at once — an interrupt
+first, a reset the time after if the sketch does not answer — works as the
+datasheet has it.
+
+**The Uno restarts the way a real one does.** Its bootloader clears MCUSR and
+switches the watchdog off after every reset before the sketch runs, and that
+is done here too, so the usual software reset — `wdt_enable(WDTO_15MS);` and
+an endless loop — restarts the sketch once and it runs on. The bare ATmega328P
+has no bootloader: there MCUSR says the watchdog reset it, the watchdog is
+still on at 16 ms, as the datasheet has it, and a sketch has to switch it off
+early in `setup()` — `MCUSR = 0; wdt_disable();` — or be reset again.
+[#82](https://github.com/Agustin-Delgado/repath/pull/82)
+
+---
+
+## 20 November 2026 — When a circuit cannot be solved, it says where
+
+**A failed run points at the circuit.** Two batteries straight across each
+other, a coil across a source, a source with a wire drawn across it, a diode or
+an op-amp the solver cannot settle: instead of "singular matrix near v(n3)",
+the parts and the nets to blame turn red on the drawing, and the issues box
+lists them — hover a net there to light it up, click a part to select it. The
+banner says what went wrong in the names you see on the page, and the engine's
+own message is still there on hover.
+
+**The engine names its culprits.** Every failed operating point or transient
+step now carries the nodes and the devices responsible, so a script driving
+repath-core gets "(V1 and V2, at node a)" rather than a bare error. Working
+that out happens only once a run has failed for good; a run that succeeds does
+exactly the same work as before.
+[#81](https://github.com/Agustin-Delgado/repath/pull/81)
+
+---
+
+## 20 November 2026 — Turn a knob while the circuit runs
+
+**Changing a value no longer starts the run over.** Set a potentiometer's
+wiper, a resistor, a capacitor, an inductor, a variable capacitor or a
+source's level while a sweep is going, and the change happens at the instant
+the run has reached, the way flipping a switch does. Everything before it stays
+as it was solved. In **Servo on a knob**, moving the wiper now makes the servo
+swing to the new angle from where it is, where before the whole run replayed
+from 90°. On a scope, an RC with its resistor changed mid-run bends right at
+that moment. Changes to what the circuit is made of still start a new run:
+adding, moving or removing parts and wires, loading a program, changing the
+temperature, or changing a source's frequency.
+[#80](https://github.com/Agustin-Delgado/repath/pull/80)
+
+---
+
 ## 20 November 2026 — A file format that says which version it is
 
 **Saved circuits are `.repath` files now,** and they, share links and the draft

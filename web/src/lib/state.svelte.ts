@@ -7,17 +7,21 @@
  */
 
 import {
+	EngineError,
 	ensureEngine,
 	runFrequencySweep,
 	runTransient,
 	type FrequencyRun,
 	type McuNotice,
+	type SolveFailure,
 	type TransientRun
 } from './engine';
+import { locateFailure, type LocatedFailure } from './schematic/culprits';
 import { EXAMPLES, exampleById } from './examples';
 import { sampleIndexAt } from './schematic/flow';
 import { contactControl, isHighAt } from './schematic/contacts';
 import { Acquisition } from './acquire';
+import { liveChanges, type RetuneAt } from './retune';
 import type { Capture } from './capture';
 import { Trace, wireRef, type Step } from './trace';
 import type { CircuitSettings, SharedCircuit } from './share';
@@ -547,6 +551,23 @@ class AppState {
 	 */
 	operations = $state<Map<string, number[]>>(new Map());
 	/**
+	 * Every value changed while this run was going, and the instant of the run
+	 * it changed at, oldest first.
+	 *
+	 * Unlike an operation, the edit is also written into the drawing — a knob
+	 * turned stays turned, and the next run starts from where it was left. This
+	 * is the run's own record of when: the run's first part was solved with the
+	 * old values, and handing these to a fresh run of the circuit as it was
+	 * drawn at the start lands every change on the same instant.
+	 */
+	retunes = $state<RetuneAt[]>([]);
+	/**
+	 * The netlist the running sweep is solving now: what it started from, with
+	 * every retune since applied. What the next edit is compared with to decide
+	 * whether it can go in live. Null when no transient sweep is going.
+	 */
+	private liveNetlist: unknown = null;
+	/**
 	 * What each microcontroller has said during this run, by name: the bytes it
 	 * sent over serial, as text, and why its CPU stopped if it did.
 	 *
@@ -588,6 +609,30 @@ class AppState {
 	/** The servos in the run, and the last reading of each. */
 	private servoReads = new Map<string, ServoFrame | null>();
 	error = $state<string | null>(null);
+	/**
+	 * Where the solve behind `error` failed, in the engine's names, and the
+	 * message it came with. Kept against the message rather than cleared
+	 * alongside it: everything that clears or replaces the error then retires
+	 * this too, without each of those places having to know it exists.
+	 */
+	private failedWith = $state<{ error: string; failure: SolveFailure } | null>(null);
+	/**
+	 * The parts and nets on the drawing the last failed solve blames, and a
+	 * sentence in the drawing's own names. Null while the error showing is not
+	 * a solve's, or there is none.
+	 */
+	failure = $derived.by((): LocatedFailure | null => {
+		const failed = this.failedWith;
+		if (!failed || failed.error !== this.error) return null;
+		const located = locateFailure(failed.failure, this.compiled, this.schematic);
+		return located.nets.length > 0 || located.parts.length > 0 ? located : null;
+	});
+
+	/** Show an engine error, keeping what it said about where. */
+	private fail(message: string, failure: SolveFailure | null | undefined): void {
+		this.error = message;
+		this.failedWith = failure ? { error: message, failure } : null;
+	}
 	/**
 	 * Whether results are being kept up to date with the circuit.
 	 *
@@ -1891,6 +1936,39 @@ class AppState {
 	/** When a part was operated by hand during this run. */
 	operationsOf(id: string): number[] {
 		return this.operations.get(id) ?? [];
+	}
+
+	/**
+	 * Carry an edit into the sweep that is going, at the instant it has reached,
+	 * instead of starting a new run. Returns whether it did.
+	 *
+	 * Only for an edit the running circuit can take — a value, not a change of
+	 * what is connected to what: see `liveChanges`. Like a switch thrown during
+	 * a sweep, the change lands at the newest instant, never in the past, and
+	 * everything solved before it stays as it was solved. False sends the caller
+	 * back to a restart, which is still what any other edit gets.
+	 */
+	retuneLive(): boolean {
+		const acquiring = this.acquiring;
+		if (!acquiring || this.analysis !== 'transient' || this.liveNetlist === null) return false;
+		// A single shot that has finished is a captured window, and an edit to
+		// it asks for the window again with the new value in it.
+		if (acquiring.single && !acquiring.sweeping) return false;
+		const next = this.compiled.netlist;
+		if (!next) return false;
+		const changes = liveChanges(this.liveNetlist, next);
+		if (changes === null) return false;
+		const at = acquiring.time;
+		for (const { element, change } of changes) {
+			// A refusal halfway through leaves the run part-changed, which is
+			// fine only because the restart that follows throws it away.
+			if (!acquiring.retune(element, change)) return false;
+		}
+		this.liveNetlist = next;
+		if (changes.length > 0) {
+			this.retunes = [...this.retunes, ...changes.map((c) => ({ ...c, at }))];
+		}
+		return true;
 	}
 
 	/** Rename a component. Returns why it was refused, or null on success. */
@@ -3800,6 +3878,9 @@ class AppState {
 						'No source is driving the sweep. Set a voltage source’s AC drive to 1 to make it the input.'
 					);
 				}
+				// Whatever transient sweep is left over is no longer what is on
+				// screen, and an edit is not to be slipped into it.
+				this.liveNetlist = null;
 				this.acResult = await runFrequencySweep(compiled.netlist, this.acStart, this.acStop);
 				if (this.probes.length === 0) this.autoProbe();
 			} else {
@@ -3808,8 +3889,8 @@ class AppState {
 				// line rather than two dots joined up.
 				const acquiring = new Acquisition(compiled.netlist, this.stopTime / 200, {
 					onChunk: () => this.absorb(),
-					onError: (message) => {
-						this.error = message;
+					onError: (message, failure) => {
+						this.fail(message, failure);
 						this.playing = false;
 					},
 					rate: () => this.playbackRate
@@ -3817,6 +3898,8 @@ class AppState {
 				this.acquiring = acquiring;
 				this.capture = acquiring.capture;
 				this.operations = new Map();
+				this.retunes = [];
+				this.liveNetlist = compiled.netlist;
 				this.mcuNames = devicesOfType(compiled.netlist, 'mcu');
 				this.lcdNames = devicesOfType(compiled.netlist, 'i2c_lcd');
 				this.lcdHistory = new Map();
@@ -3836,7 +3919,10 @@ class AppState {
 				else acquiring.start();
 			}
 		} catch (cause) {
-			this.error = cause instanceof Error ? cause.message : String(cause);
+			this.fail(
+				cause instanceof Error ? cause.message : String(cause),
+				cause instanceof EngineError ? cause.failure : null
+			);
 			if (this.analysis === 'frequency') this.acResult = null;
 			else this.discardRun();
 		} finally {
@@ -4015,6 +4101,8 @@ class AppState {
 		this.capture = null;
 		this.result = null;
 		this.operations = new Map();
+		this.retunes = [];
+		this.liveNetlist = null;
 		this.mcuLogs = {};
 		this.mcuNames = [];
 		this.lcdNames = [];

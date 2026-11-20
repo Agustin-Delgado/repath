@@ -62,9 +62,7 @@ const UNSIMULATED: Readonly<Record<string, string>> = {
 	i2c: 'Nothing answered on the I²C bus: the program sent an address no device on it has, so Wire.endTransmission() returns 2 and Wire.requestFrom() 0. Check the address in the sketch against the module’s (0x27 and 0x3F are the usual two), and that its SDA goes to A4 and its SCL to A5 — on an Uno, the SDA and SCL pins are the same two.',
 	spi: 'The SPI is in slave mode, which is not simulated: from here on no transfer moves SCK or MOSI, and SPI.transfer() waits for ever. Either the program made it a slave, or D10 (SS, PB2) was an input reading low while it was the master — which the chip takes as another master taking the bus, and drops to slave. SPI.begin() makes D10 an output; keep it one, or hold it high.',
 	comparator:
-		'The analog comparator is not simulated yet: its output reads 0 whatever is on its pins, and it never interrupts.',
-	watchdog:
-		'The watchdog is not simulated yet: it never times out, so it neither resets the chip nor interrupts, and the program runs on.'
+		'The analog comparator is not simulated yet: its output reads 0 whatever is on its pins, and it never interrupts.'
 };
 
 /**
@@ -128,6 +126,6 @@ export const MCU_CHIPS: readonly ChipDef[] = [
 		optional: [...PORTS, 'RESET', 'AREF'],
 		boardNames: ARDUINO_NAMES,
 		caveat:
-			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers, serial in and out — type to it in the inspector — the EEPROM, erased at the start of every run, and analogRead(), which measures A0 to A5 against AVCC, AREF or the internal 1.1 V when its conversion samples. I²C reaches only the LCD modules wired to A4 and A5; SPI is a master on the pins, clocking D13 and D11 and reading D12, so a scope or a shift register sees every bit; there is no watchdog, and a sketch that uses it, or SPI as a slave, is told so while it runs. AVCC is the converter's supply and reference, so analogRead() needs it wired, as on the real chip; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
+			"Runs the .hex the Arduino IDE exports: the CPU, the pins and their pull-ups, interrupts, the three timers, serial in and out — type to it in the inspector — the EEPROM, erased at the start of every run, the watchdog, which resets the chip or wakes it from sleep, and analogRead(), which measures A0 to A5 against AVCC, AREF or the internal 1.1 V when its conversion samples. I²C reaches only the LCD modules wired to A4 and A5; SPI is a master on the pins, clocking D13 and D11 and reading D12, so a scope or a shift register sees every bit; a sketch that uses SPI as a slave is told so while it runs. AVCC is the converter's supply and reference, so analogRead() needs it wired, as on the real chip; the clock is set in the inspector rather than by a crystal on PB6 and PB7."
 	}
 ];
