@@ -477,20 +477,21 @@ function drawSegments(
 	bars: ReadonlyArray<readonly [string, readonly [number, number, number, number]]>,
 	width: number
 ): void {
-	if (!view.showLight) return;
 	const rated = ledRating(instance);
 	const { rgb } = ledColour(instance.params.colour);
 	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
 	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
 		for (const [key, [x1, y1, x2, y2]] of bars) {
+			const from = { x: x1, y: y1 };
+			const to = { x: x2, y: y2 };
+			if (drawBurntBar(painter, view, `${instance.id}:${key}`, from, to, width)) continue;
+			if (!view.showLight) continue;
 			const current = view.frame.segmentCurrent.get(`${instance.id}:${key}`) ?? 0;
 			const lit = brightness(current, rated);
 			// Same floor as a single LED: below this it is leakage, and painting it
 			// would leave every bar faintly on and the digit unreadable.
 			if (lit < 0.05) continue;
-			const from = { x: x1, y: y1 };
-			const to = { x: x2, y: y2 };
 			// A soft pass under a hard one: the spill says how hard it is driven and
 			// the bar itself stays the same width, so a dim digit is still a digit.
 			painter.polyline([from, to], { color: ink, width: width * 2, alpha: 0.18 + 0.22 * lit });
@@ -501,6 +502,36 @@ function drawSegments(
 			});
 		}
 	});
+}
+
+/**
+ * One LED of a display or a bar graph that has burnt: the bar charred, with
+ * the flash a single LED goes out with at its middle. Like a single LED's
+ * wreckage it is drawn whether or not the light layer is on, and only the
+ * flash answers to it. True when the bar is burnt, so it is not also lit.
+ */
+function drawBurntBar(
+	painter: Painter,
+	view: DynamicView,
+	key: string,
+	from: Vec2,
+	to: Vec2,
+	width: number
+): boolean {
+	const burn = view.burnouts.get(key);
+	if (!burn || view.time < burn.time) return false;
+	painter.polyline([from, to], { color: CHAR, width });
+	const middle = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+	painter.polyline(
+		[
+			{ x: middle.x - width / 2, y: middle.y - width / 2 },
+			{ x: middle.x + width / 2, y: middle.y + width / 2 }
+		],
+		{ color: CRACK, width: 1.2 }
+	);
+	const progress = (view.time - burn.time) / Math.max(view.stopTime * BURST_SPAN, 1e-15);
+	if (view.showLight && progress <= 1) drawBurst(painter, middle, progress, key);
+	return true;
 }
 
 /**
@@ -584,19 +615,20 @@ function drawLcd(painter: Painter, view: DynamicView, instance: Instance): void 
 
 /** A bar graph: the digit's lighting, one bar at a time. */
 function drawBars(painter: Painter, view: DynamicView, instance: Instance): void {
-	if (!view.showLight) return;
 	const rated = ledRating(instance);
 	const { rgb } = ledColour(instance.params.colour);
 	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
 	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
 		for (const [i, bar] of BARS.entries()) {
-			const current = view.frame.segmentCurrent.get(`${instance.id}:${bar}`) ?? 0;
-			const lit = brightness(current, rated);
-			if (lit < 0.05) continue;
 			const y = (i - 5) * 10;
 			const from = { x: -14, y };
 			const to = { x: 14, y };
+			if (drawBurntBar(painter, view, `${instance.id}:${bar}`, from, to, 5)) continue;
+			if (!view.showLight) continue;
+			const current = view.frame.segmentCurrent.get(`${instance.id}:${bar}`) ?? 0;
+			const lit = brightness(current, rated);
+			if (lit < 0.05) continue;
 			painter.polyline([from, to], { color: ink, width: 9, alpha: 0.18 + 0.22 * lit });
 			painter.polyline([from, to], {
 				color: whiteHot(rgb, Math.max(lit - 0.7, 0) * 0.6),
