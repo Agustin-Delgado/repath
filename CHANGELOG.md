@@ -26,6 +26,7 @@ segment went dark with nothing to say why.
 
 **A 74HC595 with QHS left open no longer warns.** That pin is only for
 chaining a second 595, so with one chip it is meant to be left unconnected.
+[#75](https://github.com/Agustin-Delgado/repath/pull/75)
 
 ---
 
