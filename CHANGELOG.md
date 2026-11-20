@@ -26,7 +26,8 @@ is, and a pulse that is not a position — `analogWrite()` on the same pin, say
 — is ignored. Selected, it says its angle, the last pulse and whether that
 pulse was taken, and what it draws from its supply: a steady 10 mA.
 
-**Servo on a knob** is the Servo library's Knob sketch on an Uno: set the
+**Servo on a knob** does what the Servo library's Knob sketch does, on an
+Uno, with Timer1 making the pulses: set the
 potentiometer's wiper in its inspector and the horn swings to match.
 [#76](https://github.com/Agustin-Delgado/repath/pull/76)
 
