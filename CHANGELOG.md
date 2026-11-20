@@ -11,6 +11,29 @@ early entries point at those instead.
 
 ---
 
+## 20 November 2026 — The watchdog bites
+
+**The chip's watchdog works now.** A sketch that calls `wdt_enable()` and then
+stops calling `wdt_reset()` — because it hung, or because that is how it means
+to restart — is reset when the time-out runs out, 16 ms to 8 s as it asked,
+and starts again from `setup()`. Until now the watchdog was registers and
+nothing more, and the run only warned that it was armed; that warning is gone.
+
+**It can wake a sleeping chip, too.** With the watchdog's interrupt on, a
+sketch that puts the chip to sleep is woken by it every time-out, which is how
+battery projects sleep for seconds at a time. Both at once — an interrupt
+first, a reset the time after if the sketch does not answer — works as the
+datasheet has it.
+
+**A sketch can tell why it restarted.** MCUSR says the watchdog did it, and
+keeps saying so until the sketch clears it. One thing differs from an Uno on
+the bench: no bootloader runs here, so after a watchdog reset the watchdog is
+still on, at 16 ms, as on a bare chip, and a sketch has to switch it off early
+in `setup()` — `MCUSR = 0; wdt_disable();` — or be reset again.
+[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+
+---
+
 ## 20 November 2026 — SPI on the wires, and an LED matrix to drive with it
 
 **The chip's SPI works now.** `SPI.transfer()` clocks the byte out on D13

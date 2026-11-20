@@ -65,6 +65,7 @@ mod spi;
 mod timer;
 mod twi;
 mod usb_serial;
+mod watchdog;
 
 use std::sync::Arc;
 
@@ -640,12 +641,9 @@ impl DigitalDevice for Mcu {
             // start-up delay; see BACKLOG.md.
             self.in_reset = false;
             // A reset is not a power cycle: the EEPROM keeps what it holds,
-            // and the devices on the bus, powered apart, what they were told.
-            let kept = self.committed.eeprom.cells;
-            let bus = self.committed.take_i2c();
-            self.committed = Machine::new(self.flash.clone(), now, self.frequency);
-            self.committed.eeprom.cells = kept;
-            self.committed.set_i2c(bus);
+            // the devices on the bus, powered apart, what they were told, and
+            // MCUSR its flags, EXTRF added.
+            self.committed.reset(now, machine::EXTRF);
             self.committed.set_inputs(levels, now);
             self.sampled = Some(levels);
             self.publish(ctx, now);
