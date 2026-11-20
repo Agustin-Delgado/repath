@@ -20,6 +20,7 @@ import {
 	type ChipDef
 } from './chips';
 import { DEFAULT_CLOCK } from './chips-mcu';
+import { BUZZER_KIND, PIEZO_CAPACITANCE } from './buzzer';
 import {
 	DEFAULT_LCD_ADDRESS,
 	LCD_ADDRESSES,
@@ -1215,6 +1216,36 @@ export const CATALOG: ComponentDef[] = [
 				min: 0,
 				nonZero: true,
 				description: 'At the rated voltage.'
+			}
+		]
+	},
+	{
+		/**
+		 * A passive piezo buzzer: a ceramic disc that sounds at whatever it is
+		 * driven at, which is what `tone()` is for.
+		 *
+		 * Electrically the load a disc is to its pin (`buzzer.ts`); what it is
+		 * playing is read off the logic driving it and drawn on the live layer.
+		 * Marked + on one leg, as the parts are, though a disc has no polarity:
+		 * the mark is the leg that goes to the pin, the other to ground.
+		 */
+		kind: BUZZER_KIND,
+		box: { x: -20, y: -16, w: 40, h: 46 },
+		label: 'Piezo buzzer',
+		group: 'passive',
+		prefix: 'BZ',
+		pins: [analog('plus', -10, 30), analog('minus', 10, 30)],
+		params: [
+			{
+				key: 'capacitance',
+				label: 'Capacitance',
+				unit: 'F',
+				default: PIEZO_CAPACITANCE,
+				min: 0,
+				nonZero: true,
+				advanced: true,
+				description:
+					'Of the disc: 10 to 30 nF for the 12 mm ones in Arduino kits. Sets the current it draws, the average a disc this size takes at 1 kHz.'
 			}
 		]
 	},

@@ -24,6 +24,14 @@ import type { CircuitSettings, SharedCircuit } from './share';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
 import { LCD_HISTORY, sameGlass, type LcdFrame } from './schematic/lcd';
+import {
+	absorbTones,
+	buzzerDevice,
+	buzzerPart,
+	emptyTrack,
+	type BuzzerTrack
+} from './schematic/buzzer';
+import { Speaker } from './sound';
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import { groupFrame, outside } from './schematic/groups';
 import {
@@ -554,6 +562,18 @@ class AppState {
 	 */
 	lcdHistory = new Map<string, LcdFrame[]>();
 	private lcdNames: string[] = [];
+	/**
+	 * What each buzzer has played during this run, by name. Not reactive, for
+	 * the same reason as `lcdHistory`; a readout follows `playbackTime`.
+	 */
+	buzzerTracks = new Map<string, BuzzerTrack>();
+	private buzzerNames: string[] = [];
+	/** Plays the buzzers. Silent until `setSound(true)`, which only a click may call. */
+	readonly speaker = new Speaker();
+	/** Whether the buzzers are being played aloud. */
+	soundOn = $state(false);
+	/** When the run last moved, by the wall clock, in milliseconds; null while it is not moving. */
+	private movedAt: number | null = null;
 	error = $state<string | null>(null);
 	/**
 	 * Whether results are being kept up to date with the circuit.
@@ -696,6 +716,29 @@ class AppState {
 	stop(): void {
 		this.playing = false;
 		this.acquiring?.stop();
+		this.hush();
+	}
+
+	/**
+	 * Turn the buzzers' sound on or off. On has to come from a click: a
+	 * browser lets a page start making sound only then. False if this browser
+	 * cannot play it.
+	 */
+	async setSound(on: boolean): Promise<boolean> {
+		if (!on) {
+			this.speaker.disable();
+			this.soundOn = false;
+			return true;
+		}
+		const ok = await this.speaker.enable();
+		this.soundOn = ok;
+		return ok;
+	}
+
+	/** Stop the speaker where it is: the instant stopped moving. */
+	private hush(): void {
+		this.movedAt = null;
+		this.speaker.silence();
 	}
 
 	/**
@@ -3784,6 +3827,8 @@ class AppState {
 				this.mcuNames = devicesOfType(compiled.netlist, 'mcu');
 				this.lcdNames = devicesOfType(compiled.netlist, 'i2c_lcd');
 				this.lcdHistory = new Map();
+				this.buzzerNames = devicesOfType(compiled.netlist, 'buzzer').map(buzzerPart);
+				this.buzzerTracks = new Map();
 				this.held = null;
 				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
@@ -3813,12 +3858,16 @@ class AppState {
 		this.result = capture.run();
 		this.readMcus(acquiring);
 		this.readDisplays(acquiring);
+		this.readBuzzers(acquiring);
 		// While the sweep is going, the instant on the drawing is the newest one
 		// there is. Stopped, it stays where it was left, to be measured.
 		if (acquiring.sweeping) {
+			const from = this.playbackTime;
 			this.playbackTime = capture.now;
+			this.sound(from, capture.now);
 			return;
 		}
+		this.hush();
 		const ended = this.playing;
 		this.playing = false;
 		// A single sweep that has finished is a window with two ends, which is the
@@ -3896,8 +3945,36 @@ class AppState {
 		}
 	}
 
+	/**
+	 * Add each buzzer's new tones to its track. Polled once a piece of the
+	 * run, like the displays; a tone is placed where the engine timed its
+	 * edges, not where the poll found it.
+	 */
+	private readBuzzers(acquiring: Acquisition): void {
+		for (const name of this.buzzerNames) {
+			const track = this.buzzerTracks.get(name) ?? emptyTrack();
+			const state = acquiring.buzzerState(buzzerDevice(name), track.finished);
+			if (!state) continue;
+			this.buzzerTracks.set(name, absorbTones(track, state));
+		}
+	}
+
+	/** Play the stretch from `from` to `to` the run has just covered. */
+	private sound(from: number, to: number): void {
+		const now = performance.now();
+		const wall = this.movedAt === null ? 0 : (now - this.movedAt) / 1000;
+		this.movedAt = now;
+		if (this.soundOn && this.buzzerNames.length > 0) {
+			this.speaker.play(this.buzzerTracks, from, to, wall);
+		}
+	}
+
 	private discardRun(): void {
 		this.runGeneration++;
+		this.speaker.release();
+		this.movedAt = null;
+		this.buzzerNames = [];
+		this.buzzerTracks = new Map();
 		this.acquiring?.close();
 		this.acquiring = null;
 		this.capture = null;

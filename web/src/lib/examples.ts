@@ -115,6 +115,62 @@ const BLINK_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: s
 	[[0xcfe2], 'rjmp loop']
 ];
 
+/**
+ * The program the buzzer example runs, assembled by hand like the blink's.
+ *
+ * A hardware tone: Timer2 in CTC mode with OC2A — the Uno's pin 11 — set to
+ * toggle on every compare match, so the pin is a square wave at 16 MHz / 64 /
+ * 2 / (OCR2A + 1), 125 000 / (OCR2A + 1) Hz, with no interrupt in the way.
+ * Each note writes its count to OCR2A, zeroes the timer and connects OC2A; at
+ * its end OC2A is let go, which hands the pin back to PORTB3, low, for 50 ms
+ * of silence before the next. A rest only waits. The wait is 39 998 turns of a
+ * four-cycle loop and six cycles more, 10 ms less a quarter of a microsecond,
+ * a unit.
+ *
+ * The tune is the first line of Twinkle, Twinkle, Little Star, in the fifth
+ * octave, where the counts land within five cents of every note: C 238
+ * (523.0 Hz), D 212 (586.9), E 189 (657.9), F 178 (698.3), G 158 (786.2), A
+ * 141 (880.3). A beat is 250 ms of note and 50 of gap, a half note 550 and 50,
+ * and the line ends on 700 ms of rest before it starts again.
+ */
+const MELODY_PROGRAM: ReadonlyArray<readonly [words: readonly number[], source: string]> = [
+	[[0xe008], 'ldi  r16, 0x08        ; D11 (PB3) an output, low'],
+	[[0xb904], 'out  DDRB, r16'],
+	[[0xe004], 'ldi  r16, 0x04        ; Timer2 counts at 16 MHz / 64'],
+	[[0x9300, 0x00b1], 'sts  TCCR2B, r16'],
+	[[0x2733], 'clr  r19'],
+	[[0xe4e6], 'restart: ldi r30, lo8(melody)'],
+	[[0xe0f0], 'ldi  r31, hi8(melody)'],
+	[[0x9115], "next: lpm r17, Z+     ; the note's count; 0 for a rest"],
+	[[0x9125], 'lpm  r18, Z+          ; how long, in 10 ms; 0 to start over'],
+	[[0x2322], 'tst  r18'],
+	[[0xf3d1], 'breq restart'],
+	[[0x2311], 'tst  r17'],
+	[[0xf039], 'breq rest'],
+	[[0x9310, 0x00b3], 'sts  OCR2A, r17'],
+	[[0x9330, 0x00b2], 'sts  TCNT2, r19       ; from the bottom'],
+	[[0xe402], 'ldi  r16, 0x42        ; CTC, OC2A toggling on each match'],
+	[[0x9300, 0x00b0], 'sts  TCCR2A, r16'],
+	[[0xd006], 'rest: rcall wait'],
+	[[0xe002], 'ldi  r16, 0x02        ; CTC, OC2A let go: the pin low'],
+	[[0x9300, 0x00b0], 'sts  TCCR2A, r16'],
+	[[0xe025], 'ldi  r18, 5           ; 50 ms between notes'],
+	[[0xd001], 'rcall wait'],
+	[[0xcfec], 'rjmp next'],
+	[[0xe38e], 'wait: ldi r24, lo8(39998)'],
+	[[0xe99c], 'ldi  r25, hi8(39998)'],
+	[[0x9701], 'tick: sbiw r24, 1'],
+	[[0xf7f1], 'brne tick'],
+	[[0x952a], 'dec  r18'],
+	[[0xf7d1], 'brne wait'],
+	[[0x9508], 'ret'],
+	// The tune, a count and a length a note: the count in the low byte of
+	// each word, which is the one `lpm` reads first.
+	[[0x19ee, 0x19ee, 0x199e, 0x199e, 0x198d, 0x198d, 0x379e], 'melody: C C G G A A G-'],
+	[[0x19b2, 0x19b2, 0x19bd, 0x19bd, 0x19d4, 0x19d4, 0x37ee], 'F F E E D D C-'],
+	[[0x4600, 0x0000], 'rest 700 ms, then start over']
+];
+
 export const EXAMPLES: Example[] = [
 	{
 		id: 'rc-lowpass',
@@ -866,6 +922,35 @@ export const EXAMPLES: Example[] = [
 					// RESET, on the power header, through a button to ground.
 					[440, 610, 440, 660],
 					[500, 660, 530, 660]
+				]
+			)
+	},
+
+	{
+		id: 'uno-buzzer',
+		name: 'Arduino Uno melody',
+		description:
+			"A piezo buzzer on pin 11 playing the first line of Twinkle, Twinkle, Little Star, over and over. The program drives the pin straight from Timer2, toggling it on every compare match — what tone() does with an interrupt, done in hardware — so each note is a square wave at the frequency the timer's count gives: C 523 Hz up to A 880 Hz. The buzzer shows the pitch it is being driven at while it sounds; turn Sound on below the drawing to hear it. A 4-second window at 1× is real time, so the tune plays at its tempo; at 0.25× each note keeps its pitch and lasts four times as long. The probe on pin 11 shows the square wave on the scope.",
+		stopTime: 4,
+		build: () =>
+			build(
+				[
+					{
+						kind: 'ic:ArduinoUno',
+						name: 'U1',
+						x: 500,
+						y: 400,
+						params: { firmware: intelHex(MELODY_PROGRAM.flatMap(([words]) => words)) }
+					},
+					{ kind: 'buzzer', name: 'BZ1', x: 450, y: 110 },
+					{ kind: 'ground', name: 'GND1', x: 500, y: 150 },
+					{ kind: 'probe', name: 'D11', x: 440, y: 170 }
+				],
+				[
+					// Pin 11 up to the buzzer's + leg, its other leg to ground.
+					[440, 190, 440, 170],
+					[440, 170, 440, 140],
+					[460, 140, 500, 140]
 				]
 			)
 	},

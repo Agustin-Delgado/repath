@@ -13,6 +13,7 @@ import { contactControl, restingContact } from './contacts';
 import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, pointKey } from './model';
 import { LCD_KIND, lcdAddress } from './lcd';
+import { BUZZER_KIND, PIEZO_CAPACITANCE, buzzerDevice, piezoResistance } from './buzzer';
 import {
 	analogTerminals,
 	mcuBlock,
@@ -1251,6 +1252,33 @@ function compileFresh(
 					b: analogOf(instance, 'b'),
 					resistance: (volts * volts) / watts
 				});
+				break;
+			}
+			// The disc's load, and the engine's ear on what drives it (`buzzer.ts`). The
+			// ear listens to the logic each leg is driven by; a buzzer driven from
+			// the analog side — a 555, a source — has its + leg read through the
+			// logic thresholds instead, against ground.
+			case BUZZER_KIND: {
+				const plus = analogOf(instance, 'plus');
+				const minus = analogOf(instance, 'minus');
+				components.push({
+					type: 'resistor',
+					name,
+					a: plus,
+					b: minus,
+					resistance: piezoResistance(num(instance, 'capacitance', PIEZO_CAPACITANCE))
+				});
+				const logic = (pin: string) => {
+					const index = connectivity.netOfPin.get(pinKey(instance.id, pin));
+					return (index !== undefined && names.get(index)?.digital) || null;
+				};
+				let driving = logic('plus');
+				const returning = logic('minus');
+				if (!driving && !returning && plus !== 'gnd') {
+					driving = `${instance.id}_sense`;
+					chipBridges.push({ direction: 'to_digital', name: `${name}:sense`, node: plus, net: driving, delay: 0 });
+				}
+				devices.push({ type: 'buzzer', name: buzzerDevice(name), plus: driving, minus: returning });
 				break;
 			}
 			case 'switch':

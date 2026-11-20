@@ -8,6 +8,7 @@
 
 import init, { Simulation, runFrequencySweep as sweep, version } from './wasm/repath.js';
 import type { LcdFrame } from './schematic/lcd';
+import type { BuzzerState } from './schematic/buzzer';
 
 export type LogicState = 'low' | 'high' | 'unknown' | 'highz';
 
@@ -332,6 +333,16 @@ export class LiveRun {
 	sendSerial(name: string, bytes: Uint8Array, baud: number, at: number): boolean {
 		if (this.freed) return false;
 		return this.simulation.sendSerial(name, bytes, Math.max(1, Math.round(baud)), at);
+	}
+
+	/**
+	 * What a buzzer has been driven at: the tones finished from the `from`-th
+	 * of the run on, how many there have been, and the one still going. Null
+	 * when there is no buzzer by that name.
+	 */
+	buzzerState(name: string, from: number): BuzzerState | null {
+		if (this.freed) return null;
+		return JSON.parse(this.simulation.buzzerState(name, from)) as BuzzerState | null;
 	}
 
 	/**

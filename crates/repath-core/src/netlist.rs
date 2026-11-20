@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::avr::{self, AnalogPins, Mcu, Pin, PinNets, UsbSerial};
 use crate::bridge::LogicFamily;
+use crate::buzzer::Buzzer;
 use crate::circuit::Circuit;
 use crate::digital::{
     AsyncInputs, Clock, DFlipFlop, Gate, GateKind, Logic, LogicSource, Memory, Programming,
@@ -479,6 +480,15 @@ pub enum Device {
         #[serde(default)]
         scl: Option<String>,
     },
+    /// A passive piezo buzzer's ear: the tones on the logic nets driving its
+    /// legs. See `buzzer::Buzzer`; the disc's load is among the components.
+    Buzzer {
+        name: String,
+        #[serde(default)]
+        plus: Option<String>,
+        #[serde(default)]
+        minus: Option<String>,
+    },
 }
 
 /// Whether `net` is one of the nets a microcontroller's `pin` reaches.
@@ -501,7 +511,8 @@ impl Device {
             | Device::LogicSource { name, .. }
             | Device::Mcu { name, .. }
             | Device::UsbSerial { name, .. }
-            | Device::I2cLcd { name, .. } => name,
+            | Device::I2cLcd { name, .. }
+            | Device::Buzzer { name, .. } => name,
         }
     }
 }
@@ -993,6 +1004,11 @@ impl Netlist {
                     let target = Target::Lcd(LcdModule::new(name, *address));
                     c.add_device(Box::new(i2c::Unattached { target }));
                 }
+            }
+            Device::Buzzer { name, plus, minus } => {
+                let plus = plus.as_ref().map(|n| c.net(n));
+                let minus = minus.as_ref().map(|n| c.net(n));
+                c.add_device(Box::new(Buzzer::new(name, plus, minus)));
             }
         }
         Ok(())

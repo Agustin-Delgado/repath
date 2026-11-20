@@ -51,6 +51,7 @@ import {
 	type WireSegment
 } from './model';
 import { instanceBounds, instancePins } from './scene';
+import { BUZZER_KIND, noteName, toneAt, type BuzzerTrack } from './buzzer';
 import {
 	DOT_SIZE,
 	LCD_GLASS,
@@ -83,6 +84,8 @@ export interface DynamicView {
 	burnouts: ReadonlyMap<string, Burnout>;
 	/** What each LCD module showed during the run, by name, oldest first. */
 	displays: ReadonlyMap<string, readonly LcdFrame[]>;
+	/** What each buzzer played during the run, by name. */
+	buzzers: ReadonlyMap<string, BuzzerTrack>;
 	/**
 	 * Nets whose voltage is an artifact rather than a measurement.
 	 *
@@ -230,6 +233,7 @@ export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect):
 		else if (instance.kind === 'bargraph') drawBars(painter, view, instance);
 		else if (instance.kind === 'lamp') drawLamp(painter, view, instance);
 		else if (instance.kind === LCD_KIND) drawLcd(painter, view, instance);
+		else if (instance.kind === BUZZER_KIND) drawBuzzer(painter, view, instance);
 	}
 }
 
@@ -536,7 +540,7 @@ function drawFuse(painter: Painter, view: DynamicView, instance: Instance): void
 }
 
 /** Parts that give off light, and so are drawn again once something flows. */
-const LIT = new Set(['led', 'display7', 'display7x4', 'bargraph', 'lamp', 'fuse', LCD_KIND]);
+const LIT = new Set(['led', 'display7', 'display7x4', 'bargraph', 'lamp', 'fuse', LCD_KIND, BUZZER_KIND]);
 
 /**
  * The glass of an LCD module, as the run had it at the playback instant.
@@ -580,6 +584,39 @@ function drawLcd(painter: Painter, view: DynamicView, instance: Instance): void 
 		painter.fillPath(overdriven, { color: blocks, alpha: 0.85 });
 		painter.fillPath(on, { color: ink });
 	});
+}
+
+/** The colour of a buzzer's sound on the drawing. */
+const SOUND = '#ffd166';
+
+/**
+ * A buzzer, while it is sounding at the playback instant: waves off both
+ * sides of the dome, and the pitch above it — the frequency, and the note
+ * when it is one. Not gated on `showLight`, for the reason the LCD is not:
+ * the sound is what the part is for.
+ */
+function drawBuzzer(painter: Painter, view: DynamicView, instance: Instance): void {
+	const tone = toneAt(view.buzzers.get(instance.name), view.time);
+	if (!tone) return;
+	const waves = new Path2D();
+	for (const radius of [24, 30]) {
+		const sweep = Math.PI / 5;
+		waves.moveTo(Math.cos(-sweep * 1.6) * radius, 6 + Math.sin(-sweep * 1.6) * radius);
+		waves.arc(0, 6, radius, -sweep * 1.6, -sweep * 0.4);
+		waves.moveTo(Math.cos(Math.PI + sweep * 0.4) * radius, 6 + Math.sin(Math.PI + sweep * 0.4) * radius);
+		waves.arc(0, 6, radius, Math.PI + sweep * 0.4, Math.PI + sweep * 1.6);
+	}
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		painter.strokePath(waves, { color: SOUND, width: 2, cap: 'round', alpha: 0.85 });
+	});
+	const size = Math.min(11 * painter.viewport.scale, 14);
+	const above = rotatePoint(0, -24, instance.rotation);
+	const note = noteName(tone.frequency);
+	painter.text(
+		`${formatWithUnit(tone.frequency, 'Hz', 3)}${note ? ` · ${note}` : ''}`,
+		{ x: instance.x + above.x, y: instance.y + above.y },
+		{ size, color: SOUND, baseline: 'bottom', minSize: 6 }
+	);
 }
 
 /** A bar graph: the digit's lighting, one bar at a time. */

@@ -29,6 +29,7 @@
 
 pub mod avr;
 pub mod bridge;
+pub mod buzzer;
 pub mod circuit;
 pub mod complex;
 pub mod digital;

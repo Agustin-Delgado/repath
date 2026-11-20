@@ -361,6 +361,43 @@ impl Simulation {
         });
         serde_json::to_string(&state).map_err(to_js_error)
     }
+
+    /// What a buzzer has been driven at, as JSON, or `null` if there is none
+    /// by that name: `{ tones, finished, open }`.
+    ///
+    /// `tones` is every tone finished from the `from`-th of the run on, as
+    /// `{ start, end, frequency }` in seconds and hertz, so a caller polling a
+    /// live run asks only for what it has not seen; `finished` is how many
+    /// there have been in all, the `from` to ask with next. `open` is the
+    /// tone still going on, in the same shape: sounding up to its `end`, and
+    /// silent after it unless a later poll says it went on.
+    #[wasm_bindgen(js_name = buzzerState)]
+    pub fn buzzer_state(&self, name: &str, from: usize) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct ToneOut {
+            start: f64,
+            end: f64,
+            frequency: f64,
+        }
+        #[derive(Serialize)]
+        struct State {
+            tones: Vec<ToneOut>,
+            finished: usize,
+            open: Option<ToneOut>,
+        }
+        let out = |tone: &repath_core::buzzer::Tone| ToneOut {
+            start: tone.start,
+            end: tone.end,
+            frequency: tone.frequency(),
+        };
+        let state =
+            repath_core::buzzer::find_buzzer(&self.circuit.digital, name).map(|buzzer| State {
+                tones: buzzer.tones_from(from).iter().map(out).collect(),
+                finished: buzzer.finished(),
+                open: buzzer.open().as_ref().map(out),
+            });
+        serde_json::to_string(&state).map_err(to_js_error)
+    }
 }
 
 /// What a run, or one piece of one, has to say for itself.

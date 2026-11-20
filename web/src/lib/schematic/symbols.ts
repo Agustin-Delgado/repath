@@ -414,6 +414,17 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
+	// The usual buzzer: a dome on a flat base, its legs out of the bottom, and
+	// an arc inside it for the disc. The + is the leg that goes to the pin.
+	buzzer: {
+		shapes: [
+			path('M-18 6 A18 18 0 0 1 18 6 Z'),
+			path('M-10 6 A10 10 0 0 1 10 6'),
+			path('M-10 6 V30 M10 6 V30')
+		],
+		labels: [{ x: -14, y: 22, text: '+', anchor: 'end', size: 10 }]
+	},
+
 	// Two cells, long plate positive. Two rather than one because one cell is
 	// how a single 1.5 V cell is drawn, and a battery is the stack.
 	battery: {

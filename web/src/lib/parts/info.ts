@@ -65,6 +65,10 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		description: 'Filament bulb, rated in volts and watts, that glows with the power in it',
 		keywords: ['bulb', 'light', 'incandescent', 'filament', 'indicator', 'torch']
 	},
+	buzzer: {
+		description: 'Passive piezo disc that sounds at the frequency it is driven at: tone(), noTone()',
+		keywords: ['piezo', 'buzzer', 'speaker', 'beeper', 'sound', 'tone', 'notone', 'melody', 'audio', 'beep', 'transducer']
+	},
 	port: {
 		description: 'A terminal of a block: wire a pin to it and the box gets a pin',
 		keywords: ['terminal', 'pin', 'io', 'label', 'net']

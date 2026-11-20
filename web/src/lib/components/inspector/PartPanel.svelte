@@ -3,6 +3,7 @@
 	import { Button } from '$lib/ui';
 	import { mcuBlock } from '$lib/schematic/chips';
 	import { ledRating } from '$lib/schematic/led';
+	import { BUZZER_KIND } from '$lib/schematic/buzzer';
 	import { pinKey } from '$lib/schematic/nets';
 	import {
 		chipOf,
@@ -17,6 +18,7 @@
 	import BlockPanel from './BlockPanel.svelte';
 	import NameField from './NameField.svelte';
 	import McuPanel from './McuPanel.svelte';
+	import BuzzerPanel from './BuzzerPanel.svelte';
 	import MemoryContents from './MemoryContents.svelte';
 	import ParamField from './ParamField.svelte';
 	import SpiceCard from './SpiceCard.svelte';
@@ -188,6 +190,10 @@
 		{#key instance.id}
 			<McuPanel {instance} />
 		{/key}
+	{/if}
+
+	{#if instance.kind === BUZZER_KIND}
+		<BuzzerPanel {instance} />
 	{/if}
 
 	{#if takesCard}

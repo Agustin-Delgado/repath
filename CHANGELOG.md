@@ -11,6 +11,29 @@ early entries point at those instead.
 
 ---
 
+## 20 November 2026 — A buzzer you can hear
+
+**The piezo buzzer is in the palette,** under Passive, found by piezo, buzzer,
+tone or speaker. Its + leg goes to a pin, the other to ground, the way the
+two-legged ones in Arduino kits are wired.
+
+**It shows what it is being played at.** While a sketch's `tone()` drives it —
+or a pin toggled by hand, or a PWM output — the drawing puts the frequency and
+the note over it, 523 Hz · C5, and the inspector says the same for the instant
+on the screen. Between notes it says nothing, and `noTone()` is silence.
+
+**Turn Sound on and you hear it.** The button sits beside the speeds when the
+circuit has a buzzer, and in the buzzer's inspector. It is off until you click
+it, as a page has to be. Each note keeps the pitch the circuit drives it at;
+the speed sets how long it lasts, so 1:1 plays a tune at its tempo and 0.25×
+holds every note four times as long.
+
+**There is an example to start from:** an Uno playing Twinkle, Twinkle, Little
+Star on pin 11.
+[#75](https://github.com/Agustin-Delgado/repath/pull/75)
+
+---
+
 ## 13 November 2026 — A 16×2 LCD for the microcontroller to talk to
 
 **The I²C character display is in the palette,** under Semiconductors with the
