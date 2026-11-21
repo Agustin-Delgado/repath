@@ -1,5 +1,6 @@
 import type { App } from '$lib/state.svelte';
 import { toasts } from '$lib/ui/toast/toasts.svelte';
+import { linkWarning } from '$lib/share';
 
 /**
  * What can be done to the drawing as a whole — save it, open one, hand over
@@ -87,9 +88,11 @@ export async function shareAndReport(app: App, share: () => Promise<string>): Pr
 		app.notice = `The link could not be made. ${cause instanceof Error ? cause.message : String(cause)}`;
 		return;
 	}
+	const warning = linkWarning(url);
 	try {
 		await navigator.clipboard.writeText(url);
-		toasts.show('Link copied — it holds the whole circuit');
+		if (warning) app.notice = `Link copied. ${warning}`;
+		else toasts.show('Link copied — it holds the whole circuit');
 	} catch {
 		// Clipboard access can be refused. The link goes where it can be copied
 		// by hand, since it is no longer put in the address bar.

@@ -11,6 +11,33 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Imported parts as their files describe them
+
+**A pasted vendor model behaves like it does in SPICE.**
+- **P-channel transistors.** A P-channel MOSFET card writes its threshold as a negative number, the way SPICE does. Those parts used to come in as transistors that were always on. Now they turn on where the datasheet says.
+- **Parameters a card leaves out** take SPICE's defaults, not the values of this editor's own diode, transistor and MOSFET. A classic op-amp macromodel's clamp diodes used to drop 1.75 times the voltage they should.
+- **Node names** inside a subcircuit are case-insensitive, as in SPICE.
+- **A comment between two lines of a card** no longer loses the line after it.
+- **Nodes named `sin`, `exp` or `value`** are read as nodes, instead of the whole line being refused.
+
+**Readings and links.**
+- **Rise time** is measured on the real edge, not from a smaller pulse just before it.
+- **A folded burst** reports its true frequency, which used to be off by one edge.
+- **Value fields** show 999.96 as 1 k, matching the label.
+- **A link that would be too long** for chat apps now says so when you copy it.
+- **A deliberately crafted link** can no longer hang the tab while it unpacks.
+
+**Clear refusals instead of odd results.**
+- **Part names.** A part named like one of the converters repath adds itself (`BAD3`) no longer stops the drawing compiling.
+- **Error highlights.** An error that has nothing to do with the solve no longer highlights the parts of an old failure.
+- **Non-physical values.** A temperature at or below absolute zero, a negative resistance, capacitance or inductance, or a negative MOSFET threshold is refused with the reason, instead of being run as something else.
+- **Recorded steps.** "Copy the steps taken" now replays renames to names with spaces in them.
+- **Live runs.** A live run that cannot use a frame's results now stops and says why, instead of looking stuck.
+
+[#PR](https://github.com/Agustin-Delgado/repath/pulls)
+
+---
+
 ## 20 November 2026 — Saving from inside a block keeps the whole circuit
 
 **Save and Share work wherever you are.** With a block open for editing, File

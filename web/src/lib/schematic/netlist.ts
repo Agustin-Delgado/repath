@@ -2009,6 +2009,20 @@ function compileFresh(
 
 	// ---- automatic bridges ----------------------------------------------
 	const bridges: unknown[] = [...chipBridges];
+	// A bridge is named after its net, and a part can be named anything —
+	// `BAD3` included, which stopped the whole drawing compiling with "two
+	// components are both named" about a component nobody placed. Names already
+	// taken are stepped past rather than refused.
+	const taken = new Set<string>();
+	for (const list of [components, devices, chipBridges]) {
+		for (const entry of list) taken.add((entry as { name: string }).name);
+	}
+	const fresh = (base: string): string => {
+		let name = base;
+		for (let n = 2; taken.has(name); n++) name = `${base}_${n}`;
+		taken.add(name);
+		return name;
+	};
 	for (const net of connectivity.nets) {
 		const entry = names.get(net.index)!;
 		if (!entry.analog || !entry.digital) continue;
@@ -2016,7 +2030,7 @@ function compileFresh(
 		if (net.hasDigitalOutput) {
 			bridges.push({
 				direction: 'to_analog',
-				name: `BDA${net.index}`,
+				name: fresh(`BDA${net.index}`),
 				net: entry.digital,
 				node: entry.analog
 			});
@@ -2030,7 +2044,7 @@ function compileFresh(
 		if (net.hasDigitalInput && !undefinedNets.has(net.index)) {
 			bridges.push({
 				direction: 'to_digital',
-				name: `BAD${net.index}`,
+				name: fresh(`BAD${net.index}`),
 				node: entry.analog,
 				net: entry.readBack ?? entry.digital,
 				delay: 0
