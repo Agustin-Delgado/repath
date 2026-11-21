@@ -161,13 +161,13 @@
 					spellcheck="false"
 					class="h-11 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-fg outline-none placeholder:text-muted"
 				/>
-				<kbd class="rounded border border-border px-1.5 font-mono text-[0.6rem] leading-4 text-muted">Esc</kbd>
+				<kbd class="rounded border border-border px-1.5 font-mono text-3xs leading-4 text-muted">Esc</kbd>
 			</label>
 
 			<div id="command-rows" role="listbox" aria-label="Results" class="min-h-0 flex-1 overflow-y-auto p-1.5">
 				{#each rows as row, i (row.key)}
 					{#if i === 0 || heading(rows[i - 1]) !== heading(row)}
-						<div class="px-2 pt-2 pb-1 text-[0.62rem] font-semibold tracking-[0.08em] text-muted uppercase">
+						<div class="px-2 pt-2 pb-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
 							{heading(row)}
 						</div>
 					{/if}
@@ -186,7 +186,7 @@
 							<PartIcon kind={row.part.kind} class="h-[22px] w-[30px]" />
 							<div class="flex min-w-0 flex-1 flex-col">
 								<span class="truncate text-ui">Place {row.part.label}</span>
-								<span class="truncate text-[0.64rem] text-muted">
+								<span class="truncate text-3xs text-muted">
 									{sectionLabel(row.part.section)}{row.part.description ? ` · ${row.part.description}` : ''}
 								</span>
 							</div>
@@ -194,11 +194,11 @@
 							<div class="flex min-w-0 flex-1 flex-col">
 								<span class="truncate text-ui">{row.command.label}</span>
 								{#if row.command.description}
-									<span class="truncate text-[0.64rem] text-muted">{row.command.description}</span>
+									<span class="truncate text-3xs text-muted">{row.command.description}</span>
 								{/if}
 							</div>
 							{#if row.command.shortcut}
-								<kbd class="shrink-0 font-mono text-[0.62rem] text-muted">{row.command.shortcut}</kbd>
+								<kbd class="shrink-0 font-mono text-3xs text-muted">{row.command.shortcut}</kbd>
 							{/if}
 						{/if}
 						{#if i === active}<CornerDownLeft class="size-3.5 shrink-0 text-muted" />{/if}

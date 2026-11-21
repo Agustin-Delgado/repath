@@ -18,7 +18,7 @@
 	const parts = $derived(app.schematic.instances.filter((i) => i.kind !== 'port').length);
 	const wires = $derived(app.schematic.wires.length);
 
-	const kbd = 'rounded border border-border px-1 font-mono text-[0.6rem] text-strong';
+	const kbd = 'rounded border border-border px-1 font-mono text-3xs text-strong';
 </script>
 
 <div class="flex h-full min-h-0 w-full min-w-0 flex-col gap-3 overflow-y-auto p-3">
@@ -40,10 +40,10 @@
 		</p>
 		<div class="flex gap-1.5">
 			<Button class="flex-1" onclick={() => app.ungroupSelection()}>
-				<Ungroup /> Ungroup <kbd class="font-mono text-[0.6rem] text-muted">U</kbd>
+				<Ungroup /> Ungroup <kbd class="font-mono text-3xs text-muted">U</kbd>
 			</Button>
 			<Button class="flex-1" onclick={() => app.boxSelection()}>
-				<Boxes /> Box up <kbd class="font-mono text-[0.6rem] text-muted">B</kbd>
+				<Boxes /> Box up <kbd class="font-mono text-3xs text-muted">B</kbd>
 			</Button>
 		</div>
 	{:else if instance}
@@ -54,10 +54,10 @@
 		<h3 class={sectionTitle}>{count} components selected</h3>
 		<div class="flex gap-1.5">
 			<Button class="flex-1" onclick={() => app.groupSelection()}>
-				<Group /> Group <kbd class="font-mono text-[0.6rem] text-muted">G</kbd>
+				<Group /> Group <kbd class="font-mono text-3xs text-muted">G</kbd>
 			</Button>
 			<Button class="flex-1" onclick={() => app.boxSelection()}>
-				<Boxes /> Box up <kbd class="font-mono text-[0.6rem] text-muted">B</kbd>
+				<Boxes /> Box up <kbd class="font-mono text-3xs text-muted">B</kbd>
 			</Button>
 		</div>
 		<!-- Keys are no help on a touch screen; the phone bar has Rotate and Delete. -->
@@ -75,11 +75,11 @@
 			<div class="grid grid-cols-2 gap-1.5">
 				<div class="rounded-md border border-border bg-canvas px-2 py-1.5">
 					<div class="font-mono text-base text-fg">{parts}</div>
-					<div class="text-[0.64rem] text-muted">{parts === 1 ? 'part' : 'parts'}</div>
+					<div class="text-3xs text-muted">{parts === 1 ? 'part' : 'parts'}</div>
 				</div>
 				<div class="rounded-md border border-border bg-canvas px-2 py-1.5">
 					<div class="font-mono text-base text-fg">{wires}</div>
-					<div class="text-[0.64rem] text-muted">{wires === 1 ? 'wire' : 'wires'}</div>
+					<div class="text-3xs text-muted">{wires === 1 ? 'wire' : 'wires'}</div>
 				</div>
 			</div>
 			<p class={hint}>Select a part to edit its values.</p>

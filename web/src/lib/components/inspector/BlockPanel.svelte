@@ -91,7 +91,7 @@
 	<div class="flex flex-wrap gap-1.5">
 		<Button onclick={() => app.enterBlock(boxed.block.id)}>Edit inside</Button>
 		<Button onclick={() => app.unboxSelection()}>
-			Open up <kbd class="font-mono text-[0.6rem] text-muted">U</kbd>
+			Open up <kbd class="font-mono text-3xs text-muted">U</kbd>
 		</Button>
 		{#if copies > 1}
 			<Button

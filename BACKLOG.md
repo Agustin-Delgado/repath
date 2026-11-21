@@ -74,7 +74,6 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Animation | Speed is scaled to the 90th percentile of what is on screen, not the peak | A spike ten times everything else is drawn at full speed rather than flattening the rest of the circuit to a standstill |
 | Canvas | Layer-level invalidation, no dirty rectangles | A full-screen repaint per interaction on the affected layer |
 | Canvas | Labels are placed per part, with no collision avoidance between them | Two parts a symbol's width apart can have a name and a reading land on each other |
-| Editor | No touch or pen input | Unusable on a tablet |
 | Editor | Deleting heals a gap only for a two-pin part wired on both sides | Anything with three pins leaves stubs, since no pairing is obviously right |
 | Editor | History still stores whole-document snapshots | Bounded now (100 entries or 8 MB, whichever comes first) but not a delta log |
 | Router | Widening the search box is a fixed ladder (12 then 40 cells) | An obstacle wider than 40 cells is still routed through rather than around |
@@ -117,7 +116,8 @@ because each step is what makes the next one worth having:
 5. **Measurement.** Parameter sweep, noise, Fourier and THD. *(The scope is
    mostly there: gain and position per channel, split scales, two cursors with
    deltas, and a panel that reads off frequency, duty, RMS, rise time and
-   overshoot. A trigger and a timebase are what it still lacks.)*
+   overshoot, and a timebase turned from the header, the wheel or a pinch. A
+   trigger is what it still lacks.)*
 
 ## Must
 
@@ -151,8 +151,9 @@ because each step is what makes the next one worth having:
 
 ### Editor
 
-- [ ] **Touch and pen input.** Pointer events are already used throughout, so this
-      is mostly gesture design: pinch-zoom, two-finger pan, long-press menu.
+- [x] **Touch and pen input.** Pinch to zoom and two-finger pan on the drawing and
+      the scope, the palette and inspector as drawers, and a row of buttons for
+      the keys a phone does not have (#21).
 - [ ] **Keyboard-only editing and screen reader support.** Currently the canvas is
       opaque to assistive technology. At minimum: tab through components, announce
       selection, edit values from the inspector without a mouse.
@@ -252,11 +253,12 @@ because each step is what makes the next one worth having:
       it cannot do is connect anything.
 - [ ] **Buses** for digital, with `d[7:0]` notation.
 - [ ] **Align and distribute** on a multi-selection.
-- [ ] **Component search** in the palette; it will not stay small.
-- [ ] **A trigger and a timebase**, so a repeating waveform holds still instead
-      of being read from wherever the run happened to start, and so a corner of it
-      can be zoomed into. Vertical is done — gain, position, split scales, two
-      cursors and a measure panel; horizontal is not.
+- [x] **Component search** in the palette, by name or part number, and `Ctrl+K`
+      for every part, command and example.
+- [ ] **A trigger**, so a repeating waveform holds still instead of being read
+      from wherever the run happened to start. The timebase is done — the window
+      field, the wheel and a pinch turn it, and a stopped trace zooms — and so is
+      the vertical: gain, position, split scales, two cursors and a measure panel.
 - [ ] **Current and differential probes**, not just node voltages.
 - [ ] **Export** — PNG/SVG of the schematic, CSV of the traces, SPICE netlist out.
 - [ ] **Print / PDF** of a schematic that looks like a schematic.
@@ -299,8 +301,10 @@ because each step is what makes the next one worth having:
 - [ ] **Verilog-A-lite** for user-defined devices.
 - [ ] **Plugin API** for third-party component libraries.
 - [ ] **Real-time collaboration** on a schematic.
-- [ ] **Local persistence** — reopen where you left off, and keep a few recent
-      circuits.
+- [x] **Local persistence** — the drawing is kept as a draft as you work and
+      reopened where you left off (#57).
+- [ ] **A list of recent circuits** to go back to, beyond the draft of the one
+      you were working on.
 - [ ] **Tolerance and tempco shown on the schematic**, rather than only in the
       inspector.
 - [ ] **Auto-arrange** a netlist into a readable schematic.

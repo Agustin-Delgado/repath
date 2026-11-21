@@ -163,7 +163,7 @@
 				app.setParam(instance.id, 'firmware', e.currentTarget.value);
 			}}
 			aria-label="Program as Intel HEX"
-			class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-[0.64rem] leading-normal text-fg outline-none focus:border-accent/70"
+			class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none focus:border-accent/70"
 		></textarea>
 	{/if}
 	<p class={hint}>
@@ -216,7 +216,7 @@
 		<pre
 			bind:this={monitor}
 			aria-label="Serial output"
-			class="m-0 max-h-40 min-h-12 overflow-auto rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-[0.64rem] leading-normal whitespace-pre-wrap break-all text-fg">{#if log?.text}{log.text}{:else}<span
+			class="m-0 max-h-40 min-h-12 overflow-auto rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal whitespace-pre-wrap break-all text-fg">{#if log?.text}{log.text}{:else}<span
 					class="text-muted">Nothing sent yet.</span
 				>{/if}</pre>
 		<p class={hint}>What it sends on TX (D1), at whatever baud rate the program set.</p>

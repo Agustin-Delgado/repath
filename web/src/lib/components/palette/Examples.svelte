@@ -84,10 +84,10 @@
 		{#each shelves as { shelf, examples } (shelf)}
 			<section class="mb-2">
 				<h3
-					class="m-0 flex items-center px-0.5 py-1 text-[0.66rem] font-semibold tracking-[0.08em] text-muted uppercase"
+					class="m-0 flex items-center px-0.5 py-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase"
 				>
 					{shelf}
-					<span class="ml-auto font-mono text-[0.6rem] font-normal tracking-normal opacity-60">
+					<span class="ml-auto font-mono text-3xs font-normal tracking-normal opacity-60">
 						{examples.length}
 					</span>
 				</h3>
@@ -104,12 +104,12 @@
 									<span class="min-w-0 truncate">{example.name}</span>
 									{#if example.analysis === 'frequency'}
 										<span
-											class="ml-auto shrink-0 rounded bg-control px-1 font-mono text-[0.56rem] leading-4 text-muted"
+											class="ml-auto shrink-0 rounded bg-control px-1 font-mono text-3xs leading-4 text-muted"
 											>AC</span
 										>
 									{/if}
 								</span>
-								<span class="line-clamp-2 text-[0.66rem] leading-snug text-muted">
+								<span class="line-clamp-2 text-3xs leading-snug text-muted">
 									{example.description}
 								</span>
 							</button>

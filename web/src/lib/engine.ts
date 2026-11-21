@@ -268,6 +268,8 @@ export interface Chunk {
 	failures: PartFailure[];
 	/** The run's totals so far, not this piece's share: the engine counts from the start. */
 	stats: RunStats;
+	/** Wall-clock milliseconds the engine spent solving this piece. */
+	elapsedMs?: number;
 }
 
 /**
@@ -317,8 +319,11 @@ export class LiveRun {
 	advance(until: number): Chunk {
 		if (this.freed) throw new EngineError('the run has been closed');
 		try {
+			const started = performance.now();
 			const meta = JSON.parse(this.simulation.advance(until)) as RunMeta;
-			return this.collect(meta);
+			const chunk = this.collect(meta);
+			chunk.elapsedMs = performance.now() - started;
+			return chunk;
 		} catch (cause) {
 			throw toEngineError(cause);
 		}

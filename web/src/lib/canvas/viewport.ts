@@ -138,4 +138,34 @@ export class Viewport {
 	equals(state: ViewportState): boolean {
 		return this.x === state.x && this.y === state.y && this.scale === state.scale;
 	}
+
+	/**
+	 * Follow the screen when it changes size.
+	 *
+	 * A view nobody has touched since it was fitted is fitted again: the
+	 * drawing was fitted to the screen it opened on, and after the window or a
+	 * panel changed size — the scope folded away, a phone turned — it was left
+	 * cropped or stranded in a corner. A view someone has panned or zoomed
+	 * keeps what was at the middle of the screen at the middle, since that is
+	 * what they were looking at.
+	 *
+	 * `fitted` is the view as the last fit left it, and `refit` fits it again.
+	 * Returns the view as a fit leaves it, if one was done, for the caller to
+	 * keep as the new `fitted`.
+	 */
+	resized(
+		before: { width: number; height: number },
+		after: { width: number; height: number },
+		fitted: ViewportState | null,
+		refit: () => void
+	): ViewportState | null {
+		if (before.width === 0 || before.height === 0) return fitted;
+		if (fitted && this.equals(fitted)) {
+			refit();
+			return this.snapshot();
+		}
+		this.x += (after.width - before.width) / 2;
+		this.y += (after.height - before.height) / 2;
+		return fitted;
+	}
 }

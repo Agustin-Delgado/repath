@@ -335,6 +335,26 @@
 	/>
 {/snippet}
 
+<!--
+	First in the tab order, shown only when it has the focus: the palette is
+	a hundred-odd buttons, and a keyboard user had to go through every one of
+	them to reach the drawing and the inspector beside it.
+-->
+<!--
+	The focus is moved by hand rather than by following `#drawing`: the address
+	bar's hash is where a shared circuit travels, and a stray `#drawing` there
+	would be read as a link at the next reload.
+-->
+<a
+	class="skip-link"
+	href="#drawing"
+	onclick={(event) => {
+		event.preventDefault();
+		document.getElementById('drawing')?.focus();
+	}}>Skip to the drawing</a
+>
+
+
 <div
 	class="app"
 	class:scope-folded={!layout.scopeOpen}
@@ -382,7 +402,9 @@
 			<Sidebar />
 			{@render splitter('left', 'right', 'Resize the parts panel')}
 		</aside>
-		<section class="canvas"><Schematic bind:this={schematic} /></section>
+		<section class="canvas" id="drawing" tabindex="-1" aria-label="Drawing">
+			<Schematic bind:this={schematic} />
+		</section>
 		<aside class="right" class:open={panel === 'details'}>
 			<Inspector />
 			{@render splitter('right', 'left', 'Resize the details panel')}
@@ -565,6 +587,11 @@
 	.canvas {
 		min-width: 0;
 		min-height: 0;
+	}
+
+	/* Focused by the skip link only, as a place to continue tabbing from. */
+	.canvas:focus {
+		outline: none;
 	}
 
 	/* Flex rather than fixed grid rows: the transport bar is conditional, and with

@@ -157,13 +157,13 @@
 {#snippet shelfHeading(id: string, label: string, count: number)}
 	<button
 		type="button"
-		class="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left text-[0.66rem] font-semibold tracking-[0.08em] text-muted uppercase hover:text-fg"
+		class="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left text-3xs font-semibold tracking-[0.08em] text-muted uppercase hover:text-fg"
 		aria-expanded={!folded.has(id)}
 		onclick={() => toggleShelf(id)}
 	>
 		<ChevronRight class="size-3 transition-transform {folded.has(id) ? '' : 'rotate-90'}" />
 		{label}
-		<span class="ml-auto font-mono text-[0.6rem] font-normal tracking-normal opacity-60">{count}</span>
+		<span class="ml-auto font-mono text-3xs font-normal tracking-normal opacity-60">{count}</span>
 	</button>
 {/snippet}
 
@@ -200,7 +200,7 @@
 					<X class="size-3.5" />
 				</button>
 			{:else}
-				<kbd class="rounded border border-border px-1 font-mono text-[0.6rem] leading-4">/</kbd>
+				<kbd class="rounded border border-border px-1 font-mono text-3xs leading-4">/</kbd>
 			{/if}
 		</label>
 	</div>
@@ -228,7 +228,7 @@
 						<PartIcon kind={part.kind} class="h-[26px] w-[34px]" />
 						<div class="flex min-w-0 flex-col">
 							<span class="truncate text-ui">{part.label}</span>
-							<span class="truncate text-[0.64rem] text-muted">
+							<span class="truncate text-3xs text-muted">
 								{sectionLabel(part.section)}{part.description ? ` · ${part.description}` : ''}
 							</span>
 						</div>
@@ -291,7 +291,7 @@
 
 				{#if recent.length > 0}
 					<section>
-						<h3 class="m-0 px-0.5 py-1 text-[0.66rem] font-semibold tracking-[0.08em] text-muted uppercase">
+						<h3 class="m-0 px-0.5 py-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
 							Recent
 						</h3>
 						<div class="grid grid-cols-[repeat(auto-fill,minmax(58px,1fr))] gap-1">
@@ -317,7 +317,7 @@
 									{#each shelf as part, i (part.kind + ':' + part.label + ':' + part.description)}
 										<!-- A long shelf is filed under headings of its own: chips by what they do. -->
 										{#if part.shelf && part.shelf !== shelf[i - 1]?.shelf}
-											<h4 class="col-span-full m-0 mt-1 px-0.5 text-[0.62rem] font-medium text-muted first:mt-0">
+											<h4 class="col-span-full m-0 mt-1 px-0.5 text-3xs font-medium text-muted first:mt-0">
 												{part.shelf}
 											</h4>
 										{/if}

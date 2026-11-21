@@ -16,7 +16,7 @@ import { Scene } from './scene';
 import { SnapIndex } from './snap';
 import { LayeredSurface } from './surface';
 import type { EditorPointer, Tool, ToolContext } from './tool';
-import { Viewport } from './viewport';
+import { Viewport, type ViewportState } from './viewport';
 
 export type RenderFn = (painter: Painter, editor: CanvasEditor) => void;
 
@@ -93,6 +93,10 @@ export class CanvasEditor {
 	private touches = new Map<number, Vec2>();
 	/** Two fingers down: the gesture is a pinch, whatever the tool wanted. */
 	private pinch: { a: number; b: number } | null = null;
+	/** The view as the last fit left it, to tell whether anyone has moved it since. */
+	private fitted: ViewportState | null = null;
+	/** The surface's size before the latest resize. */
+	private lastSize = { width: 0, height: 0 };
 	/** Whether the last press was a finger, so tolerances can grow to fit one. */
 	private touching = false;
 
@@ -107,7 +111,16 @@ export class CanvasEditor {
 		for (const name of options.layers) {
 			this.painters.set(name, new Painter(this.surface.context(name), this.viewport));
 		}
-		this.surface.onResize = () => this.invalidateAll();
+		this.lastSize = this.surface.size;
+		this.surface.onResize = () => {
+			const size = this.surface.size;
+			this.fitted = this.viewport.resized(this.lastSize, size, this.fitted, () => {
+				const bounds = this.scene.bounds();
+				if (bounds) this.viewport.fit(bounds, size, ...this.fitArgs);
+			});
+			this.lastSize = size;
+			this.afterViewportChange();
+		};
 
 		container.addEventListener('pointerdown', this.onPointerDown);
 		container.addEventListener('pointermove', this.onPointerMove);
@@ -206,11 +219,16 @@ export class CanvasEditor {
 
 	// -- viewport -----------------------------------------------------------
 
+	/** What the last fit was asked for, so a resize can ask for it again. */
+	private fitArgs: [number, number] = [60, 1];
+
 	fit(padding = 60, ceiling = 1): void {
 		const bounds = this.scene.bounds();
 		if (!bounds) return;
 		this.viewport.fit(bounds, this.surface.size, padding, ceiling);
+		this.fitArgs = [padding, ceiling];
 		this.afterViewportChange();
+		this.fitted = this.viewport.snapshot();
 	}
 
 	centreOn(world: Vec2): void {

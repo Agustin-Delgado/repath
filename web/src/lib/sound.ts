@@ -37,7 +37,8 @@ export interface AudioParamLike {
 export interface ToneVoice {
 	frequency: AudioParamLike;
 	gain: AudioParamLike;
-	stop(): void;
+	/** Stop at audio time `at`, or now; let go of the nodes once it has. */
+	stop(at?: number): void;
 }
 
 export interface SpeakerContext {
@@ -57,6 +58,14 @@ const LEVEL = 0.05;
 
 /** How fast a voice comes on and goes off, as a time constant: a click-free edge, no more. */
 const EDGE = 0.002;
+
+/**
+ * How long a voice is let ring after it is told to go silent, before the
+ * oscillator stops: long enough for the fade to reach nothing. Stopped in the
+ * same instant as the fade was scheduled, it cut the wave mid-cycle and
+ * clicked.
+ */
+export const RELEASE = 6 * EDGE;
 
 /** The longest frame taken as one stretch; past it the clock has jumped, and play starts over. */
 const LONGEST_FRAME = 0.25;
@@ -85,10 +94,12 @@ export function webAudio(): SpeakerContext | null {
 			return {
 				frequency: oscillator.frequency,
 				gain: gain.gain,
-				stop() {
-					oscillator.stop();
-					oscillator.disconnect();
-					gain.disconnect();
+				stop(at?: number) {
+					oscillator.onended = () => {
+						oscillator.disconnect();
+						gain.disconnect();
+					};
+					oscillator.stop(at);
 				}
 			};
 		},
@@ -113,15 +124,23 @@ export class Speaker {
 	async enable(): Promise<boolean> {
 		this.context ??= this.open();
 		if (!this.context) return false;
+		// The browser can refuse — no gesture it accepts, or no output device —
+		// and a refusal left the speaker marked on, scheduling into a context
+		// that never ran, with the rejection unhandled.
+		try {
+			await this.context.resume();
+		} catch {
+			this.on = false;
+			return false;
+		}
 		this.on = true;
-		await this.context.resume();
 		return true;
 	}
 
 	disable(): void {
 		this.on = false;
 		this.silence();
-		void this.context?.suspend();
+		this.context?.suspend().catch(() => {});
 	}
 
 	/**
@@ -174,7 +193,8 @@ export class Speaker {
 	/** Let go of the voices of a run that is over: the next run has its own buzzers. */
 	release(): void {
 		this.silence();
-		for (const voice of this.voices.values()) voice.stop();
+		const at = this.context ? this.context.currentTime + RELEASE : undefined;
+		for (const voice of this.voices.values()) voice.stop(at);
 		this.voices.clear();
 	}
 

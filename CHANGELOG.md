@@ -11,6 +11,45 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — A scope that fits what it shows, and a header that fits a phone
+
+**Every lane name reads whole.** The scope's left margin widens for long net
+names instead of cutting their first letters off, and a name too long even
+for that is shortened from the middle, so both ends still tell two lanes apart.
+
+**Many logic lanes no longer crush the plot.** Lanes shrink to make room, the
+analog plot keeps at least a third of the height, and lanes there is no room
+for at all are counted in a note rather than drawn over the time axis.
+
+**The scope's numbers are what's on screen.** The grid and its volts stay put
+when one channel's gain is turned up. Measurements are taken over the window
+you are looking at, not everything in memory. A node sitting at zero reads
+0 V instead of a few femtovolts of rounding, and the footer says how long the
+run really took instead of "0 ms".
+
+**The Bode plot stays in its panels.** A deep notch no longer runs the
+magnitude curve down through the phase panel, the phase axis is marked in
+divisions of a turn (0°, −90°, −180°), two probes with the same name no longer
+break the readout, and the readout has a solid background over the curves.
+
+**A phone or a narrow window can reach everything.** At 900 px and under, the
+simulation settings scroll sideways with a fade at the edge that has more, and
+File, Share, Undo, Redo, Clear and the symbol standard sit in one menu that
+never scrolls away. The transport bar fades the same way. The drawing is
+fitted again when the window or the scope changes size, unless you have moved
+it yourself, in which case what was in the middle stays in the middle.
+
+**Easier to read and to reach.** Text follows your browser's font size
+setting, and nothing is smaller than about ten pixels at the default. Units
+are written the same way everywhere ("4.7 mV", "5 ms"). Toasts appear at the
+top of the drawing instead of over the scope's time labels. Pressing Tab on a
+fresh page offers "Skip to the drawing", past the hundred-odd palette buttons.
+The scope stays sharp when the window moves to a screen with a different
+scale, and the buzzer no longer clicks when a run stops.
+[#PR](https://github.com/Agustin-Delgado/repath/pulls)
+
+---
+
 ## 20 November 2026 — Saving from inside a block keeps the whole circuit
 
 **Save and Share work wherever you are.** With a block open for editing, File

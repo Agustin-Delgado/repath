@@ -1,11 +1,22 @@
 <script lang="ts">
-	import { measure, measureBurst, measureLogic } from '$lib/measure';
+	import { untrack } from 'svelte';
+	import { measureBurst, measureLogic } from '$lib/measure';
 	import { firstAfter, levelAt } from '$lib/transitions';
 	import { DEPTH } from '$lib/capture';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
-	import { formatValue } from '$lib/units';
+	import { formatWithUnit } from '$lib/units';
 	import { decimate, extent, ticks, timeLabel, visibleRange, wheelFactor } from '$lib/plot';
+	import {
+		axisY,
+		fitLabel,
+		marginFor,
+		measureVisible,
+		playheadPixel,
+		scopeLayout,
+		settleReading
+	} from '$lib/plot-layout';
+	import { watchPixelRatio } from '$lib/canvas/pixel-ratio';
 	import type { Burst, DigitalTransition, LogicState } from '$lib/engine';
 	import BodePlot from './BodePlot.svelte';
 	import SignalsPanel from './scope/SignalsPanel.svelte';
@@ -23,8 +34,11 @@
 	 */
 	let marker = $state<number | null>(null);
 
-	const DIGITAL_LANE = 26;
-	const PADDING = { left: 62, right: 14, top: 14, bottom: 26 };
+	/** The least left margin: room for the volts. Widened for long lane names. */
+	const LEFT_LEAST = 62;
+	const PADDING = { right: 14, top: 14, bottom: 26 };
+	/** The size the canvas writes its labels at. */
+	const FONT_PX = 11;
 
 	const analogProbes = $derived(app.activeProbes.filter((p) => p.analog && p.analog !== 'gnd'));
 	const digitalProbes = $derived(app.activeProbes.filter((p) => p.digital));
@@ -270,7 +284,7 @@
 				label: t.label,
 				colour: t.colour,
 				averaged: t.averaged,
-				m: measure(run.time, t.samples)
+				m: measureVisible(run.time, t.samples, span.from, span.to)
 			}))
 			.filter((row) => row.m !== null);
 	});
@@ -345,8 +359,13 @@
 		return value ?? '';
 	}
 
-	/** Device pixels per CSS pixel, as of the last resize. */
-	let dpr = 1;
+	/**
+	 * Device pixels per CSS pixel. Watched, not only read at a resize: moving the
+	 * window to a screen with another scale changes it with the size unchanged,
+	 * and the scope stayed blurry until something else resized it.
+	 */
+	let dpr = $state(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
+	$effect(() => watchPixelRatio(window, (ratio) => (dpr = ratio)));
 
 	/**
 	 * Size the backing store, and only when the size changes.
@@ -356,11 +375,37 @@
 	 */
 	$effect(() => {
 		if (!canvas) return;
-		dpr = window.devicePixelRatio || 1;
 		canvas.width = Math.round(size.width * dpr);
 		canvas.height = Math.round(size.height * dpr);
 		colours = new Map();
 	});
+
+	/** Width of a label as the canvas will write it. */
+	let measurer: CanvasRenderingContext2D | null = null;
+	function textWidth(text: string): number {
+		if (!measurer && canvas) {
+			measurer = document.createElement('canvas').getContext('2d');
+			if (measurer) measurer.font = `${FONT_PX}px ${colour('--font-mono') || 'monospace'}`;
+		}
+		// A monospace advance is about six tenths of the size, for the first frame
+		// before the canvas exists.
+		return measurer ? measurer.measureText(text).width : text.length * FONT_PX * 0.6;
+	}
+
+	/**
+	 * The left margin: wide enough for the volts and for the longest lane name.
+	 *
+	 * Lane names are written right-aligned into this margin, and at a fixed 62 px
+	 * a name like `BUTTON.p+1` lost its first letters off the canvas's edge.
+	 */
+	const left = $derived(
+		marginFor(
+			digitalTraces.map((t) => t.label),
+			textWidth,
+			{ least: LEFT_LEAST, width: size.width }
+		)
+	);
+	const padding = $derived({ ...PADDING, left });
 
 	$effect(() => {
 		const scheme = window.matchMedia?.('(prefers-color-scheme: dark)');
@@ -385,18 +430,20 @@
 
 		// A purely digital circuit has no voltage axis to draw, so give the whole
 		// panel over to the logic lanes instead of leaving an empty graph above.
+		// With both, the lanes shrink first and the analog plot keeps a floor;
+		// lanes there is no room for at all are counted rather than drawn over
+		// the time axis.
 		const hasAnalog = traces.length > 0;
-		const available = Math.max(h - PADDING.top - PADDING.bottom, 20);
-		const lane = hasAnalog
-			? DIGITAL_LANE
-			: Math.min(64, available / Math.max(digitalTraces.length, 1));
-		const laneHeight = digitalTraces.length * lane;
-		const plot = {
-			x: PADDING.left,
-			y: PADDING.top,
-			w: Math.max(w - PADDING.left - PADDING.right, 10),
-			h: hasAnalog ? Math.max(available - laneHeight, 10) : 0
-		};
+		const layout = scopeLayout({
+			width: w,
+			height: h,
+			padding,
+			analog: hasAnalog,
+			lanes: digitalTraces.length
+		});
+		const { plot, lane } = layout;
+		const laneHeight = layout.shown * lane;
+		hiddenLanes = layout.hidden;
 
 		const run = app.result;
 		const { from, to } = span;
@@ -421,26 +468,27 @@
 			const y = b.top + b.h - ((scaled - b.span.lo) / (b.span.hi - b.span.lo)) * b.h;
 			return y - (t?.offset ?? 0) * (b.h / 5);
 		};
-		const toY = (v: number) => mapY(0, v);
-
-		// Grid.
+		// Grid. On the axis itself, not through any channel's knobs: mapped through
+		// the first trace's gain, the gridlines and their volts followed that one
+		// knob out of the plot and over the lanes.
 		ctx.strokeStyle = colour('--scope-grid') || '#2a2f3a';
 		ctx.fillStyle = colour('--label-dim') || '#7c8496';
 		ctx.lineWidth = 1;
-		ctx.font = `11px ${colour('--font-mono') || 'monospace'}`;
+		ctx.font = `${FONT_PX}px ${colour('--font-mono') || 'monospace'}`;
 
 		const vStep = niceStep(range.hi - range.lo, 5);
 		ctx.textAlign = 'right';
 		ctx.textBaseline = 'middle';
 		for (const v of hasAnalog && !separate ? ticks(range.lo, range.hi, vStep) : []) {
-			const y = toY(v);
+			const y = axisY(range, plot, v);
+			if (y < plot.y - 0.5 || y > plot.y + plot.h + 0.5) continue;
 			ctx.beginPath();
 			ctx.moveTo(plot.x, y);
 			ctx.lineTo(plot.x + plot.w, y);
 			ctx.strokeStyle = v === 0 ? colour('--scope-axis') : colour('--scope-grid');
 			ctx.stroke();
 			ctx.fillStyle = colour('--label-dim');
-			ctx.fillText(`${formatValue(v, 3)}V`, plot.x - 8, y);
+			ctx.fillText(formatWithUnit(v, 'V', 3), plot.x - 8, y);
 		}
 
 		const tStep = niceStep(width, 6);
@@ -514,9 +562,9 @@
 				ctx.fillStyle = trace.colour;
 				ctx.textAlign = 'right';
 				ctx.textBaseline = 'top';
-				ctx.fillText(`${formatValue(b.span.hi, 3)}V`, plot.x - 8, b.top);
+				ctx.fillText(formatWithUnit(b.span.hi, 'V', 3), plot.x - 8, b.top);
 				ctx.textBaseline = 'bottom';
-				ctx.fillText(`${formatValue(b.span.lo, 3)}V`, plot.x - 8, b.top + b.h);
+				ctx.fillText(formatWithUnit(b.span.lo, 'V', 3), plot.x - 8, b.top + b.h);
 				ctx.textAlign = 'left';
 				ctx.textBaseline = 'top';
 				ctx.fillText(trace.label, plot.x + 6, b.top + 2);
@@ -526,7 +574,7 @@
 		// Digital lanes below the analog plot.
 		const labels: Array<{ text: string; y: number }> = [];
 		ctx.lineWidth = 1.8;
-		digitalTraces.forEach((trace, index) => {
+		digitalTraces.slice(0, layout.shown).forEach((trace, index) => {
 			// Moved by its own knob, in half-lane steps, so two lanes can be laid
 			// over each other to compare edges — which is what moving a channel on a
 			// scope is for.
@@ -581,7 +629,10 @@
 		ctx.fillStyle = colour('--label-dim');
 		ctx.textAlign = 'right';
 		ctx.textBaseline = 'middle';
-		for (const label of labels) ctx.fillText(label.text, plot.x - 8, label.y);
+		// Shortened from the middle if even the widened margin cannot take them.
+		for (const label of labels) {
+			ctx.fillText(fitLabel(label.text, plot.x - 12, textWidth), plot.x - 8, label.y);
+		}
 
 		// Playhead: the instant the drawing is showing.
 		if (app.result) {
@@ -638,17 +689,19 @@
 	const playheadPx = $derived.by(() => {
 		const run = app.result;
 		if (!run || run.time.length === 0) return -1;
-		const stop = run.time[run.time.length - 1] || 1;
-		const plotW = Math.max(size.width - PADDING.left - PADDING.right, 10);
-		return Math.round((app.playbackTime / stop) * plotW);
+		const plotW = Math.max(size.width - left - PADDING.right, 10);
+		return playheadPixel(app.playbackTime, span, plotW);
 	});
+
+	/** Logic lanes there was no room for in the last frame drawn. */
+	let hiddenLanes = $state(0);
 
 	/** Simulated time under a pointer. */
 	function timeAt(clientX: number): number | null {
 		if (!canvas) return null;
 		const rect = canvas.getBoundingClientRect();
-		const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
-		const fraction = (clientX - rect.left - PADDING.left) / plotW;
+		const plotW = Math.max(rect.width - left - PADDING.right, 10);
+		const fraction = (clientX - rect.left - left) / plotW;
 		return span.from + fraction * (span.to - span.from);
 	}
 
@@ -660,9 +713,9 @@
 	function onPlayhead(event: PointerEvent): boolean {
 		if (!canvas || !app.result || app.playing) return false;
 		const rect = canvas.getBoundingClientRect();
-		const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
+		const plotW = Math.max(rect.width - left - PADDING.right, 10);
 		const at = Math.min(Math.max(app.playbackTime, span.from), span.to);
-		const x = PADDING.left + ((at - span.from) / Math.max(span.to - span.from, 1e-15)) * plotW;
+		const x = left + ((at - span.from) / Math.max(span.to - span.from, 1e-15)) * plotW;
 		return Math.abs(event.clientX - rect.left - x) <= (event.pointerType === 'touch' ? 14 : 6);
 	}
 
@@ -746,11 +799,13 @@
 				key: t.key,
 				label: t.label,
 				colour: t.colour,
-				text: `${formatValue(t.samples[here], 4)}V`,
+				text: formatWithUnit(settleReading(t.samples[here], range.hi - range.lo), 'V', 4),
 				// The change between the two, which is the number nobody wants to do
 				// by subtracting two readings they wrote down.
 				delta:
-					there === null ? null : `${formatValue(t.samples[here] - t.samples[there], 4)}V`
+					there === null
+						? null
+						: formatWithUnit(settleReading(t.samples[here] - t.samples[there], range.hi - range.lo), 'V', 4)
 			})),
 			// And the logic lanes, which read nothing at all until now: a lane is two
 			// levels and a label, so "is that a one, and what is a one here" was a
@@ -765,7 +820,7 @@
 					colour: t.colour,
 					text:
 						state === 'high' || state === 'low'
-							? `${state === 'high' ? 1 : 0} (${formatValue(volts ?? 0, 3)}V)`
+							? `${state === 'high' ? 1 : 0} (${formatWithUnit(volts ?? 0, 'V', 3)})`
 							: state
 				};
 			})
@@ -864,7 +919,7 @@
 		// running acquisition has nowhere to be dragged to: the newest instant is
 		// the only one there is. Shift is measuring and must not move anything.
 		if (dragging && event.buttons & 1 && !event.shiftKey) {
-			const plotW = Math.max(rect.width - PADDING.left - PADDING.right, 10);
+			const plotW = Math.max(rect.width - left - PADDING.right, 10);
 			const width = span.to - span.from;
 			place(dragging.from + ((dragging.x - x) / plotW) * width, width);
 		}
@@ -902,9 +957,15 @@
 			cursor,
 			playheadPx,
 			span,
+			padding,
+			dpr,
 			app.channels
 		];
-		draw();
+		// Untracked, so the list above is the whole of what repaints it. `draw`
+		// reads the raw playback time, and tracked it would repaint the canvas on
+		// every frame of the animation however little the line moved — which is
+		// what `playheadPx` exists to stop.
+		untrack(draw);
 	});
 </script>
 
@@ -939,18 +1000,24 @@
 
 		{#if narrowed}
 			<p class="memory" title="The memory is a fixed number of samples, and this circuit uses them quickly. A shorter stop time is a window it can fill.">
-				memory holds {formatValue(coverage, 3)}s of the {formatValue(app.stopTime, 3)}s window
+				memory holds {formatWithUnit(coverage, 's', 3)} of the {formatWithUnit(app.stopTime, 's', 3)} window
+			</p>
+		{/if}
+
+		{#if hiddenLanes > 0}
+			<p class="lanes-hidden" title="Each lane needs some height to tell its two levels apart. Drag the scope taller, or untick a net on the right.">
+				+{hiddenLanes} {hiddenLanes === 1 ? 'lane' : 'lanes'} not shown — make the scope taller
 			</p>
 		{/if}
 
 		{#if readout && readout.values.length + readout.logic.length > 0}
 			<div class="readout">
 				<span class="time">
-					t = {formatValue(readout.time, 4)}s
+					t = {formatWithUnit(readout.time, 's', 4)}
 					{#if readout.delta !== null}
-						<span class="delta">Δt = {formatValue(readout.delta, 4)}s</span>
+						<span class="delta">Δt = {formatWithUnit(readout.delta, 's', 4)}</span>
 						{#if readout.rate !== null}
-							<span class="delta">1/Δt = {formatValue(readout.rate, 4)}Hz</span>
+							<span class="delta">1/Δt = {formatWithUnit(readout.rate, 'Hz', 4)}</span>
 						{/if}
 					{/if}
 				</span>
@@ -988,22 +1055,22 @@
 						<span class="who" style:color={row.colour}>{row.label}</span>
 						<dl>
 							<dt>pk-pk</dt>
-							<dd>{formatValue(m.peakToPeak, 3)}V</dd>
+							<dd>{formatWithUnit(m.peakToPeak, 'V', 3)}</dd>
 							<dt>mean</dt>
-							<dd>{formatValue(m.mean, 3)}V</dd>
+							<dd>{formatWithUnit(m.mean, 'V', 3)}</dd>
 							<dt>rms</dt>
-							<dd>{formatValue(m.rms, 3)}V</dd>
+							<dd>{formatWithUnit(m.rms, 'V', 3)}</dd>
 							{#if m.frequency !== null && m.period !== null}
 								<dt>freq</dt>
-								<dd>{formatValue(m.frequency, 3)}Hz</dd>
+								<dd>{formatWithUnit(m.frequency, 'Hz', 3)}</dd>
 								<dt>period</dt>
-								<dd>{formatValue(m.period, 3)}s</dd>
+								<dd>{formatWithUnit(m.period, 's', 3)}</dd>
 								<dt>duty</dt>
 								<dd>{Math.round((m.duty ?? 0) * 100)}%</dd>
 							{/if}
 							{#if m.riseTime !== null}
 								<dt>rise</dt>
-								<dd>{formatValue(m.riseTime, 3)}s</dd>
+								<dd>{formatWithUnit(m.riseTime, 's', 3)}</dd>
 							{/if}
 							{#if m.overshoot !== null && m.overshoot > 0.005}
 								<dt>over</dt>
@@ -1025,9 +1092,9 @@
 							{@const m = row.m}
 							<dl>
 								<dt>freq</dt>
-								<dd>{formatValue(m.frequency, 3)}Hz</dd>
+								<dd>{formatWithUnit(m.frequency, 'Hz', 3)}</dd>
 								<dt>period</dt>
-								<dd>{formatValue(m.period, 3)}s</dd>
+								<dd>{formatWithUnit(m.period, 's', 3)}</dd>
 								<dt>duty</dt>
 								<dd>{Math.round(m.duty * 100)}%</dd>
 								<dt>cycles</dt>
@@ -1052,17 +1119,18 @@
 		{/snippet}
 		{#snippet footer()}
 		{#if app.analysis === 'frequency' && app.acResult}
+			<!-- Each figure kept whole, so a narrow column breaks between them, never inside one. -->
 			<footer>
-				{app.acResult.frequencies.length} points ·
-				{app.acResult.elapsedMs.toFixed(0)} ms
+				<span>{app.acResult.frequencies.length} points</span> ·
+				<span>{app.acResult.elapsedMs.toFixed(0)} ms</span>
 			</footer>
 		{/if}
 
 		{#if app.analysis === 'transient' && app.result}
 			<footer>
-				{app.result.stats.accepted_steps} steps ·
-				{app.result.stats.newton_iterations} iterations ·
-				{app.result.elapsedMs.toFixed(0)} ms
+				<span>{app.result.stats.accepted_steps} steps</span> ·
+				<span>{app.result.stats.newton_iterations} iterations</span> ·
+				<span title="Time spent solving, on this machine">{app.result.elapsedMs.toFixed(0)} ms</span>
 			</footer>
 		{/if}
 		{/snippet}
@@ -1080,13 +1148,13 @@
 	}
 
 	.measure .who {
-		font-size: 0.66rem;
+		font-size: var(--text-3xs);
 		font-family: var(--font-mono);
 	}
 
 	.measure .waiting {
 		display: block;
-		font-size: 0.64rem;
+		font-size: var(--text-3xs);
 		color: var(--label-dim);
 		font-style: italic;
 	}
@@ -1101,7 +1169,7 @@
 		grid-template-columns: auto 1fr;
 		gap: 0.05rem 0.4rem;
 		margin: 0.15rem 0 0;
-		font-size: 0.64rem;
+		font-size: var(--text-3xs);
 	}
 
 	.measure dt {
@@ -1182,7 +1250,7 @@
 		bottom: 6px;
 		margin: 0;
 		font-family: var(--font-mono);
-		font-size: 0.68rem;
+		font-size: var(--text-2xs);
 		color: var(--label-dim);
 		pointer-events: auto;
 		background: color-mix(in srgb, var(--panel-bg) 85%, transparent);
@@ -1201,7 +1269,9 @@
 		font-family: var(--font-mono);
 		font-size: 0.72rem;
 		pointer-events: none;
-		background: color-mix(in srgb, var(--panel-bg) 85%, transparent);
+		/* Nearly opaque, with a frame: it sits over the traces it describes. */
+		background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+		border: 1px solid var(--border);
 		padding: 0.25rem 0.5rem;
 		border-radius: 4px;
 	}
@@ -1210,10 +1280,27 @@
 		color: var(--label-dim);
 	}
 
+	footer span {
+		white-space: nowrap;
+	}
+
+	.lanes-hidden {
+		position: absolute;
+		right: 12px;
+		bottom: 30px;
+		margin: 0;
+		font-family: var(--font-mono);
+		font-size: 0.72rem;
+		color: var(--label-dim);
+		background: color-mix(in srgb, var(--panel-bg) 85%, transparent);
+		padding: 0.15rem 0.4rem;
+		border-radius: 4px;
+	}
+
 	footer {
 		border-top: 1px solid var(--border);
 		padding: 0.4rem 0.75rem;
-		font-size: 0.68rem;
+		font-size: var(--text-2xs);
 		color: var(--label-dim);
 		font-family: var(--font-mono);
 	}

@@ -1023,7 +1023,8 @@
 		border-radius: 3px;
 		background: var(--panel-bg);
 		color: var(--text, inherit);
-		font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+		/* The canvas labels' own face, so editing one does not change its glyphs. */
+		font-family: var(--font-mono);
 		line-height: 1;
 		width: auto;
 		outline: none;
