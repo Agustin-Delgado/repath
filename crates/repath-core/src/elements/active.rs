@@ -419,7 +419,7 @@ impl Element for OpAmp {
             let (geq, ieq) = self.companion(ctx.integration, ctx.dt);
             self.i_prev = geq * v - ieq;
             self.i_mean = CC * (v - self.v_prev) / ctx.dt;
-            self.ring.push(self.i_mean);
+            self.ring.push(self.v_prev, v, ctx.scale());
         }
         self.v_prev = v;
         // The same sample `trial_timestep` judges a step by.

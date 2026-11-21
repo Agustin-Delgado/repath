@@ -276,7 +276,7 @@ impl ChargeBranch {
             let (g, ieq) = self.terms(c, ctx.integration, ctx.dt);
             self.i_prev = g * v - ieq;
             self.i_mean = c * (v - self.v_prev) / ctx.dt;
-            self.ring.push(self.i_mean);
+            self.ring.push(self.v_prev, v, ctx.scale());
         } else {
             self.i_mean = 0.0;
         }
