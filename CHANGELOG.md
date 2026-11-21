@@ -11,6 +11,17 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Shorter, plainer interface text
+
+**Every label, hint, toast and error now says what you need and stops.** Text
+that repeated what the screen already showed is gone; what is left keeps the
+units, limits, pin maps and file formats, uses one word for one thing (a part,
+the circuit, a program), and errors still name the part and the reason.
+
+[#108](https://github.com/Agustin-Delgado/repath/pull/108)
+
+---
+
 ## 21 November 2026 — Large circuits run in a fraction of the time
 
 **A circuit of hundreds of parts no longer slows to a crawl.** The engine used
