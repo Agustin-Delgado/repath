@@ -30,7 +30,7 @@ finish on the wire before TX is let go, instead of cutting the line mid-frame.
 And a sketch printing in a loop for an hour no longer fills the engine's memory:
 it keeps the newest bytes, as the serial monitor already did.
 
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#84](https://github.com/Agustin-Delgado/repath/pull/84)
 
 ---
 
