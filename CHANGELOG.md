@@ -27,7 +27,7 @@ them is the selection yellow any more. The Bode plot's finer gridlines are
 fainter instead of darker, and at exactly 900 px wide the header and the phone
 controls now agree on which layout they are in.
 
-[#PR](https://github.com/Agustin-Delgado/repath/pulls)
+[#100](https://github.com/Agustin-Delgado/repath/pull/100)
 
 ---
 
