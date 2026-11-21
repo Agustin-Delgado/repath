@@ -121,7 +121,7 @@
 		aria-valuenow={value}
 		aria-valuetext={detail ? `${shown}, ${detail}` : shown}
 		aria-disabled={disabled || undefined}
-		title={disabled ? undefined : 'Drag up or down, roll, or use the arrow keys. Double-click to type.'}
+		title={disabled ? undefined : 'Drag up or down, scroll or use the arrow keys. Double-click to type.'}
 		class="knob size-10 shrink-0 touch-none rounded-full outline-none select-none focus-visible:focus-ring
 			{disabled ? 'cursor-not-allowed opacity-50' : 'cursor-ns-resize'}"
 		data-dragging={dragging ? '' : undefined}

@@ -926,7 +926,7 @@ export const CATALOG: ComponentDef[] = [
 				plain: true,
 				step: 0.05,
 				knob: true,
-				description: '0 % at the smallest, 100 % at the largest.'
+				description: '0 %: minimum. 100 %: maximum.'
 			}
 		]
 	},
@@ -1080,7 +1080,7 @@ export const CATALOG: ComponentDef[] = [
 				plain: true,
 				step: 0.05,
 				knob: true,
-				description: '0 % at a, 100 % at b.'
+				description: '0 %: wiper at a. 100 %: wiper at b.'
 			},
 			// Pots are sold at twenty percent. A divider that only works at the
 			// printed value is a divider that has to be trimmed on every board.
