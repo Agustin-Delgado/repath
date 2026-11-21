@@ -42,6 +42,22 @@ accuracy. The 555 blinker takes 1.6 times as many steps, the Arduino blink
 1.2 times. The LED matrix takes fewer steps than before.
 
 [#95](https://github.com/Agustin-Delgado/repath/pull/95)
+\n---\n\n## 21 November 2026 — A chip's supply legs carry its current
+
+**The VCC wire of a chip now carries what the chip takes.** A 74HC04 lighting
+an LED draws the LED's current in at its VCC leg, and an output sinking a load
+sends it out by GND; an op-amp in a package does the same through V+ and V−,
+and its inputs' bias current returns through them too. On top of that, every
+package draws its own quiescent current off its datasheet: 3 mA for a 555,
+0.7 mA for an LM358, a couple of microamps for a 74HC gate, milliamps for 74LS,
+about 10 mA for an ATmega328P at 16 MHz. So a supply's reading is the sum of
+the parts on it, and the current overlay animates the supply wires with the
+engine's own figures instead of leaving them still.
+
+Nothing about the outputs changed: they reach the same levels as before. What
+one figure cannot say — CMOS switching current, a memory's draw while
+selected, a lit LED matrix, an LCD's backlight — is listed in the backlog.
+([#96](https://github.com/Agustin-Delgado/repath/pull/96))
 
 ---
 

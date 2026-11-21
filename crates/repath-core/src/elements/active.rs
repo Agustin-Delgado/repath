@@ -6,6 +6,7 @@
 //! everywhere, so the Jacobian never lies, and with a high enough gain the
 //! difference from an ideal clamp is microvolts.
 
+use crate::bridge::split_output;
 use crate::complex::{C64, ComplexSystem};
 use crate::element::{
     AcCtx, AcceptCtx, Element, Integration, Mode, NodeId, RingDetector, StampCtx, StampReport,
@@ -143,6 +144,9 @@ pub struct OpAmp {
     ring: RingDetector,
     /// First extra unknown: the gain node. Second: the output branch current.
     first: usize,
+    /// Slopes of the sourced and sunk output current against the branch
+    /// current at the operating point, for the small-signal analysis.
+    tap_slopes: (f64, f64),
 }
 
 /// Where an op-amp takes its rails from, when it takes them from its supply.
@@ -173,6 +177,7 @@ impl OpAmp {
             i_mean: 0.0,
             ring: RingDetector::default(),
             first: 0,
+            tap_slopes: (0.0, 0.0),
         }
     }
 
@@ -364,12 +369,45 @@ impl Element for OpAmp {
         sys.add(branch, gain_node, -1.0);
         sys.add(branch, branch, -m.r_out.max(1e-9));
 
+        // ---- supply current ----------------------------------------------
+        // An output stage is a transistor to each supply leg. What the output
+        // sources comes in at the positive leg and what it sinks goes out at
+        // the negative one, so the package's supply pins carry its load. The
+        // buffer above returns its current through the reference; this moves
+        // it onto the legs, leaving the reference with nothing on its account.
+        // The branch current is into the device, so the sourced current is its
+        // negative.
+        if let Some(s) = self.supply {
+            let ib = ctx.unknown(self.first + 1);
+            let (is, ik, dis, dik) = split_output(-ib);
+            let (js, jk) = (-dis, -dik);
+            self.tap_slopes = (js, jk);
+            let (plus, minus) = (node_index(s.plus), node_index(s.minus));
+            // Out of the positive leg: `is`.
+            sys.add(plus, branch, js);
+            sys.add_rhs(plus, -(is - js * ib));
+            // Out of the negative leg: `-ik`, which is into it.
+            sys.add(minus, branch, -jk);
+            sys.add_rhs(minus, ik - jk * ib);
+        }
+
         // ---- input bias --------------------------------------------------
         // Drawn out of whatever each input is connected to, so a source resistance
         // turns it into an offset of its own.
         if m.i_bias != 0.0 {
             sys.add_rhs(np, -m.i_bias);
             sys.add_rhs(nn, -m.i_bias);
+            // And returned through the package: an NPN pair's base current
+            // leaves by its emitters' tail to the negative leg, and a PNP pair's
+            // (negative, out of the pins) comes in at the positive one.
+            if let Some(s) = self.supply {
+                let (plus, minus) = (node_index(s.plus), node_index(s.minus));
+                if m.i_bias > 0.0 {
+                    sys.add_rhs(minus, 2.0 * m.i_bias);
+                } else {
+                    sys.add_rhs(plus, 2.0 * m.i_bias);
+                }
+            }
         }
 
         StampReport::CLEAN
@@ -423,6 +461,7 @@ impl Element for OpAmp {
         self.i_mean = 0.0;
         self.ring.reset();
         self.charge = Trace::default();
+        self.tap_slopes = (0.0, 0.0);
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
@@ -439,10 +478,35 @@ impl Element for OpAmp {
         sys.add(branch, out, C64::ONE);
         sys.add(branch, gain_node, -C64::ONE);
         sys.add(branch, branch, C64::real(-self.model.r_out.max(1e-9)));
+
+        if let Some(s) = self.supply {
+            let (js, jk) = self.tap_slopes;
+            sys.add(node_index(s.plus), branch, C64::real(js));
+            sys.add(node_index(s.minus), branch, C64::real(-jk));
+        }
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {
         x.get(self.first + 1).copied()
+    }
+
+    /// With supply legs, the current into the part at each of them and at
+    /// each input, so the package's pins add up: the output's load and the
+    /// inputs' bias come in at one leg and go out at another.
+    fn terminal_names(&self) -> &'static [&'static str] {
+        if self.supply.is_some() { &["vp", "vm", "ip", "in"] } else { &[] }
+    }
+
+    fn terminal_currents(&self, x: &[f64], out: &mut Vec<f64>) {
+        if self.supply.is_some() {
+            let ib = x.get(self.first + 1).copied().unwrap_or(0.0);
+            let (is, ik, _, _) = split_output(-ib);
+            let bias = self.model.i_bias;
+            out.push(is - 2.0 * bias.min(0.0));
+            out.push(-ik - 2.0 * bias.max(0.0));
+            out.push(bias);
+            out.push(bias);
+        }
     }
 }
 

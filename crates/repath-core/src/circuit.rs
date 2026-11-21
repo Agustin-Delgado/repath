@@ -277,7 +277,8 @@ impl Circuit {
     /// Instance names, in the same order as [`Self::collect_currents`].
     /// Names for every reported current, in the order [`Self::collect_currents`]
     /// produces them: each element, then any extra terminals it reports, as
-    /// `M1:g`.
+    /// `M1:g`. After the elements, the supply legs of every bridge that draws
+    /// its output current through a package's supply, as `BDA3:p1`, `BDA3:m1`.
     pub fn element_names(&self) -> Vec<String> {
         let mut names = Vec::with_capacity(self.elements.len());
         for element in &self.elements {
@@ -286,20 +287,27 @@ impl Circuit {
                 names.push(format!("{}:{terminal}", element.name()));
             }
         }
+        for dac in &self.dacs {
+            names.extend(dac.tap_names());
+        }
         names
     }
 
-    /// Current through every element, in element order.
+    /// Current through every element, in element order, then each bridge's
+    /// supply legs, at the solution `x` solved for the instant `t`.
     ///
     /// Recorded per timepoint so a viewer can show current flowing without
     /// having to re-derive device physics it should not have to know about.
     /// Elements that cannot report a current contribute zero.
-    pub fn collect_currents(&self, x: &[f64], out: &mut Vec<f64>) {
+    pub fn collect_currents(&self, x: &[f64], t: f64, out: &mut Vec<f64>) {
         out.clear();
         out.reserve(self.elements.len());
         for element in &self.elements {
             out.push(element.current(x).unwrap_or(0.0));
             element.terminal_currents(x, out);
+        }
+        for dac in &self.dacs {
+            dac.tap_currents(x, t, out);
         }
     }
 
