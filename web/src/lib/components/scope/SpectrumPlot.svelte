@@ -370,7 +370,7 @@
 
 <section class="spectrum" aria-label="Spectrum">
 	<div class="controls">
-		<span class="title">Spectrum</span>
+		<span class="title eyebrow">Spectrum</span>
 		{#if sources.length > 1}
 			<Select
 				size="sm"
@@ -436,6 +436,7 @@
 	</div>
 	<div class="plot" bind:this={host}>
 		<canvas
+			aria-label="Spectrum plot"
 			bind:this={canvas}
 			style:width="{size.width}px"
 			style:height="{size.height}px"
@@ -498,11 +499,6 @@
 	}
 
 	.title {
-		font-size: var(--text-3xs);
-		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--label-dim);
 		margin-right: 0.2rem;
 	}
 
@@ -533,7 +529,7 @@
 		place-content: center;
 		margin: 0;
 		color: var(--label-dim);
-		font-size: 0.85rem;
+		font-size: var(--text-ui);
 		pointer-events: none;
 	}
 
@@ -551,10 +547,10 @@
 		font-family: var(--font-mono);
 		font-size: var(--text-3xs);
 		pointer-events: none;
-		background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+		background: color-mix(in srgb, var(--raised) 94%, transparent);
 		border: 1px solid var(--border);
 		padding: 0.2rem 0.45rem;
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 		color: var(--label-strong);
 	}
 

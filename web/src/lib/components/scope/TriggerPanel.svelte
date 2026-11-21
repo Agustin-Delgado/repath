@@ -45,7 +45,7 @@
 
 <section class="mt-2 flex flex-col gap-1 border-t border-border px-1.5 pt-2" aria-label="Trigger">
 	<div class="flex items-center gap-1 px-1">
-		<h3 class="m-0 mr-auto text-3xs font-semibold tracking-[0.08em] text-muted uppercase">Trigger</h3>
+		<h3 class="m-0 mr-auto eyebrow">Trigger</h3>
 		{#if on && status}
 			<span
 				class="font-mono text-3xs {status === 'triggered' || status === 'captured' ? 'text-accent' : 'text-muted'}"

@@ -26,6 +26,7 @@
 	import SpectrumPlot from './scope/SpectrumPlot.svelte';
 	import TriggerPanel from './scope/TriggerPanel.svelte';
 	import { Button } from '$lib/ui';
+	import { CANVAS_PALETTE } from '$lib/theme';
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let host = $state<HTMLDivElement | null>(null);
@@ -584,8 +585,8 @@
 		// Grid. On the axis itself, not through any channel's knobs: mapped through
 		// the first trace's gain, the gridlines and their volts followed that one
 		// knob out of the plot and over the lanes.
-		ctx.strokeStyle = colour('--scope-grid') || '#2a2f3a';
-		ctx.fillStyle = colour('--label-dim') || '#7c8496';
+		ctx.strokeStyle = colour('--scope-grid') || CANVAS_PALETTE.gridLine;
+		ctx.fillStyle = colour('--label-dim') || CANVAS_PALETTE.labelDim;
 		ctx.lineWidth = 1;
 		ctx.font = `${FONT_PX}px ${colour('--font-mono') || 'monospace'}`;
 

@@ -17,6 +17,7 @@
 export const CANVAS_PALETTE = {
 	background: '#0e1116',
 	gridDot: '#232936',
+	gridLine: '#222a36',
 	wire: '#8b96aa',
 	symbol: '#cfd7e4',
 	pin: '#6d7a8f',
@@ -39,6 +40,7 @@ export const CANVAS_PALETTE = {
 export const CANVAS_TOKENS: Record<keyof typeof CANVAS_PALETTE, string> = {
 	background: '--canvas-bg',
 	gridDot: '--grid-dot',
+	gridLine: '--grid-line',
 	wire: '--wire',
 	symbol: '--symbol',
 	pin: '--pin',

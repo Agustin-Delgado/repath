@@ -42,6 +42,8 @@ import { CANVAS_PALETTE, CANVAS_TOKENS } from '$lib/theme';
 export interface Theme {
 	background: string;
 	gridDot: string;
+	/** The scope's gridlines, which read it from `--grid-line` too. */
+	gridLine: string;
 	wire: string;
 	symbol: string;
 	pin: string;
