@@ -40,7 +40,31 @@
 <header
 	class="flex items-center gap-4 border-b border-border bg-panel px-3 py-1.5 max-[900px]:gap-2 max-[900px]:px-2.5"
 >
-	<strong class="shrink-0 text-base tracking-tight">repath</strong>
+	<!--
+		The mark from brand/mark/repath-mark.svg, drawn with the small cut's
+		stroke (10.5 for 7): at this size the full weight thins to a hairline.
+		Sized and set as in the logo: 1.16 times as tall as the h, standing on
+		the baseline, which the box's margin under the stroke would lift.
+	-->
+	<strong class="flex shrink-0 items-baseline text-base font-semibold tracking-[-0.035em]">
+		<svg class="size-[0.95em] translate-y-[0.065em]" viewBox="24 16 96 96" aria-hidden="true">
+			<defs>
+				<linearGradient id="toolbar-signal" x1="40" x2="104" gradientUnits="userSpaceOnUse">
+					<stop offset=".25" stop-color="#4ea8ff" />
+					<stop offset="1" stop-color="#7fe3a0" />
+				</linearGradient>
+			</defs>
+			<path
+				d="M36 102V66c0-26 6-40 14-40s9 30 17 30 8-18 15-18 7 9 14 9 5-4 12-4"
+				fill="none"
+				stroke="url(#toolbar-signal)"
+				stroke-width="10.5"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			/>
+		</svg>
+		repath
+	</strong>
 
 	<div
 		use:overflowHint

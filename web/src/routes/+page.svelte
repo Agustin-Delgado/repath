@@ -335,10 +335,7 @@
 
 <svelte:head>
 	<title>repath — free circuit simulator</title>
-	<meta
-		name="description"
-		content="A free and open source mixed-signal circuit simulator that runs entirely in your browser."
-	/>
+	<!-- The description is in app.html, with the link-preview tags. -->
 </svelte:head>
 
 {#snippet splitter(which: Panel, grow: 'right' | 'left' | 'up', label: string)}
