@@ -98,6 +98,9 @@ export type Step =
  */
 const LIMIT = 400;
 
+/** Steps that set one value outright, so the next of the same kind replaces them. */
+const SETTINGS = new Set<Step['op']>(['stop', 'temperature', 'sample']);
+
 export class Trace {
 	steps: Step[] = [];
 	/** Cleared and restarted whenever the whole drawing is replaced. */
@@ -109,6 +112,15 @@ export class Trace {
 		if (step.op === 'example' || step.op === 'clear') {
 			this.steps = [];
 			this.dropped = 0;
+		}
+		// A setting turned again straight after it was turned is one turn, to
+		// where it ended up: a replay only ever needs the last value. Every
+		// notch of a wheel zooming the timebase was a line of its own, and a
+		// second of scrolling pushed the steps that mattered off the end.
+		const last = this.steps.at(-1);
+		if (last && last.op === step.op && SETTINGS.has(step.op)) {
+			this.steps[this.steps.length - 1] = step;
+			return;
 		}
 		this.steps.push(step);
 		if (this.steps.length > LIMIT) {

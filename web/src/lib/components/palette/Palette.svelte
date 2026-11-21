@@ -9,6 +9,14 @@
 	import PartIcon from './PartIcon.svelte';
 	import PartTile from './PartTile.svelte';
 	import SubcircuitImport from './SubcircuitImport.svelte';
+	import { findsPart } from '$lib/shortcuts';
+
+	type Props = {
+		/** Put the search box in focus as soon as the list is up: `/` pressed on the examples tab. */
+		focusSearch?: boolean;
+	};
+
+	let { focusSearch = false }: Props = $props();
 
 	/**
 	 * Where parts are picked from.
@@ -26,6 +34,9 @@
 
 	let query = $state('');
 	let searchInput = $state<HTMLInputElement | null>(null);
+	$effect(() => {
+		if (focusSearch) searchInput?.focus();
+	});
 	let active = $state(0);
 	const results = $derived(query.trim() ? searchParts(parts, query) : []);
 	$effect(() => {
@@ -106,9 +117,7 @@
 
 	/** `/` finds a part from anywhere, the way it finds things on most of the web. */
 	function onWindowKey(event: KeyboardEvent) {
-		if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
-		const target = event.target as HTMLElement | null;
-		if (target?.closest('input, textarea, select, [contenteditable]')) return;
+		if (!findsPart(event, event.target as HTMLElement | null)) return;
 		// Hidden in a closed drawer on a phone: nothing to focus there.
 		if (!searchInput || searchInput.offsetParent === null) return;
 		event.preventDefault();

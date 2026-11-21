@@ -11,6 +11,42 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Runs that stop when they are told to, and fields that keep their values
+
+**Switching to the frequency sweep stops the run.** It used to only say it had:
+the transient sweep kept solving behind the Bode plot, a buzzer kept sounding,
+and coming back offered to resume a run that had never stopped. A stopped run
+that an edit would no longer match is now put away instead of being started
+again, so Stop followed by a change no longer sets the circuit running, and
+clearing the drawing no longer puts up "Could not simulate" for an empty sheet.
+A finished single shot that you edit is caught again as a single shot.
+
+**Opening a block no longer says "No ground".** The inside of a block was
+checked as a circuit of its own, so a block whose ground was outside it — where
+a ground belongs — read as broken, and Run failed. The banner now speaks for
+the whole circuit, and Run inside a block asks to be pressed from the drawing.
+
+**The inspector stops rewriting values you only looked at.** Tabbing through a
+field wrote back the four figures it shows: a 32.768 kHz crystal became
+32.77 kHz. Only what you type goes in now. A value with the wrong unit — `5 V`
+at a resistor — is refused instead of read as five milliohms, `100
+nanofarads` is understood, typing `0.5` into a kilohm field after a pause stays
+in kilohms, and a value set in the inspector shows on the drawing at once.
+Names with spaces, dots, colons or commas are refused, since those are how the
+names inside a part are joined.
+
+**Keyboard and controls.** Ctrl+R reloads the page again instead of rotating
+the selection, and Alt+arrow goes back instead of nudging. The × beside a probe
+placed on the drawing removes it (one Ctrl+Z brings it back). Undo and Redo are
+greyed out when there is nothing to undo or redo. `/` finds a part from the
+examples tab too. The command palette's highlight stays on its row while a run
+starts or stops, and Run and Stop show Space beside them. On a phone, the
+closed side panel is out of the Tab order. Zooming the timebase with the wheel
+writes one step into "Copy the steps taken", not one per notch.
+[#PR](https://github.com/Agustin-Delgado/repath/pulls)
+
+---
+
 ## 20 November 2026 — Saving from inside a block keeps the whole circuit
 
 **Save and Share work wherever you are.** With a block open for editing, File

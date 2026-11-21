@@ -22,6 +22,7 @@ import { sampleIndexAt } from './schematic/flow';
 import { contactControl, isHighAt } from './schematic/contacts';
 import { Acquisition } from './acquire';
 import { liveChanges, type RetuneAt } from './retune';
+import { nameRefusal } from './entry';
 import type { Capture } from './capture';
 import { Trace, wireRef, type Step } from './trace';
 import type { CircuitSettings, SharedCircuit } from './share';
@@ -106,7 +107,7 @@ import {
 	type Wire
 } from './schematic/model';
 import { elbow, rerouteMoved, routeWire, type RouteBetween } from './schematic/route';
-import { compileSchematic } from './schematic/netlist';
+import { compileSchematic, type CompileResult } from './schematic/netlist';
 import { serialBytes, usbSerialName, type LineEnding } from './schematic/serial';
 import {
 	buildConnectivity,
@@ -646,8 +647,16 @@ class AppState {
 	analysis = $state<'transient' | 'frequency'>('transient');
 	/** Playback belongs to the transient result; stop it when leaving that mode. */
 	setAnalysis(mode: 'transient' | 'frequency'): void {
+		if (mode === this.analysis) return;
 		this.trace.record({ op: 'analysis', mode });
-		if (mode === 'frequency') this.playing = false;
+		// Stopped, not just told it is: clearing `playing` alone left the
+		// sweep solving every frame behind the Bode plot, a buzzer sounding,
+		// and a Resume button offered for a run that was still going. What it
+		// caught stays, frozen, for when the transient view comes back.
+		this.stop();
+		// The results that were being kept in step belong to the other
+		// analysis. An edit from here on waits for Run, like on a fresh sheet.
+		this.live = false;
 		this.analysis = mode;
 	}
 	acStart = $state(DEFAULT_AC_START);
@@ -815,7 +824,37 @@ class AppState {
 			return;
 		}
 		this.playing = true;
+		// Edits follow a resumed sweep again, whatever stopped following them.
+		this.live = true;
 		this.acquiring.start();
+	}
+
+	/**
+	 * What an edit that the running circuit cannot take does to the run.
+	 *
+	 * Called once the edit has settled, after `retuneLive` said no. A sweep
+	 * that is going starts again on the new circuit, and a single shot that
+	 * has finished is caught again, as a single shot: the window is what was
+	 * asked for. A sweep somebody stopped is not started for them — an edit is
+	 * not a Run — so it is put away instead, since its samples belong to a
+	 * circuit that is no longer drawn. A run that failed is tried again,
+	 * because changing the circuit is how a failure gets fixed.
+	 */
+	followEdit(): void {
+		if (!this.live) return;
+		const acquiring = this.acquiring;
+		if (acquiring && !acquiring.sweeping && !acquiring.single && this.error === null) {
+			this.discardRun();
+			this.live = false;
+			return;
+		}
+		// Nothing left to simulate is a sheet at rest, not a failure to report.
+		if (this.schematic.instances.length === 0) {
+			this.discardRun();
+			this.live = false;
+			return;
+		}
+		void this.run({ quiet: true, single: acquiring?.single ?? false });
 	}
 
 	/**
@@ -831,8 +870,11 @@ class AppState {
 		this.playbackTime = Math.min(Math.max(time, this.capture.earliest), this.capture.now);
 	}
 
-	private past: HistoryEntry[] = [];
-	private future: HistoryEntry[] = [];
+	// Reactive, so the Undo and Redo buttons can say when there is nothing to
+	// do: as plain arrays `canUndo` was worked out once, at start, and never
+	// again. The entries are strings and id lists, cheap to watch.
+	private past = $state<HistoryEntry[]>([]);
+	private future = $state<HistoryEntry[]>([]);
 	/** Running total of the serialized history, so it can be capped by size. */
 	private historyBytes = 0;
 	private clipboard: {
@@ -855,6 +897,23 @@ class AppState {
 	private gesture: Step | null = null;
 
 	compiled = $derived(compileSchematic(this.schematic, this.temperature + 273.15, this.sample, this.logicFamily));
+
+	/**
+	 * The whole circuit compiled, wherever the editor stands.
+	 *
+	 * On the drawing it is `compiled`. With a block open, `compiled` is that
+	 * block's inside on its own, which has no ground and whose ports lead
+	 * nowhere — so the circuit's own errors are asked of the drawing as leaving
+	 * the block would leave it, or every block opened read "No ground" when the
+	 * ground was outside it, where it belongs.
+	 */
+	circuit = $derived.by((): CompileResult => {
+		if (this.depth === 0) return this.compiled;
+		const { level, definitions } = this.wholeDrawing();
+		return withKinds(definitions, () =>
+			compileSchematic(level.schematic, this.temperature + 273.15, this.sample, this.logicFamily)
+		);
+	});
 
 	/** Probes placed on the drawing, in the order they were put there. */
 	probeInstances = $derived(this.schematic.instances.filter((i) => i.kind === 'probe'));
@@ -914,6 +973,7 @@ class AppState {
 	});
 
 	canUndo = $derived(this.past.length > 0);
+	canRedo = $derived(this.future.length > 0);
 
 	// -- history ----------------------------------------------------------
 
@@ -1926,6 +1986,8 @@ class AppState {
 		// that fits inside its edge.
 		if (instance.kind === 'port' && /\s/.test(trimmed)) return 'A port name cannot have spaces in it.';
 		if (instance.kind === 'port' && trimmed.length > BLOCK_PORT_WIDTH) return PORT_TOO_LONG;
+		const unfit = nameRefusal(trimmed);
+		if (unfit) return unfit;
 		if (this.schematic.instances.some((i) => i.id !== id && i.name === trimmed)) {
 			return `${trimmed} is already taken.`;
 		}
@@ -2757,6 +2819,10 @@ class AppState {
 		};
 		this.selection = [];
 		this.probes = [];
+		// An empty sheet has nothing to keep in step with: an edit after this
+		// waits for Run, as on a sheet that was never run, rather than trying to
+		// simulate nothing and putting up an error nobody asked for.
+		this.live = false;
 		// Like every other path that replaces the whole drawing. Clearing `result`
 		// alone left the sweep going: the engine's `Simulation` was never freed, the
 		// transport still said it was playing, and the next frame put the samples
@@ -3017,6 +3083,36 @@ class AppState {
 		if (handle) this.probes = [...this.probes, handle];
 	}
 
+	/**
+	 * Take one plotted signal off the scope, by the key `activeProbes` gave it.
+	 *
+	 * A probe placed on the drawing is plotted because it is there — that is
+	 * what placing one means — so taking it off the scope takes it off the
+	 * drawing, as one undoable step. It used to go through `toggleProbe`,
+	 * which only knows the probes picked by name: the × on a placed probe did
+	 * nothing, or plotted the same net a second time.
+	 */
+	unplot(key: string): void {
+		const placed = this.placedProbe(key);
+		if (!placed) {
+			this.probes = this.probes.filter((k) => k !== key);
+			return;
+		}
+		const kept = this.selection.filter((id) => id !== placed.id);
+		this.selection = [placed.id];
+		this.deleteSelection();
+		this.selection = this.stillPresent(kept);
+	}
+
+	/** Whether a plotted signal's key is a probe standing on the drawing. */
+	isPlacedProbe(key: string): boolean {
+		return this.placedProbe(key) !== undefined;
+	}
+
+	private placedProbe(key: string): Instance | undefined {
+		return this.probeInstances.find((i) => probePin(i.id, 'p') === key);
+	}
+
 	isProbed(netIndex: number): boolean {
 		return this.activeProbes.some((p) => p.netIndex === netIndex);
 	}
@@ -3219,6 +3315,24 @@ class AppState {
 	 * leaving would. Coming back into the block is the draft's business.
 	 */
 	toDocument(): RepathDocument {
+		const { level } = this.wholeDrawing();
+		return toDocument({
+			schematic: level.schematic,
+			stopTime: this.stopTime,
+			probes: [...level.probes],
+			settings: this.settings()
+		});
+	}
+
+	/**
+	 * The drawing as leaving every open block would leave it, and the block
+	 * definitions that would be registered on the way: `toDocument`'s circuit,
+	 * and what `circuit` compiles with a block open.
+	 */
+	private wholeDrawing(): {
+		level: { schematic: Schematic; probes: string[] };
+		definitions: ComponentDef[];
+	} {
 		let level = { schematic: $state.snapshot(this.schematic) as Schematic, probes: this.probes };
 		// Innermost out, each level written back with the definitions the levels
 		// above it produced, as leaving one at a time would have registered them.
@@ -3228,12 +3342,7 @@ class AppState {
 			level = back;
 			definitions = [...definitions, ...back.definitions];
 		}
-		return toDocument({
-			schematic: level.schematic,
-			stopTime: this.stopTime,
-			probes: [...level.probes],
-			settings: this.settings()
-		});
+		return { level, definitions };
 	}
 
 	/** What `writeBack` needs of a level left behind, as plain data. */
@@ -3777,6 +3886,16 @@ class AppState {
 		// Only a deliberate press. A restart after an edit follows from the edit
 		// that is already written down, and logging it would double every line.
 		if (!options.quiet) this.trace.record({ op: 'run' });
+		// The live layer, the probes and the scope all read the drawing on
+		// screen, and inside a block that is one definition, which every copy of
+		// it shares: there is no one copy whose voltages it could show. So a run
+		// is of the drawing, and asked for from there, rather than simulating
+		// the inside alone — which has no ground — and failing for it.
+		if (this.depth > 0) {
+			this.discardRun();
+			this.notice = 'Leave the block to run the circuit. A block’s inside is shared by every copy of it, so it has no voltages of its own to show.';
+			return;
+		}
 		if (!this.compiled.netlist) {
 			this.error = this.compiled.errors.join(' ');
 			this.discardRun();
@@ -3793,14 +3912,16 @@ class AppState {
 			const compiled = this.compiled;
 			if (!compiled.netlist) throw new Error(compiled.errors.join(' '));
 			if (this.analysis === 'frequency') {
+				// Whatever transient sweep is left over is no longer what is on
+				// screen: it is thrown away, not just cut off from edits, or it
+				// stayed in memory and came back to be resumed as the run of a
+				// circuit that may since have changed.
+				this.discardRun();
 				if (!this.hasAcDrive) {
 					throw new Error(
 						'No source is driving the sweep. Set a voltage source’s AC drive to 1 to make it the input.'
 					);
 				}
-				// Whatever transient sweep is left over is no longer what is on
-				// screen, and an edit is not to be slipped into it.
-				this.liveNetlist = null;
 				this.acResult = await runFrequencySweep(compiled.netlist, this.acStart, this.acStop);
 				if (this.probes.length === 0) this.autoProbe();
 			} else {
