@@ -151,7 +151,15 @@ export function splitValue(value: number, digits = 4): SplitValue {
 	if (!Number.isFinite(value) || value === 0) return { mantissa: 0, prefix: '' };
 
 	const magnitude = Math.abs(value);
-	const [scale, prefix] = SCALE.find(([s]) => magnitude >= s) ?? SCALE[SCALE.length - 1];
+	let index = SCALE.findIndex(([s]) => magnitude >= s);
+	if (index < 0) index = SCALE.length - 1;
+	// Rounding can carry into the next decade — 999.96 at four figures is 1000 —
+	// and then it belongs in that decade, as `formatValue` already puts it: the
+	// label read 1k while the field beside it read 1000.
+	while (index > 0 && Math.abs(Number((value / SCALE[index][0]).toPrecision(digits))) >= 1000) {
+		index--;
+	}
+	const [scale, prefix] = SCALE[index];
 	// Rounded to the precision it is displayed at, so what is shown and what is
 	// stored cannot drift apart over repeated edits.
 	return { mantissa: Number((value / scale).toPrecision(digits)), prefix };

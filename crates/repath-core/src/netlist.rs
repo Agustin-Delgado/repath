@@ -85,11 +85,28 @@ fn check_values(component: &Component) -> Result<(), NetlistError> {
             positive("the reverse gain", model.br),
         ]),
         Component::Mosfet { model, .. } => first(vec![
+            // The threshold is a magnitude for either channel: a P-channel part
+            // that turns on at -2 V is written `vto: 2`. A negative one is a
+            // depletion-mode device, which conducts with no gate drive at all;
+            // this model has none, and clamping it to zero built a transistor
+            // that is always on.
+            (!(model.vto.is_finite() && model.vto >= 0.0)).then(|| {
+                format!(
+                    "the threshold is a magnitude for either channel and cannot be negative,                      and is {} (a negative one is a depletion-mode device, which is not modelled)",
+                    model.vto
+                )
+            }),
             positive("the transconductance parameter", model.kp),
             positive("the channel width", model.w),
             positive("the channel length", model.l),
             not_negative("lambda", model.lambda),
         ]),
+        // Zero is allowed for all three and means what a drawing means by it — a
+        // wire, nothing, a wire — but a negative value was folded to its
+        // magnitude, which ran a circuit nobody drew.
+        Component::Resistor { resistance, .. } => not_negative("the resistance", *resistance),
+        Component::Capacitor { capacitance, .. } => not_negative("the capacitance", *capacitance),
+        Component::Inductor { inductance, .. } => not_negative("the inductance", *inductance),
         _ => None,
     };
     match found {
@@ -585,7 +602,7 @@ impl Bridge {
 }
 
 /// A complete circuit, ready to be compiled and simulated.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Netlist {
     #[serde(default)]
     pub components: Vec<Component>,
@@ -609,6 +626,22 @@ pub struct Netlist {
 
 fn default_temperature() -> f64 {
     TNOM
+}
+
+/// Written out rather than derived: a derived default put the circuit at zero
+/// kelvin, so a netlist built in code with `..Default::default()` ran every
+/// junction at absolute zero while the same netlist read from JSON ran at room
+/// temperature.
+impl Default for Netlist {
+    fn default() -> Self {
+        Self {
+            components: Vec::new(),
+            devices: Vec::new(),
+            bridges: Vec::new(),
+            logic_family: LogicFamily::default(),
+            temperature: default_temperature(),
+        }
+    }
 }
 
 /// Names that always mean ground, whatever case the user typed.
@@ -638,6 +671,18 @@ impl Netlist {
 
         for component in &self.components {
             check_values(component)?;
+        }
+        // At absolute zero there are no carriers and the thermal voltage is zero,
+        // which every junction divides by. Refused here, by name, rather than
+        // reported as a failure to converge blamed on whichever diode was first.
+        if !(self.temperature.is_finite() && self.temperature > 0.0) {
+            return Err(NetlistError::BadValue {
+                component: "the circuit".into(),
+                reason: format!(
+                    "a temperature of {} K is at or below absolute zero, where no junction conducts",
+                    self.temperature
+                ),
+            });
         }
 
         let mut circuit = Circuit::new();

@@ -150,19 +150,30 @@ export class EngineError extends Error {
 	failure: SolveFailure | null = null;
 }
 
-function toEngineError(cause: unknown): EngineError {
+/** @internal Exported for the tests; everything else goes through the calls below. */
+export function toEngineError(cause: unknown): EngineError {
 	if (cause instanceof EngineError) return cause;
 	const message = cause instanceof Error ? cause.message : String(cause);
 	const error = new EngineError(message);
-	error.failure = readFailure();
+	error.failure = readFailure(message);
 	return error;
 }
 
-/** What the engine kept about the error it raised last, if it was a solve's. */
-function readFailure(): SolveFailure | null {
+/**
+ * What the engine kept about the error it raised last, if it was a solve's and
+ * it is the error in hand.
+ *
+ * The engine hands a failure over once and says which message it went with.
+ * Both matter: without them, an error that never reached the solver — a trap,
+ * a copy out of memory, a call made with no live run — picked up whatever the
+ * last failed solve had left and highlighted its parts on the drawing.
+ */
+function readFailure(message: string): SolveFailure | null {
 	try {
 		const raw = lastFailure();
-		return raw ? (JSON.parse(raw) as SolveFailure) : null;
+		if (!raw) return null;
+		const { message: raisedWith, ...failure } = JSON.parse(raw) as SolveFailure & { message?: string };
+		return raisedWith === message ? failure : null;
 	} catch {
 		return null;
 	}

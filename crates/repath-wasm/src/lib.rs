@@ -90,6 +90,11 @@ struct FailureOut {
     time: Option<f64>,
     nodes: Vec<String>,
     elements: Vec<String>,
+    /// The error's own message. The caller matches it against the error it
+    /// caught, so a failure kept from an earlier call is never pinned on an
+    /// error that did not come from the solve — a trap, or a copy that ran out
+    /// of memory — and highlights parts that have nothing to do with it.
+    message: String,
 }
 
 thread_local! {
@@ -108,18 +113,23 @@ fn sim_js_error(e: SimError) -> JsError {
         _ => ("other", None),
     };
     let culprits = e.culprits().cloned().unwrap_or_default();
-    let out = FailureOut { kind, time, nodes: culprits.nodes, elements: culprits.elements };
+    let message = e.to_string();
+    let error = JsError::new(&message);
+    let out =
+        FailureOut { kind, time, nodes: culprits.nodes, elements: culprits.elements, message };
     let json = serde_json::to_string(&out).ok();
-    let error = JsError::new(&e.to_string());
     LAST_FAILURE.with(|last| *last.borrow_mut() = json);
     error
 }
 
 /// What the last failed call knew about where it failed, as JSON, or an
 /// empty string when it was not a failure of the solve.
+///
+/// Handed over once: reading it clears it, so a failure is attached to the
+/// error it came with and to nothing raised after.
 #[wasm_bindgen(js_name = lastFailure)]
 pub fn last_failure() -> String {
-    LAST_FAILURE.with(|last| last.borrow().clone().unwrap_or_default())
+    LAST_FAILURE.with(|last| last.borrow_mut().take().unwrap_or_default())
 }
 
 /// A compiled circuit plus its solver state.

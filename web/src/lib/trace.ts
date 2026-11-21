@@ -130,7 +130,28 @@ export class Trace {
 	}
 }
 
-const list = (names: readonly string[]) => (names.length ? names.join(',') : '-');
+/**
+ * A part's name as one token.
+ *
+ * A name is whatever someone typed, spaces and commas included, and the format
+ * splits on both: `rename R1 my part` replayed as a rename to `my`, and a part
+ * called `a,b` read back as two. The characters that separate are written as
+ * percent escapes — and the percent sign itself, and a lone `-`, which is how
+ * an empty list is written — so a name without them is written as it stands
+ * and an older trace still reads.
+ */
+const quote = (name: string): string =>
+	name === '-'
+		? '%2D'
+		: name.replace(
+				/[%\s,;]/g,
+				(c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`
+			);
+
+const unquote = (token: string): string =>
+	token.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+const list = (names: readonly string[]) => (names.length ? names.map(quote).join(',') : '-');
 // A wire is referred to by its ends, `x,y-x,y`, so a comma cannot separate two
 // of them: a list of wires joined with commas read back as a list of numbers,
 // and every move or delete that carried a wire failed to replay.
@@ -172,18 +193,18 @@ function format(step: Step): string {
 		case 'rotate':
 			return `rotate ${list(step.parts)} ${wireList(step.wires)}`;
 		case 'param':
-			return `param ${step.part} ${step.key} ${flatten(step.value)}`;
+			return `param ${quote(step.part)} ${step.key} ${flatten(step.value)}`;
 		case 'import':
 			return `import ${flatten(step.source)}`;
 		case 'rename':
-			return `rename ${step.part} ${step.to}`;
+			return `rename ${quote(step.part)} ${quote(step.to)}`;
 		// A group's name goes last: it may have spaces in it.
 		case 'group':
 			return `group ${list(step.parts)} ${step.name}`;
 		case 'ungroup':
 			return `ungroup ${list(step.parts)}`;
 		case 'regroup':
-			return `regroup ${step.part} ${step.name}`;
+			return `regroup ${quote(step.part)} ${step.name}`;
 		case 'box':
 			return `box ${list(step.parts)} ${step.name}`;
 		case 'unbox':
@@ -193,7 +214,7 @@ function format(step: Step): string {
 		case 'reblock':
 			return `reblock ${step.from} -> ${step.to}`;
 		case 'detach':
-			return `detach ${step.part}`;
+			return `detach ${quote(step.part)}`;
 		case 'port':
 			return `port ${step.from} ${step.to} ${step.block}`;
 		case 'portmove':
@@ -227,7 +248,7 @@ function format(step: Step): string {
 	}
 }
 
-const names = (token: string) => (token === '-' ? [] : token.split(','));
+const names = (token: string) => (token === '-' ? [] : token.split(',').map(unquote));
 const wireNames = (token: string) => (token === '-' ? [] : token.split(';'));
 const number = (token: string) => {
 	const value = Number(token);
@@ -293,7 +314,7 @@ function read(op: string, rest: string[]): Step {
 			const value = rest.slice(2).join(' ');
 			return {
 				op,
-				part: rest[0],
+				part: unquote(rest[0]),
 				key: rest[1],
 				value:
 					Number.isFinite(Number(value)) && value !== '' ? Number(value) : unflatten(value)
@@ -302,13 +323,13 @@ function read(op: string, rest: string[]): Step {
 		case 'import':
 			return { op, source: unflatten(rest.join(' ')) };
 		case 'rename':
-			return { op, part: rest[0], to: rest[1] };
+			return { op, part: unquote(rest[0]), to: unquote(rest[1]) };
 		case 'group':
 			return { op, parts: names(rest[0]), name: rest.slice(1).join(' ') };
 		case 'ungroup':
 			return { op, parts: names(rest[0]) };
 		case 'regroup':
-			return { op, part: rest[0], name: rest.slice(1).join(' ') };
+			return { op, part: unquote(rest[0]), name: rest.slice(1).join(' ') };
 		case 'box':
 			return { op, parts: names(rest[0]), name: rest.slice(1).join(' ') };
 		case 'unbox':
@@ -318,7 +339,7 @@ function read(op: string, rest: string[]): Step {
 			return { op, from: rest.slice(0, arrow).join(' '), to: rest.slice(arrow + 1).join(' ') };
 		}
 		case 'detach':
-			return { op, part: rest[0] };
+			return { op, part: unquote(rest[0]) };
 		case 'port':
 			return { op, from: rest[0], to: rest[1], block: rest.slice(2).join(' ') };
 		case 'portmove':

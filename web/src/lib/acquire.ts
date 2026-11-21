@@ -295,7 +295,17 @@ export class Acquisition {
 			this.keeping = this.keeping * 0.8 + Math.min(advanced / asked, 1) * 0.2;
 		}
 
-		this.host.onChunk();
+		// What the host does with the samples — reading a display's state, a
+		// buzzer's tones, the overlay — can throw as well, and outside the guard
+		// above it took the frame down before the next one was asked for: the run
+		// stayed "running", and nothing moved or said why.
+		try {
+			this.host.onChunk();
+		} catch (cause) {
+			this.stop();
+			this.host.onError(cause instanceof Error ? cause.message : String(cause), null);
+			return;
+		}
 
 		if (this.limit !== null && this.run.time >= this.limit - 1e-15) {
 			this.stop();
