@@ -300,7 +300,34 @@ const anchorCache = new WeakMap<
 	{ wires: unknown; instances: unknown; anchors: Anchors }
 >();
 
-function readingAnchors(view: DynamicView): Anchors {
+/** How far apart the places a reading may go are, along a wire. */
+const READING_STEP = 10;
+
+/**
+ * The places along a wire a net's reading may be written: its corners, and
+ * steps of about ten units between them. Corners alone were not enough — a
+ * short wire from a source's pin to the next part has both ends against a
+ * body, so the reading fell back to the pin and was written over the source,
+ * while the middle of that same wire is clear. A wire is one net end to end,
+ * so every place along it is filed under the net of its first point.
+ */
+export function readingCandidates(points: readonly Vec2[]): Vec2[] {
+	const out: Vec2[] = [];
+	for (let i = 0; i < points.length; i++) {
+		const a = points[i];
+		out.push(a);
+		const b = points[i + 1];
+		if (!b) continue;
+		const steps = Math.floor(Math.hypot(b.x - a.x, b.y - a.y) / READING_STEP);
+		for (let k = 1; k < steps; k++) {
+			const t = k / steps;
+			out.push({ x: Math.round(a.x + (b.x - a.x) * t), y: Math.round(a.y + (b.y - a.y) * t) });
+		}
+	}
+	return out;
+}
+
+export function readingAnchors(view: DynamicView): Anchors {
 	const { schematic, netOfPoint } = view;
 	const known = anchorCache.get(netOfPoint);
 	if (known && known.wires === schematic.wires && known.instances === schematic.instances) {
@@ -321,9 +348,10 @@ function readingAnchors(view: DynamicView): Anchors {
 
 	const anchor: Anchors = new Map();
 	for (const wire of schematic.wires) {
-		for (const point of wire.points) {
-			const net = netOfPoint.get(pointKey(point.x, point.y));
-			if (net === undefined) continue;
+		const first = wire.points[0];
+		const net = first && netOfPoint.get(pointKey(first.x, first.y));
+		if (net === undefined) continue;
+		for (const point of readingCandidates(wire.points)) {
 			const clear = clearOfParts(point);
 			const best = anchor.get(net);
 			// Clear of every symbol first, and only then highest and leftmost. A net
@@ -561,7 +589,7 @@ function drawFuse(painter: Painter, view: DynamicView, instance: Instance): void
 	const burn = view.burnouts.get(instance.id);
 	if (!burn || view.time < burn.time) return;
 	const at = { x: instance.x, y: instance.y };
-	const paths = symbolPaths(instance.kind, instance.params);
+	const paths = symbolPaths(instance.kind, instance.params, instance.rotation);
 	painter.transformed(at, instance.rotation, () => {
 		painter.strokePath(paths.stroke, { color: CHAR, width: 3 });
 		painter.polyline(
@@ -827,7 +855,7 @@ function drawLed(painter: Painter, view: DynamicView, instance: Instance): void 
 	// Past the moment it failed. The char is drawn first and unconditionally, so
 	// a burnt part still looks burnt when the transport is paused long after the
 	// blast has finished — the failure is a fact about the circuit, not an effect.
-	const paths = symbolPaths(instance.kind, instance.params);
+	const paths = symbolPaths(instance.kind, instance.params, instance.rotation);
 	painter.transformed(at, instance.rotation, () => {
 		painter.strokePath(paths.stroke, { color: CHAR, width: 3 });
 		if (paths.hasFill) painter.fillPath(paths.fill, { color: CHAR });

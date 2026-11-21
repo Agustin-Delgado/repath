@@ -29,6 +29,7 @@ import {
 import { DEFAULT_CLOCK, MCU_FALLING, MCU_RISING, PORT_PULL_UP_OHMS } from './chips-mcu';
 import { USB_SERIAL_OHMS, usbSerialName } from './serial';
 import { unfoldBlocks } from './blocks';
+import { pinLabel } from './nets';
 import { parseContents } from './memory';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
@@ -492,6 +493,14 @@ function compileFresh(
 			// Nor is a matrix module's DOUT: it is there to chain the next
 			// module on, and the last one in a chain, or the only one, has it open.
 			if (instance.kind === MATRIX_KIND && pin.name === 'DOUT') continue;
+			// Nor is a logic output nothing reads: a flip-flop's Q̅, the spare half
+			// of a dual part, the last stage of a divider whose carry goes nowhere.
+			// A real board leaves those open as a matter of course; what is worth a
+			// warning is an input nothing drives, which reads as unknown.
+			if (pin.domain === 'digital' && pin.direction === 'out') continue;
+			// Or a digit's decimal point, left unwired on every clock and counter
+			// that shows whole numbers.
+			if ((instance.kind === 'display7' || instance.kind === 'display7x4') && pin.name === 'dp') continue;
 			const index = connectivity.netOfPin.get(pinKey(instance.id, pin.name));
 			const net = index === undefined ? undefined : connectivity.nets[index];
 			// A pin with a wire hanging off it is fine — that is how you leave a
@@ -506,7 +515,7 @@ function compileFresh(
 						!net.points.some((key) => drawnPoints.has(key)))
 				: !net || (net.pins.length < 2 && net.points.length < 2);
 			if (alone) {
-				warnings.push(`${instance.name}.${pin.name} is not connected to anything.`);
+				warnings.push(`${pinLabel(instance.name, pin.name)} is not connected to anything.`);
 			}
 		}
 
@@ -1975,10 +1984,10 @@ function compileFresh(
 		const output = driven.pins.find(
 			(pin) => pin.pin.domain === 'digital' && pin.pin.direction !== 'in'
 		);
-		const who = output ? `${output.instance.name}.${output.pin.name}` : 'a logic output';
+		const who = output ? pinLabel(output.instance.name, output.pin.name) : 'a logic output';
 		const readers = driven.pins
 			.filter((pin) => pin.pin.domain === 'digital' && pin.pin.direction === 'in')
-			.map((pin) => `${pin.instance.name}.${pin.pin.name}`);
+			.map((pin) => pinLabel(pin.instance.name, pin.pin.name));
 		warnings.push(
 			`${instance.name} sits straight across ${who} and the rail with nothing to limit the current. The output is held at the LED's forward voltage, about 2 V — which is not a High to anything else on that net${readers.length ? ` (${readers.join(', ')} read${readers.length === 1 ? 's' : ''} it)` : ''} — and the current is whatever the output can give. A resistor in series, 330 Ω for about 10 mA from 5 V, is what makes it a lamp.`
 		);

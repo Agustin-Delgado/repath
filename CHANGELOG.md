@@ -225,6 +225,33 @@ scale, and the buzzer no longer clicks when a run stops.
 [#87](https://github.com/Agustin-Delgado/repath/pull/87)
 
 ---
+\n---\n\n## 21 November 2026 — Symbols, currents and examples that read right
+
+**Symbols say what the part does.** The PNP's arrow sits on its emitter, not
+its collector, and the MOSFET arrows point the right way for each channel. The
+plus and minus on an op-amp and a source stay upright however the part is
+turned, instead of reading as a bar. In IEC/GOST mode the op-amp is the boxed
+symbol those standards draw.
+
+**Current flows the right way.** A current source, a common-anode digit, a
+buzzer and a negative regulator (79xx) animate their current in the direction
+it actually goes, and a regulator's input and output currents add up.
+
+**Wires behave off the grid.** A wire to a pin that is off the grid gets a
+clean right-angle route, you can tap a branch off an off-grid wire, a pin in
+the middle of a wire gets its junction dot, and tidying a big drawing no
+longer slows down with its size.
+
+**The examples open clean.** No "check the wiring" card about pins nobody
+wires (a digit's decimal point, a logic output nothing reads). The RLC
+band-pass plots the band-pass node. A source's label shows its offset
+("12 V ± 3 V 1 kHz"). A column of identical resistors is labelled once
+(R1–R7, 330 Ω) instead of in a pile, probe names point the way the probe does,
+and examples that place their own probes plot those and nothing else.
+
+**Smaller things.** The LCD, the LED matrix and the servo have a Modules
+shelf, the probe a Measuring one. Warnings name pins as drawn (`V1.+`, not
+`V1.plus`), and a net label's count reads `R1.a · R2.a +3`.
 
 ## 20 November 2026 — Saving from inside a block keeps the whole circuit
 

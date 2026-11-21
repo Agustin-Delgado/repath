@@ -9,7 +9,6 @@
 
 import { positiveSupply } from './chips';
 import {
-	GRID,
 	SINGLE_CONTACTS,
 	chipOf,
 	definitionFor,
@@ -446,7 +445,7 @@ export function unexpectedJoin(
 	allowed: ReadonlySet<string>,
 	stable: ReadonlySet<string>
 ): [string, string] | null {
-	const name = (ref: PinRef) => `${ref.instance.name}.${ref.pin.name}`;
+	const name = (ref: PinRef) => pinLabel(ref.instance.name, ref.pin.name);
 	for (const net of after.nets) {
 		if (net.points.some((key) => allowed.has(key))) continue;
 		const seen = new Map<number, string>();
@@ -517,49 +516,80 @@ export function mergeWireChains(schematic: Schematic): Wire[] {
 		}
 	}
 
-	// Repeat until nothing more joins: a chain of N pieces takes N-1 passes.
-	//
-	// The bound is the count this started with. Measured against `wires.length` it
-	// closed on itself — each pass removes a wire, so after k joins the test read
-	// `k < N - k + 1` and gave up around halfway. A chain of five came out as two,
-	// six as two, eight as three, and every joint left behind is a fixed point that
-	// re-routing has to honour: the detours that read as the router being stupid.
-	const passes = wires.length;
-	for (let guard = 0; guard < passes; guard++) {
-		const ends = new Map<string, Array<{ index: number; atStart: boolean }>>();
-		wires.forEach((wire, index) => {
-			for (const atStart of [true, false]) {
-				const p = atStart ? wire.points[0] : wire.points[wire.points.length - 1];
-				const key = pointKey(p.x, p.y);
-				const list = ends.get(key);
-				if (list) list.push({ index, atStart });
-				else ends.set(key, [{ index, atStart }]);
-			}
-		});
-
-		let joined = false;
-		for (const [key, list] of ends) {
-			if (pins.has(key) || through.has(key) || list.length !== 2) continue;
-			const [a, b] = list;
-			// A wire whose own two ends meet is a loop, not a chain.
-			if (a.index === b.index) continue;
-
-			const first = wires[a.index];
-			const second = wires[b.index];
-			// Orient both so the shared point is where they meet in the middle.
-			const head = a.atStart ? [...first.points].reverse() : first.points;
-			const tail = b.atStart ? second.points : [...second.points].reverse();
-			const combined = simplifyPath([...head, ...tail.slice(1)]);
-
-			wires[a.index] = { id: first.id, points: combined };
-			wires.splice(b.index, 1);
-			joined = true;
-			break;
+	// Which ends can be folded together. Merging never moves a point and never
+	// changes how many ends meet anywhere else, so the joints are the same
+	// before the first fold as after the last: they are found once, and every
+	// chain is then walked end to end in one go. Folding a pair at a time and
+	// re-reading every end after each fold was quadratic — two seconds of tidy
+	// after a paste of a few thousand wire pieces.
+	const ends = new Map<string, Array<{ index: number; atStart: boolean }>>();
+	wires.forEach((wire, index) => {
+		for (const atStart of [true, false]) {
+			const p = atStart ? wire.points[0] : wire.points[wire.points.length - 1];
+			const key = pointKey(p.x, p.y);
+			const list = ends.get(key);
+			if (list) list.push({ index, atStart });
+			else ends.set(key, [{ index, atStart }]);
 		}
-		if (!joined) break;
-	}
+	});
+	/** The wire end on the far side of a foldable joint, or null. */
+	const across = (key: string, index: number, atStart: boolean) => {
+		if (pins.has(key) || through.has(key)) return null;
+		const list = ends.get(key)!;
+		if (list.length !== 2) return null;
+		const other = list[0].index === index && list[0].atStart === atStart ? list[1] : list[0];
+		// A wire whose own two ends meet is a loop, not a chain.
+		return other.index === index ? null : other;
+	};
+	const endKey = (index: number, atStart: boolean) => {
+		const points = wires[index].points;
+		const p = atStart ? points[0] : points[points.length - 1];
+		return pointKey(p.x, p.y);
+	};
 
-	return wires;
+	const used = new Array<boolean>(wires.length).fill(false);
+	const out = new Map<number, Wire>();
+	for (let first = 0; first < wires.length; first++) {
+		if (used[first]) continue;
+		// Walk from the end of the chain this piece is on, so the run keeps the
+		// direction the piece it is named after already had; failing that, back
+		// up to one end of the chain — or round the whole of a closed one, to
+		// where it started — so the walk forward takes it all.
+		let index = first;
+		let forward = true;
+		const freeStart = !across(endKey(first, true), first, true);
+		const freeEnd = !across(endKey(first, false), first, false);
+		if (!freeStart && freeEnd) forward = false;
+		for (let guard = 0; !freeStart && !freeEnd && guard < wires.length; guard++) {
+			const back = across(endKey(index, forward), index, forward);
+			if (!back || back.index === first) break;
+			index = back.index;
+			forward = !back.atStart;
+		}
+		const members: number[] = [];
+		const points: Point[] = [];
+		for (let guard = 0; guard <= wires.length; guard++) {
+			used[index] = true;
+			members.push(index);
+			const own = wires[index].points;
+			const oriented = forward ? own : [...own].reverse();
+			for (let i = points.length === 0 ? 0 : 1; i < oriented.length; i++) points.push(oriented[i]);
+			const next = across(endKey(index, !forward), index, !forward);
+			if (!next || used[next.index]) break;
+			index = next.index;
+			forward = next.atStart;
+		}
+		// The piece drawn first gives the run its identity and its place.
+		const keeper = Math.min(...members);
+		out.set(keeper, {
+			id: wires[keeper].id,
+			points:
+				members.length === 1
+					? wires[keeper].points
+					: simplifyPath(points, (p) => pins.has(pointKey(p.x, p.y)))
+		});
+	}
+	return [...out.entries()].sort((a, b) => a[0] - b[0]).map(([, wire]) => wire);
 }
 
 /**
@@ -596,9 +626,41 @@ export function junctionDots(schematic: Schematic): Point[] {
 		}
 	}
 
+	// A pin is a conductor meeting the wire like any other. A wire running
+	// through one — straight on, or as two wires ending there — is three things
+	// joined at a point, and without a dot it reads as a wire drawn across a
+	// pin it does not touch. One wire ending on a pin is only a connection.
+	const pinPoints = new LineIndex(
+		schematic.instances.flatMap((instance) =>
+			definitionFor(instance).pins.map((pin) => pinPosition(instance, pin))
+		)
+	);
+	const pins = new Map<string, Point>();
+	for (const instance of schematic.instances) {
+		for (const pin of definitionFor(instance).pins) {
+			const at = pinPosition(instance, pin);
+			pins.set(pointKey(at.x, at.y), at);
+		}
+	}
+	for (const segment of segments) {
+		for (const point of pinPoints.inside(segment.a, segment.b)) midwire.add(pointKey(point.x, point.y));
+	}
+
 	const dots: Point[] = [];
+	const placed = new Set<string>();
 	for (const [key, entry] of counts) {
-		if (entry.ends >= 3 || midwire.has(key)) dots.push(entry.point);
+		const conductors = entry.ends + (pins.has(key) ? 1 : 0);
+		if (conductors >= 3 || midwire.has(key)) {
+			dots.push(entry.point);
+			placed.add(key);
+		}
+	}
+	// A pin strictly inside a segment is at no segment's end, so it is not in
+	// the counts at all.
+	for (const key of midwire) {
+		if (placed.has(key) || !pins.has(key)) continue;
+		const at = pins.get(key)!;
+		dots.push({ x: at.x, y: at.y });
 	}
 	return dots;
 }
@@ -729,17 +791,20 @@ export function trimOverlaps(schematic: Schematic): Wire[] {
  */
 export function splitAtJunctions(schematic: Schematic, nextId: () => string): Wire[] {
 	const ends = new Set<string>();
+	const points: Point[] = [];
+	const add = (p: Point) => {
+		const key = pointKey(p.x, p.y);
+		if (ends.has(key)) return;
+		ends.add(key);
+		points.push({ x: p.x, y: p.y });
+	};
 	for (const wire of schematic.wires) {
-		for (const index of [0, wire.points.length - 1]) {
-			ends.add(pointKey(wire.points[index].x, wire.points[index].y));
-		}
+		for (const index of [0, wire.points.length - 1]) add(wire.points[index]);
 	}
 	for (const instance of schematic.instances) {
-		for (const pin of definitionFor(instance).pins) {
-			const at = pinPosition(instance, pin);
-			ends.add(pointKey(at.x, at.y));
-		}
+		for (const pin of definitionFor(instance).pins) add(pinPosition(instance, pin));
 	}
+	const lines = new LineIndex(points);
 
 	const out: Wire[] = [];
 	for (const wire of schematic.wires) {
@@ -747,7 +812,7 @@ export function splitAtJunctions(schematic: Schematic, nextId: () => string): Wi
 		let first = true;
 
 		for (;;) {
-			const at = firstJunctionWithin(rest, ends);
+			const at = firstJunctionWithin(rest, ends, lines);
 			if (!at) break;
 
 			out.push({ id: first ? wire.id : nextId(), points: at.before });
@@ -763,7 +828,8 @@ export function splitAtJunctions(schematic: Schematic, nextId: () => string): Wi
 /** Where another wire ends strictly inside this one, and the two halves it makes. */
 function firstJunctionWithin(
 	wire: Wire,
-	ends: ReadonlySet<string>
+	ends: ReadonlySet<string>,
+	lines: LineIndex<Point>
 ): { before: Point[]; after: Point[] } | null {
 	for (let i = 0; i < wire.points.length - 1; i++) {
 		const a = wire.points[i];
@@ -776,15 +842,21 @@ function firstJunctionWithin(
 			return { before: wire.points.slice(0, i + 1), after: wire.points.slice(i) };
 		}
 
-		const vertical = a.x === b.x;
-		const from = vertical ? a.y : a.x;
-		const to = vertical ? b.y : b.x;
-		const step = Math.sign(to - from) * GRID;
-		if (step === 0) continue;
-
-		for (let v = from + step; step > 0 ? v < to : v > to; v += step) {
-			const at = vertical ? { x: a.x, y: v } : { x: v, y: a.y };
-			if (!ends.has(pointKey(at.x, at.y))) continue;
+		// The nearest end strictly inside the segment, wherever it lies. Walking
+		// the segment a grid step at a time from its start only ever visited the
+		// lattice — and from a start off it, a lead at x = 515, not even that — so
+		// a pin five units off the grid sat inside a wire unsplit, with no dot.
+		let nearest: Point | null = null;
+		let distance = Infinity;
+		for (const p of lines.inside(a, b)) {
+			const d = Math.abs(p.x - a.x) + Math.abs(p.y - a.y);
+			if (d < distance) {
+				distance = d;
+				nearest = p;
+			}
+		}
+		if (nearest) {
+			const at = { x: nearest.x, y: nearest.y };
 			return {
 				before: [...wire.points.slice(0, i + 1), at],
 				after: [at, ...wire.points.slice(i + 1)]
@@ -928,7 +1000,17 @@ export function netLabel(net: Net, fallback: string): string {
 	// A middle dot, so the separator between two names is not the same character
 	// as the one inside them: `V1.+-R1.a` reads as one thing, `V1.+ · R1.a` as two.
 	const shown = named.slice(0, 2).join(' · ');
-	return named.length > 2 ? `${shown}+${named.length - 2}` : shown;
+	// Spaced like the dot is: `U1.LT+1` read as a pin named LT+1.
+	return named.length > 2 ? `${shown} +${named.length - 2}` : shown;
+}
+
+/**
+ * A pin the way it is printed for a person: `V1.+`, not `V1.plus`. The net
+ * labels already read like this, and a warning that named the same pin
+ * `V1.plus` sent anyone looking for it after a pin the drawing never shows.
+ */
+export function pinLabel(instance: string, pin: string): string {
+	return `${instance}.${short(pin)}`;
 }
 
 /** Pin names as they read on a label rather than in the catalog. */

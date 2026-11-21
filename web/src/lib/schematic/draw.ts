@@ -28,7 +28,14 @@ import {
 } from './model';
 import { GROUP_LABEL_GAP, groupLabelSize, placeGroups } from './groups';
 import { instanceBounds, instancePins } from './scene';
-import { symbolGeometry, symbolVariant, type Shape, type SymbolLabel } from './symbols';
+import {
+	shapeToPathData,
+	symbolGeometry,
+	symbolVariant,
+	turnsApart,
+	type Shape,
+	type SymbolLabel
+} from './symbols';
 import { SERVO_KIND } from './servo';
 
 export interface Theme {
@@ -168,10 +175,13 @@ const pathCache = new Map<string, SymbolPaths>();
 /** Far more variants than any drawing uses at once. */
 const SYMBOL_CACHE_LIMIT = 2000;
 
-function appendShape(target: Path2D, shape: Shape): void {
+function appendShape(target: Path2D, shape: Shape, rotation: Rotation): void {
 	switch (shape.kind) {
 		case 'path':
 			target.addPath(new Path2D(shape.d));
+			break;
+		case 'sign':
+			target.addPath(new Path2D(shapeToPathData(shape, rotation)));
 			break;
 		case 'rect':
 			target.rect(shape.x, shape.y, shape.w, shape.h);
@@ -183,22 +193,31 @@ function appendShape(target: Path2D, shape: Shape): void {
 	}
 }
 
-/** `Path2D` for a symbol variant, built once and reused for every instance. */
-export function symbolPaths(kind: string, params: Record<string, unknown>): SymbolPaths {
-	const key = symbolVariant(kind, params);
+/**
+ * `Path2D` for a symbol variant, built once and reused for every instance —
+ * once per turn for the few symbols with polarity marks, which are drawn the
+ * same way up whichever way their part faces.
+ */
+export function symbolPaths(
+	kind: string,
+	params: Record<string, unknown>,
+	rotation: Rotation = 0
+): SymbolPaths {
+	const geometry = symbolGeometry(kind, params);
+	const turn = turnsApart(geometry) ? rotation : 0;
+	const key = `${symbolVariant(kind, params)}@${turn}`;
 	const cached = pathCache.get(key);
 	if (cached) return cached;
 
-	const geometry = symbolGeometry(kind, params);
 	const stroke = new Path2D();
 	const fill = new Path2D();
 	let hasFill = false;
 	for (const shape of geometry.shapes) {
 		if (shape.fill) {
-			appendShape(fill, shape);
+			appendShape(fill, shape, turn);
 			hasFill = true;
 		} else {
-			appendShape(stroke, shape);
+			appendShape(stroke, shape, turn);
 		}
 	}
 
@@ -343,6 +362,31 @@ function wireColour(wire: Wire, view: SchematicView): { colour: string; width: n
 	return { colour: view.theme.wire, width: 1.5 };
 }
 
+/**
+ * What a source puts out, in the terms its parameters are set in. An offset is
+ * half of what a sine with one does — the zener example rides 3 V on 12 V, and
+ * a label reading "3 V 1 kHz" over a scope swinging 9 V to 15 V is a label for
+ * some other source. A pulse is written low to high, which is how it is set.
+ */
+export function sourceLabel(p: Record<string, unknown>, unit: 'V' | 'A'): string {
+	const value = Number(p.value);
+	const offset = Number(p.offset ?? 0) || 0;
+	const frequency = formatWithUnit(Number(p.frequency), 'Hz');
+	if (p.waveform === 'sine') {
+		const swing = formatWithUnit(value, unit);
+		return offset === 0
+			? `${swing} ${frequency}`
+			: `${formatWithUnit(offset, unit)} ± ${swing} ${frequency}`;
+	}
+	if (p.waveform === 'pulse') {
+		const high = formatWithUnit(offset + value, unit);
+		return offset === 0
+			? `${high} ${frequency}`
+			: `${formatWithUnit(offset, unit)}–${high} ${frequency}`;
+	}
+	return formatWithUnit(value, unit);
+}
+
 function valueLabel(instance: Instance): string | null {
 	const p = instance.params;
 	switch (instance.kind) {
@@ -370,11 +414,9 @@ function valueLabel(instance: Instance): string | null {
 		case 'battery':
 			return formatWithUnit(Number(p.voltage), 'V');
 		case 'vsource':
-			return p.waveform === 'dc'
-				? formatWithUnit(Number(p.value), 'V')
-				: `${formatWithUnit(Number(p.value), 'V')} ${formatWithUnit(Number(p.frequency), 'Hz')}`;
+			return sourceLabel(p, 'V');
 		case 'isource':
-			return formatWithUnit(Number(p.value), 'A');
+			return sourceLabel(p, 'A');
 		case 'led':
 			// The rating rather than the colour: the colour is already on the symbol,
 			// and what is worth reading off a schematic is the number you have to size
@@ -507,6 +549,85 @@ export function partLabels(instance: Instance): PartLabel[] {
 	return labels;
 }
 
+/**
+ * The labels printed on a drawing, part by part, with banks read as banks.
+ *
+ * Seven resistors twenty units apart, from a decoder's legs to a digit's,
+ * have no room for a name above and a value below each: there are four lines
+ * of print to fit in every twenty units, and what came out was a column of
+ * names and values printed over each other and over the next part's body. A
+ * schematic names a bank like that once — R1–R7 over the top, 330 Ω under the
+ * bottom — and so does this: a column of the same part, turned the same way,
+ * set to the same value and too close for its own labels, prints its names
+ * over the top one and its value under the bottom one.
+ */
+export function printedLabels(schematic: Schematic): Map<string, PartLabel[]> {
+	const printed = new Map<string, PartLabel[]>();
+	const columns = new Map<string, Array<{ instance: Instance; labels: PartLabel[] }>>();
+	for (const instance of schematic.instances) {
+		const labels = partLabels(instance);
+		printed.set(instance.id, labels);
+		const name = labels.find((l) => l.slot === 'name');
+		const value = labels.find((l) => l.slot === 'value');
+		// Above and below is the only placement that stacks into a column.
+		if (!name || !value || name.align !== 'center') continue;
+		const key = `${instance.kind}|${instance.rotation}|${instance.x}|${value.text}`;
+		const column = columns.get(key);
+		if (column) column.push({ instance, labels });
+		else columns.set(key, [{ instance, labels }]);
+	}
+	for (const column of columns.values()) {
+		if (column.length < 2) continue;
+		column.sort((a, b) => a.instance.y - b.instance.y);
+		let run: typeof column = [column[0]];
+		const flush = () => {
+			if (run.length >= 2) bank(run, printed);
+		};
+		for (let i = 1; i < column.length; i++) {
+			const above = column[i - 1];
+			const here = column[i];
+			// Crowded when the value under one would reach the name over the next.
+			const under = above.labels.find((l) => l.slot === 'value')!;
+			const over = here.labels.find((l) => l.slot === 'name')!;
+			const room = under.at.y - above.instance.y + BANK_LINE * 2 + (here.instance.y - over.at.y);
+			if (here.instance.y - above.instance.y < room) {
+				run.push(here);
+			} else {
+				flush();
+				run = [here];
+			}
+		}
+		flush();
+	}
+	return printed;
+}
+
+/** One line of label print, in world units at full size. */
+const BANK_LINE = 11;
+
+function bank(run: Array<{ instance: Instance; labels: PartLabel[] }>, printed: Map<string, PartLabel[]>): void {
+	const top = run[0];
+	const bottom = run[run.length - 1];
+	for (const member of run) printed.set(member.instance.id, []);
+	const name = top.labels.find((l) => l.slot === 'name')!;
+	const value = bottom.labels.find((l) => l.slot === 'value')!;
+	printed.set(top.instance.id, [{ ...name, text: bankName(run.map((m) => m.instance.name)) }]);
+	printed.set(bottom.instance.id, [...(printed.get(bottom.instance.id) ?? []), value]);
+}
+
+/** R1–R7 for a run of numbers, the numbers listed for a broken one, every name otherwise. */
+export function bankName(names: string[]): string {
+	const parsed = names.map((n) => /^(.*?)(\d+)$/.exec(n));
+	const prefix = parsed[0]?.[1];
+	if (prefix !== undefined && parsed.every((m) => m !== null && m[1] === prefix)) {
+		const numbers = parsed.map((m) => Number(m![2])).sort((a, b) => a - b);
+		const contiguous = numbers.every((n, i) => i === 0 || n === numbers[i - 1] + 1);
+		if (contiguous) return `${prefix}${numbers[0]}–${prefix}${numbers[numbers.length - 1]}`;
+		return numbers.map((n) => `${prefix}${n}`).join(', ');
+	}
+	return names.join(', ');
+}
+
 /** Where a label covers on screen, measured the way the monospace face sets it. */
 export function labelScreenBox(label: PartLabel, toScreen: (world: Vec2) => Vec2, scale: number): Rect {
 	const size = labelPixels(scale);
@@ -534,9 +655,10 @@ export function labelAt(
 	// A couple of pixels of slack: the text is small, and a press that lands
 	// between two letters of it is still a press on it.
 	const slack = 2;
+	const printed = printedLabels(schematic);
 	for (let i = schematic.instances.length - 1; i >= 0; i--) {
 		const instance = schematic.instances[i];
-		for (const label of partLabels(instance)) {
+		for (const label of printed.get(instance.id) ?? []) {
 			const box = labelScreenBox(label, toScreen, scale);
 			if (
 				screen.x >= box.x - slack &&
@@ -623,6 +745,26 @@ export function labelPosition(label: SymbolLabel, rotation: Rotation): Vec2 {
 	return rotatePoint(place.x, place.y, rotation);
 }
 
+/** Past the ring on top of a probe's stalk, which reaches 26 from its point. */
+const PROBE_LABEL_REACH = 28;
+
+/**
+ * Where a probe's name goes: beyond the ring, the way the stalk points. Always
+ * above, as it was, put a probe turned on its side with its name floating over
+ * nothing in particular — over the next part along, in the EEPROM example.
+ */
+export function probeLabelPlace(instance: Instance): {
+	at: Vec2;
+	align: 'center' | 'left' | 'right';
+	baseline: 'bottom' | 'top' | 'middle';
+} {
+	const out = rotatePoint(0, -PROBE_LABEL_REACH, instance.rotation);
+	const at = { x: instance.x + out.x, y: instance.y + out.y };
+	if (out.x > 0) return { at, align: 'left', baseline: 'middle' };
+	if (out.x < 0) return { at, align: 'right', baseline: 'middle' };
+	return { at, align: 'center', baseline: out.y < 0 ? 'bottom' : 'top' };
+}
+
 export function drawSchematic(painter: Painter, view: SchematicView, visible: Rect): void {
 	const { theme } = view;
 	const scale = painter.viewport.scale;
@@ -652,6 +794,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 
 	const showPins = scale > 0.45;
 	const showLabels = scale > 0.35;
+	const printed = showLabels ? printedLabels(view.schematic) : new Map<string, PartLabel[]>();
 
 	for (const instance of view.schematic.instances) {
 		if (!instanceVisible(instance, region)) continue;
@@ -675,7 +818,8 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 					? { ...instance.params, state: live ? 'high' : 'low' }
 					: instance.kind === SERVO_KIND
 						? { ...instance.params, horn: 'live' }
-						: { ...instance.params, start: live ? 'closed' : 'open' }
+						: { ...instance.params, start: live ? 'closed' : 'open' },
+			instance.rotation
 		);
 
 		painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
@@ -717,17 +861,14 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 		// rather than of holding a legend in your head.
 		if (showLabels && instance.kind === 'probe') {
 			const probe = view.probes?.get(instance.id);
-			painter.text(
-				probe?.label ?? instance.name,
-				{ x: instance.x, y: instance.y - 28 },
-				{
-					size: labelSize,
-					color: probe?.colour ?? theme.labelStrong,
-					align: 'center',
-					baseline: 'bottom',
-					minSize: 6
-				}
-			);
+			const place = probeLabelPlace(instance);
+			painter.text(probe?.label ?? instance.name, place.at, {
+				size: labelSize,
+				color: probe?.colour ?? theme.labelStrong,
+				align: place.align,
+				baseline: place.baseline,
+				minSize: 6
+			});
 			continue;
 		}
 
@@ -750,7 +891,7 @@ export function drawSchematic(painter: Painter, view: SchematicView, visible: Re
 		}
 
 		if (showLabels) {
-			for (const label of partLabels(instance)) {
+			for (const label of printed.get(instance.id) ?? []) {
 				painter.text(label.text, label.at, {
 					size: labelSize,
 					color: label.strong ? theme.labelStrong : theme.labelDim,

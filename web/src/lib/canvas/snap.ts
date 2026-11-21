@@ -138,8 +138,16 @@ export class SnapIndex {
 
 	/** Nearest point on any wire within `radius`. */
 	nearestSegment(at: Vec2, radius: number, exclude?: (s: SnapSegment) => boolean): SnapTarget | null {
+		return this.nearestOnSegment(at, radius, exclude)?.target ?? null;
+	}
+
+	private nearestOnSegment(
+		at: Vec2,
+		radius: number,
+		exclude?: (s: SnapSegment) => boolean
+	): { target: SnapTarget; segment: SnapSegment } | null {
 		const limit = radius * radius;
-		let best: SnapTarget | null = null;
+		let best: { target: SnapTarget; segment: SnapSegment } | null = null;
 		let bestDistance = Infinity;
 
 		const region: Rect = { x: at.x - radius, y: at.y - radius, w: radius * 2, h: radius * 2 };
@@ -153,7 +161,10 @@ export class SnapIndex {
 				const projected = closestPointOnSegment(at, segment.a, segment.b);
 				const d = distanceSquared(at, projected);
 				if (d <= limit && d < bestDistance) {
-					best = { x: projected.x, y: projected.y, kind: 'wire', ownerId: segment.ownerId };
+					best = {
+						target: { x: projected.x, y: projected.y, kind: 'wire', ownerId: segment.ownerId },
+						segment
+					};
 					bestDistance = d;
 				}
 			}
@@ -181,15 +192,8 @@ export class SnapIndex {
 			if (point) return point;
 		}
 		if (options.segments !== false) {
-			const segment = this.nearestSegment(at, radius, options.excludeSegment);
-			if (segment) {
-				// Land on the lattice along the wire so the resulting geometry stays
-				// on-grid; a wire tapped at x=137.4 makes a mess of everything after.
-				const snapped = snapPoint(segment, grid);
-				const onAxis =
-					Math.abs(segment.x - snapped.x) < grid && Math.abs(segment.y - snapped.y) < grid;
-				return onAxis ? { ...segment, x: snapped.x, y: snapped.y } : segment;
-			}
+			const found = this.nearestOnSegment(at, radius, options.excludeSegment);
+			if (found) return alongSegment(found.target, found.segment, grid);
 		}
 		const snapped = snapPoint(at, grid);
 		return { x: snapped.x, y: snapped.y, kind: 'grid' };
@@ -202,4 +206,28 @@ export class SnapIndex {
 	get segmentCount(): number {
 		return this.segments.length;
 	}
+}
+
+/**
+ * A tap on a wire, landed on the lattice *along* the wire and nowhere else.
+ *
+ * A wire tapped at x=137.4 makes a mess of everything drawn from there, so the
+ * coordinate that runs along the wire is snapped. The one across it is the
+ * wire's own: rounding that as well pulled a tap on a wire that runs off the
+ * grid — the lead of a 555 at x = 515, a digit's segment at y = 265 — five
+ * units off the wire, where it connected to nothing. A slanted wire keeps the
+ * plain projection, and so does a short one with no lattice point on it.
+ */
+export function alongSegment(target: SnapTarget, segment: SnapSegment, grid: number): SnapTarget {
+	const { a, b } = segment;
+	const within = (v: number, p: number, q: number) => v >= Math.min(p, q) && v <= Math.max(p, q);
+	if (a.y === b.y) {
+		const x = snapPoint({ x: target.x, y: 0 }, grid).x;
+		return within(x, a.x, b.x) ? { ...target, x, y: a.y } : { ...target, y: a.y };
+	}
+	if (a.x === b.x) {
+		const y = snapPoint({ x: 0, y: target.y }, grid).y;
+		return within(y, a.y, b.y) ? { ...target, x: a.x, y } : { ...target, x: a.x };
+	}
+	return target;
 }
