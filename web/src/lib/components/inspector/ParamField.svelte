@@ -2,14 +2,8 @@
 	import { Select } from '$lib/ui';
 	import type { ParamDef } from '$lib/schematic/model';
 	import { app } from '$lib/state.svelte';
-	import {
-		joinValue,
-		parseValue,
-		PREFIX_OPTIONS,
-		splitValue,
-		stepValue,
-		type SplitValue
-	} from '$lib/units';
+	import { onLeave, readEntry } from '$lib/entry';
+	import { joinValue, PREFIX_OPTIONS, splitValue, stepValue, type SplitValue } from '$lib/units';
 	import { fieldBox, fieldInput, fieldLabel, hint, problem as problemClass } from './styles';
 
 	/**
@@ -68,8 +62,16 @@
 		return refusal === null;
 	}
 
-	/** Typed with its own prefix — `4k7`, `10meg` — rather than beside the scale picker. */
-	const hasOwnPrefix = (raw: string) => /[fpnuµμmkKMGT]|meg/i.test(raw.trim());
+	/**
+	 * The decade beside the field when typing began.
+	 *
+	 * Taken once, on focus, not from the value as it stands at each keystroke:
+	 * the value moves while typing, since each pause applies what is there, and
+	 * `0` applied on the way to `0.5` dropped a 4.7 kΩ field out of the kilo
+	 * decade, so the 0.5 that followed went in as half an ohm.
+	 */
+	let typedIn: string | null = null;
+	const decade = () => typedIn ?? split(value).prefix;
 
 	/**
 	 * A keystroke.
@@ -87,11 +89,11 @@
 		// Captured now: a timer that fires after the selection has moved on must
 		// still apply to the part the value was typed for.
 		const target = id;
-		const prefix = split(value).prefix;
+		const prefix = decade();
 		settling = setTimeout(() => {
-			const typed = parseValue(raw);
+			const typed = readEntry(raw, param.unit, prefix);
 			if (typed === null) return;
-			refusal = app.setParam(target, param.key, hasOwnPrefix(raw) ? typed : joinValue(typed, prefix));
+			refusal = app.setParam(target, param.key, typed);
 		}, SETTLE_MS);
 	}
 
@@ -107,16 +109,21 @@
 			editing = null;
 			field.value = String(split(value).mantissa);
 		};
+		// Nothing typed since the field was focused: nothing to apply. Writing
+		// back what is shown would write the rounded figure — a Tab through
+		// the panel turned a 32.768 kHz crystal into 32.77 kHz.
+		const prefix = decade();
+		typedIn = null;
 		// Someone with the habit will still type `4k7`, and there is no reason to
 		// punish them for it — it parses, and the scale beside the field follows.
-		const typed = parseValue(raw);
-		if (typed === null) {
-			refusal = `“${raw.trim()}” is not a number.`;
+		const leaving = onLeave(editing === null ? null : raw, param.unit, prefix);
+		if (leaving.kind === 'keep') return;
+		if (leaving.kind === 'refuse') {
+			refusal = leaving.message;
 			restore();
 			return;
 		}
-		const next = hasOwnPrefix(raw) ? typed : joinValue(typed, split(value).prefix);
-		if (apply(next)) editing = null;
+		if (apply(leaving.value)) editing = null;
 		else restore();
 	}
 
@@ -214,6 +221,7 @@
 				title="Arrow keys step the value — Shift for ten at a time, Alt for a tenth"
 				value={editing ?? String(split(value).mantissa)}
 				class={fieldInput}
+				onfocus={() => (typedIn = split(value).prefix)}
 				oninput={(e) => typing(e.currentTarget.value)}
 				onblur={(e) => commit(e.currentTarget.value, e.currentTarget)}
 				onkeydown={(e) => {

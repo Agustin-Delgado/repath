@@ -7,7 +7,7 @@
 	import { recentParts } from '$lib/parts/recent.svelte';
 	import { fold, search } from '$lib/search';
 	import { app } from '$lib/state.svelte';
-	import { buildCommands, type Command, type CommandContext } from './commands';
+	import { buildCommands, keepHighlight, type Command, type CommandContext } from './commands';
 
 	/**
 	 * One box that does everything: Ctrl+K, type, Enter.
@@ -20,7 +20,13 @@
 
 	let { context, open = $bindable(false) }: { context: CommandContext; open?: boolean } = $props();
 	let query = $state('');
-	let active = $state(0);
+	/**
+	 * The highlighted row, by key rather than by place: the list changes
+	 * under an open palette whenever something it shows comes or goes — Run
+	 * becomes Stop as a run starts — and a highlight held by index slid onto
+	 * a different row, or back to the top, just before Enter.
+	 */
+	let activeKey = $state<string | null>(null);
 
 	type Row =
 		| { type: 'command'; key: string; command: Command }
@@ -73,6 +79,9 @@
 		];
 	});
 
+	const active = $derived(keepHighlight(rows.map((row) => row.key), activeKey));
+	const highlight = (index: number) => (activeKey = rows[index]?.key ?? null);
+
 	function partition<T>(items: T[], test: (item: T) => boolean): [T[], T[]] {
 		const yes: T[] = [];
 		const no: T[] = [];
@@ -80,9 +89,11 @@
 		return [yes, no];
 	}
 
+	// A new query, or the palette opened again, starts from the top.
 	$effect(() => {
-		void rows;
-		active = 0;
+		void query;
+		void open;
+		activeKey = null;
 	});
 	$effect(() => {
 		document.getElementById(`command-row-${active}`)?.scrollIntoView({ block: 'nearest' });
@@ -102,10 +113,10 @@
 	function onKey(event: KeyboardEvent) {
 		if (event.key === 'ArrowDown') {
 			event.preventDefault();
-			active = Math.min(active + 1, rows.length - 1);
+			highlight(Math.min(active + 1, rows.length - 1));
 		} else if (event.key === 'ArrowUp') {
 			event.preventDefault();
-			active = Math.max(active - 1, 0);
+			highlight(Math.max(active - 1, 0));
 		} else if (event.key === 'Enter') {
 			event.preventDefault();
 			choose(rows[active]);
@@ -161,13 +172,13 @@
 					spellcheck="false"
 					class="h-11 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-fg outline-none placeholder:text-muted"
 				/>
-				<kbd class="rounded border border-border px-1.5 font-mono text-[0.6rem] leading-4 text-muted">Esc</kbd>
+				<kbd class="rounded border border-border px-1.5 font-mono text-3xs leading-4 text-muted">Esc</kbd>
 			</label>
 
 			<div id="command-rows" role="listbox" aria-label="Results" class="min-h-0 flex-1 overflow-y-auto p-1.5">
 				{#each rows as row, i (row.key)}
 					{#if i === 0 || heading(rows[i - 1]) !== heading(row)}
-						<div class="px-2 pt-2 pb-1 text-[0.62rem] font-semibold tracking-[0.08em] text-muted uppercase">
+						<div class="px-2 pt-2 pb-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
 							{heading(row)}
 						</div>
 					{/if}
@@ -178,7 +189,7 @@
 						tabindex="-1"
 						aria-selected={i === active}
 						onclick={() => choose(row)}
-						onpointermove={() => (active = i)}
+						onpointermove={() => highlight(i)}
 						class="flex min-h-8 cursor-pointer items-center gap-2.5 rounded-md px-2 py-1 [--symbol-stroke:var(--symbol)]
 							{i === active ? 'bg-hover' : ''}"
 					>
@@ -186,7 +197,7 @@
 							<PartIcon kind={row.part.kind} class="h-[22px] w-[30px]" />
 							<div class="flex min-w-0 flex-1 flex-col">
 								<span class="truncate text-ui">Place {row.part.label}</span>
-								<span class="truncate text-[0.64rem] text-muted">
+								<span class="truncate text-3xs text-muted">
 									{sectionLabel(row.part.section)}{row.part.description ? ` · ${row.part.description}` : ''}
 								</span>
 							</div>
@@ -194,11 +205,11 @@
 							<div class="flex min-w-0 flex-1 flex-col">
 								<span class="truncate text-ui">{row.command.label}</span>
 								{#if row.command.description}
-									<span class="truncate text-[0.64rem] text-muted">{row.command.description}</span>
+									<span class="truncate text-3xs text-muted">{row.command.description}</span>
 								{/if}
 							</div>
 							{#if row.command.shortcut}
-								<kbd class="shrink-0 font-mono text-[0.62rem] text-muted">{row.command.shortcut}</kbd>
+								<kbd class="shrink-0 font-mono text-3xs text-muted">{row.command.shortcut}</kbd>
 							{/if}
 						{/if}
 						{#if i === active}<CornerDownLeft class="size-3.5 shrink-0 text-muted" />{/if}

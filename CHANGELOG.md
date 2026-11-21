@@ -11,6 +11,271 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — The chip's timers, pins and serial port, closer to the datasheet
+
+**Phase-correct PWM changes frequency cleanly.** Raising TOP in a phase-correct
+mode (Timer0 or Timer2 mode 5, Timer1 mode 11) used to let the counter keep
+climbing to the new TOP mid-period, stretching that one period. It now turns at
+the old TOP and counts up to the new one on the next slope, as the chip does.
+Timer1's modes 8 and 10 no longer toggle OC1A with COM1A = 01: on the chip the
+pin stays the port's there.
+
+**A software interrupt works on a pin with nothing wired to it.** Writing a
+pin that is an output now raises its INT0/INT1 or pin-change interrupt whether
+or not anything is connected to it — the datasheet's way of triggering an
+interrupt from code.
+
+**Serial stops cleanly.** Clearing TXEN with bytes still going out lets them
+finish on the wire before TX is let go, instead of cutting the line mid-frame.
+And a sketch printing in a loop for an hour no longer fills the engine's memory:
+it keeps the newest bytes, as the serial monitor already did.
+
+[#84](https://github.com/Agustin-Delgado/repath/pull/84)
+
+---
+
+## 21 November 2026 — Imported parts as their files describe them
+
+**A pasted vendor model behaves like it does in SPICE.**
+- **P-channel transistors.** A P-channel MOSFET card writes its threshold as a negative number, the way SPICE does. Those parts used to come in as transistors that were always on. Now they turn on where the datasheet says.
+- **Parameters a card leaves out** take SPICE's defaults, not the values of this editor's own diode, transistor and MOSFET. A classic op-amp macromodel's clamp diodes used to drop 1.75 times the voltage they should.
+- **Node names** inside a subcircuit are case-insensitive, as in SPICE.
+- **A comment between two lines of a card** no longer loses the line after it.
+- **Nodes named `sin`, `exp` or `value`** are read as nodes, instead of the whole line being refused.
+
+**Readings and links.**
+- **Rise time** is measured on the real edge, not from a smaller pulse just before it.
+- **A folded burst** reports its true frequency, which used to be off by one edge.
+- **Value fields** show 999.96 as 1 k, matching the label.
+- **A link that would be too long** for chat apps now says so when you copy it.
+- **A deliberately crafted link** can no longer hang the tab while it unpacks.
+
+**Clear refusals instead of odd results.**
+- **Part names.** A part named like one of the converters repath adds itself (`BAD3`) no longer stops the drawing compiling.
+- **Error highlights.** An error that has nothing to do with the solve no longer highlights the parts of an old failure.
+- **Non-physical values.** A temperature at or below absolute zero, a negative resistance, capacitance or inductance, or a negative MOSFET threshold is refused with the reason, instead of being run as something else.
+- **Recorded steps.** "Copy the steps taken" now replays renames to names with spaces in them.
+- **Live runs.** A live run that cannot use a frame's results now stops and says why, instead of looking stuck.
+
+[#85](https://github.com/Agustin-Delgado/repath/pull/85)
+
+---
+
+## 21 November 2026 — Parts closer to their datasheets
+
+**An LED lives on 21 mA.** An LED's default rating is now the 30 mA its
+absolute maximum allows, not the 20 mA its forward voltage is quoted at, so a
+red LED on 9 V through 330 Ω no longer burns out in 43 ms. Its forward voltage
+falls as it warms, by the 2 mV a degree datasheets print, instead of rising,
+and it drops exactly its quoted voltage at 20 mA. How bright it looks still
+goes by the current, so a raised rating does not dim it. A rating you set
+yourself stays as you set it; the old default moves.
+
+**A relay holds.** Its contacts move at the pull-in voltage on the way up and
+at the drop-out voltage on the way down, and stay put between: a coil at 3 V
+no longer half-closes a relay that pulls in at 3.75 V, and one already pulled in
+does not let go as its coil sags to 2 V.
+
+**A fuse blows when a fuse would.** It carries one and a half times its rating
+without blowing, as IEC 60127 asks of a fast glass fuse, where 1.1 times used
+to blow it in 15 seconds; 2.75 times takes about half a second and ten times
+a few milliseconds.
+
+**Logic inputs switch where real ones do.** A 74HC input switches near half
+its supply rather than at the 1.5 V and 3.5 V its datasheet guarantees, so an
+RC delay into a gate lasts the 0.69 RC worked out on paper, not 1.2 RC. TTL
+switches near 1.3 V. A microcontroller's port pin is a Schmitt input with its
+datasheet's half volt of hysteresis.
+
+**A MOSFET from the palette can switch a load.** The defaults are a small
+discrete part's, about a 2N7000 or a BS250 — a few ohms on — rather than a
+transistor on a chip at 1.7 kΩ. An LM358's input bias current now flows out of
+its inputs, as its PNP inputs push it, so an offset through a source
+resistance comes out the right way round.
+[#89](https://github.com/Agustin-Delgado/repath/pull/89)
+
+---
+
+## 21 November 2026 — The solver stops stealing energy
+
+**An oscillator keeps ringing next to a clock.** A tank, a crystal or an LC
+filter drawn beside a pulse source, a clock or a microcontroller used to die
+away within milliseconds: every edge anywhere in the drawing made the whole
+circuit take a few heavily damped steps, and a lossless tank paid for each of
+them. Now only the parts an edge actually reaches are damped, and a tank on its
+own keeps its energy for as long as you run it. A tank started from a charged
+capacitor keeps it too, at the default step.
+
+**Turning a capacitor keeps its charge.** Changing a capacitance while a run is
+going used to keep the voltage across it, which made charge appear from
+nowhere; now the charge stays and the voltage moves, which is what a variable
+capacitor does. An inductance keeps its flux the same way. A tank retuned live
+rings on at the energy it had, instead of losing a quarter of it.
+
+**Logic is part of every analysis.** The frequency sweep and the operating
+point used to treat every logic output as sitting at half the supply, and a
+circuit whose operating point was hard to find lost its clocks and logic
+levels for the whole run. Both now start from the levels the logic really
+settles to.
+
+**Smaller fixes.** A 0 Ω resistor between large ones no longer skews the
+voltages around it by several percent. A run played live takes no more steps
+than the same run in one go. A single shot with an edge a hair before its end
+finishes instead of hanging. A circuit with hundreds of parts that fails to
+solve is explained in a moment rather than freezing the tab first.
+[#91](https://github.com/Agustin-Delgado/repath/pull/91)
+
+---
+
+## 21 November 2026 — Blocks, pastes and drafts that hold together
+
+**A block can no longer end up inside itself.** Pasting a box into its own
+inside, or placing a block inside one you came in through, used to be allowed
+and then crashed the editor on every redraw — and the saved draft brought the
+crash back on every start. Both are refused now, with a note saying why.
+
+**Nothing you use is deleted from under you.** Inside a block, removing a block
+from the palette, or boxing up a group with the same name as one on the
+drawing, could delete a definition the drawing underneath still used; an
+imported part could be removed while a block was still built from it. The
+editor carried on, but the link you then copied would not open for anyone
+else, and the file would not load after a reload. Those removals are refused
+now, and the ones that go ahead say so, with Ctrl+Z to bring them back — which
+matters most on a phone, where a long press on a palette tile is a right-click.
+
+**Copying carries everything the parts need.** An imported part copied into
+another circuit brings its definition along, and a paste brings only the blocks
+the pasted parts use, instead of every block of the circuit it came from.
+
+**A paste does not join nets by accident.** Pasting a circuit next to itself
+used to wire its pins straight onto whatever they landed on. A paste with no
+place picked now steps further away until it lands clear; one at the cursor
+that would join two nets is refused, the way a move is. A single part dropped
+on a wire still goes in series.
+
+**Every copy of a block keeps its wires.** Editing a block, renaming it or
+moving its ports re-attaches the wires on every copy — including the copies
+inside other blocks and on the drawing underneath, which used to be left with
+wires hanging. A probe on a port you renamed stays on it.
+
+**Also:** groups drawn inside a block survive a share link; undoing an opened
+example or a cleared drawing brings back the probes and settings with it; a
+saved draft that cannot be built is left alone instead of breaking the app on
+every start; the app starts in a browser that blocks site data, and says so
+when it cannot keep your work; an old draft of a tab still open is no longer
+pruned; and coming back up from a draft restored several blocks deep shows
+each level whole.
+[#88](https://github.com/Agustin-Delgado/repath/pull/88)
+
+---
+
+## 21 November 2026 — Runs that stop when they are told to, and fields that keep their values
+
+**Switching to the frequency sweep stops the run.** It used to only say it had:
+the transient sweep kept solving behind the Bode plot, a buzzer kept sounding,
+and coming back offered to resume a run that had never stopped. A stopped run
+that an edit would no longer match is now put away instead of being started
+again, so Stop followed by a change no longer sets the circuit running, and
+clearing the drawing no longer puts up "Could not simulate" for an empty sheet.
+A finished single shot that you edit is caught again as a single shot.
+
+**Opening a block no longer says "No ground".** The inside of a block was
+checked as a circuit of its own, so a block whose ground was outside it — where
+a ground belongs — read as broken, and Run failed. The banner now speaks for
+the whole circuit, and Run inside a block asks to be pressed from the drawing.
+
+**The inspector stops rewriting values you only looked at.** Tabbing through a
+field wrote back the four figures it shows: a 32.768 kHz crystal became
+32.77 kHz. Only what you type goes in now. A value with the wrong unit — `5 V`
+at a resistor — is refused instead of read as five milliohms, `100
+nanofarads` is understood, typing `0.5` into a kilohm field after a pause stays
+in kilohms, and a value set in the inspector shows on the drawing at once.
+Names with spaces, dots, colons or commas are refused, since those are how the
+names inside a part are joined.
+
+**Keyboard and controls.** Ctrl+R reloads the page again instead of rotating
+the selection, and Alt+arrow goes back instead of nudging. The × beside a probe
+placed on the drawing removes it (one Ctrl+Z brings it back). Undo and Redo are
+greyed out when there is nothing to undo or redo. `/` finds a part from the
+examples tab too. The command palette's highlight stays on its row while a run
+starts or stops, and Run and Stop show Space beside them. On a phone, the
+closed side panel is out of the Tab order. Zooming the timebase with the wheel
+writes one step into "Copy the steps taken", not one per notch.
+[#86](https://github.com/Agustin-Delgado/repath/pull/86)
+
+---
+
+## 21 November 2026 — A scope that fits what it shows, and a header that fits a phone
+
+**Every lane name reads whole.** The scope's left margin widens for long net
+names instead of cutting their first letters off, and a name too long even
+for that is shortened from the middle, so both ends still tell two lanes apart.
+
+**Many logic lanes no longer crush the plot.** Lanes shrink to make room, the
+analog plot keeps at least a third of the height, and lanes there is no room
+for at all are counted in a note rather than drawn over the time axis.
+
+**The scope's numbers are what's on screen.** The grid and its volts stay put
+when one channel's gain is turned up. Measurements are taken over the window
+you are looking at, not everything in memory. A node sitting at zero reads
+0 V instead of a few femtovolts of rounding, and the footer says how long the
+run really took instead of "0 ms".
+
+**The Bode plot stays in its panels.** A deep notch no longer runs the
+magnitude curve down through the phase panel, the phase axis is marked in
+divisions of a turn (0°, −90°, −180°), two probes with the same name no longer
+break the readout, and the readout has a solid background over the curves.
+
+**A phone or a narrow window can reach everything.** At 900 px and under, the
+simulation settings scroll sideways with a fade at the edge that has more, and
+File, Share, Undo, Redo, Clear and the symbol standard sit in one menu that
+never scrolls away. The transport bar fades the same way. The drawing is
+fitted again when the window or the scope changes size, unless you have moved
+it yourself, in which case what was in the middle stays in the middle.
+
+**Easier to read and to reach.** Text follows your browser's font size
+setting, and nothing is smaller than about ten pixels at the default. Units
+are written the same way everywhere ("4.7 mV", "5 ms"). Toasts appear at the
+top of the drawing instead of over the scope's time labels. Pressing Tab on a
+fresh page offers "Skip to the drawing", past the hundred-odd palette buttons.
+The scope stays sharp when the window moves to a screen with a different
+scale, and the buzzer no longer clicks when a run stops.
+[#87](https://github.com/Agustin-Delgado/repath/pull/87)
+
+---
+
+## 21 November 2026 — Symbols, currents and examples that read right
+
+**Symbols say what the part does.** The PNP's arrow sits on its emitter, not
+its collector, and the MOSFET arrows point the right way for each channel. The
+plus and minus on an op-amp and a source stay upright however the part is
+turned, instead of reading as a bar. In IEC/GOST mode the op-amp is the boxed
+symbol those standards draw.
+
+**Current flows the right way.** A current source, a common-anode digit, a
+buzzer and a negative regulator (79xx) animate their current in the direction
+it actually goes, and a regulator's input and output currents add up.
+
+**Wires behave off the grid.** A wire to a pin that is off the grid gets a
+clean right-angle route, you can tap a branch off an off-grid wire, a pin in
+the middle of a wire gets its junction dot, and tidying a big drawing no
+longer slows down with its size.
+
+**The examples open clean.** No "check the wiring" card about pins nobody
+wires (a digit's decimal point, a logic output nothing reads). The RLC
+band-pass plots the band-pass node. A source's label shows its offset
+("12 V ± 3 V 1 kHz"). A column of identical resistors is labelled once
+(R1–R7, 330 Ω) instead of in a pile, probe names point the way the probe does,
+and examples that place their own probes plot those and nothing else.
+
+**Smaller things.** The LCD, the LED matrix and the servo have a Modules
+shelf, the probe a Measuring one. Warnings name pins as drawn (`V1.+`, not
+`V1.plus`), and a net label's count reads `R1.a · R2.a +3`.
+
+[#90](https://github.com/Agustin-Delgado/repath/pull/90)
+
+---
+
 ## 20 November 2026 — Saving from inside a block keeps the whole circuit
 
 **Save and Share work wherever you are.** With a block open for editing, File

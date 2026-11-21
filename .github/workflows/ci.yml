@@ -144,6 +144,14 @@ jobs:
     environment:
       name: production
       url: https://repath-lake.vercel.app
+    # One deploy at a time, in the order the pushes came. Two quick merges could
+    # otherwise finish out of order and leave the older build in production —
+    # each run's alias check compares only against its own build, so neither
+    # would notice. Not cancelled: a deploy stopped halfway is worse than one
+    # that is superseded a minute later.
+    concurrency:
+      group: production
+      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@v7
         with:

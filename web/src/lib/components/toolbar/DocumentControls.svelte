@@ -19,12 +19,20 @@
 	const empty = $derived(app.schematic.instances.length === 0 && app.schematic.wires.length === 0);
 </script>
 
-<Button variant="ghost" size="icon" onclick={() => app.undo()} title="Undo (Ctrl+Z)" aria-label="Undo">
+<Button
+	variant="ghost"
+	size="icon"
+	disabled={!app.canUndo}
+	onclick={() => app.undo()}
+	title="Undo (Ctrl+Z)"
+	aria-label="Undo"
+>
 	<Undo2 />
 </Button>
 <Button
 	variant="ghost"
 	size="icon"
+	disabled={!app.canRedo}
 	onclick={() => app.redo()}
 	title="Redo (Ctrl+Shift+Z)"
 	aria-label="Redo"

@@ -71,6 +71,8 @@ const WDRF: u8 = 1 << 3;
 const MCUCR: u8 = 0x55;
 const SPL: u8 = 0x5D;
 const SPH: u8 = 0x5E;
+/// The bits of SPH this part implements.
+const SPH_BITS: u8 = 0x0F;
 const SREG: u8 = 0x5F;
 const WDTCSR: u8 = 0x60;
 const PCICR: u8 = 0x68;
@@ -295,6 +297,15 @@ impl Usart {
 
     fn enabled(&self) -> bool {
         self.control_b & TXEN != 0
+    }
+
+    /// Whether the transmitter holds TXD. Clearing TXEN lets go of it only
+    /// once the frame on the wire and the one waiting in the buffer are out:
+    /// the datasheet's "disabling of the Transmitter (setting the TXEN to
+    /// zero) will not become effective until ongoing and pending
+    /// transmissions are completed".
+    fn driving(&self) -> bool {
+        self.enabled() || self.frame.is_some() || self.buffer.is_some()
     }
 
     fn receiving(&self) -> bool {
@@ -699,7 +710,7 @@ impl Machine {
             }
         }
         // The transmitter overrides TXD whatever DDRD says.
-        if self.usart.enabled() {
+        if self.usart.driving() {
             let bit = 1 << PD1;
             out.driven |= bit;
             out.pullup &= !bit;
@@ -735,6 +746,19 @@ impl Machine {
         if self.usart.receiving() && changed & rxd != 0 && after & rxd == 0 {
             self.receiver.falling_edge(at, self.usart.format());
         }
+        self.pin_edges(changed, after);
+        if changed & (1 << PB2) != 0 {
+            self.check_ss(at);
+        }
+    }
+
+    /// Raise the external and pin-change flags the edges in `changed` ask
+    /// for, `after` being the pins' new levels. Whoever moved the pin — the
+    /// outside world or the chip's own output — the datasheet has these
+    /// interrupts trigger alike: "even if the INT0 and INT1 or PCINT23..0
+    /// pins are configured as outputs. This feature provides a way of
+    /// generating a software interrupt."
+    fn pin_edges(&mut self, changed: u32, after: u32) {
         for n in 0..2 {
             let bit = 1 << (PD2 + n);
             if self.eimsk & (1 << n) == 0 || changed & bit == 0 {
@@ -756,9 +780,6 @@ impl Machine {
             if self.pcicr & (1 << p) != 0 && (changed >> (8 * p)) as u8 & self.pcmsk[p] != 0 {
                 self.pcifr |= 1 << p;
             }
-        }
-        if changed & (1 << PB2) != 0 {
-            self.check_ss(at);
         }
     }
 
@@ -827,8 +848,20 @@ impl Machine {
         match address {
             0x00..=0x1F => self.data[usize::from(address)] = value,
             0x20..=0xFF => {
+                // A pin no net drives reads the chip's own output, so a write
+                // that moves that output is an edge on it like any other.
+                // Pins on a net see the change when the net answers.
+                let watching = self.eimsk != 0 || self.pcicr != 0;
+                let before = if watching { self.pin_bits() } else { 0 };
                 self.write_io(address as u8, value);
                 self.outputs_dirty = true;
+                if watching {
+                    let after = self.pin_bits();
+                    if before != after {
+                        self.pin_edges(before ^ after, after);
+                        self.refresh_next_event();
+                    }
+                }
             }
             _ => {
                 if let Some(cell) = self.data.get_mut(usize::from(address)) {
@@ -1012,7 +1045,9 @@ impl Machine {
                 self.watchdog.set_forced(self.mcusr & WDRF != 0, self.cycle);
             }
             SPL => self.sp = (self.sp & 0xFF00) | u16::from(v),
-            SPH => self.sp = (self.sp & 0x00FF) | u16::from(v) << 8,
+            // Only the bits that address the SRAM are there: SP11..SP8 for
+            // RAMEND 0x08FF, the rest reading zero.
+            SPH => self.sp = (self.sp & 0x00FF) | u16::from(v & SPH_BITS) << 8,
             SREG => self.sreg = v,
             WDTCSR => self.watchdog.write_control(v, self.cycle),
             PCICR => self.pcicr = v & 7,
@@ -2372,5 +2407,143 @@ pub(super) mod tests {
         let out = m.outputs();
         assert_eq!(out.driven & 1 << PD0, 0);
         assert_ne!(out.pullup & 1 << PD0, 0);
+    }
+    /// Step the machine's peripherals event by event up to `until`.
+    fn events_to(m: &mut Machine, until: u64) {
+        while m.next_event <= until {
+            let at = m.next_event;
+            m.cycle = at;
+            m.process_events(at);
+        }
+    }
+
+    #[test]
+    fn an_output_pin_raises_its_own_external_and_pin_change_interrupts() {
+        // The datasheet: INT0/INT1 and PCINT23..0 "will trigger even if the
+        // pins are configured as outputs. This feature provides a way of
+        // generating a software interrupt." PD2 is INT0 and PCINT18, with no
+        // net on it, so it reads what the chip drives.
+        let mut m = machine(&[idle()]);
+        m.write(u16::from(EICRA), 0x01); // INT0 on any change
+        m.write(u16::from(EIMSK), 0x01);
+        m.write(u16::from(PCMSK2), 0x04);
+        m.write(u16::from(PCICR), 0x04);
+        m.write(0x2A, 0x04); // DDRD: PD2 an output, still low
+        assert_eq!((m.eifr, m.pcifr), (0, 0), "no edge yet");
+        m.write(0x2B, 0x04); // PORTD: PD2 high
+        assert_eq!((m.eifr, m.pcifr), (0x01, 0x04));
+        m.eifr = 0;
+        m.pcifr = 0;
+        m.write(0x29, 0x04); // PIND: writing a one toggles PD2 back low
+        assert_eq!((m.eifr, m.pcifr), (0x01, 0x04));
+
+        // Rising edge only: the falling write leaves INT0 alone.
+        m.eifr = 0;
+        m.write(u16::from(EICRA), 0x03);
+        m.write(0x2B, 0x04);
+        assert_eq!(m.eifr, 0x01, "rising");
+        m.eifr = 0;
+        m.write(0x2B, 0x00);
+        assert_eq!(m.eifr, 0, "falling is not a rising edge");
+    }
+
+    #[test]
+    fn a_pin_on_a_net_takes_its_edge_from_the_net() {
+        // The same write on a pin something outside holds low changes
+        // nothing the pin reads, so it raises nothing; the net's answer is
+        // what an edge would come from.
+        let mut m = machine(&[idle()]);
+        m.set_inputs(PinLevels { high: 0, floating: !(1 << PD2) }, 0);
+        m.write(u16::from(EICRA), 0x01);
+        m.write(u16::from(EIMSK), 0x01);
+        m.write(0x2A, 0x04);
+        m.write(0x2B, 0x04);
+        assert_eq!(m.eifr, 0);
+        m.set_inputs(PinLevels { high: 1 << PD2, floating: !(1 << PD2) }, 0);
+        assert_eq!(m.eifr, 0x01);
+    }
+
+    #[test]
+    fn clearing_txen_waits_for_the_frames_already_sent() {
+        // "Disabling of the Transmitter (setting the TXEN to zero) will not
+        // become effective until ongoing and pending transmissions are
+        // completed": two bytes written, TXEN cleared in the first one's
+        // start bit. TXD stays the transmitter's, both frames go out on the
+        // wire, and only then is the pin the port's again.
+        let mut m = machine(&[idle()]);
+        m.write(u16::from(UCSR0B), TXEN);
+        m.write(u16::from(UDR0), 0x00);
+        m.write(u16::from(UDR0), 0x55);
+        let mid = m.cycle + 8;
+        events_to(&mut m, mid);
+        m.write(u16::from(UCSR0B), 0);
+        let out = m.outputs();
+        assert_ne!(out.driven & 1 << PD1, 0, "TXD still driven");
+        assert_eq!(out.level & 1 << PD1, 0, "still in the start bit");
+        // UBRR0 = 0: 16 cycles a bit, 10 bits a frame.
+        let mut levels = Vec::new();
+        while m.next_event != u64::MAX {
+            let at = m.next_event;
+            m.cycle = at;
+            m.process_events(at);
+            let out = m.outputs();
+            levels.push((at, out.driven >> PD1 & 1, out.level >> PD1 & 1));
+        }
+        // The first frame started when UDR0 was written, `t0`.
+        let t0 = m.serial[0].0 - 160;
+        assert_eq!(m.serial, vec![(t0 + 160, 0x00), (t0 + 320, 0x55)]);
+        // 0x55 LSB first, between its start bit and its stop bit.
+        let second: Vec<u32> =
+            levels.iter().filter(|l| l.0 > t0 + 160 && l.0 < t0 + 304).map(|l| l.2).collect();
+        assert_eq!(second, vec![1, 0, 1, 0, 1, 0, 1, 0]);
+        assert!(levels.iter().all(|l| l.1 == 1 || l.0 >= t0 + 320), "{levels:?}");
+        let out = m.outputs();
+        assert_eq!(out.driven & 1 << PD1, 0, "released once both are out");
+        // And with TXEN clear a new byte is refused.
+        m.write(u16::from(UDR0), 0x12);
+        assert!(m.usart.frame.is_none());
+    }
+
+    #[test]
+    fn every_two_cycle_store_starts_the_spi_clock_alike() {
+        // ST and STD take two cycles whichever pointer they use, the write
+        // landing as the second ends; OUT takes one. The master's clock at
+        // fosc/4 starts two cycles after SPDR is written, so its first edge
+        // is at 3 after OUT and at 4 after every store.
+        let z = 0x8200 | (16 << 4); // st Z, r16
+        let y = std_(16, true, 0); // std Y+0, r16
+        let z2 = std_(16, false, 2); // std Z+2, r16, Z pointing two below
+        let cases = [
+            ("out", out(0x2E, 16), 3),
+            ("st X", st_x(16), 4),
+            ("st Z", z, 4),
+            ("std Y", y, 4),
+            ("std Z+2", z2, 4),
+        ];
+        for (name, op, first) in cases {
+            let mut m = machine(&[op, idle()]);
+            m.write(0x24, 0x2C);
+            m.write(u16::from(SPCR), 0x50);
+            m.data[26] = 0x4E;
+            m.data[28] = 0x4E;
+            m.data[30] = if name == "std Z+2" { 0x4C } else { 0x4E };
+            m.data[16] = 0xA5;
+            let _ = m.run(1, &Watch::default());
+            assert_eq!(m.spi.next_event(), first, "{name}");
+        }
+    }
+
+    #[test]
+    fn sph_keeps_only_the_bits_that_address_the_sram() {
+        // "Only the number of bits required to address the available SRAM
+        // is implemented ... Unused bits will always read as zero." RAMEND
+        // is 0x08FF, twelve bits: SPH holds SP11..SP8.
+        let mut m = machine(&[idle()]);
+        m.write(u16::from(SPH), 0xFF);
+        m.write(u16::from(SPL), 0x34);
+        assert_eq!(m.read(u16::from(SPH)), 0x0F);
+        assert_eq!(m.sp, 0x0F34);
+        m.write(u16::from(SPH), 0x08);
+        assert_eq!(m.sp, 0x0834);
     }
 }

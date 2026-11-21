@@ -29,8 +29,12 @@ pub fn thermal_voltage(temp_k: f64) -> f64 {
 /// Room temperature, 27 °C, the SPICE default.
 pub const TNOM: f64 = 300.15;
 
-/// Silicon's bandgap at room temperature, eV. SPICE's `EG`.
+/// Silicon's bandgap at room temperature, eV. SPICE's `EG`, and its default.
 pub const BANDGAP: f64 = 1.11;
+
+fn default_eg() -> f64 {
+    BANDGAP
+}
 
 /// Temperature exponent for the saturation current. SPICE's `XTI`.
 ///
@@ -56,15 +60,16 @@ fn default_xtb() -> f64 {
 /// leaks through when no voltage is applied at all.
 ///
 /// `n` is 1 for a transistor's transport current and the emission coefficient for
-/// a diode, which is the only difference between the two forms.
-fn saturation_current(is_nom: f64, n: f64, temp: f64, tnom: f64) -> f64 {
+/// a diode, which is the only difference between the two forms. `eg` is the
+/// junction's activation energy, silicon's bandgap unless the part says else.
+fn saturation_current(is_nom: f64, n: f64, eg: f64, temp: f64, tnom: f64) -> f64 {
     let (t, tn) = (temp.max(1.0), tnom.max(1.0));
     if (t - tn).abs() < 1e-9 {
         return is_nom;
     }
     let ratio = t / tn;
     let vt = thermal_voltage(t);
-    is_nom * ratio.powf(XTI / n) * safe_exp((ratio - 1.0) * BANDGAP / (n * vt))
+    is_nom * ratio.powf(XTI / n) * safe_exp((ratio - 1.0) * eg / (n * vt))
 }
 
 fn default_vj() -> f64 {
@@ -282,8 +287,8 @@ impl ChargeBranch {
 
     /// Largest step this branch will take before its own truncation error is
     /// worth more than the tolerance. `INFINITY` while it has nothing to say.
-    fn max_timestep(&self) -> f64 {
-        self.charge.suggested_step()
+    fn max_timestep(&self, integration: Integration) -> f64 {
+        self.charge.suggested_step_for(integration)
     }
 
     fn reset(&mut self) {
@@ -341,6 +346,16 @@ pub struct DiodeModel {
     /// parts out of action in circuits that never asked for the behaviour.
     #[serde(default)]
     pub rated: Option<f64>,
+    /// Activation energy of the saturation current, eV. SPICE's `EG`.
+    ///
+    /// Silicon's bandgap for a silicon diode. What it sets is how the forward
+    /// drop moves with temperature: at a fixed current the drop changes by
+    /// `(vf − eg − XTI·Vt) / T` per kelvin, so silicon's 1.11 eV under a 0.65 V
+    /// drop gives the familiar −2 mV/K. An LED's drop is near or above that
+    /// gap, and left at silicon's it would rise with temperature, where every
+    /// LED datasheet shows it falling.
+    #[serde(default = "default_eg")]
+    pub eg: f64,
 }
 
 impl Default for DiodeModel {
@@ -358,6 +373,7 @@ impl Default for DiodeModel {
             temp: TNOM,
             tnom: TNOM,
             rated: None,
+            eg: BANDGAP,
         }
     }
 }
@@ -471,17 +487,35 @@ pub struct Failure {
     pub rated: f64,
 }
 
+/// How fast an indicator LED's forward drop falls as it warms, V/K, at a fixed
+/// current: what red, amber and green datasheets print.
+pub const LED_TEMPCO: f64 = -2e-3;
+
+/// The activation energy that makes a junction dropping `vf` at room
+/// temperature move by `tempco` volts per kelvin at a fixed current.
+///
+/// From the saturation current's temperature law, the drop at a fixed current
+/// is `vf·T/T0 − eg·(T/T0 − 1) − XTI·Vt·ln(T/T0)`, whose slope at `T0` is
+/// `(vf − eg − XTI·Vt) / T0`. Solved for `eg`. The series resistance takes no
+/// part: its share of the drop does not move with temperature here.
+pub fn led_activation_energy(vf: f64, tempco: f64) -> f64 {
+    vf - XTI * thermal_voltage(TNOM) - tempco * TNOM
+}
+
 impl DiodeModel {
     /// An LED with the given forward voltage at `rated` amps.
     ///
-    /// Inverting `vf = n·Vt·ln(i/is)` for the saturation current is what lets a
-    /// caller specify the part the way a datasheet does. An emission coefficient
-    /// of 2 puts the slope at about 120 mV per decade of current, which is where
-    /// a real indicator LED sits.
+    /// Inverting `vf = n·Vt·ln(i/is) + i·rs` for the saturation current is what
+    /// lets a caller specify the part the way a datasheet does. An emission
+    /// coefficient of 2 puts the slope at about 120 mV per decade of current,
+    /// which is where a real indicator LED sits. The activation energy is the
+    /// one that gives the drop the −2 mV/K indicator datasheets print.
     pub fn led(vf: f64, rated: f64) -> Self {
         let n = 2.0;
-        let is = rated * (-vf / (n * thermal_voltage(TNOM))).exp();
-        Self { is, n, bv: None, tt: 0.0, ..Self::default() }.with_rating(rated)
+        let rs = Self::default().rs;
+        let is = rated * (-(vf - rated * rs) / (n * thermal_voltage(TNOM))).exp();
+        let eg = led_activation_energy(vf, LED_TEMPCO);
+        Self { is, n, bv: None, tt: 0.0, rs, eg, ..Self::default() }.with_rating(rated)
     }
 
     /// A zener with the given breakdown voltage.
@@ -633,7 +667,7 @@ impl Diode {
     /// Saturation current at the temperature this part is actually running at.
     fn saturation(&self) -> f64 {
         let m = &self.model;
-        saturation_current(m.is, m.n, m.temp, m.tnom)
+        saturation_current(m.is, m.n, m.eg, m.temp, m.tnom)
     }
 
     /// Current and conductance at a given junction voltage.
@@ -831,7 +865,7 @@ impl Element for Diode {
         // of. Left out, the only thing bounding the step through one was the
         // ceiling — so the sharpest feature a rectifier has was resolved at
         // whatever resolution the run happened to be watched at.
-        failing.min(self.charge.max_timestep())
+        failing.min(self.charge.max_timestep(ctx.integration))
     }
 
     fn reset(&mut self) {
@@ -1006,11 +1040,8 @@ impl MosfetModel {
         // Mobility falls as the lattice gets hotter and carriers scatter off it
         // more, which is SPICE's `(T/Tnom)^-1.5`: the same gate drive carries less
         // current in a hot part. It is why a MOSFET sharing a load with another
-        // one does not run away — the hotter of the two takes less of it.
-        //
-        // Half the story. A threshold also drifts, by a couple of millivolts per
-        // degree and in the opposite direction, and this model has no parameter
-        // for it; that is on the roadmap rather than invented here.
+        // one does not run away — the hotter of the two takes less of it. The
+        // other half, the threshold drifting the opposite way, is `tcv`.
         let ratio = (self.temp.max(1.0) / self.tnom.max(1.0)).max(1e-9);
         self.kp * ratio.powf(-1.5) * (self.w / self.l.max(1e-12))
     }
@@ -1328,9 +1359,9 @@ impl Element for Mosfet {
     /// MOSFET turned on depended on how wide a window somebody was watching.
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
         self.q_gs
-            .max_timestep()
-            .min(self.q_gd.max_timestep())
-            .min(self.q_ds.max_timestep())
+            .max_timestep(ctx.integration)
+            .min(self.q_gd.max_timestep(ctx.integration))
+            .min(self.q_ds.max_timestep(ctx.integration))
             .min(self.body.max_timestep(ctx))
     }
 
@@ -1546,7 +1577,7 @@ impl Bjt {
     fn at_temperature(&self) -> (f64, f64) {
         let m = &self.model;
         let ratio = (m.temp.max(1.0) / m.tnom.max(1.0)).max(1e-9);
-        (saturation_current(m.is, 1.0, m.temp, m.tnom), m.bf * ratio.powf(m.xtb))
+        (saturation_current(m.is, 1.0, BANDGAP, m.temp, m.tnom), m.bf * ratio.powf(m.xtb))
     }
 
     /// Junction conductances at a pair of junction voltages.
@@ -1843,8 +1874,8 @@ impl Element for Bjt {
     /// The junction charge decides the step. `tf` is what sets a transistor's
     /// transition frequency, and a step long beside it integrates straight across
     /// the part of a switching edge the device is characterised by.
-    fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
-        self.q_be.max_timestep().min(self.q_bc.max_timestep())
+    fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.q_be.max_timestep(ctx.integration).min(self.q_bc.max_timestep(ctx.integration))
     }
 
     fn terminal_names(&self) -> &'static [&'static str] {

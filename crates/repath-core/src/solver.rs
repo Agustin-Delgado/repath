@@ -52,9 +52,9 @@ use crate::bridge::LogicFamily;
 use crate::circuit::Circuit;
 use crate::complex::ComplexSystem;
 use crate::digital::{DriverId, Halt, Logic, NetId, Transition};
-use crate::element::{AcCtx, AcceptCtx, Integration, Mode, StampCtx, node_index};
+use crate::element::{AcCtx, AcceptCtx, Element, Integration, Mode, StampCtx, node_index};
 use crate::elements::{Failure, VoltageSource};
-use crate::linalg::{LinearSystem, SolveError};
+use crate::linalg::{LinearSystem, SolveError, coupled_entries};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolverConfig {
@@ -503,6 +503,140 @@ pub struct Running {
     /// Most steps one call to [`Simulator::advance_transient`] may take before
     /// handing back what it has, short of `until`.
     budget: usize,
+    /// Backward Euler steps each element still owes, one count per element, on
+    /// top of the `euler_steps` the whole circuit owes.
+    damp: Vec<usize>,
+    /// Of those, the ones owed to a value changed under the element, which are
+    /// sized by backward Euler's own error rather than the trapezoidal rule's.
+    retuned: Vec<usize>,
+    /// Which parts of the circuit a corner in another part can reach.
+    coupling: Coupling,
+}
+
+/// Which unknowns can affect which, and what each element and bridge touches:
+/// enough to tell, of a corner somewhere, which elements it reaches.
+///
+/// Read off the small-signal stamp at the operating point, one element at a
+/// time, as a pattern. Two unknowns are coupled through a chain of entries,
+/// except through a node an ideal source holds against ground: the supply rail
+/// is common to everything and carries no signal from one part to another.
+#[derive(Debug, Clone, Default)]
+struct Coupling {
+    /// A label per unknown, the same for any two coupled.
+    label: Vec<usize>,
+    /// Whether each unknown is a node held by an ideal source.
+    held: Vec<bool>,
+    /// For each held node, the labels of what it is stamped against.
+    beside: Vec<Vec<usize>>,
+    /// The unknowns each element touches.
+    elements: Vec<Vec<usize>>,
+    /// The unknowns each bridge into the analog side touches.
+    dacs: Vec<Vec<usize>>,
+}
+
+/// Where a corner came from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Origin {
+    Element(usize),
+    Dac(usize),
+}
+
+/// The nodes an ideal voltage source holds against ground.
+fn rails(circuit: &Circuit) -> Vec<usize> {
+    circuit
+        .elements()
+        .iter()
+        .filter_map(|e| e.as_any().downcast_ref::<VoltageSource>())
+        .filter_map(|v| match (node_index(v.p), node_index(v.m)) {
+            (Some(p), None) => Some(p),
+            (None, Some(m)) => Some(m),
+            _ => None,
+        })
+        .collect()
+}
+
+impl Coupling {
+    fn learn(circuit: &Circuit, gmin: f64) -> Self {
+        let n = circuit.unknown_count();
+        let ctx = AcCtx { omega: 1.0, gmin };
+        let mut pattern = ComplexSystem::pattern(n);
+        let mut entries = Vec::new();
+        let mut read = |stamp: &dyn Fn(&mut ComplexSystem)| {
+            pattern.clear();
+            stamp(&mut pattern);
+            let recorded = pattern.recorded().expect("a pattern records");
+            entries.extend_from_slice(&recorded.entries);
+            recorded.touched()
+        };
+        let elements: Vec<Vec<usize>> =
+            circuit.elements().iter().map(|e| read(&|sys| e.ac_stamp(sys, &ctx))).collect();
+        let dacs: Vec<Vec<usize>> =
+            circuit.dacs().iter().map(|d| read(&|sys| d.ac_stamp(sys, &ctx))).collect();
+        let rails = rails(circuit);
+        let label = coupled_entries(n, &rails, &entries);
+        let mut held = vec![false; n];
+        for &r in &rails {
+            held[r] = true;
+        }
+        let mut beside = vec![Vec::new(); n];
+        for &(r, c) in &entries {
+            for (a, b) in [(r, c), (c, r)] {
+                if held[a] && !held[b] && !beside[a].contains(&label[b]) {
+                    beside[a].push(label[b]);
+                }
+            }
+        }
+        Self { label, held, beside, elements, dacs }
+    }
+
+    fn footprint(&self, origin: Origin) -> &[usize] {
+        match origin {
+            Origin::Element(e) => self.elements.get(e).map_or(&[], |v| v.as_slice()),
+            Origin::Dac(d) => self.dacs.get(d).map_or(&[], |v| v.as_slice()),
+        }
+    }
+
+    /// Owe `steps` damped steps on every element a corner at `origins` reaches:
+    /// whatever shares an unknown with it, and whatever is coupled to that.
+    ///
+    /// An origin with nothing in its footprint cannot say what it reaches, and
+    /// neither can an element with nothing in its own, so either one damps
+    /// conservatively: the first everything, the second at every corner.
+    fn damp(&self, origins: &[Origin], steps: usize, damp: &mut [usize]) {
+        if origins.is_empty() {
+            return;
+        }
+        let mut origin: Vec<usize> = Vec::new();
+        for &o in origins {
+            let print = self.footprint(o);
+            if print.is_empty() {
+                for d in damp.iter_mut() {
+                    *d = (*d).max(steps);
+                }
+                return;
+            }
+            origin.extend_from_slice(print);
+        }
+        let mut labels: Vec<usize> = Vec::new();
+        for &u in &origin {
+            if self.held.get(u).copied().unwrap_or(false) {
+                labels.extend_from_slice(&self.beside[u]);
+            } else if let Some(&l) = self.label.get(u) {
+                labels.push(l);
+            }
+        }
+        for (e, print) in self.elements.iter().enumerate() {
+            let reached = print.is_empty()
+                || print.iter().any(|&u| {
+                    origin.contains(&u)
+                        || (!self.held.get(u).copied().unwrap_or(false)
+                            && self.label.get(u).is_some_and(|l| labels.contains(l)))
+                });
+            if reached && let Some(d) = damp.get_mut(e) {
+                *d = (*d).max(steps);
+            }
+        }
+    }
 }
 
 impl Running {
@@ -678,6 +812,11 @@ pub struct Simulator {
     /// What the last Newton solve was asked to solve, so a failure can be
     /// stamped again element by element to find who was involved.
     attempt: Attempt,
+    /// Which elements the step being solved takes with backward Euler whatever
+    /// the rule for the rest, one flag per element. Empty outside a transient.
+    damped: Vec<bool>,
+    /// Which elements have that step sized by backward Euler's own error.
+    sized: Vec<bool>,
 }
 
 /// The arguments of one Newton solve, kept for explaining its failure.
@@ -832,6 +971,8 @@ impl Simulator {
                 dt: 0.0,
                 gmin: 0.0,
             },
+            damped: Vec::new(),
+            sized: Vec::new(),
         }
     }
 
@@ -891,7 +1032,7 @@ impl Simulator {
                     x: &self.x,
                     iteration,
                 };
-                circuit.stamp_all(&mut self.sys, &ctx)
+                circuit.stamp_all(&mut self.sys, &ctx, &self.damped)
             };
 
             self.sys.solve_into(&mut self.x_next).map_err(|e| match e {
@@ -991,7 +1132,10 @@ impl Simulator {
             // iterate rather than around its own starting guess.
             iteration: 1,
         };
-        let mut scratch = LinearSystem::new(n);
+        // A pattern rather than a matrix: an n × n matrix per element was 128 MB
+        // and n² of work each at the size limit, and froze the tab for tens of
+        // seconds before a large circuit's failure could be reported.
+        let mut scratch = LinearSystem::pattern(n);
         circuit
             .elements_mut()
             .iter_mut()
@@ -1110,6 +1254,8 @@ impl Simulator {
     /// Solve the DC operating point, escalating through the convergence aids.
     pub fn operating_point(&mut self, circuit: &mut Circuit) -> Result<OperatingPoint, SimError> {
         self.prepare(circuit)?;
+        circuit.reset();
+        self.bring_up_digital(circuit)?;
         let mut stats = Stats::default();
         self.solve_operating_point(circuit, &mut stats).map_err(|e| self.explain(circuit, e))?;
         Ok(OperatingPoint {
@@ -1177,12 +1323,16 @@ impl Simulator {
             return Ok(());
         }
 
-        // 3. Source stepping.
+        // 3. Source stepping. Starting over means the analog elements only: the
+        // logic was settled before any of this, and it is the logic the answer
+        // has to be found around.
         self.x.fill(0.0);
-        circuit.reset();
+        circuit.reset_elements();
         let mut stepped = Ok(0);
-        for step in 0..=cfg.source_steps {
-            let scale = step as f64 / cfg.source_steps as f64;
+        // At least one step, or the first scale is 0/0.
+        let steps = cfg.source_steps.max(1);
+        for step in 0..=steps {
+            let scale = step as f64 / steps as f64;
             stepped = self.newton(
                 circuit,
                 Mode::OperatingPoint,
@@ -1198,16 +1348,21 @@ impl Simulator {
                 break;
             }
         }
+        // Anything stage 1 would have tolerated, this tolerates too: damped
+        // Newton is a different path to the answer, and an iterate that
+        // overflowed partway up the ramp says nothing against it.
         match stepped {
             Ok(_) => return Ok(()),
-            Err(SimError::NoConvergence { .. }) => {}
+            Err(SimError::NoConvergence { .. })
+            | Err(SimError::Singular { .. })
+            | Err(SimError::NonFinite { .. }) => {}
             Err(other) => return Err(other),
         }
 
         // 4. Damped Newton. Slow — a node that has ten volts to go takes twenty
         // iterations to get there — so it is last, and given the room for it.
         self.x.fill(0.0);
-        circuit.reset();
+        circuit.reset_elements();
         self.damping = Some(DAMPED_STEP);
         self.last_step.clear();
         let damped = self.newton(
@@ -1241,6 +1396,8 @@ impl Simulator {
         F: FnMut(&mut Circuit, f64),
     {
         self.prepare(circuit)?;
+        circuit.reset();
+        self.bring_up_digital(circuit)?;
         let mut stats = Stats::default();
         let mut out = Vec::with_capacity(values.len());
 
@@ -1287,6 +1444,9 @@ impl Simulator {
         cfg.validate()?;
         let n = self.prepare(circuit)?;
         circuit.reset();
+        // The bias every device is linearised at depends on what the logic is
+        // driving, exactly as it does for a transient run.
+        self.bring_up_digital(circuit)?;
 
         let mut stats = Stats::default();
         self.solve_operating_point(circuit, &mut stats).map_err(|e| self.explain(circuit, e))?;
@@ -1381,14 +1541,7 @@ impl Simulator {
 
         // Bring the digital side up first: the analog operating point depends on
         // what the digital outputs are driving.
-        let bridged: Vec<NetId> = circuit.dacs().iter().map(|d| d.net).collect();
-        circuit.digital.watch(bridged);
-        circuit.digital.initialize();
-        circuit.digital.settle(0.0);
-        unsettled(circuit)?;
-        // The starting levels go into the trace below as levels, not as changes.
-        circuit.digital.take_log();
-        self.force_dac_levels(circuit, 0.0);
+        self.bring_up_digital(circuit)?;
 
         // Every net's starting value belongs in the trace. Without it a viewer
         // cannot tell what a signal was before its first transition.
@@ -1456,10 +1609,16 @@ impl Simulator {
         // and for a batch run the two are the same number, since `max_step`
         // defaults to a two-hundredth of the stop time.
         let min_step = (cfg.max_step * MIN_STEP_FRACTION * 200.0).max(f64::MIN_POSITIVE);
+        let coupling = Coupling::learn(circuit, self.config.gmin);
         let run = Running {
             cfg,
             t: 0.0,
-            dt: cfg.initial_step.min(cfg.max_step).max(min_step),
+            // A tenth of the first step asked for, as SPICE takes it. The start
+            // is damped, and until three timepoints have been accepted nothing
+            // can say how long a backward Euler step the circuit tolerates: a
+            // tank started at its initial condition gave up a tenth of its
+            // energy to each of the first two steps, at a quarter of a radian.
+            dt: (cfg.initial_step.min(cfg.max_step) / 10.0).max(min_step),
             // The trapezoidal rule rings if it is started from a step, and the
             // start of a run is the largest step there is: every source arrives
             // at its t = 0 value out of nothing. Damped for as long as any other
@@ -1470,7 +1629,14 @@ impl Simulator {
             ledger,
             reported_failures: 0,
             budget: usize::MAX,
+            damp: vec![0; circuit.elements().len()],
+            retuned: vec![0; circuit.elements().len()],
+            coupling,
         };
+        self.damped.clear();
+        self.damped.resize(circuit.elements().len(), false);
+        self.sized.clear();
+        self.sized.resize(circuit.elements().len(), false);
         Ok((run, result))
     }
 
@@ -1502,6 +1668,16 @@ impl Simulator {
             run.euler_steps = euler_steps;
             run.stats = stats;
         };
+        // A circuit edited since the run began has a different set of elements,
+        // and nothing learnt about the old one applies to it.
+        let elements = circuit.elements().len();
+        if run.damp.len() != elements {
+            run.damp = vec![0; elements];
+            run.retuned = vec![0; elements];
+            run.coupling = Coupling::learn(circuit, self.config.gmin);
+        }
+        self.damped.resize(elements, false);
+        self.sized.resize(elements, false);
 
         let row = (circuit.unknown_count() + circuit.elements().len()).max(1);
         while t < until - step_floor(min_step, t) {
@@ -1533,8 +1709,15 @@ impl Simulator {
             // chosen for a circuit that has just stopped existing, and the
             // error estimates that would cut it down are measured on history
             // the change has made meaningless.
-            if circuit.apply_retunes(t + step_floor(min_step, t)) {
-                euler_steps = euler_steps.max(CORNER_DAMPING);
+            //
+            // Damped where the change reaches and nowhere else: an oscillator in
+            // another part of the drawing loses energy to every backward Euler
+            // step it is made to take, and has nothing to recover from.
+            let retuned = circuit.apply_retunes(t + step_floor(min_step, t));
+            if !retuned.is_empty() {
+                let origins: Vec<Origin> = retuned.into_iter().map(Origin::Element).collect();
+                run.coupling.damp(&origins, CORNER_DAMPING, &mut run.damp);
+                run.coupling.damp(&origins, CORNER_DAMPING, &mut run.retuned);
                 dt = dt.min(cfg.initial_step.max(min_step));
             }
 
@@ -1550,7 +1733,8 @@ impl Simulator {
             // first change on a net that reaches the analog circuit is where
             // this step has to end, so that the bridge starts its ramp from a
             // timepoint the solver has actually been at.
-            let proposal = dt.min(cfg.max_step).min(until - t);
+            let natural = dt.min(cfg.max_step);
+            let proposal = natural.min(until - t);
             // Whichever runs out first, the frame's share or the safety valve:
             // without a budget, one step's worth of a fast clock was otherwise
             // run out in full before the valve was next looked at.
@@ -1583,6 +1767,14 @@ impl Simulator {
                 return Err(e);
             }
             self.absorb_digital(circuit, &mut result, &mut run.ledger, cfg.max_step);
+            // A change the queue made at this very instant is reached already:
+            // the bridge starts its ramp here, not a step late at the end of
+            // the step about to be taken.
+            let reached = self.reach_changes(circuit, &mut run.ledger.pacing, t);
+            if !reached.is_empty() {
+                let origins: Vec<Origin> = reached.into_iter().map(Origin::Dac).collect();
+                run.coupling.damp(&origins, CORNER_DAMPING, &mut run.damp);
+            }
             if settled.halt == Halt::Budget && settled.time <= t {
                 // What ran out was the safety valve, not the frame's share: that
                 // is an error, reported at the top of the loop, and never a run
@@ -1596,25 +1788,68 @@ impl Simulator {
                 break;
             }
 
+            // Which elements take this step damped: all of them while the whole
+            // circuit owes damped steps, otherwise those a corner reached.
+            for (flag, &owed) in self.damped.iter_mut().zip(&run.damp) {
+                *flag = euler_steps > 0 || owed > 0;
+            }
+            // And which of them have their step sized by backward Euler's own
+            // error: at the start of the run and after a value changed, where
+            // whatever is stored — a tank's energy — is at the mercy of the
+            // first-order steps. Not after every corner: the edges of a clock
+            // come so often that sizing every damped step after them that way
+            // cost half as many steps again, for a loss that the source driving
+            // the edges makes good on the next one.
+            for (flag, &owed) in self.sized.iter_mut().zip(&run.retuned) {
+                *flag = euler_steps > 0 || owed > 0;
+            }
+
             let mut step = proposal
                 .min(self.element_step_limit(circuit, t))
                 .min(self.dac_step_limit(circuit, t));
 
             // Whether this step ends exactly on a corner — the edge of a pulse,
-            // a point in a piecewise-linear table, a digital output changing.
+            // a point in a piecewise-linear table, a digital output changing —
+            // and whose corner it is.
             let mut on_corner = false;
+            let mut corner: Vec<Origin> = Vec::new();
             if let Some(bp) = self.next_breakpoint(circuit, t)
                 && bp > t
                 && bp < t + step
             {
                 step = bp - t;
                 on_corner = true;
+                corner.extend(
+                    circuit
+                        .elements()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| e.next_breakpoint(t) == Some(bp))
+                        .map(|(k, _)| Origin::Element(k)),
+                );
+                corner.extend(
+                    circuit
+                        .dacs()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, d)| d.next_breakpoint(t) == Some(bp))
+                        .map(|(k, _)| Origin::Dac(k)),
+                );
             }
             if let Some(next) = next_resolved(&run.ledger.pacing, t)
                 && next < t + step
             {
+                corner.clear();
                 step = next - t;
                 on_corner = true;
+                corner.extend(
+                    run.ledger
+                        .pacing
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| p.ahead.iter().any(|c| c.resolve && c.time == next))
+                        .map(|(k, _)| Origin::Dac(k)),
+                );
             }
             // A converter samples there: the voltage it gets is the one solved
             // at that instant, not one interpolated across a step.
@@ -1628,8 +1863,16 @@ impl Simulator {
             // analog side is not to get ahead of it.
             if settled.halt == Halt::Budget && settled.time < t + step {
                 step = settled.time - t;
+                on_corner = false;
             }
             step = step.max(step_floor(min_step, t));
+            // A step that would stop short of `until` by less than the clock can
+            // resolve goes all the way: the run counts as there, and stopping a
+            // sliver short of it left a single shot that never finished, with
+            // every later call to finish it returning nothing.
+            if until - (t + step) > 0.0 && until - (t + step) < step_floor(min_step, until) {
+                step = until - t;
+            }
 
             // Attempt the step, backing off if Newton refuses to converge.
             let mut attempt = step;
@@ -1673,6 +1916,10 @@ impl Simulator {
                                 | SimError::NonFinite { culprits, .. } => culprits,
                                 _ => Culprits::default(),
                             };
+                            // The failed iterate has been read for the
+                            // explanation; what the run holds is the last
+                            // timepoint it actually solved.
+                            self.x.copy_from_slice(&self.x_accepted);
                             return Err(SimError::TimestepTooSmall {
                                 time: t,
                                 step: attempt,
@@ -1682,7 +1929,9 @@ impl Simulator {
                     }
                     Err(other) => {
                         restore(run, t, dt, euler_steps, stats);
-                        return Err(self.explain(circuit, other));
+                        let explained = self.explain(circuit, other);
+                        self.x.copy_from_slice(&self.x_accepted);
+                        return Err(explained);
                     }
                 }
             }
@@ -1693,18 +1942,26 @@ impl Simulator {
             self.deliver_samples(circuit, from, t);
             self.x_accepted.copy_from_slice(&self.x);
             stats.accepted_steps += 1;
-            self.reach_changes(circuit, &mut run.ledger.pacing, t);
+            let mut reached = self.reach_changes(circuit, &mut run.ledger.pacing, t);
             if run.ledger.pacing.iter().any(|p| p.averageable.is_none()) {
-                self.learn_coupling(circuit, &mut run.ledger.pacing);
+                self.learn_coupling(&run.coupling, circuit, &mut run.ledger.pacing);
             }
             euler_steps = euler_steps.saturating_sub(1);
+            for owed in run.damp.iter_mut().chain(run.retuned.iter_mut()) {
+                *owed = owed.saturating_sub(1);
+            }
 
             // Anything alternating step by step is the integrator, not the
             // circuit. One damped step kills the mode; backward Euler has no
-            // ringing in it at all.
-            if circuit.elements().iter().any(|e| e.is_ringing()) {
-                euler_steps = euler_steps.max(1);
-            }
+            // ringing in it at all. Damped where it rings, and what that reaches.
+            let ringing: Vec<Origin> = circuit
+                .elements()
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.is_ringing())
+                .map(|(k, _)| Origin::Element(k))
+                .collect();
+            run.coupling.damp(&ringing, 1, &mut run.damp);
 
             // Having just landed on a corner, take the next couple of steps with
             // backward Euler.
@@ -1719,19 +1976,28 @@ impl Simulator {
             // step, and the drawing animated it: dots jittering back and forth
             // along a wire carrying nothing. Two damped steps kill it, which is
             // what every SPICE does at a breakpoint and this did only at t = 0.
+            //
+            // Damped where the corner reaches, not everywhere: a pulse source or
+            // a clock beside a tank used to put the whole circuit on backward
+            // Euler at every edge, and the tank gave up its energy to them.
             if on_corner && attempt >= step {
-                euler_steps = euler_steps.max(CORNER_DAMPING);
+                run.coupling.damp(&corner, CORNER_DAMPING, &mut run.damp);
             }
 
             self.record(&mut result, circuit, t);
-            self.exchange_with_digital(
+            reached.extend(self.exchange_with_digital(
                 circuit,
                 t,
                 &mut result,
                 &mut stats,
                 &mut run.ledger,
                 cfg.max_step,
-            );
+            ));
+            // A bridge that started a ramp here is a corner where it is.
+            if !reached.is_empty() {
+                let origins: Vec<Origin> = reached.into_iter().map(Origin::Dac).collect();
+                run.coupling.damp(&origins, CORNER_DAMPING, &mut run.damp);
+            }
             if let Err(e) = unsettled(circuit) {
                 restore(run, t, dt, euler_steps, stats);
                 return Err(e);
@@ -1750,8 +2016,13 @@ impl Simulator {
             // and doubling up from a two-nanosecond ramp to a twenty-millisecond
             // cruise took twenty-five steps of nothing happening after every
             // logic edge that reached an LED.
-            dt = if attempt >= step && step < proposal {
-                proposal
+            //
+            // Nor is the end of the call such a reason: a step cut short by
+            // `until` used to start the next call from twice the sliver that was
+            // left, and a run advanced a frame at a time took half as many steps
+            // again as the same run in one go.
+            dt = if attempt >= step && step < natural {
+                natural
             } else {
                 (attempt * 2.0).min(cfg.max_step)
             };
@@ -1784,6 +2055,10 @@ impl Simulator {
     }
 
     /// Tightest step any element is willing to take from the current state.
+    ///
+    /// Each by the error of the rule it will take the step with, where that
+    /// matters: a backward Euler step is first order, and the trapezoidal
+    /// rule's error term allows it steps far too long for that.
     fn element_step_limit(&self, circuit: &Circuit, t: f64) -> f64 {
         let ctx = AcceptCtx {
             mode: Mode::Transient,
@@ -1792,7 +2067,16 @@ impl Simulator {
             dt: 0.0,
             x: &self.x_accepted,
         };
-        circuit.elements().iter().map(|e| e.max_timestep(&ctx)).fold(f64::INFINITY, f64::min)
+        let euler = AcceptCtx { integration: Integration::BackwardEuler, ..ctx };
+        circuit
+            .elements()
+            .iter()
+            .enumerate()
+            .map(|(k, e)| {
+                let sized = self.sized.get(k).copied().unwrap_or(false);
+                e.max_timestep(if sized { &euler } else { &ctx })
+            })
+            .fold(f64::INFINITY, f64::min)
     }
 
     fn dac_step_limit(&self, circuit: &Circuit, t: f64) -> f64 {
@@ -1818,8 +2102,10 @@ impl Simulator {
         dt: f64,
     ) {
         let ctx = AcceptCtx { mode, integration, time, dt, x: &self.x };
-        for element in circuit.elements_mut() {
-            element.accept(&ctx);
+        let euler = AcceptCtx { integration: Integration::BackwardEuler, ..ctx };
+        for (k, element) in circuit.elements_mut().iter_mut().enumerate() {
+            let damped = mode == Mode::Transient && self.damped.get(k).copied().unwrap_or(false);
+            element.accept(if damped { &euler } else { &ctx });
         }
     }
 
@@ -1851,7 +2137,7 @@ impl Simulator {
         stats: &mut Stats,
         ledger: &mut Ledger,
         max_step: f64,
-    ) {
+    ) -> Vec<usize> {
         // Analog -> digital.
         let mut pending: Vec<(f64, DriverId, NetId, Logic)> = Vec::new();
         {
@@ -1903,7 +2189,7 @@ impl Simulator {
         let settled = circuit.digital.settle_until(t, false, usize::MAX);
         stats.digital_events += settled.events;
         self.absorb_digital(circuit, result, ledger, max_step);
-        self.reach_changes(circuit, &mut ledger.pacing, t);
+        self.reach_changes(circuit, &mut ledger.pacing, t)
     }
 
     /// Take what the digital domain has done since it was last asked: into the
@@ -1999,17 +2285,29 @@ impl Simulator {
     /// A change to be averaged only moves the level the next average starts
     /// from; the bridge itself is set at each attempt, from what the step ahead
     /// holds.
-    fn reach_changes(&mut self, circuit: &mut Circuit, pacing: &mut [Pacing], t: f64) {
-        for (dac, pace) in circuit.dacs_mut().iter_mut().zip(pacing.iter_mut()) {
+    ///
+    /// Returns the bridges that started a ramp.
+    fn reach_changes(
+        &mut self,
+        circuit: &mut Circuit,
+        pacing: &mut [Pacing],
+        t: f64,
+    ) -> Vec<usize> {
+        let mut ramped = Vec::new();
+        for (k, (dac, pace)) in circuit.dacs_mut().iter_mut().zip(pacing.iter_mut()).enumerate() {
             let reached = pace.ahead.iter().take_while(|c| c.time <= t).count();
             for change in pace.ahead.drain(..reached) {
                 pace.level = change.state;
                 pace.averaging = !change.resolve;
                 if change.resolve {
                     dac.notify(change.state, t);
+                    if ramped.last() != Some(&k) {
+                        ramped.push(k);
+                    }
                 }
             }
         }
+        ramped
     }
 
     /// Hold every bridge that is being averaged at its net's time average over
@@ -2058,37 +2356,38 @@ impl Simulator {
     /// with an analog-to-digital bridge's node is left alone: what it drives
     /// comes back as logic, and an oscillator built that way would be averaged
     /// into a level that never crosses a threshold.
-    fn learn_coupling(&mut self, circuit: &Circuit, pacing: &mut [Pacing]) {
-        let rails: Vec<usize> = circuit
-            .elements()
-            .iter()
-            .filter_map(|e| e.as_any().downcast_ref::<VoltageSource>())
-            .filter_map(|v| match (node_index(v.p), node_index(v.m)) {
-                (Some(p), None) => Some(p),
-                (None, Some(m)) => Some(m),
-                _ => None,
-            })
-            .collect();
-        // Read off a fresh small-signal stamp rather than `self.sys`, which at
-        // this point holds the LU factors of the last solve. Pivoting swaps a
-        // rail's row with its source's branch row, and that row reaches every
-        // neighbour of the rail: read from the factors, the barrier never held
-        // and nothing sharing a supply with a read-back net was ever averaged.
-        // The AC stamp is the linearisation at the present bias, capacitors
-        // included, which is exactly the pattern of what can reach what.
-        let mut pattern = ComplexSystem::new(circuit.unknown_count());
-        circuit.ac_stamp_all(&mut pattern, &AcCtx { omega: 1.0, gmin: self.config.gmin });
-        let label = pattern.coupled(&rails);
+    fn learn_coupling(&mut self, coupling: &Coupling, circuit: &Circuit, pacing: &mut [Pacing]) {
+        // The same pattern the damping reads, learnt once at the operating
+        // point: a dense complex matrix for the question cost 256 MB at the size
+        // limit, twice what that limit is there to bound.
+        let label = &coupling.label;
         let read: Vec<usize> = circuit
             .adcs()
             .iter()
             .filter_map(|adc| node_index(adc.node))
-            .map(|i| label[i])
+            .filter_map(|i| label.get(i).copied())
             .collect();
         for (dac, pace) in circuit.dacs().iter().zip(pacing.iter_mut()) {
-            let coupled = node_index(dac.node).is_some_and(|i| read.contains(&label[i]));
+            let coupled =
+                node_index(dac.node).and_then(|i| label.get(i)).is_some_and(|l| read.contains(l));
             pace.averageable = Some(!coupled);
         }
+    }
+
+    /// Start the logic, let it settle at t = 0, and put every bridge at the level
+    /// its net settled to. Whatever the analog side is about to solve is solved
+    /// around these levels, so it comes first, in every analysis.
+    fn bring_up_digital(&mut self, circuit: &mut Circuit) -> Result<(), SimError> {
+        let bridged: Vec<NetId> = circuit.dacs().iter().map(|d| d.net).collect();
+        circuit.digital.watch(bridged);
+        circuit.digital.initialize();
+        circuit.digital.settle(0.0);
+        unsettled(circuit)?;
+        // The starting levels are levels, not changes: whoever records the run
+        // reads them off the nets.
+        circuit.digital.take_log();
+        self.force_dac_levels(circuit, 0.0);
+        Ok(())
     }
 
     /// Snap every DAC to its net's current level with no ramp. Used only at t=0,

@@ -147,8 +147,13 @@ impl Eeprom {
             self.armed_at = None;
             return 2;
         }
+        // EEMPE is an ordinary bit the hardware clears four cycles on, so
+        // writing it zero clears it sooner. A write of EEPE without it is the
+        // datasheet's "no effect" and leaves the bit alone.
         if v & EEMPE != 0 {
             self.armed_at = Some(cycle);
+        } else if v & EEPE == 0 {
+            self.armed_at = None;
         }
         if v & EERE != 0 {
             self.data = self.cells[usize::from(self.address)];
@@ -228,6 +233,27 @@ mod tests {
         assert_eq!(read(&mut e, 60_000), 42);
         at(&mut e, 6);
         assert_eq!(read(&mut e, 60_010), 0xFF, "its neighbour is untouched");
+    }
+
+    #[test]
+    fn writing_eempe_zero_disarms_the_write() {
+        // EEMPE set, then EECR written with it clear (EERIE on, say) inside
+        // the four cycles: the bit reads zero from then on, so the EEPE that
+        // follows finds it clear and writes nothing.
+        let mut e = eeprom();
+        e.data = 0;
+        e.write_control(EEMPE, 0);
+        assert_ne!(e.control(1) & EEMPE, 0);
+        e.write_control(EERIE, 1);
+        assert_eq!(e.control(2) & EEMPE, 0);
+        assert_eq!(e.write_control(EERIE | EEPE, 2), 0);
+        assert_eq!(e.next_event(), u64::MAX, "no write started");
+        // An EEPE written without EEMPE in the same write still writes, the
+        // EEMPE of the write before it standing: `out EECR` twice, the
+        // second with only EEPE set.
+        e.write_control(EEMPE, 10);
+        assert_eq!(e.write_control(EEPE, 11), 2);
+        assert_ne!(e.next_event(), u64::MAX);
     }
 
     #[test]

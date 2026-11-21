@@ -9,7 +9,9 @@
 	 * the only thing they share is the frequency they were measured at.
 	 */
 	import { app } from '$lib/state.svelte';
-	import { formatValue } from '$lib/units';
+	import { formatWithUnit } from '$lib/units';
+	import { bodePanels, phaseStep, stepsWithin, type Rect } from '$lib/plot-layout';
+	import { watchPixelRatio } from '$lib/canvas/pixel-ratio';
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let host = $state<HTMLDivElement | null>(null);
@@ -21,6 +23,8 @@
 	const MAGNITUDE_SHARE = 0.62;
 
 	interface Trace {
+		/** The probe's own key: labels are free text, and two can read the same. */
+		key: string;
 		label: string;
 		colour: string;
 		magnitudeDb: Float64Array;
@@ -42,7 +46,13 @@
 				// anything a plot would show rather than letting it break the scale.
 				db[i] = 20 * Math.log10(Math.max(magnitude[i], 1e-12));
 			}
-			out.push({ label: probe.label, colour: probe.colour, magnitudeDb: db, phase: run.phase[index] });
+			out.push({
+			key: probe.key,
+			label: probe.label,
+			colour: probe.colour,
+			magnitudeDb: db,
+			phase: run.phase[index]
+		});
 		}
 		return out;
 	});
@@ -87,26 +97,72 @@
 		return power * 10;
 	}
 
+	/**
+	 * The theme's colours, read once rather than on every draw — and the Bode
+	 * plot draws on every pointer move. Forgotten when the canvas is resized
+	 * and when the system theme changes, which is when they can change.
+	 */
+	let colours = new Map<string, string>();
+	function colour(name: string): string {
+		let value = colours.get(name);
+		if (value === undefined && canvas) {
+			value = getComputedStyle(canvas).getPropertyValue(name).trim();
+			colours.set(name, value);
+		}
+		return value ?? '';
+	}
+
+	let dpr = $state(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
+	$effect(() => watchPixelRatio(window, (ratio) => (dpr = ratio)));
+
+	/**
+	 * Size the backing store when the size or density changes, not on every
+	 * draw: assigning a canvas's width reallocates it even when the number is
+	 * the same.
+	 */
+	$effect(() => {
+		if (!canvas) return;
+		canvas.width = Math.round(size.width * dpr);
+		canvas.height = Math.round(size.height * dpr);
+		colours = new Map();
+	});
+
+	$effect(() => {
+		const scheme = window.matchMedia?.('(prefers-color-scheme: dark)');
+		if (!scheme) return;
+		const forget = () => {
+			colours = new Map();
+			draw();
+		};
+		scheme.addEventListener('change', forget);
+		return () => scheme.removeEventListener('change', forget);
+	});
+
+	/** Run `paint` with drawing confined to one panel. */
+	function within(ctx: CanvasRenderingContext2D, panel: Rect, paint: () => void) {
+		ctx.save();
+		ctx.beginPath();
+		// A line's width of slack, so a curve along the frame is not shaved.
+		ctx.rect(panel.x - 1, panel.y - 1, panel.w + 2, panel.h + 2);
+		ctx.clip();
+		paint();
+		ctx.restore();
+	}
+
 	function draw() {
 		if (!canvas || size.width === 0) return;
 		const run = app.acResult;
-		const dpr = window.devicePixelRatio || 1;
-		canvas.width = Math.round(size.width * dpr);
-		canvas.height = Math.round(size.height * dpr);
 		const ctx = canvas.getContext('2d');
 		if (!ctx) return;
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, size.width, size.height);
-
-		const style = getComputedStyle(canvas);
-		const colour = (name: string) => style.getPropertyValue(name).trim();
 		ctx.font = `11px ${colour('--font-mono') || 'monospace'}`;
 
-		const plotW = Math.max(size.width - PADDING.left - PADDING.right, 10);
-		const totalH = Math.max(size.height - PADDING.top - PADDING.bottom, 20);
-		const magH = totalH * MAGNITUDE_SHARE;
-		const phaseTop = PADDING.top + magH + 10;
-		const phaseH = Math.max(totalH - magH - 10, 10);
+		const panels = bodePanels(size, PADDING, MAGNITUDE_SHARE);
+		const plotW = panels.magnitude.w;
+		const magH = panels.magnitude.h;
+		const phaseTop = panels.phase.y;
+		const phaseH = panels.phase.h;
 
 		if (!run || run.frequencies.length === 0) return;
 
@@ -138,7 +194,7 @@
 					ctx.fillStyle = colour('--label-dim');
 					ctx.textAlign = 'center';
 					ctx.textBaseline = 'top';
-					ctx.fillText(`${formatValue(hz, 3)}Hz`, x, size.height - PADDING.bottom + 6);
+					ctx.fillText(formatWithUnit(hz, 'Hz', 3), x, size.height - PADDING.bottom + 6);
 				}
 			}
 		}
@@ -157,12 +213,9 @@
 			ctx.fillText(`${db.toFixed(0)} dB`, PADDING.left - 8, y);
 		}
 
-		const phaseStep = niceStep(phaseRange.hi - phaseRange.lo, 3);
-		for (
-			let deg = Math.ceil(phaseRange.lo / phaseStep) * phaseStep;
-			deg <= phaseRange.hi;
-			deg += phaseStep
-		) {
+		// In divisions of a turn: a phase axis marked 0° and −100° is one nobody
+		// reads a phase in.
+		for (const deg of stepsWithin(phaseRange.lo, phaseRange.hi, phaseStep(phaseRange.hi - phaseRange.lo))) {
 			const y = toPhaseY(deg);
 			ctx.strokeStyle = colour('--grid-line');
 			ctx.beginPath();
@@ -174,30 +227,36 @@
 		}
 
 		// Phase is drawn dashed so the two panels are never confused for one plot.
+		// Each panel clipped to itself: the axis shows at most 140 dB, and a deep
+		// null below that ran the magnitude curve down through the phase panel.
 		ctx.lineWidth = 1.6;
 		ctx.lineJoin = 'round';
 		for (const trace of traces) {
 			ctx.strokeStyle = trace.colour;
-			ctx.setLineDash([]);
-			ctx.beginPath();
-			for (let i = 0; i < run.frequencies.length; i++) {
-				const x = toX(run.frequencies[i]);
-				const y = toMagY(trace.magnitudeDb[i]);
-				if (i === 0) ctx.moveTo(x, y);
-				else ctx.lineTo(x, y);
-			}
-			ctx.stroke();
+			within(ctx, panels.magnitude, () => {
+				ctx.setLineDash([]);
+				ctx.beginPath();
+				for (let i = 0; i < run.frequencies.length; i++) {
+					const x = toX(run.frequencies[i]);
+					const y = toMagY(trace.magnitudeDb[i]);
+					if (i === 0) ctx.moveTo(x, y);
+					else ctx.lineTo(x, y);
+				}
+				ctx.stroke();
+			});
 
-			ctx.setLineDash([4, 3]);
-			ctx.beginPath();
-			for (let i = 0; i < run.frequencies.length; i++) {
-				const x = toX(run.frequencies[i]);
-				const y = toPhaseY(trace.phase[i]);
-				if (i === 0) ctx.moveTo(x, y);
-				else ctx.lineTo(x, y);
-			}
-			ctx.stroke();
-			ctx.setLineDash([]);
+			within(ctx, panels.phase, () => {
+				ctx.setLineDash([4, 3]);
+				ctx.beginPath();
+				for (let i = 0; i < run.frequencies.length; i++) {
+					const x = toX(run.frequencies[i]);
+					const y = toPhaseY(trace.phase[i]);
+					if (i === 0) ctx.moveTo(x, y);
+					else ctx.lineTo(x, y);
+				}
+				ctx.stroke();
+				ctx.setLineDash([]);
+			});
 		}
 
 		if (cursor !== null && cursor >= PADDING.left && cursor <= PADDING.left + plotW) {
@@ -234,6 +293,7 @@
 		return {
 			hz: run.frequencies[nearest],
 			values: traces.map((t) => ({
+				key: t.key,
 				label: t.label,
 				colour: t.colour,
 				db: t.magnitudeDb[nearest],
@@ -252,7 +312,7 @@
 	});
 
 	$effect(() => {
-		void [app.acResult, traces, dbRange, phaseRange, size, cursor];
+		void [app.acResult, traces, dbRange, phaseRange, size, cursor, dpr];
 		draw();
 	});
 </script>
@@ -276,8 +336,8 @@
 
 	{#if readout && readout.values.length > 0}
 		<div class="readout">
-			<span class="freq">{formatValue(readout.hz, 4)}Hz</span>
-			{#each readout.values as entry (entry.label)}
+			<span class="freq">{formatWithUnit(readout.hz, 'Hz', 4)}</span>
+			{#each readout.values as entry (entry.key)}
 				<span style:color={entry.colour}>
 					{entry.label} {entry.db.toFixed(1)} dB · {entry.phase.toFixed(0)}°
 				</span>
@@ -321,7 +381,9 @@
 		font-family: var(--font-mono);
 		font-size: 0.72rem;
 		pointer-events: none;
-		background: color-mix(in srgb, var(--panel-bg) 85%, transparent);
+		/* Nearly opaque, with a frame: it sits over the curves it describes. */
+		background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+		border: 1px solid var(--border);
 		padding: 0.25rem 0.5rem;
 		border-radius: 4px;
 	}

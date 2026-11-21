@@ -1,14 +1,23 @@
 <script lang="ts">
 	import { ChevronRight, Plus, Search, X } from '@lucide/svelte';
-	import { BLOCK_PREFIX, SUBCIRCUIT_PREFIX } from '$lib/schematic/model';
 	import { SECTIONS, searchParts, sectionLabel, type PartEntry, type SectionId } from '$lib/parts/library';
-	import { allParts, isArmed, pickPart } from '$lib/parts/drawing';
+	import { SUBCIRCUIT_PREFIX } from '$lib/schematic/model';
+	import { allParts, isArmed, pickPart, removeDrawingPart } from '$lib/parts/drawing';
+	import { toasts } from '$lib/ui';
 	import { recentParts } from '$lib/parts/recent.svelte';
 	import { app } from '$lib/state.svelte';
 	import Symbol from '../Symbol.svelte';
 	import PartIcon from './PartIcon.svelte';
 	import PartTile from './PartTile.svelte';
 	import SubcircuitImport from './SubcircuitImport.svelte';
+	import { findsPart } from '$lib/shortcuts';
+
+	type Props = {
+		/** Put the search box in focus as soon as the list is up: `/` pressed on the examples tab. */
+		focusSearch?: boolean;
+	};
+
+	let { focusSearch = false }: Props = $props();
 
 	/**
 	 * Where parts are picked from.
@@ -26,6 +35,9 @@
 
 	let query = $state('');
 	let searchInput = $state<HTMLInputElement | null>(null);
+	$effect(() => {
+		if (focusSearch) searchInput?.focus();
+	});
 	let active = $state(0);
 	const results = $derived(query.trim() ? searchParts(parts, query) : []);
 	$effect(() => {
@@ -106,30 +118,25 @@
 
 	/** `/` finds a part from anywhere, the way it finds things on most of the web. */
 	function onWindowKey(event: KeyboardEvent) {
-		if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
-		const target = event.target as HTMLElement | null;
-		if (target?.closest('input, textarea, select, [contenteditable]')) return;
+		if (!findsPart(event, event.target as HTMLElement | null)) return;
 		// Hidden in a closed drawer on a phone: nothing to focus there.
 		if (!searchInput || searchInput.offsetParent === null) return;
 		event.preventDefault();
 		searchInput.focus();
 	}
 
-	/** Blocks and imported parts go with the drawing, and right-click is how they go. */
+	/**
+	 * Blocks and imported parts go with the drawing, and right-click is how they
+	 * go. A long press on a phone is a right-click too, so it says what it did
+	 * and that undo brings it back.
+	 */
 	function removable(part: PartEntry): ((event: MouseEvent) => void) | undefined {
-		if (part.section === 'blocks') {
-			return (event) => {
-				event.preventDefault();
-				app.removeBlock(part.kind.slice(BLOCK_PREFIX.length));
-			};
-		}
-		if (part.section === 'imported') {
-			return (event) => {
-				event.preventDefault();
-				app.removeSubcircuit(part.kind.slice(SUBCIRCUIT_PREFIX.length));
-			};
-		}
-		return undefined;
+		if (part.section !== 'blocks' && part.section !== 'imported') return undefined;
+		return (event) => {
+			event.preventDefault();
+			const said = removeDrawingPart(app, part);
+			if (said) toasts.show(said);
+		};
 	}
 
 	const tip = (part: PartEntry) =>
@@ -157,13 +164,13 @@
 {#snippet shelfHeading(id: string, label: string, count: number)}
 	<button
 		type="button"
-		class="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left text-[0.66rem] font-semibold tracking-[0.08em] text-muted uppercase hover:text-fg"
+		class="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left text-3xs font-semibold tracking-[0.08em] text-muted uppercase hover:text-fg"
 		aria-expanded={!folded.has(id)}
 		onclick={() => toggleShelf(id)}
 	>
 		<ChevronRight class="size-3 transition-transform {folded.has(id) ? '' : 'rotate-90'}" />
 		{label}
-		<span class="ml-auto font-mono text-[0.6rem] font-normal tracking-normal opacity-60">{count}</span>
+		<span class="ml-auto font-mono text-3xs font-normal tracking-normal opacity-60">{count}</span>
 	</button>
 {/snippet}
 
@@ -200,7 +207,7 @@
 					<X class="size-3.5" />
 				</button>
 			{:else}
-				<kbd class="rounded border border-border px-1 font-mono text-[0.6rem] leading-4">/</kbd>
+				<kbd class="rounded border border-border px-1 font-mono text-3xs leading-4">/</kbd>
 			{/if}
 		</label>
 	</div>
@@ -228,7 +235,7 @@
 						<PartIcon kind={part.kind} class="h-[26px] w-[34px]" />
 						<div class="flex min-w-0 flex-col">
 							<span class="truncate text-ui">{part.label}</span>
-							<span class="truncate text-[0.64rem] text-muted">
+							<span class="truncate text-3xs text-muted">
 								{sectionLabel(part.section)}{part.description ? ` · ${part.description}` : ''}
 							</span>
 						</div>
@@ -291,7 +298,7 @@
 
 				{#if recent.length > 0}
 					<section>
-						<h3 class="m-0 px-0.5 py-1 text-[0.66rem] font-semibold tracking-[0.08em] text-muted uppercase">
+						<h3 class="m-0 px-0.5 py-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
 							Recent
 						</h3>
 						<div class="grid grid-cols-[repeat(auto-fill,minmax(58px,1fr))] gap-1">
@@ -317,7 +324,7 @@
 									{#each shelf as part, i (part.kind + ':' + part.label + ':' + part.description)}
 										<!-- A long shelf is filed under headings of its own: chips by what they do. -->
 										{#if part.shelf && part.shelf !== shelf[i - 1]?.shelf}
-											<h4 class="col-span-full m-0 mt-1 px-0.5 text-[0.62rem] font-medium text-muted first:mt-0">
+											<h4 class="col-span-full m-0 mt-1 px-0.5 text-3xs font-medium text-muted first:mt-0">
 												{part.shelf}
 											</h4>
 										{/if}

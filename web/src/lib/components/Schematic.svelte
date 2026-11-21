@@ -9,6 +9,7 @@
 	 */
 	import { untrack } from 'svelte';
 	import { CanvasEditor, type Painter, type ViewportState } from '$lib/canvas';
+	import { followDepth } from '$lib/canvas/levels';
 	import { createAnimationState, forget } from '$lib/schematic/animate';
 	import {
 		isActuatedAt,
@@ -40,6 +41,7 @@
 	import { parseTrace } from '$lib/trace';
 	import { junctionDots } from '$lib/schematic/nets';
 	import { buildSceneItems, buildSnapTargets } from '$lib/schematic/scene';
+	import { drawnText } from '$lib/schematic/appearance';
 	import { createPlaceTool, createSelectTool, createWireTool } from '$lib/schematic/tools';
 	import { app } from '$lib/state.svelte';
 	import { formatWithUnit, parseQuantity } from '$lib/units';
@@ -526,6 +528,9 @@
 	// because the standard is part of their cache key.
 	$effect(() => {
 		void [selectionSet, probeColours, app.hoverNet, app.symbolStandard, faultNets, faultParts];
+		// A value or a name set on a part in place, from the inspector: the
+		// drawing is the same object, so nothing above changed for it.
+		void drawnText(app.schematic);
 		// Groups are drawn from the parts, so only their names and membership
 		// are theirs to watch; the index does not know they exist.
 		void app.schematic.groups?.map((g) => `${g.name}:${g.members.length}`);
@@ -557,25 +562,21 @@
 	// own origin, nowhere near where the drawing was being looked at, and a
 	// double click that lands on an empty screen reads as nothing happening.
 	// Coming back out, the drawing is looked at from where it was left.
-	let views: ViewportState[] = [];
+	// A level arrived on without being looked at — a draft restored several
+	// blocks deep — has no view to come back to, and is fitted instead.
+	let views: (ViewportState | null)[] = [];
 	$effect(() => {
 		const active = editor;
 		const depth = app.depth;
 		if (!active) return;
-		if (depth > views.length) {
-			views.push(active.viewport.snapshot());
-			// After the index has been rebuilt for the new document, or the fit
-			// would be to the old one.
-			queueMicrotask(() => active.fit());
-		} else {
-			while (views.length > depth) {
-				const back = views.pop();
-				if (views.length === depth && back) {
-					active.viewport.restore(back);
-					active.invalidate();
-				}
-			}
+		const next = followDepth(views, depth, () => active.viewport.snapshot());
+		if (next.restore) {
+			active.viewport.restore(next.restore);
+			active.invalidate();
 		}
+		// After the index has been rebuilt for the new document, or the fit
+		// would be to the old one.
+		if (next.fit) queueMicrotask(() => active.fit());
 	});
 
 	/**
@@ -860,6 +861,10 @@
 			return;
 		}
 
+		// What is left are plain keys. Held with a modifier they belong to the
+		// browser or the system — Ctrl+Backspace, Alt+F — and not to the drawing.
+		if (event.ctrlKey || event.metaKey || event.altKey) return;
+
 		switch (event.key) {
 			case 'Delete':
 			case 'Backspace':
@@ -1023,7 +1028,8 @@
 		border-radius: 3px;
 		background: var(--panel-bg);
 		color: var(--text, inherit);
-		font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+		/* The canvas labels' own face, so editing one does not change its glyphs. */
+		font-family: var(--font-mono);
 		line-height: 1;
 		width: auto;
 		outline: none;

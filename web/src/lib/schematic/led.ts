@@ -37,19 +37,37 @@ export interface LedColour {
 }
 
 /**
- * The current every forward voltage below is quoted at, and the default rating.
+ * The current every forward voltage below is quoted at.
  *
- * 20 mA is what almost every indicator LED is specified at, which is why the
- * same number does duty as both — as the point the I-V curve is fitted through,
- * and as the rating a part gets until someone says otherwise.
+ * 20 mA is what almost every indicator LED is specified at: the datasheet's
+ * test current, the point the I-V curve is fitted through, and the current an
+ * LED is drawn at full brightness.
  */
-export const RATED = 0.02;
+export const TEST_CURRENT = 0.02;
 
-/** Where the curve is anchored. Fixed, unlike a part's rating. */
+/**
+ * The default rating: the continuous forward current a 5 mm indicator LED's
+ * absolute maximum allows.
+ *
+ * Not the 20 mA it is tested at. A datasheet prints both, and the test current
+ * is the comfortable one, not the limit: a red LED on 9 V through 330 Ω
+ * carries 21 mA all its life on a bench, and with the test current standing in
+ * for the limit it burnt out here in 43 ms.
+ */
+export const RATED = 0.03;
+
 /** Bulk resistance, as every diode here has. */
 const RS = 0.568;
 
-const REFERENCE = RATED;
+/**
+ * How fast the forward drop falls as the part warms, V/K, at a fixed current:
+ * the −2 mV/K indicator LED datasheets print. Matches the engine's
+ * `LED_TEMPCO`.
+ */
+const TEMPCO = -2e-3;
+
+/** Temperature exponent of the saturation current, the engine's `XTI`. */
+const XTI = 3;
 
 /**
  * The eight LEDs in a seven-segment digit, in the order every datasheet lists.
@@ -144,13 +162,36 @@ export function ledColour(value: unknown): LedColour {
 export function ledDiodeModel(
 	value: unknown,
 	rated: number
-): { is: number; n: number; bv: null; rs: number; temp: number; rated: number } {
+): { is: number; n: number; bv: null; rs: number; temp: number; rated: number; eg: number } {
 	const { vf } = ledColour(value);
-	// The curve is anchored at the fixed reference current, never at `rated`.
-	// The rating says how much abuse the part takes, and raising it to keep a
-	// circuit alive must not quietly move the forward voltage and change how much
-	// current that circuit draws in the first place.
-	return { is: REFERENCE * Math.exp(-vf / (N * VT)), n: N, bv: null, rs: RS, temp: TEMP, rated };
+	// The curve is anchored at the fixed test current, never at `rated`. The
+	// rating says how much abuse the part takes, and raising it to keep a circuit
+	// alive must not quietly move the forward voltage and change how much current
+	// that circuit draws in the first place. The bulk resistance's share of the
+	// drop comes off first, so the quoted voltage is what the part drops at the
+	// quoted current, terminals to terminals.
+	const junction = vf - TEST_CURRENT * RS;
+	return {
+		is: TEST_CURRENT * Math.exp(-junction / (N * VT)),
+		n: N,
+		bv: null,
+		rs: RS,
+		temp: TEMP,
+		rated,
+		eg: activationEnergy(vf)
+	};
+}
+
+/**
+ * The activation energy that makes the drop fall by `TEMPCO` a kelvin.
+ *
+ * The saturation current's temperature law puts the slope of the drop, at a
+ * fixed current, at `(vf − eg − XTI·Vt) / T`; this is that solved for `eg`.
+ * Left at silicon's 1.11 eV, an LED whose drop sits above the gap would get
+ * a higher drop as it warmed, the opposite of every real one.
+ */
+function activationEnergy(vf: number): number {
+	return vf - XTI * VT - TEMPCO * TEMP;
 }
 
 /** What this LED is rated for, in amps. */
@@ -166,12 +207,16 @@ export function ledRating(instance: Instance): number {
  * a fifth of the current still reads as about half the brightness. The power law
  * is what keeps a dim LED visibly lit instead of looking switched off.
  *
+ * `full` is the current drawn at full brightness: the test current for an LED,
+ * since light is a matter of current and not of how much abuse the part is
+ * rated for — raising a rating must not dim a lamp that carries the same.
+ *
  * Allowed past 1 so an LED being overdriven blazes for the moment before it goes
  * — which is the warning the animation exists to give.
  */
-export function brightness(current: number, rated: number): number {
-	if (!(current > 0) || !(rated > 0)) return 0;
-	return Math.min((current / rated) ** 0.45, 1.6);
+export function brightness(current: number, full: number = TEST_CURRENT): number {
+	if (!(current > 0) || !(full > 0)) return 0;
+	return Math.min((current / full) ** 0.45, 1.6);
 }
 
 /**

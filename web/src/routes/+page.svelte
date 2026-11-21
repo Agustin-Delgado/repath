@@ -12,15 +12,19 @@
 	import {
 		Autosaver,
 		chooseStart,
+		draftLock,
+		heldDrafts,
 		newDraftId,
 		openDraftStore,
 		staleDrafts,
+		UNSAVED_NOTICE,
 		type DraftRecord,
 		type DraftStore
 	} from '$lib/draft';
 	import { PANEL_LIMITS, layout, type Panel } from '$lib/layout.svelte';
 	import { decodeCircuit, shareUrl } from '$lib/share';
 	import { app } from '$lib/state.svelte';
+	import { DRAWER_QUERY, drawerClosed } from '$lib/drawers';
 
 	let schematic = $state<ReturnType<typeof Schematic> | null>(null);
 	/**
@@ -34,6 +38,16 @@
 	let panel = $state<'parts' | 'details' | null>(null);
 	/** Whether the command palette is open. */
 	let finding = $state(false);
+
+	/** Whether the side panels are drawers: see `drawerClosed`. */
+	let narrow = $state(false);
+	$effect(() => {
+		const query = window.matchMedia(DRAWER_QUERY);
+		narrow = query.matches;
+		const follow = (event: MediaQueryListEvent) => (narrow = event.matches);
+		query.addEventListener('change', follow);
+		return () => query.removeEventListener('change', follow);
+	});
 
 	$effect(() => {
 		if (app.tool.mode !== 'select') panel = null;
@@ -74,7 +88,7 @@
 		if (typeof navigator === 'undefined' || !navigator.locks) return Promise.resolve(true);
 		return new Promise((resolve) => {
 			navigator.locks
-				.request(`repath.draft.${id}`, { ifAvailable: true }, (lock) => {
+				.request(draftLock(id), { ifAvailable: true }, (lock) => {
 					resolve(lock !== null);
 					return lock ? new Promise<void>(() => {}) : undefined;
 				})
@@ -134,7 +148,12 @@
 		let origin = resumed?.origin ?? '';
 		if (!resumed && hash) origin = (await openLink(hash)) ? hash : '';
 
-		if (!store) return;
+		if (!store) {
+			// Said after whatever was opened, which clears notices as it loads: the
+			// person needs to know before they put an hour into it.
+			app.notice ??= UNSAVED_NOTICE;
+			return;
+		}
 		const id = resumed && (await claim(resumed.id)) ? resumed.id : newDraftId();
 		if (id !== resumed?.id) await claim(id);
 		setTabDraft(id);
@@ -152,8 +171,7 @@
 			},
 			{
 				onError: () => {
-					app.notice =
-						'Your work could not be saved in this browser, so a reload would lose it. Save it to a file to be safe.';
+					app.notice = UNSAVED_NOTICE;
 				},
 				isEmpty: (doc) => {
 					const draft = doc as ReturnType<typeof app.draft>;
@@ -161,7 +179,10 @@
 				}
 			}
 		);
-		for (const stale of staleDrafts(records, new Set([id]))) void store.remove(stale).catch(() => {});
+		// Never another open tab's draft, however old: it is where that tab's next
+		// change goes.
+		const held = await heldDrafts();
+		for (const stale of staleDrafts(records, new Set([id, ...held]))) void store.remove(stale).catch(() => {});
 		saverReady = true;
 	}
 
@@ -285,9 +306,10 @@
 			lastSignature = app.netlistSignature;
 			// A different circuit is a different run: the samples on screen were
 			// solved for the old one, and carrying them over would be a chart of two
-			// circuits spliced together. So this starts again from zero — which is
-			// also why operating a switch deliberately does not come through here.
-			app.run({ quiet: true });
+			// circuits spliced together. So a sweep that is going starts again from
+			// zero — which is also why operating a switch deliberately does not come
+			// through here — and one that was stopped is put away: `followEdit`.
+			app.followEdit();
 		};
 		clearTimeout(pending);
 		pending = setTimeout(rerun, 120);
@@ -335,6 +357,26 @@
 	/>
 {/snippet}
 
+<!--
+	First in the tab order, shown only when it has the focus: the palette is
+	a hundred-odd buttons, and a keyboard user had to go through every one of
+	them to reach the drawing and the inspector beside it.
+-->
+<!--
+	The focus is moved by hand rather than by following `#drawing`: the address
+	bar's hash is where a shared circuit travels, and a stray `#drawing` there
+	would be read as a link at the next reload.
+-->
+<a
+	class="skip-link"
+	href="#drawing"
+	onclick={(event) => {
+		event.preventDefault();
+		document.getElementById('drawing')?.focus();
+	}}>Skip to the drawing</a
+>
+
+
 <div
 	class="app"
 	class:scope-folded={!layout.scopeOpen}
@@ -373,17 +415,19 @@
 			<strong>Could not simulate.</strong>
 			{app.failure?.message ?? app.error}
 		</div>
-	{:else if app.compiled.errors.length > 0}
-		<div class="banner warn" role="status">{app.compiled.errors[0]}</div>
+	{:else if app.circuit.errors.length > 0}
+		<div class="banner warn" role="status">{app.circuit.errors[0]}</div>
 	{/if}
 
 	<main>
-		<aside class="left" class:open={panel === 'parts'}>
+		<aside class="left" class:open={panel === 'parts'} inert={drawerClosed(narrow, panel, 'parts')}>
 			<Sidebar />
 			{@render splitter('left', 'right', 'Resize the parts panel')}
 		</aside>
-		<section class="canvas"><Schematic bind:this={schematic} /></section>
-		<aside class="right" class:open={panel === 'details'}>
+		<section class="canvas" id="drawing" tabindex="-1" aria-label="Drawing">
+			<Schematic bind:this={schematic} />
+		</section>
+		<aside class="right" class:open={panel === 'details'} inert={drawerClosed(narrow, panel, 'details')}>
 			<Inspector />
 			{@render splitter('right', 'left', 'Resize the details panel')}
 		</aside>
@@ -565,6 +609,11 @@
 	.canvas {
 		min-width: 0;
 		min-height: 0;
+	}
+
+	/* Focused by the skip link only, as a place to continue tabbing from. */
+	.canvas:focus {
+		outline: none;
 	}
 
 	/* Flex rather than fixed grid rows: the transport bar is conditional, and with

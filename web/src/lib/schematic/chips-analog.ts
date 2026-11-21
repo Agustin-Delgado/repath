@@ -36,7 +36,10 @@ const LM358: OpAmpSpec = {
 	slew: 0.3e6,
 	rOut: 75,
 	vOs: 2e-3,
-	iBias: 45e-9,
+	// Negative: a PNP input pair, so the 45 nA flows out of each input rather
+	// than into it, as TI's datasheet says in so many words. Through a source
+	// resistance it lifts the input instead of pulling it down.
+	iBias: -45e-9,
 	// Down to within millivolts of ground, and a volt and a half short of the
 	// top: the reason it is the single-supply part, and the reason a 5 V one
 	// cannot give a 5 V output.

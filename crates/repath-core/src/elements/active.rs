@@ -46,6 +46,10 @@ pub struct OpAmpModel {
     pub v_os: f64,
     /// Input bias current, drawn through whatever each input is connected to.
     /// The reason an integrator drifts with nothing on its input.
+    ///
+    /// Signed, positive into the pins: an NPN input pair (a 741) takes its base
+    /// current in, a PNP one (an LM358, an LM324) pushes it out, and a source
+    /// resistance turns the two into offsets of opposite sign.
     pub i_bias: f64,
     pub v_max: f64,
     pub v_min: f64,
@@ -389,8 +393,8 @@ impl Element for OpAmp {
     /// reactive and then had no opinion about how finely it was stepped: the whole
     /// of a slew — the one part of the response the datasheet number is about — was
     /// resolved at whatever the ceiling happened to be.
-    fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
-        self.charge.suggested_step()
+    fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.charge.suggested_step_for(ctx.integration)
     }
 
     fn is_ringing(&self) -> bool {
@@ -438,16 +442,48 @@ pub struct SwitchModel {
     /// Control voltage at which the switch is fully on.
     pub v_on: f64,
     /// Control voltage at which the switch is fully off.
+    ///
+    /// Either way round: `v_on` below `v_off` is a switch that closes as its
+    /// control falls, which is what a normally-closed contact reading the same
+    /// coil is.
     pub v_off: f64,
     pub r_on: f64,
     pub r_off: f64,
+    /// Whether the switch remembers which way it last went, as a relay does.
+    ///
+    /// Without it the conductance is one smooth curve from `v_off` to `v_on`,
+    /// the same going up as coming down, which is what a driver or a contact
+    /// thrown by a ramped control wants. With it the two thresholds are two
+    /// different events: an open switch stays open until the control reaches
+    /// `v_on` and a closed one stays closed until it gets back to `v_off`, and
+    /// anywhere between them it is whichever it was. That band is a relay's
+    /// pull-in and drop-out, and the reason a coil sagging below its pull-in
+    /// voltage does not open the contacts it is holding.
+    #[serde(default)]
+    pub latch: bool,
+    /// Whether a latched switch starts closed. Only read when `latch` is set: a
+    /// normally-closed contact is closed while its coil is still unpowered.
+    #[serde(default)]
+    pub closed: bool,
 }
 
 impl Default for SwitchModel {
     fn default() -> Self {
-        Self { v_on: 1.0, v_off: 0.0, r_on: 1.0, r_off: 1e9 }
+        Self { v_on: 1.0, v_off: 0.0, r_on: 1.0, r_off: 1e9, latch: false, closed: false }
     }
 }
+
+/// How much of the band between a latched switch's two thresholds its contacts
+/// take to travel, at each end.
+///
+/// A real contact is open or closed, but a conductance that jumps between
+/// Newton iterations is one Newton cannot converge on, so each event is a short
+/// smooth stretch that finishes exactly at its threshold. A fiftieth of the band
+/// keeps that stretch to 65 mV on a 3.75 V / 0.5 V relay — under the tolerance
+/// any datasheet quotes its pull-in to — and a long way from the other end,
+/// so the two curves agree to well under a percent wherever the switch changes
+/// which one it is on.
+const LATCH_TRAVEL: f64 = 0.02;
 
 /// A voltage-controlled switch. Also the workhorse behind digital output drivers.
 #[derive(Debug, Clone)]
@@ -460,6 +496,8 @@ pub struct Switch {
     pub model: SwitchModel,
     /// Conductance at the operating point.
     op_g: f64,
+    /// Which way a latched switch last went. Ignored by one that is not.
+    closed: bool,
 }
 
 impl Switch {
@@ -471,7 +509,7 @@ impl Switch {
         cm: NodeId,
         model: SwitchModel,
     ) -> Self {
-        Self { name: name.into(), p, m, cp, cm, model, op_g: 0.0 }
+        Self { name: name.into(), p, m, cp, cm, model, op_g: 0.0, closed: model.closed }
     }
 
     /// Conductance and its derivative with respect to the control voltage.
@@ -481,16 +519,41 @@ impl Switch {
     fn conductance(&self, vc: f64) -> (f64, f64) {
         let g_on = (1.0 / self.model.r_on.max(1e-9)).ln();
         let g_off = (1.0 / self.model.r_off.max(1e-9)).ln();
-        let mid = 0.5 * (self.model.v_on + self.model.v_off);
-        let width = ((self.model.v_on - self.model.v_off).abs() * 0.25).max(1e-6);
+        // Measured towards `v_on`, so a switch that closes as its control falls
+        // is the same curve mirrored rather than one that closes at `v_off`.
+        let sense = if self.model.v_on >= self.model.v_off { 1.0 } else { -1.0 };
+        let (on, off) = (sense * self.model.v_on, sense * self.model.v_off);
+        let u = sense * vc;
+        let band = on - off;
 
-        let t = ((vc - mid) / width).tanh();
+        let (mid, width) = if self.latched() {
+            // The open switch's stretch ends at `v_on`, the closed one's at
+            // `v_off`: each is fully on, or fully off, at its own threshold.
+            let travel = LATCH_TRAVEL * band;
+            let mid = if self.closed { off + travel / 2.0 } else { on - travel / 2.0 };
+            (mid, travel / 10.0)
+        } else {
+            (0.5 * (on + off), (band * 0.25).max(1e-6))
+        };
+
+        let t = ((u - mid) / width).tanh();
         let s = 0.5 * (1.0 + t);
         let ln_g = g_off + s * (g_on - g_off);
         let g = ln_g.exp();
-        // d(g)/d(vc) = g * d(ln g)/d(vc)
-        let dsdv = 0.5 * (1.0 - t * t) / width;
+        // d(g)/d(vc) = g * d(ln g)/d(u) * du/dvc
+        let dsdv = 0.5 * (1.0 - t * t) / width * sense;
         (g, g * (g_on - g_off) * dsdv)
+    }
+
+    /// Whether this one remembers its state. Thresholds that coincide leave no
+    /// band to remember anything across, so that is an ordinary switch.
+    fn latched(&self) -> bool {
+        self.model.latch && (self.model.v_on - self.model.v_off).abs() > 1e-9
+    }
+
+    /// Whether a latched switch is now closed.
+    pub fn is_closed(&self) -> bool {
+        self.closed
     }
 }
 
@@ -536,6 +599,28 @@ impl Element for Switch {
         // The control input is a bias, not a signal path: a switch being nudged
         // is not something AC analysis has anything useful to say about.
         sys.add_admittance(node_index(self.p), node_index(self.m), C64::real(self.op_g));
+    }
+
+    /// A latched switch changes state only on an accepted timepoint, and only
+    /// once the control is past the threshold, where its current curve has
+    /// already finished travelling — so the curve it changes to agrees with it
+    /// there, and the circuit sees no step.
+    fn accept(&mut self, ctx: &AcceptCtx) {
+        if !self.latched() {
+            return;
+        }
+        let vc = ctx.voltage(self.cp) - ctx.voltage(self.cm);
+        let sense = if self.model.v_on >= self.model.v_off { 1.0 } else { -1.0 };
+        let u = sense * vc;
+        if !self.closed && u >= sense * self.model.v_on {
+            self.closed = true;
+        } else if self.closed && u <= sense * self.model.v_off {
+            self.closed = false;
+        }
+    }
+
+    fn reset(&mut self) {
+        self.closed = self.model.closed;
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {
@@ -673,6 +758,109 @@ mod tests {
         let (g_off, _) = s.conductance(-1.0);
         let (g_on, _) = s.conductance(2.0);
         assert!(g_on / g_off > 1e6, "on/off ratio too small: {g_on} vs {g_off}");
+    }
+
+    /// Accept a timepoint with the control at `vc`, the way the transient loop
+    /// does once a step has converged. The control is on node 3 and ground.
+    fn settle(s: &mut Switch, vc: f64) {
+        let x = [0.0, 0.0, vc];
+        s.accept(&AcceptCtx {
+            mode: Mode::Transient,
+            integration: Integration::default(),
+            time: 0.0,
+            dt: 1e-6,
+            x: &x,
+        });
+    }
+
+    /// A relay's contact: 3.75 V pull-in, 0.5 V drop-out, 50 mΩ and 1 TΩ.
+    fn relay_contact(closed: bool) -> Switch {
+        let model =
+            SwitchModel { v_on: 3.75, v_off: 0.5, r_on: 0.05, r_off: 1e12, latch: true, closed };
+        Switch::new("K1:no", 1, 2, 3, 0, model)
+    }
+
+    #[test]
+    fn a_relay_contact_holds_between_pull_in_and_drop_out() {
+        // The datasheet's two numbers are two events, not the ends of one curve.
+        // Below pull-in an unpowered relay is open — at 2.9 V and at 3.6 V
+        // alike — and above drop-out a pulled-in one is closed, at 2 V and at
+        // 0.6 V alike. Which it is in the band depends on where it came from.
+        let mut s = relay_contact(false);
+        for vc in [0.0, 1.0, 2.0, 2.9, 3.2, 3.6] {
+            settle(&mut s, vc);
+            let r = 1.0 / s.conductance(vc).0;
+            assert!(r > 1e11, "rising through {vc} V the open contact read {r} Ω");
+        }
+        settle(&mut s, 3.75);
+        assert!(s.is_closed(), "pull-in reached and still open");
+        for vc in [3.75, 3.0, 2.0, 1.0, 0.6] {
+            settle(&mut s, vc);
+            let r = 1.0 / s.conductance(vc).0;
+            assert!(r < 0.051, "falling through {vc} V the closed contact read {r} Ω");
+        }
+        settle(&mut s, 0.5);
+        assert!(!s.is_closed(), "drop-out reached and still closed");
+        assert!(1.0 / s.conductance(0.5).0 > 1e11);
+        assert!(1.0 / s.conductance(2.0).0 > 1e11, "dropped out, it must not close again at 2 V");
+    }
+
+    #[test]
+    fn a_latched_switch_changes_curve_where_both_curves_agree() {
+        // The state flips on an accepted timepoint, and the circuit must not see
+        // a step when it does: at each threshold the curve it leaves and the
+        // curve it joins give the same conductance to within a percent.
+        let open = relay_contact(false);
+        let closed = relay_contact(true);
+        for vc in [3.75, 0.5] {
+            let (a, b) = (open.conductance(vc).0, closed.conductance(vc).0);
+            assert!(
+                (a / b - 1.0).abs() < 0.01,
+                "at {vc} V the open curve gave {a} and the closed {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_latched_switch_derivative_matches_finite_difference() {
+        // Inside the travel, where Newton needs the slope.
+        for (closed, vc) in [(false, 3.7), (true, 0.55)] {
+            let s = relay_contact(closed);
+            let h = 1e-7;
+            let (_, analytic) = s.conductance(vc);
+            let numeric = (s.conductance(vc + h).0 - s.conductance(vc - h).0) / (2.0 * h);
+            let rel = (analytic - numeric).abs() / numeric.abs().max(1e-30);
+            assert!(
+                rel < 1e-3,
+                "closed {closed} at {vc}: analytic {analytic} vs numeric {numeric}"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_puts_a_latched_switch_back_where_it_started() {
+        let mut s = relay_contact(false);
+        settle(&mut s, 5.0);
+        assert!(s.is_closed());
+        s.reset();
+        assert!(!s.is_closed());
+        let mut nc = relay_contact(true);
+        settle(&mut nc, 0.0);
+        assert!(!nc.is_closed());
+        nc.reset();
+        assert!(nc.is_closed(), "a normally-closed contact starts closed");
+    }
+
+    #[test]
+    fn a_switch_with_its_thresholds_reversed_closes_as_its_control_falls() {
+        // SPICE allows `v_on` below `v_off`: on at the first, off at the second.
+        let model = SwitchModel { v_on: 0.0, v_off: 1.0, ..SwitchModel::default() };
+        let s = Switch::new("S1", 1, 2, 3, 0, model);
+        let r_at = |vc: f64| 1.0 / s.conductance(vc).0;
+        assert!(r_at(-0.5) < 2.0, "past v_on it should be on, read {} Ω", r_at(-0.5));
+        assert!(r_at(1.5) > 1e8, "past v_off it should be off, read {} Ω", r_at(1.5));
+        // And the slope has the sign of the curve: conductance falls as vc rises.
+        assert!(s.conductance(0.5).1 < 0.0);
     }
 
     #[test]

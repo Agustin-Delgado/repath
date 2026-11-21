@@ -83,6 +83,15 @@ export function unsimulatedMessage(peripheral: string): string {
 	);
 }
 
+/**
+ * Where a port pin's Schmitt input switches, as shares of the chip's supply:
+ * rising and falling. The ATmega328P datasheet's typical curves of the input
+ * threshold against VCC, 2.6 V and 2.15 V at 5 V — half a volt of hysteresis,
+ * well inside the guaranteed 0.3·VCC and 0.6·VCC.
+ */
+export const MCU_RISING = 0.52;
+export const MCU_FALLING = 0.43;
+
 /** The reset leg's own pull-up: the middle of the datasheet's 30 to 60 kΩ. */
 const RESET_PULL_UP_OHMS = 45e3;
 

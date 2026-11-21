@@ -18,6 +18,7 @@ import {
 	registerSubcircuits,
 	type BlockDef,
 	type Instance,
+	type PartGroup,
 	type Wire
 } from './schematic/model';
 import { registerBlocks } from './schematic/blocks';
@@ -59,12 +60,59 @@ async function deflate(bytes: Uint8Array): Promise<Uint8Array | null> {
 	return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
+/**
+ * Most a link may expand to.
+ *
+ * Deflate packs a run of zeros a thousand to one, so a link of a megabyte —
+ * which a browser will open — can unpack to a gigabyte, and the tab hung on
+ * it. Worse, the hash is what a fresh start reads first, so a reload opened
+ * the same link and hung again. The largest drawing anybody makes is a few
+ * hundred kilobytes of JSON; this is far past that and far short of harm.
+ */
+export const MAX_LINK_BYTES = 16 * 1024 * 1024;
+
 async function inflate(bytes: Uint8Array): Promise<Uint8Array | null> {
 	if (typeof DecompressionStream === 'undefined') return null;
-	const stream = new Blob([bytes as BlobPart])
+	const reader = new Blob([bytes as BlobPart])
 		.stream()
-		.pipeThrough(new DecompressionStream('deflate-raw'));
-	return new Uint8Array(await new Response(stream).arrayBuffer());
+		.pipeThrough(new DecompressionStream('deflate-raw'))
+		.getReader();
+	const pieces: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.length;
+		if (total > MAX_LINK_BYTES) {
+			await reader.cancel();
+			throw new Error('That link unpacks to far more than any circuit, so it was not opened.');
+		}
+		pieces.push(value);
+	}
+	const out = new Uint8Array(total);
+	let at = 0;
+	for (const piece of pieces) {
+		out.set(piece, at);
+		at += piece.length;
+	}
+	return out;
+}
+
+/**
+ * Longer than this, a link is at risk of being cut short on the way.
+ *
+ * Browsers open links of megabytes, but what carries them is less generous:
+ * chat apps, mail clients and the servers in between truncate somewhere past a
+ * few thousand characters, and a link cut short opens as damaged. Eight
+ * thousand is the request-line limit common to web servers, and so the most a
+ * link can be counted on surviving.
+ */
+export const LONG_LINK = 8000;
+
+/** What to tell someone about a link before they paste it somewhere, or null. */
+export function linkWarning(url: string): string | null {
+	if (url.length <= LONG_LINK) return null;
+	return `This link is ${url.length.toLocaleString('en')} characters long, and some apps cut links past ${LONG_LINK.toLocaleString('en')}. If it arrives damaged, send the file instead (File → Save).`;
 }
 
 /**
@@ -104,20 +152,40 @@ function unpackWires(flat: number[][] | undefined, id: () => string): Wire[] {
  * A block as it travels: its insides packed the way the drawing is. Its
  * terminals are port parts among the instances, so nothing else needs to.
  */
-type TravellingBlock = [string, string, TravellingInstance[], number[][]];
+type TravellingBlock = [string, string, TravellingInstance[], number[][], TravellingGroup[]?];
 
+/** A group as it travels: its name, and its members by their index among the parts it is drawn with. */
+type TravellingGroup = [string, number[]];
+
+function packGroups(groups: readonly PartGroup[] | undefined, instances: readonly Instance[]): TravellingGroup[] {
+	const at = new Map(instances.map((n, index) => [n.id, index] as const));
+	return (groups ?? []).map((group) => [
+		group.name,
+		group.members.map((m) => at.get(m)).filter((i) => i !== undefined)
+	]);
+}
+
+// The groups drawn inside a block ride along only when there are any, as a
+// dragged label does: most blocks have none.
 function packBlock(block: BlockDef): TravellingBlock {
-	return [block.id, block.name, block.instances.map(packInstance), block.wires.map(packWire)];
+	const packed: TravellingBlock = [block.id, block.name, block.instances.map(packInstance), block.wires.map(packWire)];
+	if (block.groups && block.groups.length > 0) packed.push(packGroups(block.groups, block.instances));
+	return packed;
 }
 
 function unpackBlock(packed: TravellingBlock, id: () => string): BlockDef {
-	const [bid, name, instances, wires] = packed;
-	return {
-		id: bid,
-		name,
-		instances: instances.map((packedInstance) => unpackInstance(packedInstance, id())),
-		wires: unpackWires(wires, id)
-	};
+	const [bid, name, instances, wires, groups] = packed;
+	const unpacked = instances.map((packedInstance) => unpackInstance(packedInstance, id()));
+	const block: BlockDef = { id: bid, name, instances: unpacked, wires: unpackWires(wires, id) };
+	const kept = (groups ?? [])
+		.map(([groupName, members]) => ({
+			id: id(),
+			name: groupName,
+			members: members.map((m) => unpacked[m]?.id).filter((m) => m !== undefined)
+		}))
+		.filter((group) => group.members.length > 0);
+	if (kept.length > 0) block.groups = kept;
+	return block;
 }
 
 function unpackInstance(
@@ -191,10 +259,42 @@ function checkInstance(packed: unknown, where: string): void {
 	if (typeof kind !== 'string' || typeof name !== 'string') throw new Damaged(`a part in ${where}`);
 	if (!isFiniteNumber(x) || !isFiniteNumber(y)) throw new Damaged(`where ${name} is`);
 	if (![0, 90, 180, 270].includes(rotation)) throw new Damaged(`how ${name} is turned`);
+	// Where its name and value were dragged to. Unchecked, a link could put text
+	// in place of a coordinate, and the label was drawn at `NaN`.
+	const labels = packed[6];
+	if (labels !== undefined && labels !== null) {
+		if (typeof labels !== 'object' || Array.isArray(labels)) throw new Damaged(`where ${name}'s labels are`);
+		for (const [slot, at] of Object.entries(labels)) {
+			const point = at as { x?: unknown; y?: unknown } | null;
+			if (
+				(slot !== 'name' && slot !== 'value') ||
+				typeof point !== 'object' ||
+				point === null ||
+				!isFiniteNumber(point.x) ||
+				!isFiniteNumber(point.y)
+			) {
+				throw new Damaged(`where ${name}'s labels are`);
+			}
+		}
+	}
 	if (params !== undefined && params !== null) {
 		if (typeof params !== 'object' || Array.isArray(params)) throw new Damaged(`${name}'s values`);
 		for (const value of Object.values(params)) {
 			if (typeof value !== 'string' && !isFiniteNumber(value)) throw new Damaged(`${name}'s values`);
+		}
+	}
+}
+
+function checkGroups(groups: unknown, where: string): void {
+	if (!Array.isArray(groups)) throw new Damaged(`the groups in ${where}`);
+	for (const group of groups) {
+		if (
+			!Array.isArray(group) ||
+			typeof group[0] !== 'string' ||
+			!Array.isArray(group[1]) ||
+			!group[1].every((m: unknown) => Number.isInteger(m))
+		) {
+			throw new Damaged(`a group in ${where}`);
 		}
 	}
 }
@@ -240,6 +340,7 @@ function check(data: Record<string, unknown>): void {
 		if (!Array.isArray(block[2])) throw new Damaged(`block ${block[1]}`);
 		for (const packed of block[2]) checkInstance(packed, `block ${block[1]}`);
 		checkWires(block[3], `block ${block[1]}`);
+		if (block[4] !== undefined) checkGroups(block[4], `block ${block[1]}`);
 	}
 	for (const packed of (data.i as unknown[]) ?? []) checkInstance(packed, 'the drawing');
 	checkWires(data.w, 'the drawing');
@@ -249,16 +350,7 @@ function check(data: Record<string, unknown>): void {
 			(Array.isArray(probe) && Number.isInteger(probe[0]) && typeof probe[1] === 'string');
 		if (!ok) throw new Damaged('what was being watched');
 	}
-	for (const group of (data.g as unknown[]) ?? []) {
-		if (
-			!Array.isArray(group) ||
-			typeof group[0] !== 'string' ||
-			!Array.isArray(group[1]) ||
-			!group[1].every((m: unknown) => Number.isInteger(m))
-		) {
-			throw new Damaged('a group');
-		}
-	}
+	if (data.g !== undefined) checkGroups(data.g, 'the drawing');
 	if (data.s !== undefined && (typeof data.s !== 'object' || data.s === null || Array.isArray(data.s))) {
 		throw new Damaged('its settings');
 	}

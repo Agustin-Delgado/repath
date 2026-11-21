@@ -86,8 +86,13 @@ function joinContinuations(text: string): string[] {
 		return semicolon >= 0 ? trimmed.slice(0, semicolon) : trimmed;
 	});
 
+	// Comments and blank lines are dropped before joining rather than kept as
+	// empty statements: a note between two halves of a card is common, and as an
+	// empty statement it took the `+` line after it, so `BF=300` went nowhere
+	// and was not even reported as ignored.
 	const joined: string[] = [];
 	for (const line of lines) {
+		if (!line.trim()) continue;
 		const continuation = /^\s*\+(.*)$/.exec(line);
 		if (continuation && joined.length > 0) {
 			joined[joined.length - 1] += ' ' + continuation[1];
@@ -191,9 +196,9 @@ const BJT: Record<string, string> = {
 	TR: 'tr'
 };
 
+// The threshold is read in `mosfetFromCard`, where its sign is taken apart from
+// its size.
 const MOSFET: Record<string, string> = {
-	VTO: 'vto',
-	VT0: 'vto',
 	KP: 'kp',
 	LAMBDA: 'lambda',
 	W: 'w',
@@ -242,6 +247,21 @@ export function bjtFromCard(card: ModelCard): Applied {
 export function mosfetFromCard(card: ModelCard): Applied {
 	const applied = take(card.params, MOSFET, (out, params) => {
 		const used = new Set<string>();
+		// SPICE signs a threshold with its channel: an enhancement PMOS that turns
+		// on at two volts below its source is `VTO=-2`. This engine takes a
+		// magnitude for both, so a P-channel card's is flipped. One of the wrong
+		// sign for its channel is a depletion-mode device, which conducts with no
+		// gate drive and is not one this model has: it is reported, not built as
+		// an enhancement part with the sign dropped.
+		const vto = params.get('VTO') ?? params.get('VT0');
+		if (vto !== undefined) {
+			const magnitude = card.type === 'PMOS' ? -vto : vto;
+			if (magnitude >= 0) {
+				out.vto = magnitude;
+				used.add('VTO');
+				used.add('VT0');
+			}
+		}
 		const w = params.get('W');
 		if (w === undefined || w <= 0) return used;
 		for (const [spice, ours] of [
@@ -344,7 +364,6 @@ function readElement(line: string): SubElement | null {
 	// Anything bracketed is a waveform, an expression or a polynomial: a
 	// different kind of source from the constant one built below.
 	if (/[({]/.test(line)) return null;
-	if (/\b(pulse|sin|pwl|exp|sffm|am|poly|value|table|laplace|freq)\b/i.test(line)) return null;
 
 	// `W = 1u` and `W=1u` are the same assignment; one token is easier to read.
 	const tokens = line.trim().replace(/\s*=\s*/g, '=').split(/\s+/);
@@ -352,6 +371,11 @@ function readElement(line: string): SubElement | null {
 	const spec = ELEMENTS[tokens[0][0].toUpperCase()];
 	if (!spec) return null;
 	const name = tokens[0];
+	// The same, written without brackets. Looked for only after the nodes: a
+	// node is a name like any other, and one called `sin`, `exp` or `value` is
+	// ordinary in a macromodel — searching the whole line refused those.
+	const keyword = /^(pulse|sin|pwl|exp|sffm|am|poly|value|table|laplace|freq)$/i;
+	if (tokens.slice(1 + spec.nodes).some((token) => keyword.test(token.split('=')[0]))) return null;
 
 	const assigned = new Map<string, string>();
 	const plain: string[] = [];
@@ -526,12 +550,66 @@ function parseSubcircuitsUncached(text: string): Subcircuit[] {
  * this transistor actually has.
  */
 function sized(card: ModelCard, element: { w?: number; l?: number }): ModelCard {
-	if (element.w === undefined && element.l === undefined) return card;
 	const params = new Map(card.params);
 	if (element.w !== undefined) params.set('W', element.w);
 	if (element.l !== undefined) params.set('L', element.l);
+	// A size given on one side only is that size beside SPICE's default for the
+	// other, `DEFW` and `DEFL` of 100 µm — not a reason to throw both away.
+	if (params.has('W') !== params.has('L')) {
+		if (!params.has('W')) params.set('W', SPICE_DEFAULT_SIZE);
+		if (!params.has('L')) params.set('L', SPICE_DEFAULT_SIZE);
+	}
 	return { ...card, params };
 }
+
+/**
+ * What SPICE takes for every parameter a card leaves out (the model tables of
+ * the ngspice manual), in this engine's fields.
+ *
+ * The temperature is a placeholder: the netlist's own temperature is applied
+ * to every device over whatever its model says.
+ */
+const SPICE_DIODE = {
+	is: 1e-14,
+	n: 1,
+	rs: 0,
+	cj0: 0,
+	vj: 1,
+	m: 0.5,
+	tt: 0,
+	bv: null,
+	temp: 300.15
+};
+
+const SPICE_BJT = {
+	is: 1e-16,
+	bf: 100,
+	br: 1,
+	vaf: null,
+	cje: 0,
+	vje: 0.75,
+	mje: 0.33,
+	cjc: 0,
+	vjc: 0.75,
+	mjc: 0.33,
+	tf: 0,
+	tr: 0,
+	temp: 300.15
+};
+
+/** `DEFW` and `DEFL`. */
+const SPICE_DEFAULT_SIZE = 100e-6;
+
+const SPICE_MOSFET = {
+	vto: 0,
+	kp: 2e-5,
+	lambda: 0,
+	w: SPICE_DEFAULT_SIZE,
+	l: SPICE_DEFAULT_SIZE,
+	cgs: 0,
+	cgd: 0,
+	cds: 0
+};
 
 /**
  * What one placed subcircuit becomes.
@@ -560,19 +638,36 @@ export function expandSubcircuit(
 	instanceName: string,
 	portNets: readonly string[]
 ): Expansion {
+	// SPICE does not tell `mid` from `MID`, for nodes or for elements, so
+	// neither does this: a port bound as `IN` is the node an element calls
+	// `in`. Internal nodes keep the spelling they were first written with.
 	const bound = new Map<string, string>();
-	sub.ports.forEach((port, i) => bound.set(port, portNets[i] ?? 'gnd'));
+	sub.ports.forEach((port, i) => bound.set(port.toUpperCase(), portNets[i] ?? 'gnd'));
+	const spelling = new Map<string, string>();
 
 	const node = (name: string) => {
 		if (name === '0' || name.toLowerCase() === 'gnd') return 'gnd';
-		return bound.get(name) ?? `${instanceName}.${name}`;
+		const key = name.toUpperCase();
+		const port = bound.get(key);
+		if (port !== undefined) return port;
+		if (!spelling.has(key)) spelling.set(key, name);
+		return `${instanceName}.${spelling.get(key)}`;
 	};
 	const named = (element: SubElement) => `${instanceName}.${element.name}`;
 
 	const components: unknown[] = [];
 	const skipped = sub.unread.map((line) => line.split(/\s+/)[0]);
+	const names = new Set<string>();
 
 	for (const element of sub.elements) {
+		// Two elements whose names differ only in case are one name twice, which
+		// a SPICE refuses. Building both would be a part the file never had.
+		const key = element.name.toUpperCase();
+		if (names.has(key)) {
+			skipped.push(`${element.name} (a second element of that name)`);
+			continue;
+		}
+		names.add(key);
 		const n = element.nodes.map(node);
 		switch (element.kind) {
 			case 'resistor':
@@ -608,13 +703,18 @@ export function expandSubcircuit(
 					skipped.push(`${element.name} (no .model ${element.model})`);
 					break;
 				}
+				// A card inside a vendor's file was written against SPICE's defaults,
+				// so whatever it leaves out is SPICE's value — never this editor's
+				// presets, which describe a 1N4148 or a 2N3904 and gave a 741's clamp
+				// diodes an emission coefficient of 1.75. Every field is sent, so the
+				// engine's own fallbacks are not reached either.
 				if (element.kind === 'diode') {
 					components.push({
 						type: 'diode',
 						name: named(element),
 						anode: n[0],
 						cathode: n[1],
-						model: { is: 2.52e-9, n: 1.752, bv: null, temp: 300.15, ...diodeFromCard(card).model }
+						model: { ...SPICE_DIODE, ...diodeFromCard(card).model }
 					});
 				} else if (element.kind === 'bjt') {
 					components.push({
@@ -625,10 +725,7 @@ export function expandSubcircuit(
 						emitter: n[2],
 						model: {
 							polarity: card.type === 'PNP' ? 'pnp' : 'npn',
-							is: 6.73e-15,
-							bf: 200,
-							br: 4,
-							temp: 300.15,
+							...SPICE_BJT,
 							...bjtFromCard(card).model
 						}
 					});
@@ -641,6 +738,14 @@ export function expandSubcircuit(
 					if (n[3] !== undefined && n[3] !== n[2]) {
 						skipped.push(`${element.name} (a bulk that is not its source)`);
 					}
+					const applied = mosfetFromCard(sized(card, element));
+					// A threshold of the wrong sign for the channel is a depletion
+					// device. Built with SPICE's default of zero in its place, it would
+					// be a different transistor under the right name.
+					if (applied.ignored.includes('VTO') || applied.ignored.includes('VT0')) {
+						skipped.push(`${element.name} (a depletion-mode threshold)`);
+						break;
+					}
 					components.push({
 						type: 'mosfet',
 						name: named(element),
@@ -649,12 +754,8 @@ export function expandSubcircuit(
 						source: n[2],
 						model: {
 							channel: card.type === 'PMOS' ? 'p' : 'n',
-							vto: 2,
-							kp: 2e-5,
-							lambda: 0.02,
-							w: 10,
-							l: 1,
-							...mosfetFromCard(sized(card, element)).model
+							...SPICE_MOSFET,
+							...applied.model
 						}
 					});
 				}

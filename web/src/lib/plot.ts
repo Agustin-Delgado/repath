@@ -8,7 +8,7 @@
  * a spike would be a scope lying about the one thing it is for.
  */
 
-import { formatValue } from './units';
+import { formatWithUnit } from './units';
 
 /** First index whose time is at or after `at`, or `time.length` if none is. */
 function lowerBound(time: ArrayLike<number>, at: number): number {
@@ -146,10 +146,10 @@ export function ticks(lo: number, hi: number, step: number, slack = 0): number[]
  * the spacing of the grid.
  */
 export function timeLabel(t: number, step: number): string {
-	if (t === 0 || !(step > 0)) return `${formatValue(t, 3)}s`;
+	if (t === 0 || !(step > 0)) return formatWithUnit(t, 's', 3);
 	const decades = Math.floor(Math.log10(Math.abs(t))) - Math.floor(Math.log10(step));
 	const digits = Math.min(Math.max(3, decades + 1), 15);
-	return `${formatValue(t, digits)}s`;
+	return formatWithUnit(t, 's', digits);
 }
 
 /**

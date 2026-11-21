@@ -19,8 +19,9 @@ pub struct Resistor {
     pub name: String,
     pub p: NodeId,
     pub m: NodeId,
-    /// Resistance in ohms. Clamped away from zero at stamp time — a literal 0 Ω
-    /// is a short, and users draw those constantly.
+    /// Resistance in ohms. Zero is allowed: a part made below [`SHORT`] is
+    /// written as the voltage across it rather than as a conductance, so a
+    /// literal 0 Ω is an exact short, and users draw those constantly.
     pub r: f64,
     /// First and second order temperature coefficients, per kelvin.
     ///
@@ -33,11 +34,38 @@ pub struct Resistor {
     /// What the part is at, and what its value was measured at, in kelvin.
     pub temp: f64,
     pub tnom: f64,
+    /// The branch current's unknown, for a part made a short.
+    branch: Option<usize>,
+    short: bool,
 }
+
+/// Below this a resistor is stamped as a branch, `v(p) − v(m) = R·i`, instead of
+/// as a conductance.
+///
+/// A conductance of a gigasiemens beside the microsiemens of the parts around
+/// it does not survive being added to them: a double carries sixteen digits,
+/// and the small conductance loses the ones that mattered in the sum. Five
+/// volts across 1 MΩ, 0 Ω and 1 MΩ came out 2.62 V in the middle instead of
+/// 2.5, with no word said. The branch form carries R itself, which is
+/// exactly representable however small, at the cost of one unknown. One ohm
+/// leaves it to the parts where the conductance form has started to lose
+/// digits next to anything above a few kilohms.
+pub const SHORT: f64 = 1.0;
 
 impl Resistor {
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, r: f64) -> Self {
-        Self { name: name.into(), p, m, r, tc1: 0.0, tc2: 0.0, temp: TNOM, tnom: TNOM }
+        Self {
+            name: name.into(),
+            p,
+            m,
+            r,
+            tc1: 0.0,
+            tc2: 0.0,
+            temp: TNOM,
+            tnom: TNOM,
+            branch: None,
+            short: r.abs() < SHORT,
+        }
     }
 
     pub fn with_tempco(mut self, tc1: f64, tc2: f64) -> Self {
@@ -72,16 +100,48 @@ impl Element for Resistor {
         &self.name
     }
 
+    fn extra_unknowns(&self) -> usize {
+        usize::from(self.short)
+    }
+    fn bind(&mut self, first_extra_index: usize) {
+        self.branch = Some(first_extra_index);
+    }
+
     fn stamp(&mut self, sys: &mut LinearSystem, _ctx: &StampCtx) -> StampReport {
-        sys.add_conductance(node_index(self.p), node_index(self.m), self.conductance());
+        let (p, m) = (node_index(self.p), node_index(self.m));
+        match self.branch.filter(|_| self.short) {
+            Some(k) => {
+                let k = Some(k);
+                sys.add(p, k, 1.0);
+                sys.add(m, k, -1.0);
+                sys.add(k, p, 1.0);
+                sys.add(k, m, -1.0);
+                sys.add(k, k, -self.resistance());
+            }
+            None => sys.add_conductance(p, m, self.conductance()),
+        }
         StampReport::CLEAN
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
-        sys.add_admittance(node_index(self.p), node_index(self.m), C64::real(self.conductance()));
+        let (p, m) = (node_index(self.p), node_index(self.m));
+        match self.branch.filter(|_| self.short) {
+            Some(k) => {
+                let k = Some(k);
+                sys.add(p, k, C64::real(1.0));
+                sys.add(m, k, C64::real(-1.0));
+                sys.add(k, p, C64::real(1.0));
+                sys.add(k, m, C64::real(-1.0));
+                sys.add(k, k, C64::real(-self.resistance()));
+            }
+            None => sys.add_admittance(p, m, C64::real(self.conductance())),
+        }
     }
 
     fn current(&self, x: &[f64]) -> Option<f64> {
+        if let Some(k) = self.branch.filter(|_| self.short) {
+            return x.get(k).copied();
+        }
         let vp = node_index(self.p).map_or(0.0, |i| x[i]);
         let vm = node_index(self.m).map_or(0.0, |i| x[i]);
         Some((vp - vm) * self.conductance())
@@ -96,6 +156,13 @@ pub struct Capacitor {
     /// Capacitance in farads.
     pub c: f64,
     /// Initial voltage across the capacitor, applied when the transient starts.
+    ///
+    /// Without `use_initial_conditions` the operating point holds the capacitor
+    /// at this voltage, like SPICE's `.IC`: as a source, through 1 µΩ. Whatever
+    /// that source has to drive at the operating point it drives, so a charged
+    /// capacitor straight across an inductor, which is a short at DC, starts
+    /// the run with the current the short draws from it. To start a tank with a
+    /// charged capacitor and no current, run from initial conditions.
     pub ic: Option<f64>,
     v_prev: f64,
     i_prev: f64,
@@ -127,14 +194,20 @@ impl Capacitor {
         self
     }
 
-    /// Change the capacitance in the middle of a run, keeping the voltage.
+    /// Change the capacitance in the middle of a run, keeping the charge.
     ///
-    /// The voltage is the state the run carries across the change, so the
-    /// charge steps with the capacitance. The error estimate is restarted: it
-    /// watches the charge, and a step in it is the edit, not the circuit.
+    /// The plates have nowhere to put what they hold, so the voltage moves to
+    /// Q/C': turning a variable capacitor down raises the voltage across it,
+    /// which is what the part does on the bench. Keeping the voltage instead
+    /// made charge out of nothing, with no current anywhere in the circuit to
+    /// account for it, and threw away the error estimate's history with it;
+    /// a tank retuned that way lost a quarter of its amplitude to the steps
+    /// taken blind afterwards. The charge is continuous, so the history the
+    /// estimate watches stays good.
     pub fn set_capacitance(&mut self, c: f64) {
-        self.c = c.abs().max(1e-18);
-        self.charge = Trace::default();
+        let c = c.abs().max(1e-18);
+        self.v_prev *= self.c / c;
+        self.c = c;
     }
 
     /// Companion conductance and history current for the current step.
@@ -227,8 +300,8 @@ impl Element for Capacitor {
         self.ring.ringing()
     }
 
-    fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
-        self.charge.suggested_step()
+    fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.charge.suggested_step_for(ctx.integration)
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
@@ -287,11 +360,12 @@ impl Inductor {
         self
     }
 
-    /// Change the inductance in the middle of a run, keeping the current: the
-    /// mirror of [`Capacitor::set_capacitance`].
+    /// Change the inductance in the middle of a run, keeping the flux: the
+    /// mirror of [`Capacitor::set_capacitance`]. The current moves to λ/L'.
     pub fn set_inductance(&mut self, l: f64) {
-        self.l = l.abs().max(1e-15);
-        self.flux = Trace::default();
+        let l = l.abs().max(1e-15);
+        self.i_prev *= self.l / l;
+        self.l = l;
     }
 }
 
@@ -382,8 +456,8 @@ impl Element for Inductor {
         self.ring.ringing()
     }
 
-    fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
-        self.flux.suggested_step()
+    fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.flux.suggested_step_for(ctx.integration)
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
@@ -440,17 +514,35 @@ impl Element for VariableResistor {
     }
 }
 
+/// How far past its rating a fuse has to be pushed before it melts at all, as a
+/// multiple of the rating: the minimum fusing current over the rated one.
+///
+/// Between IEC 60127's 1.5, held for an hour, and its 2.1, blown inside half an
+/// hour.
+pub const FUSING: f64 = 1.8;
+
 /// A fuse: a small resistance that opens for good once it has carried too much
 /// for too long.
 ///
 /// What melts the element is heat, and what heats it is `i²`. It is the two
-/// thermal masses of `ThermalModel`, loaded with `(i / rated)²`: the element
-/// itself and the end caps and glass around it. The fast one's time constant
+/// thermal masses of `ThermalModel`, loaded with `(i / (FUSING · rated))²`: the
+/// element itself and the end caps and glass around it.
+///
+/// A fuse's rating is not where it blows. It carries its rating forever and a
+/// good deal more for a long time — IEC 60127's fast-acting glass fuse has to
+/// hold one and a half times its rating for an hour — so the current that
+/// eventually melts it, the minimum fusing current, sits well above the number
+/// printed on it. `FUSING` is that ratio. Past it the fast mass's time constant
 /// comes from the melting integral, the `I²t` every fuse datasheet prints, so a
 /// short blows it once that much `i²t` has gone through — ten times the rating
 /// through a 1 A fuse with 0.5 A²s lasts about five milliseconds. The slow one
-/// is what makes a small overload take seconds, and what lets a fuse ride out a
-/// surge followed by a rest. At or below its rating it never blows.
+/// is what makes a modest overload take seconds, and what lets a fuse ride out a
+/// surge followed by a rest.
+///
+/// Checked against the IEC 60127-2 table for a type F fuse: 1.5 times the
+/// rating held for an hour, 2.1 times blowing within half an hour, 2.75 times
+/// between 10 ms and 2 s, 4 times between 3 ms and 300 ms, and 10 times inside
+/// 20 ms.
 #[derive(Debug, Clone)]
 pub struct Fuse {
     pub name: String,
@@ -483,8 +575,13 @@ impl Fuse {
         let i2t = i2t.abs().max(1e-12);
         // Well past the rating the element melts before any heat leaves it, so
         // what heats it is all of `i²t`: the fast mass's time constant over its
-        // share is the melting integral in units of the rating.
-        let adiabatic = i2t / (rated * rated);
+        // share is the melting integral in units of the fusing current, which is
+        // the current the load is measured against. The slow one stays in units
+        // of the rating, as before: it is the end caps, and what they hold is
+        // set by the part's size rather than by where the element gives way.
+        let fusing = FUSING * rated;
+        let adiabatic = i2t / (fusing * fusing);
+        let slow = 25.0 * i2t / (rated * rated);
         let share = 0.4;
         Self {
             name: name.into(),
@@ -493,7 +590,7 @@ impl Fuse {
             r: r.abs().max(1e-6),
             rated,
             i2t,
-            thermal: ThermalModel { share, fast: share * adiabatic, slow: 25.0 * adiabatic },
+            thermal: ThermalModel { share, fast: share * adiabatic, slow },
             heat: Heat::default(),
             i_accepted: 0.0,
             peak: 0.0,
@@ -503,6 +600,16 @@ impl Fuse {
 
     fn conductance(&self, gmin: f64) -> f64 {
         if self.blown_at.is_some() { gmin } else { 1.0 / self.r }
+    }
+
+    /// The square of the minimum fusing current, which a load is measured in.
+    fn melts(&self) -> f64 {
+        (FUSING * self.rated).powi(2)
+    }
+
+    /// How long a steady `current` takes to blow it from cold, if it ever does.
+    pub fn time_to_blow(&self, current: f64) -> Option<f64> {
+        self.thermal.time_to_fail(current * current / self.melts())
     }
 }
 
@@ -535,8 +642,7 @@ impl Element for Fuse {
         let current = self.current(ctx.x).unwrap_or(0.0).abs();
         if self.blown_at.is_none() && ctx.mode == Mode::Transient && ctx.dt > 0.0 {
             self.peak = self.peak.max(current);
-            let rated = self.rated * self.rated;
-            let load = (self.i_accepted * self.i_accepted + current * current) / 2.0 / rated;
+            let load = (self.i_accepted * self.i_accepted + current * current) / 2.0 / self.melts();
             self.heat.advance(&self.thermal, load, ctx.dt);
             if self.heat.level() >= 1.0 {
                 self.blown_at = Some(ctx.time);
@@ -553,7 +659,7 @@ impl Element for Fuse {
             Some(at) if ctx.time <= at => 1e-9,
             Some(_) => f64::INFINITY,
             None => {
-                let load = (self.i_accepted / self.rated).powi(2);
+                let load = self.i_accepted * self.i_accepted / self.melts();
                 self.heat.max_step(&self.thermal, load)
             }
         }
@@ -745,8 +851,8 @@ impl Element for Transformer {
         self.flux = Trace::default();
     }
 
-    fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
-        self.flux.suggested_step()
+    fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.flux.suggested_step_for(ctx.integration)
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {

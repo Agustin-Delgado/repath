@@ -14,11 +14,12 @@
 	 */
 	import { ChevronDown, Play, RotateCcw, StepForward, Volume2, VolumeX } from '@lucide/svelte';
 	import { Button } from '$lib/ui';
+	import { overflowHint } from '$lib/ui/overflow';
 	import { VOLTAGE_SCALE } from '$lib/schematic/animate';
 	import { BUZZER_KIND } from '$lib/schematic/buzzer';
 	import { layout } from '$lib/layout.svelte';
 	import { app } from '$lib/state.svelte';
-	import { formatValue } from '$lib/units';
+	import { formatValue, formatWithUnit } from '$lib/units';
 	import RunButton from './RunButton.svelte';
 
 	/** A multiple of the four-second sweep, or a second per second. */
@@ -67,14 +68,15 @@
 </script>
 
 <div
-	class="flex items-center gap-1.5 bg-panel px-2.5 py-1 text-[0.75rem] max-[900px]:overflow-x-auto max-[900px]:[scrollbar-width:none] max-[900px]:*:shrink-0 {layout.scopeOpen
+	use:overflowHint
+	class="scroll-row flex items-center gap-1.5 bg-panel px-2.5 py-1 text-[0.75rem] max-[900px]:*:shrink-0 {layout.scopeOpen
 		? 'border-b border-border'
 		: ''}"
 >
 	<!-- Outside the analysis switch: a frequency sweep is started here too. -->
 	<RunButton />
 	{#if app.analysis !== 'transient'}
-		<span class="text-[0.62rem] font-semibold tracking-[0.08em] text-muted uppercase">
+		<span class="text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
 			Frequency response
 		</span>
 		<span class="flex-1"></span>
@@ -110,13 +112,13 @@
 
 		<!-- Running, the clock is the one number on the panel that is moving. -->
 		<span class="min-w-[4.5rem] text-right font-mono {app.playing ? 'text-fg' : 'text-muted'}">
-			{formatValue(app.playbackTime, 3)}s
+			{formatWithUnit(app.playbackTime, 's', 3)}
 		</span>
 		{#if !started}
 			<span class="whitespace-nowrap text-muted max-[900px]:hidden">nothing running — press Run</span>
 		{:else if lagging}
 			<span
-				class="whitespace-nowrap text-[#ffb066] max-[900px]:hidden"
+				class="whitespace-nowrap text-(--warn-text) max-[900px]:hidden"
 				title="The circuit is being solved slower than the timebase asks for"
 			>
 				{Math.round(keeping * 100)}% of the timebase
@@ -154,7 +156,7 @@
 			times slower, and the number is the only way to know which.
 		-->
 		<span
-			class="font-mono text-[0.66rem] whitespace-nowrap text-muted"
+			class="font-mono text-3xs whitespace-nowrap text-muted"
 			title="Simulated time against real time at this speed and window"
 		>
 			{against(app.playbackSpeed)}
@@ -196,11 +198,11 @@
 							style:background="linear-gradient(90deg, {VOLTAGE_SCALE.negative}, {VOLTAGE_SCALE.neutral}, {VOLTAGE_SCALE.positive})"
 						></span>
 					{:else if layer.key === 'showCurrent'}
-						<span class="tracking-[-1px] text-[#ffe9a8]" aria-hidden="true">•••</span>
+						<span class="tracking-[-1px] text-(--overlay-amps)" aria-hidden="true">•••</span>
 					{:else if layer.key === 'showValues'}
-						<span class="font-mono text-[0.62rem] text-[#7fe3a0]" aria-hidden="true">5V</span>
+						<span class="font-mono text-3xs text-(--overlay-volts)" aria-hidden="true">5V</span>
 					{:else}
-						<span class="text-[#ff4e3e] [text-shadow:0_0_5px_#ff4e3e]" aria-hidden="true">●</span>
+						<span class="text-(--overlay-glow) [text-shadow:0_0_5px_var(--overlay-glow)]" aria-hidden="true">●</span>
 					{/if}
 					{layer.label}
 				</Button>

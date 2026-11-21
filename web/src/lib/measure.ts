@@ -163,10 +163,13 @@ export interface LogicMeasurements {
  * no length.
  */
 export function measureBurst(burst: Burst): LogicMeasurements | null {
+	// `from` and `to` are the first and last edges folded in, so the span holds
+	// one interval fewer than there are edges: three edges are one cycle.
 	const span = burst.to - burst.from;
-	const cycles = Math.floor(burst.edges / 2);
+	const intervals = burst.edges - 1;
+	const cycles = Math.floor(intervals / 2);
 	if (span <= 0 || cycles < 1) return null;
-	const period = span / (burst.edges / 2);
+	const period = span / (intervals / 2);
 	return {
 		frequency: 1 / period,
 		period,
@@ -249,6 +252,9 @@ function edge(
 		// Both thresholds are tested on the same pair of samples: an edge steeper
 		// than the timestep crosses them together, and skipping the second test
 		// here measured the rise to the *next* edge, a whole period later.
+		// A pulse that turned back before reaching 90% was not the edge: the
+		// rise is timed from the last time the trace left 10%, not the first.
+		if (from !== null && samples[i] < low) from = null;
 		if (from === null && samples[i - 1] < low && samples[i] >= low) {
 			from = crossing(time, samples, i, low);
 		}

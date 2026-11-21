@@ -526,10 +526,13 @@ export function routeWire(
 				}
 				path.reverse();
 				// Anchor the ends exactly where they were asked for, in case a pin sits
-				// off-lattice.
-				path[0] = { x: from.x, y: from.y };
-				path[path.length - 1] = { x: to.x, y: to.y };
-				return { path: collapse(path), cost: node.cost, clipped, exhausted: false };
+				// off-lattice — a segment of a digit, five units off the grid. Moving
+				// the end point alone left a slanted stub from the pin to the lattice;
+				// sliding the first leg across keeps every leg on an axis, the way a
+				// moved part's wires are stretched.
+				const lattice = collapse(path);
+				const anchored = stretched(lattice, { x: from.x, y: from.y }, { x: to.x, y: to.y });
+				return { path: anchored, cost: node.cost, clipped, exhausted: false };
 			}
 
 			for (const [dx, dy] of DIRECTIONS) {

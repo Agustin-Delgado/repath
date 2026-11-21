@@ -124,7 +124,22 @@ export function validateParam(param: ParamDef, value: number | string): string |
 	return null;
 }
 
-export type Group = 'passive' | 'sources' | 'semiconductor' | 'analog' | 'logic' | 'ic';
+/**
+ * The palette shelf a part is filed on. A module is a board with its own
+ * driver on it — the LCD with its I²C backpack, the matrix with its MAX7219,
+ * the servo with its controller — and was filed among the transistors, where
+ * nobody looking for a display would look. A probe measures and is not a part
+ * of the circuit at all, so it has a shelf of its own rather than Analog's.
+ */
+export type Group =
+	| 'passive'
+	| 'sources'
+	| 'semiconductor'
+	| 'analog'
+	| 'logic'
+	| 'ic'
+	| 'modules'
+	| 'measure';
 
 export interface ComponentDef {
 	kind: string;
@@ -219,7 +234,16 @@ export const wireEnd = (wire: Wire): Point => wire.points[wire.points.length - 1
  * itself. Everything between the two visits carries no current and draws as a
  * knot, so it goes.
  */
-export function simplifyPath(points: readonly Point[]): Point[] {
+export function simplifyPath(
+	points: readonly Point[],
+	/**
+	 * Points the path has to keep passing through — the pins along it, when the
+	 * caller knows them. An excursion out to a pin and back, or a spike that
+	 * doubles back on itself at one, is the wire's connection to that pin, and
+	 * cutting it out disconnected the pin without changing anything else drawn.
+	 */
+	keep: (p: Point) => boolean = () => false
+): Point[] {
 	const out: Point[] = [];
 	for (const p of points) {
 		const last = out[out.length - 1];
@@ -227,7 +251,7 @@ export function simplifyPath(points: readonly Point[]): Point[] {
 
 		// Been here before: cut out the excursion rather than draw it.
 		const seen = out.findIndex((q) => q.x === p.x && q.y === p.y);
-		if (seen !== -1) {
+		if (seen !== -1 && !out.slice(seen + 1).some(keep)) {
 			out.length = seen + 1;
 			continue;
 		}
@@ -238,7 +262,15 @@ export function simplifyPath(points: readonly Point[]): Point[] {
 		const [before, here, after] = [out[i - 1], out[i], out[i + 1]];
 		const straight =
 			(before.x === here.x && here.x === after.x) || (before.y === here.y && here.y === after.y);
-		if (straight) out.splice(i, 1);
+		if (!straight) continue;
+		// The tip of a spike is not the inside of a straight run.
+		const between =
+			Math.min(before.x, after.x) <= here.x &&
+			here.x <= Math.max(before.x, after.x) &&
+			Math.min(before.y, after.y) <= here.y &&
+			here.y <= Math.max(before.y, after.y);
+		if (!between && keep(here)) continue;
+		out.splice(i, 1);
 	}
 	return out;
 }
@@ -480,6 +512,20 @@ const BASE_CHARGE = [
 		description: 'Sets fT ≈ 1/(2π·tf).'
 	}
 ] as const;
+
+/**
+ * The MOSFETs' default transconductance, `kp·W/L` with W/L at one: a small
+ * discrete part rather than a transistor on a chip.
+ *
+ * Level 1 puts the on-resistance at `1 / (β·(Vgs − Vt))`. A 2N7000's datasheet
+ * gives at most 5.3 Ω at 4.5 V of gate drive and about 1.2 Ω at 10 V, which a
+ * β of 0.1 A/V² meets with its 2 V threshold: 4 Ω and 1.25 Ω. Holes are slower
+ * than electrons, and a BS250's 6 Ω or so at 10 V makes the p-channel one a
+ * fifth of that. The old 20 µA/V² at W/L 10 was an integrated device's — a
+ * kilohm and a half on, too weak to light an LED.
+ */
+export const NMOS_KP = 0.1;
+export const PMOS_KP = 0.02;
 
 const GATE_CHARGE = [
 	{
@@ -1298,7 +1344,7 @@ export const CATALOG: ComponentDef[] = [
 		kind: 'probe',
 		box: { x: -8, y: -26, w: 16, h: 34 },
 		label: 'Probe',
-		group: 'analog',
+		group: 'measure',
 		prefix: 'P',
 		pins: [analog('p', 0, 0)],
 		params: [
@@ -1531,7 +1577,7 @@ export const CATALOG: ComponentDef[] = [
 		 * which is a mistake worth being able to make here.
 		 */
 		kind: 'display7',
-		box: { x: -46, y: -62, w: 92, h: 124 },
+		box: { x: -50, y: -62, w: 96, h: 124 },
 		label: '7-segment',
 		group: 'semiconductor',
 		prefix: 'DS',
@@ -1675,7 +1721,7 @@ export const CATALOG: ComponentDef[] = [
 		box: { x: LCD_LEG_X, y: LCD_BOARD.y, w: LCD_BOARD.x + LCD_BOARD.w - LCD_LEG_X, h: LCD_BOARD.h },
 		body: LCD_BOARD,
 		label: '16×2 LCD (I²C)',
-		group: 'semiconductor',
+		group: 'modules',
 		prefix: 'LCD',
 		pins: LCD_LEGS.map((leg, i) =>
 			leg === 'SDA' || leg === 'SCL'
@@ -1708,7 +1754,7 @@ export const CATALOG: ComponentDef[] = [
 		box: { x: MATRIX_LEG_X, y: MATRIX_BOARD.y, w: MATRIX_OUT_X - MATRIX_LEG_X, h: MATRIX_BOARD.h },
 		body: MATRIX_BOARD,
 		label: '8×8 LED matrix (MAX7219)',
-		group: 'semiconductor',
+		group: 'modules',
 		prefix: 'MX',
 		pins: [
 			...MATRIX_LEGS.map((leg, i) =>
@@ -1743,7 +1789,7 @@ export const CATALOG: ComponentDef[] = [
 			h: SERVO_BODY.y + SERVO_BODY.h - (SERVO_SHAFT.y - SERVO_SCALE.outer)
 		},
 		label: 'Servo motor',
-		group: 'semiconductor',
+		group: 'modules',
 		prefix: 'SV',
 		pins: SERVO_LEGS.map((leg, i) =>
 			leg === 'SIG' ? digitalIn(leg, SERVO_LEG_X, servoLegY(i)) : analog(leg, SERVO_LEG_X, servoLegY(i))
@@ -1759,8 +1805,16 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('gate', -30, 0), analog('drain', 10, -30), analog('source', 10, 30)],
 		params: [
 			{ key: 'vto', label: 'Threshold', unit: 'V', default: 2 },
-			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5, min: 0, nonZero: true },
-			{ key: 'ratio', label: 'W/L', unit: '', default: 10, min: 0, nonZero: true },
+			{
+				key: 'kp',
+				label: 'Transconductance',
+				unit: 'A/V²',
+				default: NMOS_KP,
+				min: 0,
+				nonZero: true,
+				description: 'A small discrete part, about a 2N7000: 3 Ω on at 5 V of gate drive.'
+			},
+			{ key: 'ratio', label: 'W/L', unit: '', default: 1, min: 0, nonZero: true },
 			{
 				key: 'lambda',
 				label: 'Channel-length modulation',
@@ -1781,8 +1835,16 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('gate', -30, 0), analog('drain', 10, 30), analog('source', 10, -30)],
 		params: [
 			{ key: 'vto', label: 'Threshold', unit: 'V', default: 2 },
-			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5, min: 0, nonZero: true },
-			{ key: 'ratio', label: 'W/L', unit: '', default: 10, min: 0, nonZero: true },
+			{
+				key: 'kp',
+				label: 'Transconductance',
+				unit: 'A/V²',
+				default: PMOS_KP,
+				min: 0,
+				nonZero: true,
+				description: 'A small discrete part, about a BS250: 6 Ω on at 10 V of gate drive.'
+			},
+			{ key: 'ratio', label: 'W/L', unit: '', default: 1, min: 0, nonZero: true },
 			{
 				key: 'lambda',
 				label: 'Channel-length modulation',
@@ -2600,9 +2662,29 @@ export function blockOf(schematic: Schematic, kind: string): BlockDef | null {
  * without this would leave them holding a plain silicon diode that no longer
  * glows and no longer has the forward voltage their circuit was designed around.
  */
+/** The parts made of LEDs, each with a rating. */
+const LED_KINDS = new Set(['led', 'display7', 'display7x4', 'bargraph']);
+
 export function migrateInstance(instance: Instance): Instance {
 	if (instance.kind === 'diode' && instance.params.model === 'led') {
 		return { ...instance, kind: 'led', params: defaultParams('led') };
+	}
+	// An LED's default rating used to be its 20 mA test current, which burnt out
+	// an LED run at 21 mA within a few tens of milliseconds. Only the untouched
+	// default moves to the absolute maximum: a rating somebody typed is theirs.
+	if (LED_KINDS.has(instance.kind) && instance.params.imax === 0.02) {
+		return { ...instance, params: { ...instance.params, imax: RATED } };
+	}
+	// The MOSFETs used to default to an integrated device's 20 µA/V² at a W/L of
+	// ten, an on-resistance of kilohms. Both numbers untouched is the old default
+	// and nothing anybody chose; the threshold and the rest stay as they are.
+	if (
+		(instance.kind === 'nmos' || instance.kind === 'pmos') &&
+		instance.params.kp === 2e-5 &&
+		instance.params.ratio === 10
+	) {
+		const kp = instance.kind === 'nmos' ? NMOS_KP : PMOS_KP;
+		return { ...instance, params: { ...instance.params, kp, ratio: 1 } };
 	}
 	// A switch used to have no choice but to operate during the run: "toggle at
 	// one millisecond" was the default, so every switch anybody drew flipped

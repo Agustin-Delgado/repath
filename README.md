@@ -168,8 +168,11 @@ Neither side ever sees a discontinuity:
   has to re-solve a timepoint it already accepted.
 - An **analog-to-digital** bridge watches a node between accepted timepoints and,
   when the voltage crosses a threshold, interpolates the crossing instant and
-  schedules the digital event *there* rather than at the end of the step. Thresholds
-  have hysteresis, so a slow edge produces one event rather than a burst.
+  schedules the digital event *there* rather than at the end of the step. An
+  ordinary input switches where a real one does — about half the supply for
+  CMOS, 1.3 V for TTL — with a fifth of a volt of hysteresis so a slow edge
+  produces one event rather than a burst; a Schmitt input, or a
+  microcontroller's port pin, has its own wider pair.
 
 The editor works out where a bridge is needed from the pins on each net. Analog pins
 and digital pins on the same wire means a bridge — in whichever direction the
@@ -280,14 +283,18 @@ would show you.
 
 | | |
 |---|---|
-| **Passive** | resistor, capacitor, inductor, switch you can click while it runs, push-button you hold down, relay whose blade follows its coil, ground, supply terminal |
-| **Sources** | voltage and current, with DC / sine / pulse waveforms |
-| **Semiconductors** | diode (five presets, one of them a zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP |
-| **Analog** | op-amp with finite gain, bandwidth, slew rate and rail saturation; voltage-controlled switch; VCVS; VCCS |
-| **Logic** | AND, NAND, OR, NOR, XOR, XNOR — two to four inputs each — NOT, buffer, D flip-flop, tri-state buffer, clock, logic toggle |
+| **Passive** | resistor, capacitor, variable capacitor, inductor, transformer, crystal, fuse, potentiometer, lamp, switch you can click while it runs, changeover (SPDT) switch, push-button you hold down, relay whose blade follows its coil, ground, supply terminal |
+| **Sources** | voltage and current, with DC / sine / pulse waveforms; battery |
+| **Semiconductors** | diode (five presets, one of them a zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP, voltage regulator |
+| **Displays and actuators** | 7-segment digit and 4-digit display, LED bar graph, 16×2 LCD on I²C, 8×8 LED matrix on a MAX7219, piezo buzzer you can hear, servo motor |
+| **Analog** | op-amp with finite gain, bandwidth, slew rate and rail saturation; LM358, LM324, LM741, LM339 and LM393 packages; NE555 timer; voltage-controlled switch, VCVS and VCCS inside an imported `.subckt` |
+| **Logic** | AND, NAND, OR, NOR, XOR, XNOR — two to four inputs each — NOT, buffer, D flip-flop, tri-state buffer, clock, logic toggle; the 74xx and 4000 series as packages, counters, shift registers, decoders, multiplexers and latches among them |
+| **Memory** | 62256 static RAM, 28C16 and 28C256 EEPROMs |
+| **Microcontrollers** | ATmega328P and an Arduino Uno board running a `.hex` you load: timers and PWM, ADC, USART to a serial monitor, SPI, I²C, EEPROM and the watchdog |
+| **Blocks** | any part of a drawing boxed up as one part, edited inside, placed again and nested |
 | **Imported** | `.model` cards pasted onto a part, and `.subckt` definitions placed as one |
-| **Instruments** | probe, scope with cursors and per-channel gain, Bode plot |
-| **Analyses** | DC operating point, mixed-signal transient, AC frequency sweep |
+| **Instruments** | probe, scope with cursors, measurements and per-channel gain, Bode plot |
+| **Analyses** | DC operating point, mixed-signal transient, AC frequency sweep, tolerance sweep |
 
 ## Using the editor
 
@@ -321,7 +328,8 @@ would show you.
 | Plot a net | type its name under **Add a signal** beside the scope; the × on a plotted one takes it off |
 | Read it in your own symbols | the **ANSI / IEC / GOST** selector in the toolbar — zigzag or box resistors, shaped or boxed gates, an EMF drawn with an arrow |
 
-Nothing simulates on load. Press **Run**, under the drawing, and the simulation starts and keeps
+Nothing simulates when the page opens: press **Run**, under the drawing, or open one of the
+examples, which starts running so that it shows what it is for. The simulation then keeps
 going, the way an instrument does: simulated time moves forward, the scope rolls,
 and the drawing shows the newest instant. There is no scrubber, because a running
 acquisition has nothing to scrub — **Stop** freezes what was caught, and only then
@@ -333,10 +341,16 @@ Clicking a switch or a logic toggle while it is running operates it *now*: the
 engine is carried on from where it was, so everything already solved stays solved
 and the waveform gets the edge at the instant of the click. A push-button is held
 rather than clicked: its contacts move when the pointer goes down and come back
-when it comes up. Change a value instead
-and the sweep restarts from zero — a different circuit is a different run. Moving a
-part around does not count as a change, since the circuit it describes has not
-changed.
+when it comes up. A value changed while it runs — a resistance, a capacitance, a
+source's level, a potentiometer's wiper — lands at that instant in the same way,
+and everything before it stays as it was solved. A change the run cannot take in
+its stride — a part or wire added or removed, a type changed, a source's
+frequency — starts the sweep again from zero, since a different circuit is a
+different run; with the sweep stopped, the change puts the run away instead, and
+nothing simulates again until Run. Moving a part around does not count as a
+change, since the circuit it describes has not changed. Inside a block there is
+nothing to run on its own — its inside is shared by every copy — so Run asks to
+be pressed from the drawing.
 
 With nothing running, a click on a switch, toggle or button only selects it, so it
 can be dragged like any other part; where it starts is set in the inspector.
@@ -430,23 +444,23 @@ much they would change what repath is good for:
 
 - **Sparse matrix solver.** The dense LU is fine to a few hundred nodes and then it
   is not.
-- **Drawn subcircuits.** One pasted from a file is a part today; drawing a block
-  once and nesting it is not.
 - **Dirty-rectangle repaint.** Layer-level invalidation plus viewport culling
   covers most of the benefit today; per-region repaint is the next step up.
 - **Noise and distortion analysis**, once AC has proved itself.
-- **Netlist import/export** in SPICE format.
+- **Netlist export** in SPICE format. Import is in: `.model` cards and `.subckt`
+  definitions.
 - **Richer device models** — MOSFET levels beyond Shichman-Hodges, and a BJT with
   high-level injection in it. The Early effect, channel-length modulation, the
   junction and gate capacitances and a diode's series resistance are all in, which
   is what gives a stage a top end and a rectifier a recovery.
-- **More logic**: counters, registers, decoders, memory.
+- **More of the microcontroller**: the ATmega328P is the one chip with a CPU;
+  other AVRs, and the peripherals it does not have yet, are in the backlog.
 
 ## Testing
 
 ```sh
 cargo test --workspace     # engine
-cd web && npm test         # canvas engine
+cd web && npm test         # editor, canvas, netlist, scope and the engine through wasm
 cd web && npm run check    # types
 ```
 

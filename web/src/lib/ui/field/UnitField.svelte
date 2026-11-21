@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { draftChanged } from '$lib/entry';
+
 	/**
 	 * A value typed the way an engineer writes it — `10m`, `4.7k`, `-40` — with
 	 * its unit beside it. What is typed is only a draft: `commit` gets it on
@@ -42,7 +44,9 @@
 		onblur={() => {
 			if (!editing) return;
 			editing = false;
-			commit(draft);
+			// Only what was changed: `value` is rounded for display, and handing
+			// it back unchanged rounded what it stood for.
+			if (draftChanged(draft, value)) commit(draft);
 		}}
 		onkeydown={(e) => {
 			if (e.key === 'Enter') e.currentTarget.blur();

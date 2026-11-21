@@ -11,7 +11,7 @@
 
 import { contactControl, restingContact } from './contacts';
 import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
-import { blockOf, chipOf, pointKey } from './model';
+import { blockOf, chipOf, NMOS_KP, PMOS_KP, pointKey } from './model';
 import { LCD_KIND, lcdAddress } from './lcd';
 import { MATRIX_KIND } from './max7219';
 import { BUZZER_KIND, PIEZO_CAPACITANCE, buzzerDevice, piezoResistance } from './buzzer';
@@ -26,9 +26,10 @@ import {
 	type ChipDef,
 	type ChipVolts
 } from './chips';
-import { DEFAULT_CLOCK, PORT_PULL_UP_OHMS } from './chips-mcu';
+import { DEFAULT_CLOCK, MCU_FALLING, MCU_RISING, PORT_PULL_UP_OHMS } from './chips-mcu';
 import { USB_SERIAL_OHMS, usbSerialName } from './serial';
 import { unfoldBlocks } from './blocks';
+import { pinLabel } from './nets';
 import { parseContents } from './memory';
 import { DEFAULT_FAMILY, logicFamily } from './logic';
 import { definitionFor, subcircuitOf, type Instance, type Schematic } from './model';
@@ -470,6 +471,9 @@ function compileFresh(
 		names.set(net.index, entry);
 	}
 
+	for (const name of unfolded.cycles) {
+		errors.push(`${name} is placed inside itself, so it cannot be built. Delete the copy inside it.`);
+	}
 	if (schematic.instances.length === 0) {
 		errors.push('The schematic is empty. Pick a part or open an example from the parts panel to start.');
 	} else if (!grounded && connectivity.nets.some((n) => n.hasAnalog)) {
@@ -489,6 +493,14 @@ function compileFresh(
 			// Nor is a matrix module's DOUT: it is there to chain the next
 			// module on, and the last one in a chain, or the only one, has it open.
 			if (instance.kind === MATRIX_KIND && pin.name === 'DOUT') continue;
+			// Nor is a logic output nothing reads: a flip-flop's Q̅, the spare half
+			// of a dual part, the last stage of a divider whose carry goes nowhere.
+			// A real board leaves those open as a matter of course; what is worth a
+			// warning is an input nothing drives, which reads as unknown.
+			if (pin.domain === 'digital' && pin.direction === 'out') continue;
+			// Or a digit's decimal point, left unwired on every clock and counter
+			// that shows whole numbers.
+			if ((instance.kind === 'display7' || instance.kind === 'display7x4') && pin.name === 'dp') continue;
 			const index = connectivity.netOfPin.get(pinKey(instance.id, pin.name));
 			const net = index === undefined ? undefined : connectivity.nets[index];
 			// A pin with a wire hanging off it is fine — that is how you leave a
@@ -503,7 +515,7 @@ function compileFresh(
 						!net.points.some((key) => drawnPoints.has(key)))
 				: !net || (net.pins.length < 2 && net.points.length < 2);
 			if (alone) {
-				warnings.push(`${instance.name}.${pin.name} is not connected to anything.`);
+				warnings.push(`${pinLabel(instance.name, pin.name)} is not connected to anything.`);
 			}
 		}
 
@@ -1384,7 +1396,9 @@ function compileFresh(
 			// resistance — the coil current, scaled by a number the datasheet already
 			// gives in volts. The NC side reads it negated, as the changeover does.
 			// A coil driven backwards reads as a coil not driven at all, which a DC
-			// relay with a flyback diode never sees and a bare one does.
+			// relay with a flyback diode never sees and a bare one does. Both
+			// contacts latch: they move at pull-in on the way up and at drop-out on
+			// the way down, and hold between, which is the hysteresis a relay has.
 			case 'relay': {
 				const a = analogOf(instance, 'a');
 				const mid = `${name}__coil`;
@@ -1408,7 +1422,7 @@ function compileFresh(
 					b: analogOf(instance, 'no'),
 					control_plus: a,
 					control_minus: mid,
-					model: { v_on: pullIn, v_off: dropOut, r_on, r_off }
+					model: { v_on: pullIn, v_off: dropOut, r_on, r_off, latch: true }
 				});
 				components.push({
 					type: 'switch',
@@ -1417,7 +1431,7 @@ function compileFresh(
 					b: analogOf(instance, 'nc'),
 					control_plus: mid,
 					control_minus: a,
-					model: { v_on: -dropOut, v_off: -pullIn, r_on, r_off }
+					model: { v_on: -dropOut, v_off: -pullIn, r_on, r_off, latch: true, closed: true }
 				});
 				break;
 			}
@@ -1688,10 +1702,10 @@ function compileFresh(
 						{
 							channel: instance.kind === 'nmos' ? 'n' : 'p',
 							vto: num(instance, 'vto', 2),
-							kp: num(instance, 'kp', 2e-5),
+							kp: num(instance, 'kp', instance.kind === 'nmos' ? NMOS_KP : PMOS_KP),
 							lambda: num(instance, 'lambda', 0.02),
 							// Only the ratio matters at this model level.
-							w: num(instance, 'ratio', 10),
+							w: num(instance, 'ratio', 1),
 							l: 1,
 							cgs: num(instance, 'cgs', 20e-12),
 							cgd: num(instance, 'cgd', 5e-12),
@@ -1970,10 +1984,10 @@ function compileFresh(
 		const output = driven.pins.find(
 			(pin) => pin.pin.domain === 'digital' && pin.pin.direction !== 'in'
 		);
-		const who = output ? `${output.instance.name}.${output.pin.name}` : 'a logic output';
+		const who = output ? pinLabel(output.instance.name, output.pin.name) : 'a logic output';
 		const readers = driven.pins
 			.filter((pin) => pin.pin.domain === 'digital' && pin.pin.direction === 'in')
-			.map((pin) => `${pin.instance.name}.${pin.pin.name}`);
+			.map((pin) => pinLabel(pin.instance.name, pin.pin.name));
 		warnings.push(
 			`${instance.name} sits straight across ${who} and the rail with nothing to limit the current. The output is held at the LED's forward voltage, about 2 V — which is not a High to anything else on that net${readers.length ? ` (${readers.join(', ')} read${readers.length === 1 ? 's' : ''} it)` : ''} — and the current is whatever the output can give. A resistor in series, 330 Ω for about 10 mA from 5 V, is what makes it a lamp.`
 		);
@@ -2007,8 +2021,58 @@ function compileFresh(
 		);
 	}
 
+	/**
+	 * A microcontroller's port pins are Schmitt inputs, unlike a gate's: the
+	 * ATmega328P's typical characteristics put the rising threshold near 0.52 of
+	 * its supply and the falling one near 0.43, 2.6 V and 2.15 V at 5 V. Where
+	 * every leg reading a net is a port pin, its bridge reads with those; where
+	 * a gate shares the net, one bridge has to serve both, and it is the
+	 * drawing's family. The supply they are a share of is the chip's own leg,
+	 * so a chip on 3.3 V switches at 3.3 V's thresholds; a leg left off any
+	 * analog net is taken to be the 5 V an Uno runs at.
+	 */
+	const mcuThresholds = (net: Net): Record<string, unknown> => {
+		let mcu: { instance: Instance; chip: ChipDef } | null = null;
+		for (const ref of net.pins) {
+			if (ref.pin.domain !== 'digital' || ref.pin.direction === 'out') continue;
+			const chip = chipOf(ref.instance.kind);
+			const block = chip && mcuBlock(chip);
+			const isPort =
+				!!chip && !!block && (block.ports ?? []).some((port) => mcuLeg(chip, block, port) === ref.pin.name);
+			if (!isPort) return {};
+			mcu ??= { instance: ref.instance, chip: chip! };
+		}
+		if (!mcu) return {};
+		const base = logicFamily(family);
+		const plus = positiveSupply(mcu.chip);
+		const minus = negativeSupply(mcu.chip);
+		const supply = plus === undefined ? null : nodeOf(mcu.instance, plus);
+		const ground = minus === undefined ? 'gnd' : (nodeOf(mcu.instance, minus) ?? 'gnd');
+		if (supply) {
+			return {
+				family: { ...base, v_ih: MCU_RISING, v_il: MCU_FALLING },
+				reference: [supply, ground]
+			};
+		}
+		return { family: { ...base, v_ih: MCU_RISING * 5, v_il: MCU_FALLING * 5 } };
+	};
+
 	// ---- automatic bridges ----------------------------------------------
 	const bridges: unknown[] = [...chipBridges];
+	// A bridge is named after its net, and a part can be named anything —
+	// `BAD3` included, which stopped the whole drawing compiling with "two
+	// components are both named" about a component nobody placed. Names already
+	// taken are stepped past rather than refused.
+	const taken = new Set<string>();
+	for (const list of [components, devices, chipBridges]) {
+		for (const entry of list) taken.add((entry as { name: string }).name);
+	}
+	const fresh = (base: string): string => {
+		let name = base;
+		for (let n = 2; taken.has(name); n++) name = `${base}_${n}`;
+		taken.add(name);
+		return name;
+	};
 	for (const net of connectivity.nets) {
 		const entry = names.get(net.index)!;
 		if (!entry.analog || !entry.digital) continue;
@@ -2016,7 +2080,7 @@ function compileFresh(
 		if (net.hasDigitalOutput) {
 			bridges.push({
 				direction: 'to_analog',
-				name: `BDA${net.index}`,
+				name: fresh(`BDA${net.index}`),
 				net: entry.digital,
 				node: entry.analog
 			});
@@ -2030,10 +2094,11 @@ function compileFresh(
 		if (net.hasDigitalInput && !undefinedNets.has(net.index)) {
 			bridges.push({
 				direction: 'to_digital',
-				name: `BAD${net.index}`,
+				name: fresh(`BAD${net.index}`),
 				node: entry.analog,
 				net: entry.readBack ?? entry.digital,
-				delay: 0
+				delay: 0,
+				...mcuThresholds(net)
 			});
 		}
 	}

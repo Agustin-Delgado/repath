@@ -150,19 +150,30 @@ export class EngineError extends Error {
 	failure: SolveFailure | null = null;
 }
 
-function toEngineError(cause: unknown): EngineError {
+/** @internal Exported for the tests; everything else goes through the calls below. */
+export function toEngineError(cause: unknown): EngineError {
 	if (cause instanceof EngineError) return cause;
 	const message = cause instanceof Error ? cause.message : String(cause);
 	const error = new EngineError(message);
-	error.failure = readFailure();
+	error.failure = readFailure(message);
 	return error;
 }
 
-/** What the engine kept about the error it raised last, if it was a solve's. */
-function readFailure(): SolveFailure | null {
+/**
+ * What the engine kept about the error it raised last, if it was a solve's and
+ * it is the error in hand.
+ *
+ * The engine hands a failure over once and says which message it went with.
+ * Both matter: without them, an error that never reached the solver — a trap,
+ * a copy out of memory, a call made with no live run — picked up whatever the
+ * last failed solve had left and highlighted its parts on the drawing.
+ */
+function readFailure(message: string): SolveFailure | null {
 	try {
 		const raw = lastFailure();
-		return raw ? (JSON.parse(raw) as SolveFailure) : null;
+		if (!raw) return null;
+		const { message: raisedWith, ...failure } = JSON.parse(raw) as SolveFailure & { message?: string };
+		return raisedWith === message ? failure : null;
 	} catch {
 		return null;
 	}
@@ -236,6 +247,12 @@ export interface McuNotice {
 /** What a microcontroller in a live run has to report. */
 export interface McuState {
 	serial: SerialByte[];
+	/**
+	 * How many bytes it has sent in all: the `from` to ask with next. More
+	 * than `from` plus `serial.length` only when the engine had already let
+	 * go of the oldest of them.
+	 */
+	sent: number;
 	/** Every notice so far, not only the new ones: there are at most a handful. */
 	notices: McuNotice[];
 	/** Why its CPU stopped, and when: an instruction it does not know. */
@@ -268,6 +285,8 @@ export interface Chunk {
 	failures: PartFailure[];
 	/** The run's totals so far, not this piece's share: the engine counts from the start. */
 	stats: RunStats;
+	/** Wall-clock milliseconds the engine spent solving this piece. */
+	elapsedMs?: number;
 }
 
 /**
@@ -317,8 +336,11 @@ export class LiveRun {
 	advance(until: number): Chunk {
 		if (this.freed) throw new EngineError('the run has been closed');
 		try {
+			const started = performance.now();
 			const meta = JSON.parse(this.simulation.advance(until)) as RunMeta;
-			return this.collect(meta);
+			const chunk = this.collect(meta);
+			chunk.elapsedMs = performance.now() - started;
+			return chunk;
 		} catch (cause) {
 			throw toEngineError(cause);
 		}
@@ -366,6 +388,7 @@ export class LiveRun {
 		if (this.freed) return null;
 		const state = JSON.parse(this.simulation.mcuState(name, from)) as {
 			serial: SerialByte[];
+			sent?: number;
 			notices: McuNotice[];
 			fault: string | null;
 			fault_time: number | null;
@@ -374,6 +397,7 @@ export class LiveRun {
 		if (!state) return null;
 		return {
 			serial: state.serial,
+			sent: state.sent ?? from + state.serial.length,
 			notices: state.notices,
 			fault:
 				state.fault === null ? null : { message: state.fault, time: state.fault_time ?? 0 },

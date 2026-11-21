@@ -130,7 +130,11 @@ impl Timer {
                 // 13 is reserved; a reserved mode counts like normal.
                 _ => (Normal, Top::Fixed(0xFFFF)),
             };
-            Mode { kind, top, toggle_a: wgm & 8 != 0 }
+            // In a PWM mode COM1A = 01 toggles OC1A only in the modes the
+            // datasheet's tables name: 14 or 15 for fast PWM, 9 or 11 for
+            // the dual-slope ones. Every other mode leaves the pin to the
+            // port, 8 and 10 included although WGM13 is set there.
+            Mode { kind, top, toggle_a: matches!(wgm, 9 | 11 | 14 | 15) }
         } else {
             let wgm = (self.tccra & 3) | ((self.tccrb >> 1) & 4);
             let (kind, top) = match wgm {
@@ -204,9 +208,14 @@ impl Timer {
         let mode = self.mode();
         let top = self.top(&mode);
         let max = self.max();
-        let marks = [self.ocr[0], self.ocr[1], top, top.wrapping_sub(1) & max, max, 0, 1];
+        // The counts just short of TOP and BOTTOM matter only to the modes
+        // that turn round there; the others need nothing on arriving at them.
+        let turns = matches!(mode.kind, Kind::PhaseCorrect | Kind::PhaseFrequency);
+        let marks = [self.ocr[0], self.ocr[1], top, max, 0];
+        let near = [top.wrapping_sub(1) & max, 1];
         let at = self.count;
-        let distance = marks.iter().filter_map(|&v| {
+        let marks = marks.iter().chain(near.iter().filter(|_| turns));
+        let distance = marks.filter_map(|&v| {
             if self.down { (v <= at).then(|| at - v) } else { (v >= at).then(|| v - at) }
         });
         u64::from(distance.min().unwrap_or(0))
@@ -263,6 +272,9 @@ impl Timer {
                 }
             }
             Kind::PhaseCorrect | Kind::PhaseFrequency => {
+                // Leaving TOP: the turn is decided by the TOP in force, before
+                // any new compare value is taken over at it.
+                let turning = top != 0 && !self.down && old >= top;
                 let next = if top == 0 {
                     self.down = false;
                     0
@@ -296,8 +308,13 @@ impl Timer {
                 if matches!(mode.top, Top::Icr) && old == top {
                     self.flags |= ICF;
                 }
+                // Phase correct takes the buffer over at TOP, and does it on
+                // the clock that leaves TOP, after that clock's compares: the
+                // datasheet's "the length of the falling slope is determined
+                // by the previous TOP value, while the length of the rising
+                // slope is determined by the new TOP value".
                 let update = match mode.kind {
-                    Kind::PhaseCorrect => !self.down && next == top,
+                    Kind::PhaseCorrect => turning || top == 0,
                     _ => next == 0,
                 };
                 if update {
@@ -633,5 +650,113 @@ mod tests {
         // clocks later.
         let first = flags.iter().find(|(_, f)| f & OCFA != 0).map(|(c, _)| *c);
         assert_eq!(first, Some(12));
+    }
+    #[test]
+    fn phase_correct_turns_at_the_old_top_when_top_is_raised() {
+        // Timer0 mode 5, phase correct with TOP = OCR0A = 100, no prescaling.
+        // 200 is written on the way up. The datasheet: the falling slope is
+        // the previous TOP's and the rising slope the new one's, so the
+        // counter turns at 100 (BOTTOM, and TOV0, at 200 cycles) and only then
+        // climbs to 200: BOTTOM again after 2 * 200 more cycles, every 400
+        // from there.
+        let mut t = Timer::timer0();
+        t.set_compare_value(0, 100);
+        t.set_control_a(0x01);
+        t.set_control_b(0x08 | 1);
+        t.sync(50);
+        t.set_compare_value(0, 200);
+        let (flags, _) = trace(&mut t, 1_100);
+        let overflows: Vec<u64> =
+            flags.iter().filter(|(_, f)| f & TOV != 0).map(|(c, _)| *c).collect();
+        assert_eq!(overflows, vec![200, 600, 1_000]);
+        // And lowering TOP mid-slope likewise waits for the TOP in force.
+        let mut t = Timer::timer0();
+        t.set_compare_value(0, 200);
+        t.set_control_a(0x01);
+        t.set_control_b(0x08 | 1);
+        t.sync(150);
+        t.set_compare_value(0, 50);
+        let (flags, _) = trace(&mut t, 600);
+        let overflows: Vec<u64> =
+            flags.iter().filter(|(_, f)| f & TOV != 0).map(|(c, _)| *c).collect();
+        assert_eq!(overflows, vec![400, 500, 600, 700]);
+    }
+
+    #[test]
+    fn jumping_agrees_with_counting_in_every_mode() {
+        // Each waveform mode of Timer1, toggling and clearing on compare, with
+        // TOP raised halfway: wherever the jumping version skips counts, it
+        // must raise the same flags and edges on the same cycles as stepping.
+        for wgm in [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15] {
+            let mut stepped = Timer::timer1().starting_at(3);
+            stepped.set_capture(300);
+            stepped.set_compare_value(0, 250);
+            stepped.set_compare_value(1, 90);
+            stepped.set_control_a(0x40 | 0x20 | (wgm & 3));
+            stepped.set_control_b(((wgm & 0x0C) << 1) | 2);
+            let mut jumped = stepped.clone();
+            let run = |t: &mut Timer, step: bool| {
+                let mut flags = Vec::new();
+                let mut edges = Vec::new();
+                let mut level = t.oc;
+                let mut c = t.synced;
+                while c < 20_000 {
+                    c = if step { c + 1 } else { t.next_event().min(20_000) };
+                    if c == 9_000 || (c > 9_000 && t.synced < 9_000) {
+                        t.sync(9_000);
+                        t.set_capture(520);
+                        t.set_compare_value(0, 480);
+                        t.sync(c);
+                    } else {
+                        t.sync(c);
+                    }
+                    if t.flags != 0 {
+                        flags.push((c, t.flags));
+                        t.flags = 0;
+                    }
+                    if t.oc != level {
+                        level = t.oc;
+                        edges.push((c, level));
+                    }
+                }
+                (flags, edges)
+            };
+            let a = run(&mut stepped, true);
+            let b = run(&mut jumped, false);
+            assert_eq!(a, b, "WGM1 = {wgm}");
+        }
+    }
+
+    #[test]
+    fn timer1_toggles_oc1a_only_in_the_modes_the_datasheet_names() {
+        // COM1A = 01 in a PWM mode: "WGM13:0 = 14 or 15: Toggle OC1A on
+        // Compare Match" (fast PWM), "WGM13:0 = 9 or 11" (phase correct and
+        // phase and frequency correct); in every other PWM mode OC1A is
+        // disconnected and the pin is the port's.
+        for wgm in [1u8, 2, 3, 5, 6, 7, 8, 9, 10, 11, 14, 15] {
+            let mut t = Timer::timer1();
+            t.set_control_a(0x40 | (wgm & 3));
+            t.set_control_b((wgm & 0x0C) << 1);
+            let toggles = matches!(wgm, 9 | 11 | 14 | 15);
+            assert_eq!(t.pin(0).is_some(), toggles, "WGM1 = {wgm}");
+        }
+    }
+
+    #[test]
+    fn single_slope_modes_wake_only_on_counts_that_do_something() {
+        // Arduino's Timer0: fast PWM, prescaler 64, both compare values zero.
+        // Per period the counter does something leaving 0 (both compares) and
+        // leaving MAX (overflow and the PWM's BOTTOM); arriving at 1 or 254
+        // is nothing. Two wake-ups a period of 256 clocks.
+        let mut t = Timer::timer0();
+        t.set_control_a(0x03);
+        t.set_control_b(3);
+        let mut wakes = 0;
+        while t.next_event() <= 4 * 16_384 {
+            let at = t.next_event();
+            t.sync(at);
+            wakes += 1;
+        }
+        assert_eq!(wakes, 8);
     }
 }

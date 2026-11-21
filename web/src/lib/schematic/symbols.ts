@@ -23,7 +23,7 @@ import {
 	SUBCIRCUIT_PREFIX
 } from './model';
 import { BARS, DIGITS, SEGMENTS, SEGMENT_SHAPES, digitSegment } from './led';
-import { CHIP_BODY_HALF_WIDTH, chipOf, chipPinLayout, chipReach } from './model';
+import { CHIP_BODY_HALF_WIDTH, chipOf, chipPinLayout, chipReach, rotatePoint, type Rotation } from './model';
 import { chipName, isUnused, type BoardShape, type ChipDef } from './chips';
 import {
 	DOT_SIZE,
@@ -66,6 +66,15 @@ import {
 
 export type Shape =
 	| { kind: 'path'; d: string; fill?: boolean }
+	/**
+	 * A polarity mark: a plus or a minus centred on (x, y), `r` from the centre
+	 * to the end of a bar. Unlike every other shape it does not turn with its
+	 * part. A minus turned a quarter is a vertical bar, which reads as a `1` or
+	 * an `I` beside the pin it was meant to name — so the bars are laid out in
+	 * whatever direction comes out horizontal once the part's own turn is
+	 * applied (`shapeToPathData`'s `rotation`).
+	 */
+	| { kind: 'sign'; x: number; y: number; r: number; plus: boolean; fill?: false }
 	| { kind: 'circle'; cx: number; cy: number; r: number; fill?: boolean }
 	| { kind: 'rect'; x: number; y: number; w: number; h: number; fill?: boolean };
 
@@ -103,6 +112,7 @@ export interface SymbolGeometry {
 }
 
 const path = (d: string, fill = false): Shape => ({ kind: 'path', d, fill });
+const sign = (x: number, y: number, plus: boolean, r = 3.5): Shape => ({ kind: 'sign', x, y, r, plus });
 const rectShape = (r: { x: number; y: number; w: number; h: number }): Shape => ({ kind: 'rect', ...r });
 
 /** The gates drawn from their input count rather than from a fixed shape. */
@@ -176,7 +186,7 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 		case 'vsource':
 			return `vsource:${String(params.waveform ?? 'dc')}`;
 		case 'switch':
-			return `switch:${String(params.action ?? 'toggle')}:${String(params.start ?? 'open')}`;
+			return `switch:${String(params.action ?? 'manual')}:${String(params.start ?? 'open')}`;
 		case 'pushbutton':
 			return `pushbutton:${String(params.start ?? 'open')}`;
 		case 'relay':
@@ -515,8 +525,9 @@ const STATIC: Record<string, SymbolGeometry> = {
 			path('M-8 -14 V-5 M-8 -4 V4 M-8 5 V14'),
 			path('M-8 -11 H10 M10 -11 V-30 M-8 11 H10 M10 11 V30'),
 			path('M-8 0 H10'),
-			// The arrow points into the channel for an n-channel device.
-			path('M2 0 L-4 -4 L-4 4 Z', true)
+			// The arrow points into the channel for an n-channel device: on the body
+			// line, its tip at the channel.
+			path('M-8 0 L-2 -4 L-2 4 Z', true)
 		],
 		labels: []
 	},
@@ -527,8 +538,8 @@ const STATIC: Record<string, SymbolGeometry> = {
 			path('M-8 -14 V-5 M-8 -4 V4 M-8 5 V14'),
 			path('M-8 -11 H10 M10 -11 V-30 M-8 11 H10 M10 11 V30'),
 			path('M-8 0 H10'),
-			// …and out of it for a p-channel one.
-			path('M-8 0 L-2 -4 L-2 4 Z', true)
+			// …and out of it, towards the source, for a p-channel one.
+			path('M2 0 L-4 -4 L-4 4 Z', true)
 		],
 		labels: []
 	},
@@ -543,12 +554,14 @@ const STATIC: Record<string, SymbolGeometry> = {
 		labels: []
 	},
 
+	// The emitter of a PNP is the upper lead, pin (10, -30) in the catalog, and
+	// its arrow points in along that lead, at the base.
 	pnp: {
 		shapes: [
 			path('M-30 0 H-12 M-12 -15 V15'),
 			path('M-12 -7 L10 -20 M10 -20 V-30'),
 			path('M-12 7 L10 20 M10 20 V30'),
-			path('M-12 7 L-3 9 L-7 16 Z', true)
+			path('M-12 -7 L-3 -9 L-7 -16 Z', true)
 		],
 		labels: []
 	},
@@ -569,10 +582,24 @@ const STATIC: Record<string, SymbolGeometry> = {
 		shapes: [
 			path('M-30 -10 H-20 M-30 10 H-20 M24 0 H30'),
 			path('M-20 -22 L-20 22 L24 0 Z'),
-			path('M-16 -13 H-9 M-12.5 -16.5 V-9.5'),
-			path('M-16 10 H-9')
+			sign(-12.5, -10, true),
+			sign(-12.5, 10, false)
 		],
 		labels: []
+	},
+
+	// IEC 60617 draws an amplifier as a box with a triangle and the gain, ∞
+	// for an op-amp, in its top corner; the inputs are marked as on the
+	// triangle. The leads end where the triangle's do.
+	'opamp@iec': {
+		shapes: [
+			path('M-30 -10 H-20 M-30 10 H-20 M20 0 H30'),
+			{ kind: 'rect', x: -20, y: -22, w: 40, h: 44 },
+			path('M-2 -17 L6 -13 L-2 -9 Z'),
+			sign(-13, -10, true),
+			sign(-13, 10, false)
+		],
+		labels: [{ x: 13, y: -13, text: '∞', size: 9 }]
 	},
 
 	not: {
@@ -842,7 +869,7 @@ function voltageSource(waveform: string, standard: SymbolStandard): SymbolGeomet
 		// terminal the EMF raises — the plus pin, up here.
 		shapes.push(path('M0 10 V-10 M-5 -5 L0 -10 L5 -5'));
 	} else {
-		shapes.push(path('M-5 -6 H5 M0 -11 V-1 M-5 7 H5'));
+		shapes.push(sign(0, -6, true, 5), sign(0, 7, false, 5));
 	}
 	return { shapes, labels: [] };
 }
@@ -1003,7 +1030,7 @@ export function symbolGeometry(
 	else if (kind === 'vsource') geometry = voltageSource(String(params.waveform ?? 'dc'), standard);
 	else if (kind === 'isource') geometry = currentSource(standard);
 	else if (kind === 'switch') {
-		geometry = switchSymbol(String(params.action ?? 'toggle'), String(params.start ?? 'open'));
+		geometry = switchSymbol(String(params.action ?? 'manual'), String(params.start ?? 'open'));
 	}
 	else if (kind === 'pushbutton') geometry = switchSymbol('momentary', String(params.start ?? 'open'));
 	else if (kind === 'relay') geometry = relaySymbol(String(params.start ?? 'open'));
@@ -1167,10 +1194,19 @@ function portSymbol(flow: string): SymbolGeometry {
 }
 
 /** SVG `d` for a shape, so the palette can render one element per shape. */
-export function shapeToPathData(shape: Shape): string {
+export function shapeToPathData(shape: Shape, rotation: Rotation = 0): string {
 	switch (shape.kind) {
 		case 'path':
 			return shape.d;
+		case 'sign': {
+			// The bar that has to come out horizontal on the page, in the part's
+			// own frame: the part's turn undone.
+			const along = rotatePoint(shape.r, 0, ((360 - rotation) % 360) as Rotation);
+			const across = rotatePoint(0, shape.r, ((360 - rotation) % 360) as Rotation);
+			const bar = (u: { x: number; y: number }) =>
+				`M${fix(shape.x - u.x)} ${fix(shape.y - u.y)} L${fix(shape.x + u.x)} ${fix(shape.y + u.y)}`;
+			return shape.plus ? `${bar(along)} ${bar(across)}` : bar(along);
+		}
 		case 'rect':
 			return `M${shape.x} ${shape.y} h${shape.w} v${shape.h} h${-shape.w} Z`;
 		case 'circle': {
@@ -1178,4 +1214,14 @@ export function shapeToPathData(shape: Shape): string {
 			return `M${cx - r} ${cy} a${r} ${r} 0 1 0 ${r * 2} 0 a${r} ${r} 0 1 0 ${-r * 2} 0`;
 		}
 	}
+}
+
+/** Path numbers without the floating-point dust a negated zero leaves. */
+function fix(n: number): string {
+	return String(Math.round(n * 1000) / 1000 + 0);
+}
+
+/** Whether any part of a symbol is drawn differently depending on its turn. */
+export function turnsApart(geometry: SymbolGeometry): boolean {
+	return geometry.shapes.some((shape) => shape.kind === 'sign');
 }

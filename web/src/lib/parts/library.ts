@@ -32,6 +32,8 @@ export const SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
 	{ id: 'analog', label: 'Analog' },
 	{ id: 'logic', label: 'Logic' },
 	{ id: 'ic', label: 'Chips' },
+	{ id: 'modules', label: 'Modules' },
+	{ id: 'measure', label: 'Measuring' },
 	{ id: 'blocks', label: 'Blocks' },
 	{ id: 'imported', label: 'Imported' }
 ];
