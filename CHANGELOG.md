@@ -11,6 +11,30 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Every change is now tried in a real browser
+
+**Before anything is published, a browser opens the site and uses it.** Every
+example is opened and run, and has to put traces on the scope without an
+error. Parts are placed from the palette and from Ctrl+K, wired, edited,
+renamed, deleted, copied, undone and boxed into a block that is opened by
+double-clicking it. Run, Stop, Resume and Reset are pressed; a probe dropped on
+a wire has to show up on the scope, and turning a resistor while the circuit
+runs has to move the reading. A share link is opened in a second tab and has to
+hold the same circuit; so does a saved file opened again. And the page is
+checked at three widths for anything spilling off the side. The three bugs that
+were found by hand this way before — the live overlay going dark, a double
+click that never registered, a probe that stopped the whole circuit compiling —
+each have a check of their own now.
+
+**At exactly 900 pixels wide the toolbar and the panels agree.** The panels
+turned into drawers at 900 px while the toolbar still showed its wide layout,
+so a window that size had a phone's bottom bar, no *More* menu, and the full
+toolbar crammed above it. Narrow now starts below 900 px for all of them.
+
+[#99](https://github.com/Agustin-Delgado/repath/pull/99)
+
+---
+
 ## 21 November 2026 — A DC sweep, for I-V curves
 
 **Run can now sweep a source instead of running in time.** Pick *DC sweep* as

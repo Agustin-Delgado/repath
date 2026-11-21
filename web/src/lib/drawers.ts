@@ -8,8 +8,16 @@
  * screen reader read them out as though they were there.
  */
 
-/** The width the drawers start at: the `max-width` of the page's own media query. */
-export const DRAWER_QUERY = '(max-width: 900px)';
+/**
+ * The width the drawers start at, and the page's own media queries with it.
+ *
+ * Below 900 px, not up to it: Tailwind's `max-[900px]:`, which folds the
+ * toolbar into its More menu, means `width < 900px`, and the hand-written
+ * queries used to say `max-width: 900px`. At exactly 900 px the page had the
+ * phone bar and drawers of a narrow screen under the toolbar of a wide one,
+ * with the More menu nowhere.
+ */
+export const DRAWER_QUERY = '(width < 900px)';
 
 export type Drawer = 'parts' | 'details';
 

@@ -641,7 +641,7 @@
 		become a row of buttons; and the header scrolls sideways rather than
 		wrapping into a wall of controls.
 	*/
-	@media (max-width: 900px) {
+	@media (width < 900px) {
 		.app {
 			grid-template-rows: auto auto minmax(0, 1fr) auto auto;
 		}

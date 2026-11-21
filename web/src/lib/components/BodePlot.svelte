@@ -319,6 +319,7 @@
 
 <div class="bode" bind:this={host}>
 	<canvas
+		aria-label="Frequency response plot"
 		bind:this={canvas}
 		style:width="{size.width}px"
 		style:height="{size.height}px"

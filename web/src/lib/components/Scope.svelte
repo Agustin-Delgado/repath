@@ -978,6 +978,7 @@
 	{:else}
 	<div class="plot" bind:this={host}>
 		<canvas
+			aria-label="Scope traces"
 			bind:this={canvas}
 			style:width="{size.width}px"
 			style:height="{size.height}px"
@@ -1217,7 +1218,7 @@
 		background: var(--panel-bg);
 	}
 
-	@media (max-width: 900px) {
+	@media (width < 900px) {
 		.scope {
 			grid-template-columns: minmax(0, 1fr) 160px;
 		}

@@ -148,7 +148,7 @@
  * past it, so that hiding the scrollbar does not hide that there is more.
  * `overflowHint` in `$lib/ui/overflow` sets the two attributes.
  */
-@media (max-width: 900px) {
+@media (width < 900px) {
 	.scroll-row {
 		overflow-x: auto;
 		scrollbar-width: none;
