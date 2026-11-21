@@ -21,6 +21,13 @@ export default defineConfig({
 		// run, and vitest says so rather than passing an empty suite.
 		include: ['../tests/web/**/*.test.ts'],
 		// Nothing under test touches the DOM; jsdom costs seconds per run for nothing.
-		environment: 'node'
+		environment: 'node',
+		// A timeout here catches a hang, not a slow test. The microcontroller tests
+		// emulate seconds of a sketch — millions of instructions — and take four to
+		// six seconds each on an idle machine, so vitest's 5 s default failed them
+		// whenever the machine was busy with anything else, while the answer they
+		// check was right. A few already carried their own 30 s; this makes it the
+		// rule, so whether the suite passes no longer depends on the load.
+		testTimeout: 30_000
 	}
 });
