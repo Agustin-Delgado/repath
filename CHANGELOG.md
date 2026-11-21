@@ -87,6 +87,34 @@ transistor on a chip at 1.7 kΩ. An LM358's input bias current now flows out of
 its inputs, as its PNP inputs push it, so an offset through a source
 resistance comes out the right way round.
 [#89](https://github.com/Agustin-Delgado/repath/pull/89)
+\n---\n\n## 21 November 2026 — The solver stops stealing energy
+
+**An oscillator keeps ringing next to a clock.** A tank, a crystal or an LC
+filter drawn beside a pulse source, a clock or a microcontroller used to die
+away within milliseconds: every edge anywhere in the drawing made the whole
+circuit take a few heavily damped steps, and a lossless tank paid for each of
+them. Now only the parts an edge actually reaches are damped, and a tank on its
+own keeps its energy for as long as you run it. A tank started from a charged
+capacitor keeps it too, at the default step.
+
+**Turning a capacitor keeps its charge.** Changing a capacitance while a run is
+going used to keep the voltage across it, which made charge appear from
+nowhere; now the charge stays and the voltage moves, which is what a variable
+capacitor does. An inductance keeps its flux the same way. A tank retuned live
+rings on at the energy it had, instead of losing a quarter of it.
+
+**Logic is part of every analysis.** The frequency sweep and the operating
+point used to treat every logic output as sitting at half the supply, and a
+circuit whose operating point was hard to find lost its clocks and logic
+levels for the whole run. Both now start from the levels the logic really
+settles to.
+
+**Smaller fixes.** A 0 Ω resistor between large ones no longer skews the
+voltages around it by several percent. A run played live takes no more steps
+than the same run in one go. A single shot with an edge a hair before its end
+finishes instead of hanging. A circuit with hundreds of parts that fails to
+solve is explained in a moment rather than freezing the tab first.
+[#91](https://github.com/Agustin-Delgado/repath/pull/91)
 
 ---
 

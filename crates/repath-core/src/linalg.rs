@@ -17,6 +17,72 @@ pub struct LinearSystem {
     /// Where the last solve gave up, if it did: the elimination step, and
     /// whether it was a row with nothing in it rather than a pivot too small.
     failed: Option<(usize, bool)>,
+    /// Set on a system made by [`Self::pattern`]: where each stamp lands, kept
+    /// instead of summed into a matrix that is never allocated.
+    record: Option<Pattern>,
+}
+
+/// Where stamps landed: the matrix entries given something other than zero,
+/// and every right-hand side row given anything at all.
+///
+/// What a question about the circuit's shape needs (which unknowns an element
+/// touches, which can reach which) without an n × n matrix per question. At the
+/// size limit a dense matrix is 128 MB, and the questions are asked one element
+/// at a time.
+#[derive(Clone, Debug, Default)]
+pub struct Pattern {
+    pub entries: Vec<(usize, usize)>,
+    pub rhs: Vec<usize>,
+}
+
+impl Pattern {
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.rhs.clear();
+    }
+
+    /// Every unknown with a row, a column or a right-hand side entry here, in
+    /// order, once each.
+    pub fn touched(&self) -> Vec<usize> {
+        let mut all: Vec<usize> = self
+            .entries
+            .iter()
+            .flat_map(|&(r, c)| [r, c])
+            .chain(self.rhs.iter().copied())
+            .collect();
+        all.sort_unstable();
+        all.dedup();
+        all
+    }
+}
+
+/// [`coupled_labels`] over a list of entries rather than a matrix: the same
+/// labels, in time proportional to the entries instead of to n².
+pub fn coupled_entries(n: usize, barriers: &[usize], entries: &[(usize, usize)]) -> Vec<usize> {
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut barrier = vec![false; n];
+    for &b in barriers {
+        if b < n {
+            barrier[b] = true;
+        }
+    }
+    for &(r, c) in entries {
+        if r >= n || c >= n || r == c || barrier[r] || barrier[c] {
+            continue;
+        }
+        let (a, b) = (find(&mut parent, r), find(&mut parent, c));
+        if a != b {
+            parent[a] = b;
+        }
+    }
+    (0..n).map(|i| find(&mut parent, i)).collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +147,27 @@ impl LinearSystem {
             perm: (0..n).collect(),
             scale: vec![0.0; n],
             failed: None,
+            record: None,
         }
+    }
+
+    /// A system that only records where it is stamped, and cannot be solved.
+    pub fn pattern(n: usize) -> Self {
+        Self {
+            n,
+            a: Vec::new(),
+            b: Vec::new(),
+            perm: Vec::new(),
+            scale: Vec::new(),
+            failed: None,
+            record: Some(Pattern::default()),
+        }
+    }
+
+    /// What a system made by [`Self::pattern`] has recorded since it was last
+    /// cleared; `None` for an ordinary one.
+    pub fn recorded(&self) -> Option<&Pattern> {
+        self.record.as_ref()
     }
 
     #[inline]
@@ -93,6 +179,9 @@ impl LinearSystem {
     pub fn clear(&mut self) {
         self.a.fill(0.0);
         self.b.fill(0.0);
+        if let Some(record) = &mut self.record {
+            record.clear();
+        }
     }
 
     /// `A[row][col] += value`. `None` indices are ground and are silently dropped,
@@ -100,6 +189,12 @@ impl LinearSystem {
     #[inline]
     pub fn add(&mut self, row: Option<usize>, col: Option<usize>, value: f64) {
         if let (Some(r), Some(c)) = (row, col) {
+            if let Some(record) = &mut self.record {
+                if value != 0.0 {
+                    record.entries.push((r, c));
+                }
+                return;
+            }
             self.a[r * self.n + c] += value;
         }
     }
@@ -119,6 +214,10 @@ impl LinearSystem {
     #[inline]
     pub fn add_rhs(&mut self, row: Option<usize>, value: f64) {
         if let Some(r) = row {
+            if let Some(record) = &mut self.record {
+                record.rhs.push(r);
+                return;
+            }
             self.b[r] += value;
         }
     }
@@ -149,6 +248,7 @@ impl LinearSystem {
     /// Solve in place. `self` is destroyed (holds the LU factors afterwards); the
     /// solution is written to `x`.
     pub fn solve_into(&mut self, x: &mut Vec<f64>) -> Result<(), SolveError> {
+        debug_assert!(self.record.is_none(), "a pattern is not a system to solve");
         let n = self.n;
         x.clear();
         x.resize(n, 0.0);
@@ -240,6 +340,9 @@ impl LinearSystem {
     /// [`Self::clear`]: a row, a column or a right-hand side entry of theirs is
     /// not zero.
     pub fn touched(&self) -> Vec<usize> {
+        if let Some(record) = &self.record {
+            return record.touched();
+        }
         let n = self.n;
         (0..n)
             .filter(|&i| {
@@ -323,6 +426,41 @@ mod tests {
         sys.solve_into(&mut x).unwrap();
         assert!((x[0] - 3.0).abs() < 1e-12);
         assert!((x[1] - 2.0).abs() < 1e-12);
+    }
+
+    /// A pattern records where stamps land and nothing else, and the labels
+    /// read off it are the ones read off the dense matrix the same stamps make.
+    #[test]
+    fn a_pattern_agrees_with_the_matrix_it_stands_for() {
+        let stamp = |sys: &mut LinearSystem| {
+            // 0 — 1 joined, 2 — 3 joined, 1 — 2 joined only through 4, which is
+            // a barrier, and a zero entry between 0 and 3 that joins nothing.
+            sys.add_conductance(Some(0), Some(1), 1e-3);
+            sys.add_conductance(Some(2), Some(3), 2.0);
+            sys.add_conductance(Some(1), Some(4), 1.0);
+            sys.add_conductance(Some(4), Some(2), 1.0);
+            sys.add(Some(0), Some(3), 0.0);
+            sys.add_rhs(Some(3), 0.0);
+        };
+        let mut dense = LinearSystem::new(5);
+        stamp(&mut dense);
+        let mut pattern = LinearSystem::pattern(5);
+        stamp(&mut pattern);
+        let recorded = pattern.recorded().unwrap();
+        assert!(!recorded.entries.contains(&(0, 3)), "a zero entry is not a coupling");
+        assert_eq!(recorded.rhs, [3], "a right-hand side row is touched whatever it is given");
+        assert_eq!(pattern.touched(), [0, 1, 2, 3, 4]);
+        assert_eq!(pattern.touched(), dense.touched());
+        let from_dense = dense.coupled(&[4]);
+        let from_pattern = coupled_entries(5, &[4], &recorded.entries);
+        let same = |labels: &[usize], a: usize, b: usize| labels[a] == labels[b];
+        for (a, b) in [(0, 1), (2, 3), (1, 2), (0, 3)] {
+            assert_eq!(same(&from_dense, a, b), same(&from_pattern, a, b), "{a} and {b}");
+        }
+        assert!(same(&from_pattern, 0, 1) && same(&from_pattern, 2, 3));
+        assert!(!same(&from_pattern, 1, 2), "joined only through the barrier");
+        pattern.clear();
+        assert!(pattern.touched().is_empty());
     }
 
     #[test]
