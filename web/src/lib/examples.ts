@@ -9,6 +9,7 @@ import type { Instance, Schematic } from './schematic/model';
 import { defaultParams, definitionOf } from './schematic/model';
 import { SEGMENTS } from './schematic/led';
 import { intelHex } from './schematic/firmware';
+import type { Analysis } from './format';
 
 export interface Example {
 	id: string;
@@ -16,9 +17,11 @@ export interface Example {
 	description: string;
 	stopTime: number;
 	/** Which analysis shows this circuit off. Defaults to transient. */
-	analysis?: 'transient' | 'frequency';
+	analysis?: Analysis;
 	/** Sweep range, for the ones meant to be looked at in the frequency domain. */
 	frequencyRange?: { start: number; stop: number };
+	/** The DC sweep, for the ones meant to be looked at as a curve against a source. */
+	dcSweep?: { source?: string; start: number; stop: number; step: number; currents?: string[] };
 	build: () => Schematic;
 }
 
@@ -2153,6 +2156,40 @@ export const EXAMPLES: Example[] = [
 					[350, 260, 350, 290],
 					[430, 260, 430, 290],
 					[100, 290, 430, 290],
+					[100, 230, 100, 290]
+				]
+			)
+	},
+
+	{
+		id: 'diode-iv',
+		name: 'Diode I-V curve',
+		description:
+			'A DC sweep rather than a run in time: V1 is walked from 0 to 1.2 V and the operating point solved at every 10 mV. The lower plot is the current through D1 against the drive. Almost nothing flows until about half a volt, then a decade more for every hundred millivolts or so, until the 10 Ω of R1 takes over and the curve straightens into a line. VD, the upper plot, is the diode’s own drop: it climbs with the drive at first, then hardly moves past 0.7 V however hard it is pushed.',
+		stopTime: 1e-3,
+		analysis: 'dc',
+		dcSweep: { source: 'V1', start: 0, stop: 1.2, step: 0.01, currents: ['D1'] },
+		build: () =>
+			build(
+				[
+					{
+						kind: 'vsource',
+						name: 'V1',
+						x: 100,
+						y: 200,
+						params: { waveform: 'dc', value: 1 }
+					},
+					{ kind: 'resistor', name: 'R1', x: 250, y: 170, params: { resistance: 10 } },
+					{ kind: 'diode', name: 'D1', x: 350, y: 230, rotation: 90 },
+					{ kind: 'probe', name: 'VD', x: 350, y: 170 },
+					{ kind: 'ground', name: 'GND1', x: 100, y: 300 }
+				],
+				[
+					[100, 170, 220, 170],
+					[280, 170, 350, 170],
+					[350, 170, 350, 200],
+					[350, 260, 350, 290],
+					[100, 290, 350, 290],
 					[100, 230, 100, 290]
 				]
 			)

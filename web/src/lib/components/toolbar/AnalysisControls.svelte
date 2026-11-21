@@ -4,11 +4,17 @@
 	import { LOGIC_FAMILIES } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
 	import { formatValue, parseValue } from '$lib/units';
+	import type { Analysis } from '$lib/format';
 
 	const ANALYSES = [
 		{ value: 'transient', label: 'Transient' },
-		{ value: 'frequency', label: 'Frequency' }
+		{ value: 'frequency', label: 'Frequency' },
+		{ value: 'dc', label: 'DC sweep' }
 	];
+
+	/** The sources the sweep can turn, for the picker. */
+	const sourceItems = $derived(app.dcSources.map((s) => ({ value: s.name, label: s.name })));
+	const sweptUnit = $derived(app.dcSwept?.unit ?? 'V');
 
 	/** Whether anything on the drawing has a digital pin to speak of. */
 	const hasDigital = $derived(
@@ -27,7 +33,7 @@
 <Select
 	items={ANALYSES}
 	value={app.analysis}
-	onChange={(value) => app.setAnalysis(value as 'transient' | 'frequency')}
+	onChange={(value) => app.setAnalysis(value as Analysis)}
 	aria-label="Analysis"
 	title="Which analysis Run performs"
 />
@@ -53,6 +59,67 @@
 		}}
 		aria-label="Sweep stop frequency"
 	/>
+{:else if app.analysis === 'dc'}
+	<!--
+		Only a choice when there is one: a drawing with a single source sweeps
+		that, and a picker with one entry in it is a label pretending otherwise.
+	-->
+	{#if sourceItems.length > 1}
+		<Select
+			items={sourceItems}
+			value={app.dcSwept?.name ?? ''}
+			onChange={(value) => (app.dcSource = value)}
+			aria-label="Source to sweep"
+			title="Which source the sweep turns"
+		/>
+	{:else}
+		<span class="shrink-0 font-mono text-[0.72rem] text-muted" title="The source the sweep turns">
+			{app.dcSwept?.name ?? 'no source'}
+		</span>
+	{/if}
+	<UnitField
+		prefix="from"
+		unit={sweptUnit}
+		width="3.5rem"
+		value={formatValue(app.dcStart, 4)}
+		commit={(text) => {
+			const parsed = parseValue(text);
+			if (parsed !== null) app.dcStart = parsed;
+		}}
+		aria-label="Sweep start value"
+	/>
+	<UnitField
+		prefix="to"
+		unit={sweptUnit}
+		width="3.5rem"
+		value={formatValue(app.dcStop, 4)}
+		commit={(text) => {
+			const parsed = parseValue(text);
+			if (parsed !== null) app.dcStop = parsed;
+		}}
+		aria-label="Sweep stop value"
+	/>
+	<UnitField
+		prefix="step"
+		unit={sweptUnit}
+		width="3.5rem"
+		value={formatValue(app.dcStep, 4)}
+		commit={(text) => {
+			const parsed = parseValue(text);
+			if (parsed !== null) app.dcStep = parsed;
+		}}
+		aria-label="Sweep step"
+	/>
+	<!-- How many points that is, or what is wrong with it, before Run is pressed. -->
+	{#if 'error' in app.dcPlan}
+		<span class="shrink-0 text-[0.72rem] text-danger" title={app.dcPlan.error} role="status">
+			invalid
+		</span>
+	{:else}
+		<span class="shrink-0 font-mono text-[0.72rem] text-muted" title="Operating points the sweep solves">
+			{app.dcPlan.values.length} pts
+		</span>
+	{/if}
 {:else}
 	<!--
 		The timebase: how much simulated time the screen covers. Not a length

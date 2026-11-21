@@ -30,9 +30,23 @@ export interface CircuitSettings {
 	logicFamily?: string;
 	sample?: number;
 	sweepCount?: number;
-	analysis?: 'transient' | 'frequency';
+	analysis?: Analysis;
 	acStart?: number;
 	acStop?: number;
+	/** The source a DC sweep turns, by name; empty for the first one drawn. */
+	dcSource?: string;
+	dcStart?: number;
+	dcStop?: number;
+	dcStep?: number;
+	/** Parts whose current a DC sweep plots, by name. */
+	dcCurrents?: string[];
+}
+
+/** What Run does: follow the circuit in time, sweep its frequency response, or sweep a source. */
+export type Analysis = 'transient' | 'frequency' | 'dc';
+
+export function isAnalysis(value: unknown): value is Analysis {
+	return value === 'transient' || value === 'frequency' || value === 'dc';
 }
 
 /** What a document holds about the circuit itself. */

@@ -361,6 +361,23 @@ impl Circuit {
         false
     }
 
+    /// Put a new waveform into a voltage or a current source, and hand back
+    /// the one it had, or `None` if there is no source by that name.
+    ///
+    /// What a DC sweep turns: unlike [`Self::set_source_waveform`] it reaches
+    /// current sources too, since an I-V curve is as often driven by one.
+    pub fn swap_source_waveform(&mut self, name: &str, waveform: Waveform) -> Option<Waveform> {
+        let element = self.elements.iter_mut().find(|e| e.name() == name)?;
+        let any = element.as_any_mut();
+        if let Some(source) = any.downcast_mut::<VoltageSource>() {
+            return Some(std::mem::replace(&mut source.waveform, waveform));
+        }
+        if let Some(source) = any.downcast_mut::<CurrentSource>() {
+            return Some(std::mem::replace(&mut source.waveform, waveform));
+        }
+        None
+    }
+
     /// Give an element a new value from `at` onwards — a hand on a knob.
     ///
     /// Like [`Self::operate_logic`], an instant rather than "now": the solver

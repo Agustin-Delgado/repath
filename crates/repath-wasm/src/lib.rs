@@ -674,6 +674,66 @@ pub fn run_frequency_sweep(
     Ok(FrequencyRun { result })
 }
 
+/// A DC sweep: the operating point at each value of one source. Kept apart
+/// from the other analyses' runs, as [`FrequencyRun`] is.
+#[wasm_bindgen]
+pub struct DcSweepRun {
+    result: DcSweepResult,
+}
+
+#[wasm_bindgen]
+impl DcSweepRun {
+    /// The swept source's value at each point, as a `Float64Array`.
+    pub fn values(&self) -> Vec<f64> {
+        self.result.values.clone()
+    }
+
+    /// One unknown across the sweep.
+    pub fn signal(&self, index: usize) -> Vec<f64> {
+        self.result.signal(index)
+    }
+
+    /// One element's current across the sweep.
+    pub fn current(&self, index: usize) -> Vec<f64> {
+        self.result.current_signal(index)
+    }
+
+    /// `{ source, unknown_names, element_names, node_count, point_count }` as JSON.
+    pub fn meta(&self) -> Result<String, JsError> {
+        #[derive(Serialize)]
+        struct Meta<'a> {
+            source: &'a str,
+            unknown_names: &'a [String],
+            element_names: &'a [String],
+            node_count: usize,
+            point_count: usize,
+        }
+        serde_json::to_string(&Meta {
+            source: &self.result.source,
+            unknown_names: &self.result.unknown_names,
+            element_names: &self.result.element_names,
+            node_count: self.result.node_count,
+            point_count: self.result.values.len(),
+        })
+        .map_err(to_js_error)
+    }
+}
+
+/// Sweep the source called `source` through `values` and solve the operating
+/// point at each.
+#[wasm_bindgen(js_name = runDcSweep)]
+pub fn run_dc_sweep(
+    netlist_json: &str,
+    source: &str,
+    values: &[f64],
+) -> Result<DcSweepRun, JsError> {
+    let netlist: Netlist = serde_json::from_str(netlist_json).map_err(to_js_error)?;
+    let mut circuit = netlist.compile().map_err(to_js_error)?;
+    let result =
+        Simulator::default().sweep_source(&mut circuit, source, values).map_err(sim_js_error)?;
+    Ok(DcSweepRun { result })
+}
+
 /// Engine version, so the UI can report which build it is running.
 #[wasm_bindgen]
 pub fn version() -> String {

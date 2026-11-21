@@ -11,6 +11,24 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — A DC sweep, for I-V curves
+
+**Run can now sweep a source instead of running in time.** Pick *DC sweep* as
+the analysis, choose which voltage source, current source, battery or supply
+to turn (the first one drawn, unless you say otherwise), and give it a start,
+a stop and a step. Run solves the circuit at every value and plots what each
+probed net sits at, and what each part you tick under *Currents* carries,
+against the swept value, volts above amperes. That is how an I-V curve is
+drawn: the new *Diode I-V curve* example walks a diode from 0 to 1.2 V and
+shows the current doing almost nothing, then everything. A step of the wrong
+sign, a step of zero, or more than 5000 points is refused with the reason,
+before anything is solved. The sweep is kept with the circuit, in files, links
+and drafts; a circuit that never used it saves no differently.
+
+[#98](https://github.com/Agustin-Delgado/repath/pull/98)
+
+---
+
 ## 21 November 2026 — Serial on the chip's own baud clock
 
 **A byte goes out when the chip's baud clock says, not the instant it is

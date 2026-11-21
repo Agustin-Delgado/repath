@@ -24,7 +24,12 @@
 			id: example.id,
 			group: exampleDomain(example),
 			description: example.description,
-			keywords: example.analysis === 'frequency' ? ['frequency', 'bode', 'ac'] : []
+			keywords:
+				example.analysis === 'frequency'
+					? ['frequency', 'bode', 'ac']
+					: example.analysis === 'dc'
+						? ['dc sweep', 'i-v', 'curve']
+						: []
 		}))
 	);
 	/** On their shelves, in the order the search ranked them within each. */
@@ -102,10 +107,10 @@
 							>
 								<span class="flex items-center gap-1.5 text-ui text-fg">
 									<span class="min-w-0 truncate">{example.name}</span>
-									{#if example.analysis === 'frequency'}
+									{#if example.analysis === 'frequency' || example.analysis === 'dc'}
 										<span
 											class="ml-auto shrink-0 rounded bg-control px-1 font-mono text-3xs leading-4 text-muted"
-											>AC</span
+											>{example.analysis === 'dc' ? 'DC' : 'AC'}</span
 										>
 									{/if}
 								</span>
