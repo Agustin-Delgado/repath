@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { Pressable } from '$lib/ui';
-	import { Search, X } from '@lucide/svelte';
 	import { EXAMPLES, exampleDomain, type Example, type ExampleDomain } from '$lib/examples';
 	import { search } from '$lib/search';
 	import { app } from '$lib/state.svelte';
+	import { Pressable, SearchField } from '$lib/ui';
 
 	/**
 	 * Circuits to open, filed the way the parts are: by what they are made of.
@@ -49,41 +48,17 @@
 
 <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
 	<div class="border-b border-border p-2">
-		<label
-			class="flex h-7 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-muted focus-within:border-accent/70"
-		>
-			<Search class="size-3.5 shrink-0" />
-			<input
-				bind:this={searchInput}
-				bind:value={query}
-				onkeydown={(event) => {
-					if (event.key === 'Enter' && found[0]) open(found[0]);
-					else if (event.key === 'Escape') {
-						if (query) query = '';
-						else searchInput?.blur();
-					}
-				}}
-				type="search"
-				placeholder="Find an example…"
-				aria-label="Find an example"
-				autocomplete="off"
-				spellcheck="false"
-				class="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-ui text-fg outline-none [&::-webkit-search-cancel-button]:hidden"
-			/>
-			{#if query}
-				<Pressable
-					type="button"
-					class="flex cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-fg"
-					aria-label="Clear the search"
-					onclick={() => {
-						query = '';
-						searchInput?.focus();
-					}}
-				>
-					<X class="size-3.5" />
-				</Pressable>
-			{/if}
-		</label>
+		<SearchField
+			bind:element={searchInput}
+			bind:value={query}
+			onkeydown={(event) => {
+				if (event.key === 'Enter' && found[0]) open(found[0]);
+				// An Escape that found the box already empty lets go of it.
+				else if (event.key === 'Escape' && !event.defaultPrevented) searchInput?.blur();
+			}}
+			placeholder="Find an example…"
+			aria-label="Find an example"
+		/>
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-y-auto p-2">
