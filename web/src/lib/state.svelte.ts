@@ -9,8 +9,10 @@
 import {
 	EngineError,
 	ensureEngine,
+	runDcSweep,
 	runFrequencySweep,
 	runTransient,
+	type DcSweepRun,
 	type FrequencyRun,
 	type McuNotice,
 	type SolveFailure,
@@ -27,10 +29,21 @@ import type { Capture } from './capture';
 import { Trace, wireRef, type Step } from './trace';
 import type { CircuitSettings, SharedCircuit } from './share';
 import {
+	DEFAULT_DC_START,
+	DEFAULT_DC_STEP,
+	DEFAULT_DC_STOP,
+	currentCandidates,
+	dcSweepValues,
+	pickSweepSource,
+	sweepSources
+} from './dc-sweep';
+import {
+	isAnalysis,
 	migrate,
 	parseDocument,
 	serializeDocument,
 	toDocument,
+	type Analysis,
 	type EditorLevel,
 	type EditorState,
 	type RepathDocument
@@ -706,9 +719,9 @@ class AppState {
 	notice = $state<string | null>(null);
 
 	/** Which analysis the Run button performs. */
-	analysis = $state<'transient' | 'frequency'>('transient');
+	analysis = $state<Analysis>('transient');
 	/** Playback belongs to the transient result; stop it when leaving that mode. */
-	setAnalysis(mode: 'transient' | 'frequency'): void {
+	setAnalysis(mode: Analysis): void {
 		if (mode === this.analysis) return;
 		this.trace.record({ op: 'analysis', mode });
 		// Stopped, not just told it is: clearing `playing` alone left the
@@ -724,6 +737,25 @@ class AppState {
 	acStart = $state(DEFAULT_AC_START);
 	acStop = $state(DEFAULT_AC_STOP);
 	acResult = $state<FrequencyRun | null>(null);
+
+	/**
+	 * The source the DC sweep turns, by name. Empty, or naming a source that
+	 * is no longer drawn, the sweep turns the first one there is.
+	 */
+	dcSource = $state('');
+	dcStart = $state(DEFAULT_DC_START);
+	dcStop = $state(DEFAULT_DC_STOP);
+	dcStep = $state(DEFAULT_DC_STEP);
+	/** Parts whose current the DC sweep plots, by name, in the order they were added. */
+	dcCurrents = $state<string[]>([]);
+	dcResult = $state<DcSweepRun | null>(null);
+
+	/** Plot a part's current against the sweep, or stop plotting it. */
+	toggleCurrent(name: string): void {
+		this.dcCurrents = this.dcCurrents.includes(name)
+			? this.dcCurrents.filter((n) => n !== name)
+			: [...this.dcCurrents, name];
+	}
 
 	/** Whether any source is set up to drive the frequency sweep. */
 	hasAcDrive = $derived(
@@ -1039,6 +1071,27 @@ class AppState {
 		}
 		return out;
 	});
+
+	/** The sources on the drawing a DC sweep can turn. */
+	dcSources = $derived(sweepSources(this.schematic, this.compiled.netlist));
+	/** The one it does turn. */
+	dcSwept = $derived(pickSweepSource(this.dcSources, this.dcSource));
+	/** The values the sweep would solve at, or why it cannot. */
+	dcPlan = $derived(dcSweepValues(this.dcStart, this.dcStop, this.dcStep));
+	/** The parts whose current a DC sweep could plot. */
+	dcCurrentCandidates = $derived(currentCandidates(this.schematic, this.compiled.netlist));
+
+	/**
+	 * The currents the DC sweep plots, each with its colour: after the nets',
+	 * so a current never wears the colour of a voltage plotted beside it.
+	 */
+	plottedCurrents = $derived(
+		this.dcCurrents.map((name, k) => ({
+			name,
+			label: `I(${name})`,
+			colour: TRACE_COLOURS[(this.activeProbes.length + k) % TRACE_COLOURS.length]
+		}))
+	);
 
 	selectedInstances = $derived(
 		this.schematic.instances.filter((i) => this.selection.includes(i.id))
@@ -3651,11 +3704,17 @@ class AppState {
 			this.applySettings({
 				analysis: example.analysis,
 				acStart: example.frequencyRange?.start,
-				acStop: example.frequencyRange?.stop
+				acStop: example.frequencyRange?.stop,
+				dcSource: example.dcSweep?.source,
+				dcStart: example.dcSweep?.start,
+				dcStop: example.dcSweep?.stop,
+				dcStep: example.dcSweep?.step,
+				dcCurrents: example.dcSweep?.currents
 			});
 			this.selection = [];
 			this.discardRun();
 			this.acResult = null;
+			this.dcResult = null;
 			this.error = null;
 			this.notice = null;
 			this.live = false;
@@ -3682,6 +3741,7 @@ class AppState {
 			this.selection = [];
 			this.discardRun();
 			this.acResult = null;
+			this.dcResult = null;
 			this.error = null;
 			this.notice = null;
 			this.live = false;
@@ -3751,7 +3811,14 @@ class AppState {
 			sweepCount: this.sweepCount,
 			analysis: this.analysis,
 			acStart: this.acStart,
-			acStop: this.acStop
+			acStop: this.acStop,
+			// The sweep's only once it is not the default, so the link of a
+			// circuit that never used it is no longer than it was before it existed.
+			...(this.dcSource !== '' ? { dcSource: this.dcSource } : {}),
+			...(this.dcStart !== DEFAULT_DC_START ? { dcStart: this.dcStart } : {}),
+			...(this.dcStop !== DEFAULT_DC_STOP ? { dcStop: this.dcStop } : {}),
+			...(this.dcStep !== DEFAULT_DC_STEP ? { dcStep: this.dcStep } : {}),
+			...(this.dcCurrents.length > 0 ? { dcCurrents: [...this.dcCurrents] } : {})
 		};
 	}
 
@@ -3774,9 +3841,18 @@ class AppState {
 				: DEFAULT_FAMILY;
 		this.sample = Math.max(0, Math.round(finite(settings.sample, 0)));
 		this.sweepCount = Math.min(Math.max(0, Math.round(finite(settings.sweepCount, 0))), 200);
-		this.analysis = settings.analysis === 'frequency' ? 'frequency' : 'transient';
+		this.analysis = isAnalysis(settings.analysis) ? settings.analysis : 'transient';
 		this.acStart = positive(settings.acStart, DEFAULT_AC_START);
 		this.acStop = positive(settings.acStop, DEFAULT_AC_STOP);
+		// Kept as they came, even a combination that cannot be swept: Run says
+		// what is wrong with it, which is more use than quietly changing it.
+		this.dcSource = typeof settings.dcSource === 'string' ? settings.dcSource : '';
+		this.dcStart = finite(settings.dcStart, DEFAULT_DC_START);
+		this.dcStop = finite(settings.dcStop, DEFAULT_DC_STOP);
+		this.dcStep = finite(settings.dcStep, DEFAULT_DC_STEP);
+		this.dcCurrents = Array.isArray(settings.dcCurrents)
+			? settings.dcCurrents.filter((name): name is string => typeof name === 'string')
+			: [];
 		this.envelope = null;
 	}
 
@@ -3921,6 +3997,7 @@ class AppState {
 		this.exampleId = '';
 		this.applySettings(parsed.settings);
 		this.acResult = null;
+		this.dcResult = null;
 		// Pointed at the ids this load minted, not the ones the file was written
 		// with. The map was being built here and never used, so every probe on a
 		// saved circuit resolved to nothing and vanished on opening it — the
@@ -4002,6 +4079,7 @@ class AppState {
 		this.selection = [];
 		this.discardRun();
 		this.acResult = null;
+		this.dcResult = null;
 		this.envelope = null;
 		this.error = null;
 		this.notice = null;
@@ -4175,7 +4253,7 @@ class AppState {
 					this.reset();
 					break;
 				case 'analysis':
-					this.setAnalysis(step.mode === 'frequency' ? 'frequency' : 'transient');
+					this.setAnalysis(isAnalysis(step.mode) ? step.mode : 'transient');
 					break;
 				case 'stop':
 					this.setStopTime(step.seconds);
@@ -4324,7 +4402,11 @@ class AppState {
 			compiled.netlist,
 			this.analysis,
 			this.acStart,
-			this.acStop
+			this.acStop,
+			this.dcSwept?.name ?? '',
+			this.dcStart,
+			this.dcStop,
+			this.dcStep
 		]);
 	}
 
@@ -4455,6 +4537,18 @@ class AppState {
 				}
 				this.acResult = await runFrequencySweep(compiled.netlist, this.acStart, this.acStop);
 				if (this.probes.length === 0) this.autoProbe();
+			} else if (this.analysis === 'dc') {
+				this.discardRun();
+				const source = this.dcSwept;
+				if (!source) {
+					throw new Error(
+						'There is no source to sweep. Place a voltage source, a current source, a battery or a supply.'
+					);
+				}
+				const plan = this.dcPlan;
+				if ('error' in plan) throw new Error(plan.error);
+				this.dcResult = await runDcSweep(compiled.netlist, source.name, plan.values);
+				if (this.probes.length === 0 && this.dcCurrents.length === 0) this.autoProbe();
 			} else {
 				this.discardRun();
 				// At least a couple of hundred points per window, so a flat trace is a
@@ -4496,6 +4590,7 @@ class AppState {
 				cause instanceof EngineError ? cause.failure : null
 			);
 			if (this.analysis === 'frequency') this.acResult = null;
+			else if (this.analysis === 'dc') this.dcResult = null;
 			else this.discardRun();
 		} finally {
 			this.running = false;

@@ -234,3 +234,65 @@ export function stepsWithin(lo: number, hi: number, step: number): number[] {
 	}
 	return out;
 }
+
+/**
+ * The DC sweep's panels: volts above amperes, sharing the swept axis.
+ *
+ * Two quantities in different units get a panel each, as magnitude and phase
+ * do on the Bode plot, rather than two scales on one plot. A sweep plotting
+ * only one of them gives that one the whole height.
+ */
+export function sweepPanels(
+	size: { width: number; height: number },
+	padding: { left: number; right: number; top: number; bottom: number },
+	show: { voltage: boolean; current: boolean },
+	gap = 14
+): { voltage: Rect | null; current: Rect | null } {
+	const w = Math.max(size.width - padding.left - padding.right, 10);
+	const total = Math.max(size.height - padding.top - padding.bottom, 20);
+	if (show.voltage && show.current) {
+		const h = Math.max((total - gap) / 2, 10);
+		return {
+			voltage: { x: padding.left, y: padding.top, w, h },
+			current: { x: padding.left, y: padding.top + h + gap, w, h }
+		};
+	}
+	const whole = { x: padding.left, y: padding.top, w, h: total };
+	return { voltage: show.voltage ? whole : null, current: show.current ? whole : null };
+}
+
+/**
+ * A range to plot a set of values in, padded so a curve does not run along the
+ * frame, and opened out around a flat one so it is drawn as a line in the
+ * middle rather than smeared across a range of nothing.
+ */
+export function paddedRange(series: ArrayLike<number>[]): { lo: number; hi: number } {
+	let lo = Infinity;
+	let hi = -Infinity;
+	for (const values of series) {
+		for (let i = 0; i < values.length; i++) {
+			const v = values[i];
+			if (!Number.isFinite(v)) continue;
+			if (v < lo) lo = v;
+			if (v > hi) hi = v;
+		}
+	}
+	if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { lo: -1, hi: 1 };
+	const span = hi - lo;
+	const scale = Math.max(Math.abs(lo), Math.abs(hi));
+	if (span <= scale * 1e-9) {
+		const half = scale > 0 ? scale * 0.1 : 1;
+		return { lo: lo - half, hi: hi + half };
+	}
+	const pad = span * 0.06;
+	return { lo: lo - pad, hi: hi + pad };
+}
+
+/** A gridline spacing of 1, 2 or 5 times a power of ten, about `target` to the span. */
+export function niceStep(span: number, target: number): number {
+	const raw = Math.abs(span) / Math.max(target, 1);
+	if (!(raw > 0) || !Number.isFinite(raw)) return 1;
+	const power = Math.pow(10, Math.floor(Math.log10(raw)));
+	for (const m of [1, 2, 5, 10]) if (power * m >= raw * (1 - 1e-9)) return power * m;
+	return power * 10;
+}

@@ -53,7 +53,7 @@ use crate::circuit::Circuit;
 use crate::complex::ComplexSystem;
 use crate::digital::{DriverId, Halt, Logic, NetId, Transition};
 use crate::element::{AcCtx, AcceptCtx, Element, Integration, Mode, StampCtx, node_index};
-use crate::elements::{Failure, VoltageSource};
+use crate::elements::{Failure, VoltageSource, Waveform};
 use crate::linalg::{LinearSystem, SolveError, coupled_entries};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -786,6 +786,53 @@ impl AcConfig {
     }
 }
 
+/// Result of a DC sweep: one operating point per swept value. Row-major, as a
+/// transient result is, because that is the order the points are solved in.
+#[derive(Debug, Clone, Default)]
+pub struct DcSweepResult {
+    /// The source that was swept.
+    pub source: String,
+    /// The value it was set to at each point, in volts or amperes.
+    pub values: Vec<f64>,
+    pub unknown_names: Vec<String>,
+    pub element_names: Vec<String>,
+    pub node_count: usize,
+    /// Every unknown at each point.
+    pub solution: Vec<Vec<f64>>,
+    /// Every element's current at each point, in the order of `element_names`.
+    pub currents: Vec<Vec<f64>>,
+}
+
+impl DcSweepResult {
+    /// One unknown across the sweep.
+    pub fn signal(&self, index: usize) -> Vec<f64> {
+        self.solution.iter().map(|row| row.get(index).copied().unwrap_or(0.0)).collect()
+    }
+
+    /// One element's current across the sweep.
+    pub fn current_signal(&self, index: usize) -> Vec<f64> {
+        self.currents.iter().map(|row| row.get(index).copied().unwrap_or(0.0)).collect()
+    }
+
+    /// Look up an unknown by its label, e.g. `"v(out)"`.
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.unknown_names.iter().position(|n| n == name)
+    }
+
+    /// Position of an element by instance name, e.g. `"D1"`.
+    pub fn element_index(&self, name: &str) -> Option<usize> {
+        self.element_names.iter().position(|n| n == name)
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
+
 /// Result of an AC sweep. Columnar: one array per unknown, indexed by frequency,
 /// because a Bode plot asks for one signal across the sweep, never for every
 /// signal at one frequency.
@@ -871,6 +918,11 @@ pub const MAX_RECORDED_VALUES: usize = 20_000_000;
 /// Most frequencies an AC sweep solves. Ten thousand is five hundred per
 /// decade over twenty decades, far past anything a plot can show.
 pub const MAX_AC_POINTS: usize = 10_000;
+
+/// Most points a DC sweep solves. Each is a whole operating point, so this is
+/// already a few seconds of work on a large circuit, and far more than a plot
+/// across a screen can tell apart.
+pub const MAX_DC_POINTS: usize = 5_000;
 
 /// A floor under the step at time `t`: a step shorter than a few units in the
 /// last place of `t` does not move the clock, and would be accepted as a step
@@ -1410,16 +1462,99 @@ impl Simulator {
         &mut self,
         circuit: &mut Circuit,
         values: &[f64],
-        mut apply: F,
+        apply: F,
     ) -> Result<Vec<Vec<f64>>, SimError>
     where
         F: FnMut(&mut Circuit, f64),
+    {
+        let mut out = Vec::with_capacity(values.len());
+        self.sweep_points(circuit, values, apply, |_, x| out.push(x.to_vec()))?;
+        Ok(out)
+    }
+
+    /// Sweep one independent source through `values` and record, at each,
+    /// the operating point and the current through every element.
+    ///
+    /// The source is a voltage or a current source by its instance name; its
+    /// own waveform is put back afterwards, so the circuit can still be run
+    /// as drawn. Every value has to be a finite number and there may be at
+    /// most [`MAX_DC_POINTS`] of them.
+    pub fn sweep_source(
+        &mut self,
+        circuit: &mut Circuit,
+        source: &str,
+        values: &[f64],
+    ) -> Result<DcSweepResult, SimError> {
+        if values.is_empty() {
+            return Err(SimError::Invalid { reason: "a sweep needs at least one value".into() });
+        }
+        if values.len() > MAX_DC_POINTS {
+            return Err(SimError::Invalid {
+                reason: format!(
+                    "that sweep is {} points; the most one sweep solves is {MAX_DC_POINTS}",
+                    values.len()
+                ),
+            });
+        }
+        if let Some(bad) = values.iter().find(|v| !v.is_finite()) {
+            return Err(SimError::Invalid {
+                reason: format!("every value of a sweep must be a number, not {bad}"),
+            });
+        }
+        let Some(original) =
+            circuit.swap_source_waveform(source, Waveform::Dc { value: values[0] })
+        else {
+            return Err(SimError::Invalid {
+                reason: format!("there is no voltage or current source called {source} to sweep"),
+            });
+        };
+
+        let mut solution = Vec::with_capacity(values.len());
+        let mut currents = Vec::with_capacity(values.len());
+        let swept = self.sweep_points(
+            circuit,
+            values,
+            |circuit, value| {
+                circuit.swap_source_waveform(source, Waveform::Dc { value });
+            },
+            |circuit, x| {
+                let mut row = Vec::new();
+                circuit.collect_currents(x, 0.0, &mut row);
+                solution.push(x.to_vec());
+                currents.push(row);
+            },
+        );
+        circuit.swap_source_waveform(source, original);
+        swept?;
+
+        Ok(DcSweepResult {
+            source: source.to_string(),
+            values: values.to_vec(),
+            unknown_names: circuit.unknown_names(),
+            element_names: circuit.element_names(),
+            node_count: circuit.node_count().saturating_sub(1),
+            solution,
+            currents,
+        })
+    }
+
+    /// The loop under both sweeps: `apply` sets each value, `record` sees the
+    /// circuit and its solution once that value is solved.
+    fn sweep_points<F, G>(
+        &mut self,
+        circuit: &mut Circuit,
+        values: &[f64],
+        mut apply: F,
+        mut record: G,
+    ) -> Result<(), SimError>
+    where
+        F: FnMut(&mut Circuit, f64),
+        G: FnMut(&Circuit, &[f64]),
     {
         self.prepare(circuit)?;
         circuit.reset();
         self.bring_up_digital(circuit)?;
         let mut stats = Stats::default();
-        let mut out = Vec::with_capacity(values.len());
 
         for (i, value) in values.iter().enumerate() {
             apply(circuit, *value);
@@ -1446,9 +1581,9 @@ impl Simulator {
                 self.solve_operating_point(circuit, &mut stats)
                     .map_err(|e| self.explain(circuit, e))?;
             }
-            out.push(self.x.clone());
+            record(circuit, &self.x);
         }
-        Ok(out)
+        Ok(())
     }
 
     /// Sweep frequency and report how a small signal propagates.

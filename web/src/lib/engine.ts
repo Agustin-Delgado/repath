@@ -6,7 +6,13 @@
  * simulation that produced them.
  */
 
-import init, { Simulation, lastFailure, runFrequencySweep as sweep, version } from './wasm/repath.js';
+import init, {
+	Simulation,
+	lastFailure,
+	runDcSweep as dcSweep,
+	runFrequencySweep as sweep,
+	version
+} from './wasm/repath.js';
 import type { LcdFrame } from './schematic/lcd';
 import type { MatrixFrame } from './schematic/max7219';
 import type { BuzzerState } from './schematic/buzzer';
@@ -551,6 +557,59 @@ export async function runFrequencySweep(
 			nodeCount: meta.node_count,
 			magnitude: meta.names.map((_, i) => run!.magnitude(i)),
 			phase: meta.names.map((_, i) => run!.phase(i)),
+			elapsedMs
+		};
+	} catch (cause) {
+		throw toEngineError(cause);
+	} finally {
+		run?.free();
+	}
+}
+
+export interface DcSweepRun {
+	/** The source that was swept, by its name in the netlist. */
+	source: string;
+	/** What the source was set to at each point, in volts or amperes. */
+	values: Float64Array;
+	unknownNames: string[];
+	elementNames: string[];
+	nodeCount: number;
+	/** Each unknown across the sweep, in the order of `unknownNames`. */
+	signals: Float64Array[];
+	/** Each element's current across the sweep, in the order of `elementNames`. */
+	currents: Float64Array[];
+	elapsedMs: number;
+}
+
+/** Solve the operating point at each of `values` of the source called `source`. */
+export async function runDcSweep(
+	netlist: unknown,
+	source: string,
+	values: ArrayLike<number>
+): Promise<DcSweepRun> {
+	await ensureEngine();
+
+	let run;
+	try {
+		const started = performance.now();
+		run = dcSweep(JSON.stringify(netlist), source, Float64Array.from(values));
+		const elapsedMs = performance.now() - started;
+
+		const meta = JSON.parse(run.meta()) as {
+			source: string;
+			unknown_names: string[];
+			element_names: string[];
+			node_count: number;
+			point_count: number;
+		};
+		return {
+			source: meta.source,
+			values: run.values(),
+			unknownNames: meta.unknown_names,
+			elementNames: meta.element_names,
+			nodeCount: meta.node_count,
+			signals: meta.unknown_names.map((_, i) => run!.signal(i)),
+			currents: meta.element_names.map((_, i) => run!.current(i)),
 			elapsedMs
 		};
 	} catch (cause) {

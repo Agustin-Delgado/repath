@@ -204,7 +204,7 @@ because each step is what makes the next one worth having:
 
 ### Analyses
 
-- [ ] **DC sweep in the UI.** The engine has `dc_sweep`; nothing exposes it. I-V
+- [x] **DC sweep in the UI.** The engine has `dc_sweep`; nothing exposes it. I-V
       curves are one of the most instructive things a simulator can draw.
 - [ ] **Noise analysis** (thermal and shot), reported as spectral density and
       integrated over a band.

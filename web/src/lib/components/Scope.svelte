@@ -19,6 +19,7 @@
 	import { watchPixelRatio } from '$lib/canvas/pixel-ratio';
 	import type { Burst, DigitalTransition, LogicState } from '$lib/engine';
 	import BodePlot from './BodePlot.svelte';
+	import SweepPlot from './SweepPlot.svelte';
 	import SignalsPanel from './scope/SignalsPanel.svelte';
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
@@ -972,6 +973,8 @@
 <div class="scope">
 	{#if app.analysis === 'frequency'}
 		<BodePlot />
+	{:else if app.analysis === 'dc'}
+		<SweepPlot />
 	{:else}
 	<div class="plot" bind:this={host}>
 		<canvas
@@ -1123,6 +1126,13 @@
 			<footer>
 				<span>{app.acResult.frequencies.length} points</span> ·
 				<span>{app.acResult.elapsedMs.toFixed(0)} ms</span>
+			</footer>
+		{/if}
+
+		{#if app.analysis === 'dc' && app.dcResult}
+			<footer>
+				<span>{app.dcResult.values.length} points</span> ·
+				<span>{app.dcResult.elapsedMs.toFixed(0)} ms</span>
 			</footer>
 		{/if}
 

@@ -77,7 +77,7 @@
 	<RunButton />
 	{#if app.analysis !== 'transient'}
 		<span class="text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
-			Frequency response
+			{app.analysis === 'dc' ? 'DC sweep' : 'Frequency response'}
 		</span>
 		<span class="flex-1"></span>
 	{:else}

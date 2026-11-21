@@ -73,6 +73,16 @@
 
 	const chip =
 		'rounded px-1 text-3xs font-medium leading-4 whitespace-nowrap';
+
+	/**
+	 * Parts whose current a DC sweep can plot and is not plotting yet. Only
+	 * there: the time-domain scope and the Bode plot draw voltages alone.
+	 */
+	const unplottedCurrents = $derived(
+		app.analysis === 'dc'
+			? app.dcCurrentCandidates.filter((part) => !app.dcCurrents.includes(part.name))
+			: []
+	);
 </script>
 
 {#snippet badge(c: Candidate)}
@@ -248,6 +258,53 @@
 					{found.length - listed.length} more — type to narrow them down.
 				</p>
 			{/if}
+		</section>
+	{/if}
+
+	{#if app.analysis === 'dc'}
+		<!--
+			What each part carries, against the sweep: the other half of an I-V
+			curve. Listed by part rather than searched, since a drawing has far
+			fewer parts worth a current than it has nets.
+		-->
+		<section class="mt-2 flex flex-col gap-0.5 border-t border-border px-1.5 pt-2">
+			<h3 class="m-0 px-1 pb-0.5 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
+				Currents
+			</h3>
+			<ul class="m-0 flex list-none flex-col gap-0.5 p-0">
+				{#each app.plottedCurrents as current (current.name)}
+					<li class="group flex items-center gap-1.5 rounded-md px-1 py-1 hover:bg-hover">
+						<span class="size-2.5 shrink-0 rounded-sm" style:background={current.colour}></span>
+						<span class="min-w-0 flex-1 truncate font-mono text-fg">{current.label}</span>
+						<button
+							type="button"
+							class="flex cursor-pointer border-0 bg-transparent p-0 text-muted opacity-60 group-hover:opacity-100 hover:text-fg"
+							title="Stop plotting {current.label}"
+							aria-label="Stop plotting {current.label}"
+							onclick={() => app.toggleCurrent(current.name)}
+						>
+							<X class="size-3.5" />
+						</button>
+					</li>
+				{/each}
+				{#each unplottedCurrents as part (part.id)}
+					<li>
+						<button
+							type="button"
+							class="flex w-full cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-strong hover:bg-hover hover:text-fg"
+							onclick={() => app.toggleCurrent(part.name)}
+							title="Plot the current through {part.name}"
+						>
+							<Plus class="size-3 shrink-0 text-muted" />
+							<span class="min-w-0 flex-1 truncate font-mono">I({part.name})</span>
+						</button>
+					</li>
+				{:else}
+					{#if app.plottedCurrents.length === 0}
+						<li class="px-1 py-0.5 text-muted">No part to measure yet.</li>
+					{/if}
+				{/each}
+			</ul>
 		</section>
 	{/if}
 

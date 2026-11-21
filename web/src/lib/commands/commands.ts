@@ -90,6 +90,14 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 			run: () => app.setAnalysis('frequency')
 		},
 		{
+			id: 'analysis-dc',
+			label: 'Sweep a source (DC sweep, I-V curve)',
+			group: 'Simulation',
+			keywords: ['dc', 'operating point', 'iv', 'i-v', 'curve', 'transfer', 'characteristic'],
+			available: () => app.analysis !== 'dc',
+			run: () => app.setAnalysis('dc')
+		},
+		{
 			id: 'sample',
 			label: 'Draw parts from their tolerance',
 			group: 'Simulation',

@@ -23,7 +23,14 @@ import {
 } from './schematic/model';
 import { registerBlocks } from './schematic/blocks';
 import { probePin } from './schematic/nets';
-import { FORMAT_VERSION, NewerFormatError, migrate, type CircuitSettings, type SharedCircuit } from './format';
+import {
+	FORMAT_VERSION,
+	NewerFormatError,
+	isAnalysis,
+	migrate,
+	type CircuitSettings,
+	type SharedCircuit
+} from './format';
 
 export type { CircuitSettings, SharedCircuit } from './format';
 
@@ -364,9 +371,16 @@ function readSettings(raw: unknown): CircuitSettings {
 	if (typeof s.logicFamily === 'string') out.logicFamily = s.logicFamily;
 	if (isFiniteNumber(s.sample)) out.sample = s.sample;
 	if (isFiniteNumber(s.sweepCount)) out.sweepCount = s.sweepCount;
-	if (s.analysis === 'transient' || s.analysis === 'frequency') out.analysis = s.analysis;
+	if (isAnalysis(s.analysis)) out.analysis = s.analysis;
 	if (isFiniteNumber(s.acStart) && s.acStart > 0) out.acStart = s.acStart;
 	if (isFiniteNumber(s.acStop) && s.acStop > 0) out.acStop = s.acStop;
+	if (typeof s.dcSource === 'string') out.dcSource = s.dcSource;
+	if (isFiniteNumber(s.dcStart)) out.dcStart = s.dcStart;
+	if (isFiniteNumber(s.dcStop)) out.dcStop = s.dcStop;
+	if (isFiniteNumber(s.dcStep)) out.dcStep = s.dcStep;
+	if (Array.isArray(s.dcCurrents) && s.dcCurrents.every((name) => typeof name === 'string')) {
+		out.dcCurrents = s.dcCurrents;
+	}
 	return out;
 }
 
