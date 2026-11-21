@@ -23,7 +23,10 @@ ticks now shifts its samples the way it does on a real board. Bytes sent back
 to back still follow each other with no gap.
 
 [#94](https://github.com/Agustin-Delgado/repath/pull/94)
-\n---\n\n## 21 November 2026 — A step that turns out too long is taken again
+
+---
+
+## 21 November 2026 — A step that turns out too long is taken again
 
 **A 555 blinks at the same rate every cycle.** Its capacitor now turns round
 within a millivolt of a third and two thirds of the supply, every time. Before,
@@ -42,7 +45,10 @@ accuracy. The 555 blinker takes 1.6 times as many steps, the Arduino blink
 1.2 times. The LED matrix takes fewer steps than before.
 
 [#95](https://github.com/Agustin-Delgado/repath/pull/95)
-\n---\n\n## 21 November 2026 — A chip's supply legs carry its current
+
+---
+
+## 21 November 2026 — A chip's supply legs carry its current
 
 **The VCC wire of a chip now carries what the chip takes.** A 74HC04 lighting
 an LED draws the LED's current in at its VCC leg, and an output sinking a load
@@ -58,7 +64,10 @@ Nothing about the outputs changed: they reach the same levels as before. What
 one figure cannot say — CMOS switching current, a memory's draw while
 selected, a lit LED matrix, an LCD's backlight — is listed in the backlog.
 ([#96](https://github.com/Agustin-Delgado/repath/pull/96))
-\n---\n\n## 21 November 2026 — One undo takes back everything an edit inside a block did
+
+---
+
+## 21 November 2026 — One undo takes back everything an edit inside a block did
 
 **Undo reaches the levels underneath.** Leaving a block whose pins moved
 re-attaches the wires of its copies everywhere it is placed, the drawing
