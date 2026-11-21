@@ -8,15 +8,14 @@
 //! received as garbage with framing errors.
 //!
 //! The datasheet's clock recovery and data recovery (ATmega328P, "USART0 —
-//! Data Reception"), with one simplification: its sample clock runs free at
-//! UBRR0 + 1 CPU cycles a tick, and the start edge falls somewhere between two
-//! ticks, so the real receiver's first low sample is up to a tick after the
-//! edge. Here the ticks are counted from the edge itself, which takes the
-//! middle of that range away and puts every sample a deterministic distance
-//! from the edge — at most one sample period early: a sixteenth of a bit, an
-//! eighth with U2X0.
+//! Data Reception"). Its sample clock is the baud-rate generator's tick
+//! (`baud.rs`), running free at UBRR0 + 1 CPU cycles a tick, so the first
+//! sample of a start bit is the first tick at or after the falling edge —
+//! anywhere up to a tick after it, depending on where the edge falls between
+//! two ticks, as on the silicon.
 //!
-//! - A falling edge on an idle line is sample 1 of a start bit. Samples 8, 9
+//! - The first tick after a falling edge on an idle line is sample 1 of a
+//!   start bit. Samples 8, 9
 //!   and 10 of 16 (4, 5 and 6 of 8 with U2X0) are the middle of every bit, and
 //!   two of the three decide it. A start bit they read high was a spike, and
 //!   the receiver waits for the next falling edge.
@@ -114,15 +113,16 @@ impl Receiver {
         self.frame.map_or(u64::MAX, |f| f.next_sample())
     }
 
-    /// The line fell at `at`: a start bit, if the receiver is free for one.
-    pub fn falling_edge(&mut self, at: u64, format: Format) {
+    /// The line fell, and `first` is the generator's first tick since: sample
+    /// 1 of a start bit, if the receiver is free for one.
+    pub fn falling_edge(&mut self, first: u64, format: Format) {
         if self.frame.is_some() {
             return;
         }
         if self.held.take().is_some() {
             self.lost = true;
         }
-        self.frame = Some(Frame { format, first: at, bit: 0, votes: 0, highs: 0, word: 0 });
+        self.frame = Some(Frame { format, first, bit: 0, votes: 0, highs: 0, word: 0 });
     }
 
     /// Take the sample due at [`Self::next_at`], the line being `high`.

@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use super::adc::{self, Adc, AnalogLevels};
+use super::baud::BaudGenerator;
 use super::eeprom::Eeprom;
 use super::receiver::{self, Format, Receiver};
 use super::spi::Spi;
@@ -253,7 +254,8 @@ struct Usart {
     status: u8,
     control_b: u8,
     control_c: u8,
-    baud: u16,
+    /// UBRR0 and the down-counter it loads, which both halves run off.
+    generator: BaudGenerator,
     frame: Option<Frame>,
     /// UDR0's transmit buffer, holding the byte after the one going out.
     buffer: Option<u8>,
@@ -268,7 +270,9 @@ struct Frame {
     bits: u16,
     count: u8,
     index: u8,
-    bit_cycles: u64,
+    /// Whether the start bit is on the wire yet: a frame handed to an idle
+    /// transmitter waits for the next edge of its bit clock.
+    started: bool,
     next_at: u64,
 }
 
@@ -279,12 +283,12 @@ const RXEN: u8 = 1 << 4;
 const RXCIE: u8 = 1 << 7;
 
 impl Usart {
-    fn new() -> Self {
+    fn new(cycle: u64) -> Self {
         Self {
             status: 0,
             control_b: 0,
             control_c: 0x06,
-            baud: 0,
+            generator: BaudGenerator::new(cycle),
             frame: None,
             buffer: None,
             line: true,
@@ -317,8 +321,8 @@ impl Usart {
         let size = ((self.control_c >> 1) & 3) | (self.control_b & 4);
         let parity = (self.control_c >> 4) & 3;
         Format {
-            period: u64::from(self.baud) + 1,
-            samples: if self.status & 0x02 != 0 { 8 } else { 16 },
+            period: self.generator.period(),
+            samples: self.ticks_per_bit(),
             data: match size {
                 0 => 5,
                 1 => 6,
@@ -333,6 +337,16 @@ impl Usart {
 
     fn next_event(&self) -> u64 {
         self.frame.map_or(u64::MAX, |f| f.next_at)
+    }
+
+    /// Generator ticks a bit lasts: 16, or 8 with U2X0.
+    fn ticks_per_bit(&self) -> u64 {
+        if self.status & 0x02 != 0 { 8 } else { 16 }
+    }
+
+    /// The first edge of the transmitter's bit clock at or after `cycle`.
+    fn bit_edge_from(&self, cycle: u64) -> u64 {
+        self.generator.divided_from(cycle, self.ticks_per_bit())
     }
 
     fn write(&mut self, byte: u8, cycle: u64) {
@@ -370,26 +384,36 @@ impl Usart {
         let stops: u16 = if self.control_c & 0x08 != 0 { 2 } else { 1 };
         bits |= ((1 << stops) - 1) << count;
         count += stops;
-        let per_bit = if self.status & 0x02 != 0 { 8 } else { 16 };
-        let bit_cycles = per_bit * (u64::from(self.baud) + 1);
+        // The shift register takes the byte at once, but the start bit goes
+        // out on the bit clock's next edge, up to a bit after the write.
+        let edge = self.bit_edge_from(cycle);
+        let mut frame =
+            Frame { byte, bits, count: count as u8, index: 0, started: false, next_at: edge };
+        if edge == cycle {
+            self.begin(&mut frame, cycle);
+        }
+        self.frame = Some(frame);
+    }
+
+    /// Put the start bit on the wire at `at`, an edge of the bit clock.
+    fn begin(&mut self, frame: &mut Frame, at: u64) {
+        frame.started = true;
         self.line = false;
-        self.frame = Some(Frame {
-            byte,
-            bits,
-            count: count as u8,
-            index: 0,
-            bit_cycles,
-            next_at: cycle + bit_cycles,
-        });
+        frame.next_at = self.bit_edge_from(at + 1);
     }
 
     /// The bit boundary at `at`; a finished byte goes into `log`.
     fn event(&mut self, at: u64, log: &mut Vec<(u64, u8)>) {
         let Some(mut frame) = self.frame else { return };
+        if !frame.started {
+            self.begin(&mut frame, at);
+            self.frame = Some(frame);
+            return;
+        }
         frame.index += 1;
         if frame.index < frame.count {
             self.line = frame.bits >> frame.index & 1 != 0;
-            frame.next_at += frame.bit_cycles;
+            frame.next_at = self.bit_edge_from(at + 1);
             self.frame = Some(frame);
             return;
         }
@@ -528,7 +552,7 @@ impl Machine {
                 Timer::timer2().starting_at(cycle),
             ],
             temp: 0,
-            usart: Usart::new(),
+            usart: Usart::new(cycle),
             receiver: Receiver::default(),
             twi: Twi::new(),
             spi: Spi::new(),
@@ -744,7 +768,8 @@ impl Machine {
         }
         let rxd = 1 << PD0;
         if self.usart.receiving() && changed & rxd != 0 && after & rxd == 0 {
-            self.receiver.falling_edge(at, self.usart.format());
+            let first = self.usart.generator.tick_from(at).at;
+            self.receiver.falling_edge(first, self.usart.format());
         }
         self.pin_edges(changed, after);
         if changed & (1 << PB2) != 0 {
@@ -976,8 +1001,8 @@ impl Machine {
             UCSR0A => self.usart.status() | self.receiver.status(),
             UCSR0B => self.usart.control_b | self.receiver.ninth_bit(),
             UCSR0C => self.usart.control_c,
-            UBRR0L => self.usart.baud as u8,
-            UBRR0H => (self.usart.baud >> 8) as u8,
+            UBRR0L => self.usart.generator.register() as u8,
+            UBRR0H => (self.usart.generator.register() >> 8) as u8,
             UDR0 => self.receiver.read(),
             TWBR => self.twi.bit_rate,
             TWSR => self.twi.status(),
@@ -1114,8 +1139,8 @@ impl Machine {
                 self.usart.control_b = v & !0x02;
             }
             UCSR0C => self.usart.control_c = v,
-            UBRR0L => self.usart.baud = (self.usart.baud & 0x0F00) | u16::from(v),
-            UBRR0H => self.usart.baud = (self.usart.baud & 0x00FF) | u16::from(v & 0x0F) << 8,
+            UBRR0L => self.usart.generator.write_low(v, self.cycle + self.store_lands),
+            UBRR0H => self.usart.generator.write_high(v, self.cycle + self.store_lands),
             UDR0 => {
                 // Extended I/O is reached only by the two-cycle stores, and a
                 // write lands as the instruction ends.
@@ -1447,7 +1472,8 @@ impl Machine {
             let at = self.receiver.next_at();
             let high = self.pin_bits() & (1 << PD0) != 0;
             if self.receiver.sample(high) {
-                self.receiver.falling_edge(at + self.usart.format().period, self.usart.format());
+                let next = self.usart.generator.tick_from(at + 1).at;
+                self.receiver.falling_edge(next, self.usart.format());
             }
             self.progress += 1;
         }
@@ -1631,14 +1657,16 @@ pub(super) mod tests {
             m.process_events(at);
             line.push((at, m.usart.line));
         }
-        // 'H' is 0x48, 0b0100_1000: after the start bit, 0 0 0 1 0 0 1 0,
+        // 'H' is 0x48, 0b0100_1000: the start bit, then 0 0 0 1 0 0 1 0,
         // then the stop bit.
         let bits: Vec<bool> = line.iter().map(|b| b.1).collect();
-        assert_eq!(bits, [false, false, false, true, false, false, true, false, true, true]);
-        // The write is taken as landing when the two-cycle store doing it
-        // ends, so the frame starts at 2.
-        assert!(line.iter().enumerate().all(|(i, (at, _))| *at == 2 + 16 * (i as u64 + 1)));
-        assert_eq!(m.serial, vec![(162, 0x48)]);
+        assert_eq!(bits, [false, false, false, false, true, false, false, true, false, true, true]);
+        // The write lands at 2, when the two-cycle store doing it ends. The
+        // generator has ticked every cycle since reset (UBRR0 = 0), and the
+        // transmitter's bit clock is every sixteenth tick: 0, 16, 32… So the
+        // start bit waits for 16, and every bit after it is on that clock.
+        assert!(line.iter().enumerate().all(|(i, (at, _))| *at == 16 * (i as u64 + 1)));
+        assert_eq!(m.serial, vec![(176, 0x48)]);
         assert_ne!(m.usart.status() & TXC, 0);
     }
 
@@ -1652,7 +1680,9 @@ pub(super) mod tests {
         assert_eq!(m.read(u16::from(UCSR0A)) & UDRE, 0, "the second fills the buffer");
         let none = Watch::default();
         while m.run(10_000, &none) != Stop::Limit {}
-        assert_eq!(m.serial, vec![(162, b'a'), (322, b'b')]);
+        // The first starts on the bit clock's edge at 16; the second
+        // follows its stop bit with no gap.
+        assert_eq!(m.serial, vec![(176, b'a'), (336, b'b')]);
         assert_eq!(m.read(u16::from(UCSR0A)) & (UDRE | TXC), UDRE | TXC);
     }
 
@@ -2474,7 +2504,9 @@ pub(super) mod tests {
         m.write(u16::from(UCSR0B), TXEN);
         m.write(u16::from(UDR0), 0x00);
         m.write(u16::from(UDR0), 0x55);
-        let mid = m.cycle + 8;
+        // The start bit waits for the bit clock's edge at 16 (every sixteenth
+        // tick of a generator ticking every cycle since reset): mid-bit is 24.
+        let mid = 24;
         events_to(&mut m, mid);
         m.write(u16::from(UCSR0B), 0);
         let out = m.outputs();
@@ -2489,8 +2521,8 @@ pub(super) mod tests {
             let out = m.outputs();
             levels.push((at, out.driven >> PD1 & 1, out.level >> PD1 & 1));
         }
-        // The first frame started when UDR0 was written, `t0`.
-        let t0 = m.serial[0].0 - 160;
+        // The first frame started on that edge, `t0`.
+        let t0 = 16;
         assert_eq!(m.serial, vec![(t0 + 160, 0x00), (t0 + 320, 0x55)]);
         // 0x55 LSB first, between its start bit and its stop bit.
         let second: Vec<u32> =
@@ -2545,5 +2577,69 @@ pub(super) mod tests {
         assert_eq!(m.sp, 0x0F34);
         m.write(u16::from(SPH), 0x08);
         assert_eq!(m.sp, 0x0834);
+    }
+
+    /// The cycle the transmitter puts the start bit of a byte written to UDR0
+    /// at `write` on the wire, UBRR0L having been written at each of `reloads`.
+    fn start_bit_after(reloads: &[(u64, u8)], write: u64) -> u64 {
+        let mut m = machine(&[idle()]);
+        m.write(u16::from(UCSR0B), TXEN);
+        for &(at, value) in reloads {
+            m.cycle = at;
+            m.write(u16::from(UBRR0L), value);
+        }
+        m.cycle = write;
+        m.write(u16::from(UDR0), 0x00);
+        let mut at = write;
+        while m.usart.line {
+            at = m.next_event;
+            m.cycle = at;
+            m.process_events(at);
+        }
+        at
+    }
+
+    #[test]
+    fn a_frame_from_idle_starts_on_the_next_edge_of_the_bit_clock() {
+        // Out of reset UBRR0 = 0: a tick every cycle, 0 through 98. UBRR0L =
+        // 3 written at 98 lands at 99 and reloads the down-counter, which
+        // reaches zero at 99 + 3 = 102 and every 4 cycles after. Those are
+        // ticks 99, 100, 101… counted since reset, and the bit clock is every
+        // sixteenth: tick 112, at 102 + 13 · 4 = 154, then every 64 cycles.
+        let reload = [(98, 3)];
+        for write in (150u64..400).step_by(7) {
+            // UDR0 is extended I/O, reached by a two-cycle store: it lands two
+            // cycles on.
+            let lands = write + 2;
+            let edge = 154 + (lands.saturating_sub(154)).div_ceil(64) * 64;
+            assert_eq!(start_bit_after(&reload, write), edge, "written at {write}");
+        }
+    }
+
+    #[test]
+    fn writing_ubrr0l_again_moves_the_bit_clock() {
+        // The same value written again at 119 (landing at 120) reloads the
+        // counter: the ticks at 102, 106, 110, 114 and 118 — 104 since reset
+        // by then — are followed by one at 123, not 122, and every 4 after.
+        // The sixteenth-tick edge is tick 112, at 123 + 8 · 4 = 155.
+        assert_eq!(start_bit_after(&[(98, 3)], 140), 154);
+        assert_eq!(start_bit_after(&[(98, 3), (119, 3)], 140), 155);
+    }
+
+    #[test]
+    fn the_receiver_samples_on_the_generators_ticks() {
+        // UBRR0 = 3 from 99: ticks at 102, 106, 110… A start edge between two
+        // ticks is first sampled at the next one, and the first vote is
+        // sample 8, seven ticks later.
+        for edge in 200..=212 {
+            let mut m = machine(&[idle()]);
+            m.cycle = 98;
+            m.write(u16::from(UBRR0L), 3);
+            m.write(u16::from(UCSR0B), RXEN);
+            m.set_inputs(PinLevels { high: 1 << PD0, floating: !(1 << PD0) }, 150);
+            m.set_inputs(PinLevels { high: 0, floating: !(1 << PD0) }, edge);
+            let first = 102 + (edge - 102).div_ceil(4) * 4;
+            assert_eq!(m.receiver.next_at(), first + 7 * 4, "edge at {edge}");
+        }
     }
 }

@@ -11,6 +11,21 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Serial on the chip's own baud clock
+
+**A byte goes out when the chip's baud clock says, not the instant it is
+written.** The ATmega328P's serial port runs off a baud-rate generator that
+ticks all the time, whether or not anything is being sent. A byte written to
+an idle port used to go out at once; now its start bit waits for the next edge
+of that clock, up to one bit later, as on the chip. Received bytes are sampled
+on the same clock's ticks, so where an incoming start bit falls between two
+ticks now shifts its samples the way it does on a real board. Bytes sent back
+to back still follow each other with no gap.
+
+[#93](https://github.com/Agustin-Delgado/repath/pull/93)
+
+---
+
 ## 21 November 2026 — The chip's timers, pins and serial port, closer to the datasheet
 
 **Phase-correct PWM changes frequency cleanly.** Raising TOP in a phase-correct
