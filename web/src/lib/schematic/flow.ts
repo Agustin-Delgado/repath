@@ -88,7 +88,12 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 	// One pin, like an op-amp output: the return is the ground the symbol means
 	// rather than a terminal on the drawing.
 	supply: [['v', -1]],
-	isource: [['plus', -1], ['minus', 1]],
+	// The engine's plus is the drawing's minus (see the netlist): the source
+	// takes current in at the pin its arrow points away from and delivers it at
+	// the one it points at, which is our `plus`.
+	isource: [['minus', -1], ['plus', 1]],
+	// The disc, as the engine has it: a resistor from + to −.
+	buzzer: [['plus', -1], ['minus', 1]],
 	diode: [['anode', -1], ['cathode', 1]],
 	led: [['anode', -1], ['cathode', 1]],
 	// Every terminal reported into the device, so every one of them drains its
@@ -99,9 +104,18 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 	npn: [['collector', -1], ['emitter', -1, ':e'], ['base', -1, ':b']],
 	pnp: [['collector', -1], ['emitter', -1, ':e'], ['base', -1, ':b']],
 	opamp: [['out', -1]],
-	// The pass transistor carries input to output; the third leg carries what
-	// the part draws for itself.
-	regulator: [['in', -1], ['out', -1, ':e'], ['com', 1, ':q']],
+	// The pass transistor's collector carries the input; the output is fed
+	// through the sense resistor, less what the current limiter's emitter takes
+	// back. The quiescent current is a source from the input to the third leg
+	// (a 78xx, here) or from the third leg to the input (a 79xx, `flowOf`),
+	// drawn out of one and into the other.
+	regulator: [
+		['in', -1],
+		['out', 1, ':rs'],
+		['out', -1, ':lim:e'],
+		['in', -1, ':q'],
+		['com', 1, ':q']
+	],
 	// Eight diodes in one package: every segment drains its own net, and all eight
 	// of them come back through the common pin, which is why it appears once per
 	// segment rather than once.
@@ -123,6 +137,26 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 		})
 	)
 };
+
+type FlowEntry = [pin: string, sign: number, series?: string];
+
+/**
+ * The flow table for one part, with what its parameters change about it. A
+ * common-anode display has every diode the other way round from the common-
+ * cathode one the table describes, and a 79xx takes its quiescent current in
+ * at the third leg and out at the input.
+ */
+export function flowOf(kind: string, params: Record<string, unknown> = {}): FlowEntry[] | undefined {
+	const flow = PIN_FLOW[kind];
+	if (!flow) return undefined;
+	if ((kind === 'display7' || kind === 'display7x4') && params.polarity === 'anode') {
+		return flow.map(([pin, sign, series]) => [pin, -sign, series]);
+	}
+	if (kind === 'regulator' && /^79/.test(String(params.part ?? '7805'))) {
+		return flow.map(([pin, sign, series]) => [pin, series === ':q' ? -sign : sign, series]);
+	}
+	return flow;
+}
 
 /** One leg of one wire, as the flow graph sees it. */
 interface NetSegment {
@@ -237,8 +271,12 @@ export interface FlowFrame {
  * common, a wiper — gets one for each of them, and what leaves it along its
  * wire is their sum.
  */
-export function pinFlows(kind: string, pin: string): Array<{ sign: number; series?: string }> {
-	return (PIN_FLOW[kind] ?? [])
+export function pinFlows(
+	kind: string,
+	pin: string,
+	params: Record<string, unknown> = {}
+): Array<{ sign: number; series?: string }> {
+	return (flowOf(kind, params) ?? [])
 		.filter(([name]) => name === pin)
 		.map(([, sign, series]) => ({ sign, series }));
 }
@@ -293,7 +331,7 @@ export function prepareFlow(
 		const index = elementByName.get(instance.name);
 		if (index === undefined) continue;
 		instanceElement.set(instance.id, index);
-		const flow = PIN_FLOW[instance.kind];
+		const flow = flowOf(instance.kind, instance.params);
 		// The first two are the conduction path — drain to source, collector to
 		// emitter — whatever else the device reports.
 		if (flow && flow.length >= 2) {
@@ -370,7 +408,7 @@ export function prepareFlow(
 	for (const instance of schematic.instances) {
 		const element = instanceElement.get(instance.id);
 		if (element === undefined) continue;
-		const flow = PIN_FLOW[instance.kind];
+		const flow = flowOf(instance.kind, instance.params);
 		if (!flow) continue;
 
 		for (const { pin, at } of instancePins(instance)) {

@@ -5,7 +5,7 @@
  * canvas asks you to already know how to use it.
  */
 
-import type { Schematic } from './schematic/model';
+import type { Instance, Schematic } from './schematic/model';
 import { defaultParams, definitionOf } from './schematic/model';
 import { SEGMENTS } from './schematic/led';
 import { intelHex } from './schematic/firmware';
@@ -32,6 +32,8 @@ interface Placed {
 	y: number;
 	rotation?: 0 | 90 | 180 | 270;
 	params?: Record<string, number | string>;
+	/** Labels moved off their usual place, where that place is taken. */
+	labels?: Instance['labels'];
 }
 
 function build(parts: Placed[], wires: Array<[number, number, number, number]>): Schematic {
@@ -43,7 +45,8 @@ function build(parts: Placed[], wires: Array<[number, number, number, number]>):
 			x: p.x,
 			y: p.y,
 			rotation: p.rotation ?? 0,
-			params: { ...defaultParams(p.kind), ...(p.params ?? {}) }
+			params: { ...defaultParams(p.kind), ...(p.params ?? {}) },
+			...(p.labels ? { labels: p.labels } : {})
 		})),
 		// Written as plain runs and stored as short polylines; connectivity joins
 		// them where their ends meet, exactly as if they had been drawn that way.
@@ -603,7 +606,7 @@ export const EXAMPLES: Example[] = [
 		id: 'rlc-bandpass',
 		name: 'RLC band-pass',
 		description:
-			'A series resonant circuit, meant to be looked at in the frequency domain. V1 carries the AC drive, so the sweep measures the response from it.',
+			'A series resonant circuit, meant to be looked at in the frequency domain. V1 carries the AC drive, so the sweep measures the response from it. The output is taken across R1, at the bottom of the chain: at 1.59 kHz the inductor and the capacitor cancel and all of the drive appears across it, and either side of that one of them is in the way. OUT is the band-pass; the node between L1 and C1 rises to a peak at resonance, where the two are swapping energy, and falls away to nothing above it.',
 		stopTime: 2e-3,
 		analysis: 'frequency',
 		frequencyRange: { start: 10, stop: 1e6 },
@@ -617,16 +620,18 @@ export const EXAMPLES: Example[] = [
 						y: 200,
 						params: { waveform: 'sine', value: 1, offset: 0, frequency: 1590, ac: 1 }
 					},
-					{ kind: 'resistor', name: 'R1', x: 200, y: 170, params: { resistance: 50 } },
-					{ kind: 'inductor', name: 'L1', x: 320, y: 170, params: { inductance: 10e-3 } },
+					{ kind: 'inductor', name: 'L1', x: 200, y: 170, params: { inductance: 10e-3 } },
+					{ kind: 'capacitor', name: 'C1', x: 320, y: 170, params: { capacitance: 1e-6 } },
 					{
-						kind: 'capacitor',
-						name: 'C1',
+						kind: 'resistor',
+						name: 'R1',
 						x: 420,
 						y: 230,
 						rotation: 90,
-						params: { capacitance: 1e-6 }
+						params: { resistance: 50 }
 					},
+					{ kind: 'probe', name: 'OUT', x: 420, y: 170 },
+					{ kind: 'probe', name: 'LC', x: 260, y: 170 },
 					{ kind: 'ground', name: 'GND1', x: 100, y: 300 }
 				],
 				[
@@ -698,15 +703,23 @@ export const EXAMPLES: Example[] = [
 
 			// The four data bits. 0101 is a 5, which uses six of the seven bars and
 			// leaves one off — a digit where a wrong equation would show.
-			const BITS: Array<[string, number, 'high' | 'low']> = [
-				['B', DEC_Y - 70, 'low'],
-				['C', DEC_Y - 50, 'high'],
-				['D', DEC_Y + 30, 'low'],
-				['A', DEC_Y + 50, 'high']
+			//
+			// The decoder's inputs are twenty apart and a switch is twenty-eight
+			// tall, so the first of each pair sits thirty higher and steps down
+			// to its leg: stacked on the legs, each switch covered half the next.
+			const BITS: Array<[string, number, 'high' | 'low', number]> = [
+				['B', DEC_Y - 70, 'low', -30],
+				['C', DEC_Y - 50, 'high', 0],
+				['D', DEC_Y + 30, 'low', -30],
+				['A', DEC_Y + 50, 'high', 0]
 			];
-			for (const [pin, y, state] of BITS) {
-				parts.push({ kind: 'toggle', name: pin, x: 150, y, params: { state } });
-				wires.push([180, y, 440, y]);
+			for (const [pin, y, state, lift] of BITS) {
+				parts.push({ kind: 'toggle', name: pin, x: 150, y: y + lift, params: { state } });
+				if (lift === 0) {
+					wires.push([180, y, 440, y]);
+				} else {
+					wires.push([180, y + lift, 220, y + lift], [220, y + lift, 220, y], [220, y, 440, y]);
+				}
 			}
 
 			// One resistor per segment, then across to the digit. The decoder drives
@@ -808,7 +821,16 @@ export const EXAMPLES: Example[] = [
 					{ kind: 'resistor', name: 'R1', x: 760, y: 190, rotation: 90, params: { resistance: 1000 } },
 					{ kind: 'resistor', name: 'R2', x: 760, y: 270, rotation: 90, params: { resistance: 33000 } },
 					{ kind: 'capacitor', name: 'C1', x: 760, y: 360, rotation: 90, params: { capacitance: 10e-6 } },
-					{ kind: 'capacitor', name: 'C2', x: 700, y: 380, rotation: 90, params: { capacitance: 10e-9 } },
+					{
+						kind: 'capacitor',
+						name: 'C2',
+						x: 700,
+						y: 380,
+						rotation: 90,
+						params: { capacitance: 10e-9 },
+						// To its left: C1 is thirty to the right, and the value ran into it.
+						labels: { name: { x: -64, y: 0 }, value: { x: -64, y: 0 } }
+					},
 					{ kind: 'resistor', name: 'R3', x: 370, y: 310, params: { resistance: 680 } },
 					{ kind: 'led', name: 'D1', x: 280, y: 310, rotation: 180, params: { colour: 'red' } },
 					{ kind: 'ground', name: 'GND1', x: 480, y: 290 },
@@ -816,7 +838,9 @@ export const EXAMPLES: Example[] = [
 					{ kind: 'ground', name: 'GND3', x: 700, y: 440 },
 					{ kind: 'ground', name: 'GND4', x: 250, y: 360 },
 					{ kind: 'probe', name: 'OUT', x: 400, y: 310 },
-					{ kind: 'probe', name: 'CAP', x: 760, y: 330 }
+					// On the loop that carries the timing capacitor back to pins 2 and
+					// 6, pointing out to the side: above C1 it wore its name on R2.
+					{ kind: 'probe', name: 'CAP', x: 820, y: 400, rotation: 90 }
 				],
 				[
 					// The supply, down to VCC on pin 8 and through R1.
@@ -1099,7 +1123,7 @@ export const EXAMPLES: Example[] = [
 					{ kind: 'ground', name: 'GND3', x: 530, y: 670 },
 					{ kind: 'probe', name: 'D13', x: 400, y: 170 },
 					{ kind: 'probe', name: 'D12', x: 420, y: 150 },
-					{ kind: 'probe', name: 'BUTTON', x: 640, y: 160 }
+					{ kind: 'probe', name: 'BUTTON', x: 640, y: 160, rotation: 270 }
 				],
 				[
 					// Pin 13 has the board's own LED, and a probe to watch it by.
@@ -1185,7 +1209,7 @@ export const EXAMPLES: Example[] = [
 					},
 					{ kind: 'buzzer', name: 'BZ1', x: 450, y: 110 },
 					{ kind: 'ground', name: 'GND1', x: 500, y: 150 },
-					{ kind: 'probe', name: 'D11', x: 440, y: 170 }
+					{ kind: 'probe', name: 'D11', x: 440, y: 170, rotation: 270 }
 				],
 				[
 					// Pin 11 up to the buzzer's + leg, its other leg to ground.
@@ -1470,14 +1494,20 @@ export const EXAMPLES: Example[] = [
 			/** Where each latch takes its enable from, to the left of its own gates. */
 			const MASTER_EN = 320;
 			const SLAVE_EN = 1020;
+			// The clock sits just under the latches, whose lowest wire is at Y + 220,
+			// and its run to the slave just under that. Both were three hundred
+			// units further down, a loop under nothing that made the drawing open
+			// half empty.
+			const CLOCK_Y = Y + 280;
+			const RETURN_Y = CLOCK_Y + 40;
 
 			const parts: Placed[] = [
 				{ kind: 'toggle', name: 'D', x: 100, y: 120, params: { state: 'high' } },
-				{ kind: 'clock', name: 'CLK1', x: 100, y: 640, params: { frequency: 1e6, duty: 0.5 } },
+				{ kind: 'clock', name: 'CLK1', x: 100, y: CLOCK_Y, params: { frequency: 1e6, duty: 0.5 } },
 				// The master listens while the clock is low and the slave while it is
 				// high. One inverter is the entire difference between this and two
 				// latches wired in series, which would just be transparent twice over.
-				{ kind: 'not', name: 'INV', x: 260, y: 640 },
+				{ kind: 'not', name: 'INV', x: 260, y: CLOCK_Y },
 				{ kind: 'buffer', name: 'B1', x: 1740, y: Y + 30 },
 				{ kind: 'buffer', name: 'B2', x: 1740, y: Y + 210 },
 				{ kind: 'resistor', name: 'R1', x: 1880, y: Y + 30, params: { resistance: 330 } },
@@ -1541,13 +1571,13 @@ export const EXAMPLES: Example[] = [
 				[200, Y + 40, master.d, Y + 40],
 				// The clock into the inverter, and on to the slave's rail the long way
 				// round, under everything.
-				[130, 640, 230, 640],
-				[180, 640, 180, 940],
-				[180, 940, SLAVE_EN, 940],
-				[SLAVE_EN, Y + 60, SLAVE_EN, 940],
+				[130, CLOCK_Y, 230, CLOCK_Y],
+				[180, CLOCK_Y, 180, RETURN_Y],
+				[180, RETURN_Y, SLAVE_EN, RETURN_Y],
+				[SLAVE_EN, Y + 60, SLAVE_EN, RETURN_Y],
 				// The inverted clock up to the master's rail.
-				[290, 640, MASTER_EN, 640],
-				[MASTER_EN, Y + 60, MASTER_EN, 640],
+				[290, CLOCK_Y, MASTER_EN, CLOCK_Y],
+				[MASTER_EN, Y + 60, MASTER_EN, CLOCK_Y],
 				// The cascade: the master's q is the slave's d, on one straight line.
 				[master.q, Y + 30, 980, Y + 30],
 				[980, Y + 30, 980, Y + 40],

@@ -89,7 +89,7 @@ export function createPlaceTool(kind: string): Tool {
 		drawOverlay(painter: Painter) {
 			if (!at) return;
 			const theme = currentTheme();
-			const paths = symbolPaths(kind, {});
+			const paths = symbolPaths(kind, {}, rotation);
 
 			painter.transformed(at, rotation, () => {
 				painter.strokePath(paths.stroke, { color: theme.accent, width: 2, alpha: 0.75 });

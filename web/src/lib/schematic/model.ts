@@ -124,7 +124,22 @@ export function validateParam(param: ParamDef, value: number | string): string |
 	return null;
 }
 
-export type Group = 'passive' | 'sources' | 'semiconductor' | 'analog' | 'logic' | 'ic';
+/**
+ * The palette shelf a part is filed on. A module is a board with its own
+ * driver on it — the LCD with its I²C backpack, the matrix with its MAX7219,
+ * the servo with its controller — and was filed among the transistors, where
+ * nobody looking for a display would look. A probe measures and is not a part
+ * of the circuit at all, so it has a shelf of its own rather than Analog's.
+ */
+export type Group =
+	| 'passive'
+	| 'sources'
+	| 'semiconductor'
+	| 'analog'
+	| 'logic'
+	| 'ic'
+	| 'modules'
+	| 'measure';
 
 export interface ComponentDef {
 	kind: string;
@@ -219,7 +234,16 @@ export const wireEnd = (wire: Wire): Point => wire.points[wire.points.length - 1
  * itself. Everything between the two visits carries no current and draws as a
  * knot, so it goes.
  */
-export function simplifyPath(points: readonly Point[]): Point[] {
+export function simplifyPath(
+	points: readonly Point[],
+	/**
+	 * Points the path has to keep passing through — the pins along it, when the
+	 * caller knows them. An excursion out to a pin and back, or a spike that
+	 * doubles back on itself at one, is the wire's connection to that pin, and
+	 * cutting it out disconnected the pin without changing anything else drawn.
+	 */
+	keep: (p: Point) => boolean = () => false
+): Point[] {
 	const out: Point[] = [];
 	for (const p of points) {
 		const last = out[out.length - 1];
@@ -227,7 +251,7 @@ export function simplifyPath(points: readonly Point[]): Point[] {
 
 		// Been here before: cut out the excursion rather than draw it.
 		const seen = out.findIndex((q) => q.x === p.x && q.y === p.y);
-		if (seen !== -1) {
+		if (seen !== -1 && !out.slice(seen + 1).some(keep)) {
 			out.length = seen + 1;
 			continue;
 		}
@@ -238,7 +262,15 @@ export function simplifyPath(points: readonly Point[]): Point[] {
 		const [before, here, after] = [out[i - 1], out[i], out[i + 1]];
 		const straight =
 			(before.x === here.x && here.x === after.x) || (before.y === here.y && here.y === after.y);
-		if (straight) out.splice(i, 1);
+		if (!straight) continue;
+		// The tip of a spike is not the inside of a straight run.
+		const between =
+			Math.min(before.x, after.x) <= here.x &&
+			here.x <= Math.max(before.x, after.x) &&
+			Math.min(before.y, after.y) <= here.y &&
+			here.y <= Math.max(before.y, after.y);
+		if (!between && keep(here)) continue;
+		out.splice(i, 1);
 	}
 	return out;
 }
@@ -1298,7 +1330,7 @@ export const CATALOG: ComponentDef[] = [
 		kind: 'probe',
 		box: { x: -8, y: -26, w: 16, h: 34 },
 		label: 'Probe',
-		group: 'analog',
+		group: 'measure',
 		prefix: 'P',
 		pins: [analog('p', 0, 0)],
 		params: [
@@ -1531,7 +1563,7 @@ export const CATALOG: ComponentDef[] = [
 		 * which is a mistake worth being able to make here.
 		 */
 		kind: 'display7',
-		box: { x: -46, y: -62, w: 92, h: 124 },
+		box: { x: -50, y: -62, w: 96, h: 124 },
 		label: '7-segment',
 		group: 'semiconductor',
 		prefix: 'DS',
@@ -1675,7 +1707,7 @@ export const CATALOG: ComponentDef[] = [
 		box: { x: LCD_LEG_X, y: LCD_BOARD.y, w: LCD_BOARD.x + LCD_BOARD.w - LCD_LEG_X, h: LCD_BOARD.h },
 		body: LCD_BOARD,
 		label: '16×2 LCD (I²C)',
-		group: 'semiconductor',
+		group: 'modules',
 		prefix: 'LCD',
 		pins: LCD_LEGS.map((leg, i) =>
 			leg === 'SDA' || leg === 'SCL'
@@ -1708,7 +1740,7 @@ export const CATALOG: ComponentDef[] = [
 		box: { x: MATRIX_LEG_X, y: MATRIX_BOARD.y, w: MATRIX_OUT_X - MATRIX_LEG_X, h: MATRIX_BOARD.h },
 		body: MATRIX_BOARD,
 		label: '8×8 LED matrix (MAX7219)',
-		group: 'semiconductor',
+		group: 'modules',
 		prefix: 'MX',
 		pins: [
 			...MATRIX_LEGS.map((leg, i) =>
@@ -1743,7 +1775,7 @@ export const CATALOG: ComponentDef[] = [
 			h: SERVO_BODY.y + SERVO_BODY.h - (SERVO_SHAFT.y - SERVO_SCALE.outer)
 		},
 		label: 'Servo motor',
-		group: 'semiconductor',
+		group: 'modules',
 		prefix: 'SV',
 		pins: SERVO_LEGS.map((leg, i) =>
 			leg === 'SIG' ? digitalIn(leg, SERVO_LEG_X, servoLegY(i)) : analog(leg, SERVO_LEG_X, servoLegY(i))

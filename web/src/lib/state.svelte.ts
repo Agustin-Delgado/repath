@@ -3031,6 +3031,16 @@ class AppState {
 		const internal = (net: Net) =>
 			net.pins.every((ref) => ref.instance.id === net.pins[0].instance.id) &&
 			!net.points.some((key) => drawn.has(key));
+		// Two legs of one part joined inside it — SDA and A4, AREF beside its
+		// own pin — are copper on the board, never something to plot first.
+		const joinedInside = (net: Net) => net.pins.length > 1 && internal(net);
+		// A drawing that already carries probes has said what it wants plotted:
+		// the servo, the melody and the matrix each put one on the wire they are
+		// about, and topping those up with the board's own nets buried them.
+		if (this.schematic.instances.some((i) => i.kind === 'probe')) {
+			this.probes = [];
+			return;
+		}
 		// Wired nets first — a lone pin is rarely what you want — and pin-only ones
 		// after, rather than never. An output with nothing hanging off it is exactly
 		// what you want when the circuit is small enough that there is nothing else,
@@ -3039,7 +3049,7 @@ class AppState {
 		for (const wired of [true, false]) {
 			for (const net of compiled.connectivity.nets) {
 				if (chosen.length >= 4) break;
-				if (net.isGround) continue;
+				if (net.isGround || joinedInside(net)) continue;
 				const names = compiled.names.get(net.index);
 				if (!names?.analog && !names?.digital) continue;
 				if ((net.points.length >= 2 && !internal(net)) !== wired) continue;

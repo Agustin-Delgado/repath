@@ -457,7 +457,7 @@ function pinInjections(
 ): Array<{ element: string; sign: number }> {
 	const nested = portFlow.get(instance.id);
 	if (nested) return nested.filter((entry) => entry.port === pin);
-	return pinFlows(instance.kind, pin).map((flow) => ({
+	return pinFlows(instance.kind, pin, instance.params).map((flow) => ({
 		element: `${instance.name}${flow.series ?? ''}`,
 		sign: flow.sign
 	}));

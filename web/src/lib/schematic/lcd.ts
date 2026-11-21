@@ -139,8 +139,9 @@ export function frameAt<F extends { time: number }>(history: readonly F[], time:
 
 /**
  * The dots of each character position as they show at `time`: the cursor's
- * underline on the eighth row, and the blinking position all dark on every
- * other interval.
+ * underline on the eighth row, and every dot of the blinking position set —
+ * the solid block an HD44780 flashes, dark on the glass — on every other
+ * interval.
  */
 export function shownCells(frame: LcdFrame, time: number): number[][] {
 	return frame.cells.map((rows, cell) => {
