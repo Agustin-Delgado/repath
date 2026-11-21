@@ -23,3 +23,4 @@ export { toasts } from './toast/toasts.svelte';
 export { default as Splitter } from './splitter/Splitter.svelte';
 export { default as Disclosure } from './disclosure/Disclosure.svelte';
 export { default as Dialog } from './dialog/Dialog.svelte';
+export { default as Tabs } from './tabs/Tabs.svelte';
