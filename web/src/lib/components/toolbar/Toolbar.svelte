@@ -45,15 +45,15 @@
 		stroke (10.5 for 7): at this size the full weight thins to a hairline.
 		Sized and set as in the logo: 1.16 times as tall as the h, standing on
 		the baseline, which the box's margin under the stroke would lift. Its
-		two colours are the brand's Signal blue and Settled green, which are the
-		accent and the overlay's volts ink.
+		two colours are the brand's fixed Signal blue and Settled green for dark
+		grounds, not theme tokens, so a theme change cannot recolour the logo.
 	-->
 	<strong class="flex shrink-0 items-baseline text-md font-semibold tracking-[-0.035em]">
 		<svg class="size-[0.95em] translate-y-[0.065em]" viewBox="24 16 96 96" aria-hidden="true">
 			<defs>
 				<linearGradient id="toolbar-signal" x1="40" x2="104" gradientUnits="userSpaceOnUse">
-					<stop offset=".25" style:stop-color="var(--accent)" />
-					<stop offset="1" style:stop-color="var(--overlay-volts)" />
+					<stop offset=".25" stop-color="#4ea8ff" />
+					<stop offset="1" stop-color="#7fe3a0" />
 				</linearGradient>
 			</defs>
 			<path
