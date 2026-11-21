@@ -42,7 +42,8 @@
 	 * a command's name is what it does and a part is one of many.
 	 */
 	const rows = $derived.by((): Row[] => {
-		const parts = allParts(app);
+		// A run locks the drawing: only a probe can still go on it.
+		const parts = allParts(app).filter((part) => !app.locked || part.kind === 'probe');
 		const q = query.trim();
 		if (!q) {
 			const byKind = new Map(parts.map((part) => [part.kind, part]));

@@ -197,6 +197,8 @@ function variantWithin(kind: string, params: Record<string, unknown>): string {
 			return `toggle:${String(params.state ?? 'low')}`;
 		case 'port':
 			return `port:${String(params.flow ?? 'in')}`;
+		case 'potentiometer':
+			return `potentiometer:${wiperStep(params)}`;
 		case SERVO_KIND:
 			return `servo:${params.horn === 'live' ? 'live' : 'rest'}`;
 		case 'and':
@@ -442,28 +444,6 @@ const STATIC: Record<string, SymbolGeometry> = {
 			}
 		],
 		extent: { x: MATRIX_OUT_X, y: MATRIX_BOARD.h / 2 }
-	},
-
-	// The resistor with an arrow brought down onto it: the wiper, pressing on
-	// the track somewhere along it.
-	potentiometer: {
-		shapes: [
-			path('M-30 0 H-18'),
-			{ kind: 'rect', x: -18, y: -7, w: 36, h: 14 },
-			path('M18 0 H30'),
-			path('M0 -30 V-13'),
-			path('M-4 -14 L0 -8 L4 -14 Z', true)
-		],
-		labels: []
-	},
-
-	'potentiometer@ansi': {
-		shapes: [
-			path('M-30 0 H-18 L-15 -7 L-9 7 L-3 -7 L3 7 L9 -7 L15 7 L18 0 H30'),
-			path('M0 -30 V-14'),
-			path('M-4 -15 L0 -9 L4 -15 Z', true)
-		],
-		labels: []
 	},
 
 	// The quartz between its two electrodes, drawn the same in every standard.
@@ -768,6 +748,31 @@ function boxGate(
  * and a run that starts with it open is a drawing that lies about the circuit
  * before anything has happened.
  */
+/** Where a potentiometer's wiper is drawn, in hundredths of the track: a cache key as well as a shape. */
+function wiperStep(params: Record<string, unknown>): number {
+	const position = Number(params.position ?? 0.5);
+	return Number.isFinite(position) ? Math.round(Math.min(Math.max(position, 0), 1) * 100) : 50;
+}
+
+/**
+ * The resistor with an arrow brought down onto it: the wiper, pressing on the
+ * track where it is set. The lead leaves the pin straight down and turns along
+ * the track to the arrow, so the setting reads at a glance.
+ */
+function potentiometer(step: number, standard: SymbolStandard): SymbolGeometry {
+	const ansi = standardFamily(standard) === 'ansi';
+	const x = Math.round((-15 + (30 * step) / 100) * 10) / 10;
+	const tip = ansi ? -9 : -8;
+	const lead = x === 0 ? `M0 -30 V${tip - 5}` : `M0 -30 V-22 H${x} V${tip - 5}`;
+	const body = ansi
+		? [path('M-30 0 H-18 L-15 -7 L-9 7 L-3 -7 L3 7 L9 -7 L15 7 L18 0 H30')]
+		: [path('M-30 0 H-18'), { kind: 'rect', x: -18, y: -7, w: 36, h: 14 } as Shape, path('M18 0 H30')];
+	return {
+		shapes: [...body, path(lead), path(`M${x - 4} ${tip - 6} L${x} ${tip} L${x + 4} ${tip - 6} Z`, true)],
+		labels: []
+	};
+}
+
 function switchSymbol(action: string, start: string): SymbolGeometry {
 	const closed = start === 'closed';
 	const shapes: Shape[] = [
@@ -1057,6 +1062,7 @@ export function symbolGeometry(
 	else if (kind === 'spdt') geometry = changeoverSymbol(String(params.start ?? 'open'));
 	else if (kind === 'toggle') geometry = toggleSymbol(String(params.state ?? 'low'));
 	else if (kind === 'port') geometry = portSymbol(String(params.flow ?? 'in'));
+	else if (kind === 'potentiometer') geometry = potentiometer(wiperStep(params), standard);
 	else if (kind === SERVO_KIND) geometry = servoSymbol(params.horn !== 'live');
 	else if (GATES.has(kind)) {
 		geometry = gate(kind, gateInputCount(params as Record<string, number | string>), standard);

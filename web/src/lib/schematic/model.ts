@@ -114,6 +114,16 @@ export interface ParamDef {
 	 * source a current-controlled source reads its current through.
 	 */
 	pick?: 'voltage-source';
+	/**
+	 * A fraction from `min` to `max` set by turning a knob, in the inspector
+	 * and on the part itself while a run is going: a runtime control.
+	 */
+	knob?: boolean;
+}
+
+/** The parameter a part is turned by, if it has a knob. */
+export function knobOf(instance: Instance): ParamDef | undefined {
+	return definitionFor(instance).params.find((param) => param.knob);
 }
 
 /** Why a value was refused, or null when it is fine. */
@@ -915,7 +925,8 @@ export const CATALOG: ComponentDef[] = [
 				max: 1,
 				plain: true,
 				step: 0.05,
-				description: '0 at the smallest value, 1 at the largest.'
+				knob: true,
+				description: '0 % at the smallest, 100 % at the largest.'
 			}
 		]
 	},
@@ -1068,7 +1079,8 @@ export const CATALOG: ComponentDef[] = [
 				max: 1,
 				plain: true,
 				step: 0.05,
-				description: '0 at a, 1 at b.'
+				knob: true,
+				description: '0 % at a, 100 % at b.'
 			},
 			// Pots are sold at twenty percent. A divider that only works at the
 			// printed value is a divider that has to be trimmed on every board.

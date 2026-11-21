@@ -16,9 +16,10 @@
 		label?: string;
 		/** Big and bold, for the designator at the top of the panel. */
 		prominent?: boolean;
+		disabled?: boolean;
 	};
 
-	let { value, commit, label, prominent = false, ...rest }: Props = $props();
+	let { value, commit, label, prominent = false, disabled = false, ...rest }: Props = $props();
 
 	let refusal = $state<string | null>(null);
 </script>
@@ -28,6 +29,7 @@
 	<span class={prominent ? 'flex' : fieldBox} data-rejected={refusal ? '' : undefined}>
 		<input
 			{value}
+			{disabled}
 			aria-label={rest['aria-label']}
 			spellcheck="false"
 			class={prominent

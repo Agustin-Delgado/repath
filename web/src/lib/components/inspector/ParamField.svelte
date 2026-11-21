@@ -1,9 +1,16 @@
 <script lang="ts">
-	import { Select } from '$lib/ui';
+	import { Knob, Select } from '$lib/ui';
 	import { controllerChoices, NO_CONTROLLER, type ParamDef } from '$lib/schematic/model';
-	import { app } from '$lib/state.svelte';
+	import { app, LOCKED_NOTE } from '$lib/state.svelte';
 	import { onLeave, readEntry } from '$lib/entry';
-	import { joinValue, PREFIX_OPTIONS, splitValue, stepValue, type SplitValue } from '$lib/units';
+	import {
+		formatWithUnit,
+		joinValue,
+		PREFIX_OPTIONS,
+		splitValue,
+		stepValue,
+		type SplitValue
+	} from '$lib/units';
 	import { fieldBox, fieldInput, fieldLabel, hint, problem as problemClass } from './styles';
 
 	/**
@@ -45,6 +52,30 @@
 	let settling: ReturnType<typeof setTimeout> | undefined;
 	/** A name typed but not yet applied, so leaving the field can apply it at once. */
 	let pendingText: string | null = null;
+
+	/** Whether it can be changed now: a run locks all but what it takes in place. */
+	const editable = $derived(app.editable(id, param.key));
+
+	/** What a knob's setting comes to, in the part's own terms. */
+	const knobDetail = $derived.by(() => {
+		if (!param.knob || typeof value !== 'number') return '';
+		const part = app.schematic.instances.find((i) => i.id === id);
+		if (!part) return '';
+		if (part.kind === 'potentiometer') {
+			const track = Number(part.params.resistance);
+			return `a ${formatWithUnit(track * value, 'Ω')} · b ${formatWithUnit(track * (1 - value), 'Ω')}`;
+		}
+		if (part.kind === 'varcap') {
+			const low = Number(part.params.minimum);
+			return formatWithUnit(low + (Number(part.params.maximum) - low) * value, 'F');
+		}
+		return '';
+	});
+
+	/** A knob turned: one undo step a turn, however many frames it takes. */
+	function turned(next: number, first: boolean) {
+		refusal = app.turn(id, param.key, next, first);
+	}
 
 	/** A quantity, as opposed to free text; decided by the definition, not the stored value. */
 	const numeric = $derived(typeof param.default !== 'string');
@@ -187,10 +218,17 @@
 	}));
 </script>
 
-<div class="flex flex-col gap-1">
+<!-- A fieldset, so a run that locks the value disables every control in it at once. -->
+<fieldset
+	class="m-0 flex min-w-0 flex-col gap-1 border-0 p-0 {editable || param.knob ? '' : 'opacity-50'}"
+	disabled={!editable}
+	title={editable ? undefined : LOCKED_NOTE}
+>
 	<span class={fieldLabel}>{param.label}</span>
 
-	{#if param.pick}
+	{#if param.knob && typeof value === 'number'}
+		<Knob value={value} label={param.label} detail={knobDetail} disabled={!editable} onturn={turned} />
+	{:else if param.pick}
 		<Select
 			items={picks}
 			value={String(value ?? '') || NO_CONTROLLER}
@@ -269,4 +307,4 @@
 	{:else if param.description}
 		<span class={hint}>{param.description}</span>
 	{/if}
-</div>
+</fieldset>

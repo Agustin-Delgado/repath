@@ -131,6 +131,19 @@ export class Trace {
 		}
 	}
 
+	/**
+	 * Carry on the last step rather than add one: a knob being turned is one
+	 * turn, to where it stops. Recorded afresh when the last step is another.
+	 */
+	amend(step: Step): void {
+		const last = this.steps.at(-1);
+		if (last?.op === 'param' && step.op === 'param' && last.part === step.part && last.key === step.key) {
+			this.steps[this.steps.length - 1] = step;
+			return;
+		}
+		this.record(step);
+	}
+
 	get truncated(): number {
 		return this.dropped;
 	}

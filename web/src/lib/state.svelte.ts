@@ -154,6 +154,15 @@ import {
  */
 export type Tool = { mode: 'select' } | { mode: 'place'; kind: string } | { mode: 'wire' };
 
+const SELECT_TOOL: Tool = { mode: 'select' };
+
+/** Tools that still work while a run locks the drawing: they add no part to the circuit. */
+const runTool = (tool: Tool): boolean =>
+	tool.mode === 'select' || (tool.mode === 'place' && tool.kind === 'probe');
+
+/** What a refused edit says while a run is going. */
+export const LOCKED_NOTE = 'Stop to edit.';
+
 export interface ProbeInfo {
 	/** Stable handle: a grid point the net passes through. */
 	key: string;
@@ -455,7 +464,19 @@ class AppState {
 	 * menu away and the palette is already open, which is invitation enough.
 	 */
 	schematic = $state<Schematic>({ instances: [], wires: [] });
-	tool = $state<Tool>({ mode: 'select' });
+	#tool = $state<Tool>({ mode: 'select' });
+	/**
+	 * What a press on the drawing does. While the run locks the drawing only
+	 * the select tool, or a probe in the hand, is offered: the others build.
+	 */
+	get tool(): Tool {
+		const tool = this.#tool;
+		return this.locked && !runTool(tool) ? SELECT_TOOL : tool;
+	}
+	set tool(tool: Tool) {
+		if (!runTool(tool) && this.refuse()) return;
+		this.#tool = tool;
+	}
 	selection = $state<string[]>([]);
 	probes = $state<string[]>([]);
 	/**
@@ -803,6 +824,76 @@ class AppState {
 	get operating(): boolean {
 		return this.playing && this.acquiring !== null && this.analysis === 'transient';
 	}
+
+	/**
+	 * Whether the drawing is locked against edits: while a sweep is moving.
+	 *
+	 * A run is a bench with the circuit powered. Hands go on the controls —
+	 * switches, buttons, a knob, a value the running circuit takes in place —
+	 * and not on the layout. A stopped sweep is not locked: Stop is how
+	 * editing comes back, and an edit then puts the stopped run away.
+	 */
+	get locked(): boolean {
+		return this.operating;
+	}
+
+	/** A part or a wire in the hand is put down when a run starts: it could not be used. */
+	private putDownTool(): void {
+		if (!runTool(this.#tool)) this.#tool = SELECT_TOOL;
+	}
+
+	/** Edits refused while locked, counted so the run-mode note can draw the eye. */
+	refusals = $state(0);
+
+	/** True, and counted, when the drawing is locked and the edit must not go in. */
+	refuse(): boolean {
+		if (!this.locked) return false;
+		this.refusals++;
+		return true;
+	}
+
+	/**
+	 * Whether `value` for `key` goes into the running circuit in place: the
+	 * netlist with it differs from the one now only in values a run can take.
+	 * Compiled on a copy, so asking changes nothing.
+	 */
+	private takesLive(instance: Instance, key: string, value: number | string): boolean {
+		const now = this.compiled.netlist;
+		if (!now) return false;
+		const params = { ...instance.params, [key]: value };
+		const schematic = {
+			...this.schematic,
+			instances: this.schematic.instances.map((i) => (i.id === instance.id ? { ...i, params } : i))
+		};
+		const next = compileSchematic(schematic, this.temperature + 273.15, this.sample, this.logicFamily);
+		return next.netlist !== null && liveChanges(now, next.netlist) !== null;
+	}
+
+	/**
+	 * The selected part's values that a running circuit takes in place, by
+	 * key. Null while nothing is locked. Each is tried on a copy with the value
+	 * moved, which is a compile per field: only for the one part on show.
+	 */
+	private liveKeys = $derived.by((): { id: string; keys: Set<string> } | null => {
+		if (!this.locked || this.selectedInstances.length !== 1) return null;
+		const instance = this.selectedInstances[0];
+		const keys = new Set<string>();
+		for (const param of definitionFor(instance).params) {
+			if (param.hidden || typeof param.default === 'string') continue;
+			const value = Number(instance.params[param.key] ?? param.default);
+			const tries = [value * 1.5, value * 0.5, ((param.min ?? 0) + (param.max ?? 1)) / 2];
+			const moved = tries.find((v) => v !== value && validateParam(param, v) === null);
+			if (moved !== undefined && this.takesLive(instance, param.key, moved)) keys.add(param.key);
+		}
+		return { id: instance.id, keys };
+	});
+
+	/** Whether a value of a part can be edited now: always, unless a run locks it out. */
+	editable(id: string, key: string): boolean {
+		if (!this.locked) return true;
+		const live = this.liveKeys;
+		return live !== null && live.id === id && live.keys.has(key);
+	}
 	/**
 	 * The instant the drawing is showing.
 	 *
@@ -936,6 +1027,7 @@ class AppState {
 			return;
 		}
 		this.playing = true;
+		this.putDownTool();
 		// Edits follow a resumed sweep again, whatever stopped following them.
 		this.live = true;
 		this.acquiring.start();
@@ -1134,11 +1226,13 @@ class AppState {
 	/** Whether Undo would do anything, for a button to say so. */
 	canUndo = $derived.by(() => {
 		void this.historyTick;
+		if (this.locked) return false;
 		return this.undoStack.length > 0;
 	});
 	/** Whether Redo would do anything. */
 	canRedo = $derived.by(() => {
 		void this.historyTick;
+		if (this.locked) return false;
 		return this.redoStack.length > 0;
 	});
 
@@ -1288,6 +1382,7 @@ class AppState {
 
 	undo(): void {
 		if (this.dragging) return;
+		if (this.refuse()) return;
 		this.trace.record({ op: 'undo' });
 		const previous = this.past.pop();
 		if (!previous) return;
@@ -1306,6 +1401,7 @@ class AppState {
 
 	redo(): void {
 		if (this.dragging) return;
+		if (this.refuse()) return;
 		this.trace.record({ op: 'redo' });
 		const next = this.future.pop();
 		if (!next) return;
@@ -1323,6 +1419,8 @@ class AppState {
 	// -- editing ----------------------------------------------------------
 
 	place(kind: string, x: number, y: number, rotation: Rotation = 0): Instance | null {
+		// A probe measures and adds nothing to the circuit, so it goes in mid-run.
+		if (kind !== 'probe' && this.refuse()) return null;
 		// The palette keeps such a block out of reach; this is for every other
 		// way of asking — a replayed step, a part still in the hand from before.
 		const block = blockOf(this.whole, kind);
@@ -1377,6 +1475,7 @@ class AppState {
 	 * disagree.
 	 */
 	addWirePath(points: ReadonlyArray<Point>): void {
+		if (this.refuse()) return;
 		const path = simplifyPath(points);
 		if (path.length < 2) return;
 		this.trace.record({ op: 'wire', points: path.map((q) => ({ x: q.x, y: q.y })) });
@@ -1406,8 +1505,16 @@ class AppState {
 	 * three or more pins is left alone: there is no one right answer for which of
 	 * them should be joined to which.
 	 */
+	/** Whether every id names a placed probe, which a run lets come and go. */
+	private onlyProbes(ids: readonly string[]): boolean {
+		const chosen = new Set(ids);
+		const parts = this.schematic.instances.filter((i) => chosen.has(i.id));
+		return parts.length === chosen.size && parts.every((i) => i.kind === 'probe');
+	}
+
 	deleteSelection(route: RouteBetween = this.router()): void {
 		if (this.selection.length === 0 || this.dragging) return;
+		if (!this.onlyProbes(this.selection) && this.refuse()) return;
 		this.trace.record({ op: 'delete', ...this.selectionRef() });
 		this.checkpoint();
 		const doomed = new Set(this.selection);
@@ -1519,6 +1626,7 @@ class AppState {
 	 */
 	rotateSelection(route: RouteBetween = this.router()): void {
 		if (this.selection.length === 0 || this.dragging) return;
+		if (this.refuse()) return;
 		const chosen = new Set(this.selection);
 		const rotating = this.schematic.instances.filter((i) => chosen.has(i.id));
 		const turning = this.schematic.wires.filter((w) => chosen.has(w.id));
@@ -1657,6 +1765,7 @@ class AppState {
 	 * the shape under the cursor is the shape that lands.
 	 */
 	beginMove(): void {
+		if (this.refuse()) return;
 		const chosen = new Set(this.selection);
 
 		// Pins are what hold a wire end in place. Kept apart from wire ends on
@@ -1981,6 +2090,7 @@ class AppState {
 	 * the router's — and replays and undoes as one more move.
 	 */
 	nudgeSelection(dx: number, dy: number, route: RouteBetween): void {
+		if (this.refuse()) return;
 		if (this.selection.length === 0 || this.moveOrigin) return;
 		this.beginMove();
 		this.applyMove(dx, dy, route);
@@ -2087,6 +2197,12 @@ class AppState {
 		if (refusal) return refusal;
 
 		if (instance.params[key] === value) return null;
+		// A running circuit takes a new value in place, which is live tuning.
+		// Anything that would make it another circuit waits for Stop.
+		if (this.locked && !this.takesLive(instance, key, value)) {
+			this.refuse();
+			return LOCKED_NOTE;
+		}
 		this.trace.record({ op: 'param', part: instance.name, key, value });
 		this.checkpoint();
 		instance.params[key] = value;
@@ -2101,6 +2217,33 @@ class AppState {
 			const preset = REGULATOR_PRESETS[String(value)];
 			if (preset) for (const [k, v] of Object.entries(preset)) instance.params[k] = v;
 		}
+		return null;
+	}
+
+	/**
+	 * Turn a knob: set `key` on every frame of a drag, a wheel or a key.
+	 * `first` starts the turn, and only it costs an undo step; the trace keeps
+	 * where the turn ended. Returns why it was refused, or null.
+	 */
+	turn(id: string, key: string, value: number, first: boolean): string | null {
+		const instance = this.schematic.instances.find((i) => i.id === id);
+		if (!instance) return null;
+		const param = definitionFor(instance).params.find((p) => p.key === key);
+		const refusal = param ? validateParam(param, value) : null;
+		if (refusal) return refusal;
+		if (instance.params[key] === value) return null;
+		if (this.locked && !this.takesLive(instance, key, value)) {
+			this.refuse();
+			return LOCKED_NOTE;
+		}
+		const step: Step = { op: 'param', part: instance.name, key, value };
+		if (first) {
+			this.trace.record(step);
+			this.checkpoint();
+		} else {
+			this.trace.amend(step);
+		}
+		instance.params[key] = value;
 		return null;
 	}
 
@@ -2236,6 +2379,7 @@ class AppState {
 
 	/** Rename a component. Returns why it was refused, or null on success. */
 	rename(id: string, name: string): string | null {
+		if (this.refuse()) return LOCKED_NOTE;
 		const trimmed = name.trim();
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return null;
@@ -2265,6 +2409,7 @@ class AppState {
 	 * which is the one that costs an undo step.
 	 */
 	moveLabel(id: string, slot: LabelSlot, offset: Point, first: boolean): void {
+		if (this.refuse()) return;
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return;
 		const was = instance.labels?.[slot];
@@ -2332,6 +2477,7 @@ class AppState {
 	 * is odd but it is what was asked for, and it can still be named.
 	 */
 	groupSelection(): PartGroup | null {
+		if (this.refuse()) return null;
 		const parts = this.selectedInstances.map((i) => i.id);
 		if (parts.length === 0 || this.dragging) return null;
 		if (this.selectedGroup) return this.selectedGroup;
@@ -2348,6 +2494,7 @@ class AppState {
 
 	/** Dissolve every group that has a selected part in it. The parts stay selected. */
 	ungroupSelection(): void {
+		if (this.refuse()) return;
 		if (this.dragging) return;
 		const parts = this.selectedInstances.map((i) => i.id);
 		const doomed = new Set(parts.map((id) => this.groupOf(id)?.id).filter((id) => id !== undefined));
@@ -2359,6 +2506,7 @@ class AppState {
 
 	/** Rename a group. Returns why it was refused, or null on success. */
 	renameGroup(id: string, name: string): string | null {
+		if (this.refuse()) return LOCKED_NOTE;
 		const trimmed = name.trim();
 		const group = (this.schematic.groups ?? []).find((g) => g.id === id);
 		if (!group) return null;
@@ -2533,6 +2681,7 @@ class AppState {
 	 * second copy is a click away.
 	 */
 	boxSelection(route: RouteBetween = this.router()): BlockDef | null {
+		if (this.refuse()) return null;
 		const members = this.selectedInstances;
 		if (members.length === 0 || this.dragging) return null;
 		const memberIds = new Set(members.map((i) => i.id));
@@ -2643,6 +2792,7 @@ class AppState {
 	 * palette. Every selected block is opened.
 	 */
 	unboxSelection(route: RouteBetween = this.router()): void {
+		if (this.refuse()) return;
 		const boxes = this.selectedInstances.filter((i) => blockOf(this.schematic, i.kind));
 		if (boxes.length === 0 || this.dragging) return;
 		this.trace.record({ op: 'unbox', parts: boxes.map((i) => i.name) });
@@ -2916,6 +3066,7 @@ class AppState {
 
 	/** Rename a block. Returns why it was refused, or null on success. */
 	renameBlock(id: string, name: string): string | null {
+		if (this.refuse()) return LOCKED_NOTE;
 		const trimmed = name.trim();
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		if (!block) return null;
@@ -2945,6 +3096,7 @@ class AppState {
 	 * box is the only copy there is and is already its own.
 	 */
 	detachBlock(instanceId: string): BlockDef | null {
+		if (this.refuse()) return null;
 		const instance = this.schematic.instances.find((i) => i.id === instanceId);
 		const block = instance ? blockOf(this.schematic, instance.kind) : null;
 		if (!instance || !block) return null;
@@ -3082,6 +3234,7 @@ class AppState {
 	 * on success.
 	 */
 	renamePort(id: string, port: string, name: string): string | null {
+		if (this.refuse()) return LOCKED_NOTE;
 		const trimmed = name.trim();
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		const entry = block?.instances.find((i) => i.kind === 'port' && i.name === port);
@@ -3131,6 +3284,7 @@ class AppState {
 	 * wires. Nothing happens at the top or bottom of the column.
 	 */
 	movePort(id: string, port: string, by: 'up' | 'down'): void {
+		if (this.refuse()) return;
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		if (!block) return;
 		const ports = blockPorts(block);
@@ -3159,6 +3313,7 @@ class AppState {
 	 * to match. Every placed copy follows, with its wires.
 	 */
 	setPortSide(id: string, port: string, side: 'left' | 'right'): void {
+		if (this.refuse()) return;
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		const entry = block?.instances.find((i) => i.kind === 'port' && i.name === port);
 		if (!block || !entry) return;
@@ -3176,6 +3331,7 @@ class AppState {
 	 * block is built out of it: that one would be left with a hole in it.
 	 */
 	removeBlock(id: string): boolean {
+		if (this.refuse()) return false;
 		const kind = BLOCK_PREFIX + id;
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		if (!block) return false;
@@ -3323,6 +3479,7 @@ class AppState {
 
 	/** Forget an imported part, and delete anything placed from it. */
 	removeSubcircuit(id: string): boolean {
+		if (this.refuse()) return false;
 		const kind = SUBCIRCUIT_PREFIX + id;
 		const sub = (this.schematic.subcircuits ?? []).find((s) => s.id === id);
 		if (!sub) return false;
@@ -3393,6 +3550,7 @@ class AppState {
 	 * of its own; the palette is where a block is placed twice on purpose.
 	 */
 	paste(at?: { x: number; y: number }): void {
+		if (this.refuse()) return;
 		if (!this.clipboard || this.dragging) return;
 		const clipboard = this.clipboard;
 		const { instances, wires } = clipboard;
@@ -3575,6 +3733,7 @@ class AppState {
 	}
 
 	duplicateSelection(): void {
+		if (this.refuse()) return;
 		if (this.dragging || !this.copySelection()) return;
 		this.paste();
 	}
@@ -4621,6 +4780,7 @@ class AppState {
 				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
 				this.playing = true;
+				this.putDownTool();
 				if (options.single) acquiring.startSingle(this.stopTime);
 				else acquiring.start();
 			}

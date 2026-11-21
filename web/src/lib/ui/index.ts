@@ -17,3 +17,4 @@ export { floatingItem, floatingSurface } from './surface';
 export { default as Toaster } from './toast/Toaster.svelte';
 export { toasts } from './toast/toasts.svelte';
 export { default as Splitter } from './splitter/Splitter.svelte';
+export { default as Knob } from './knob/Knob.svelte';

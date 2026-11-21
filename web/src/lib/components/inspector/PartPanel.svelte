@@ -115,6 +115,7 @@
 				prominent
 				value={instance.name}
 				commit={(raw) => app.rename(instance.id, raw)}
+				disabled={app.locked}
 				aria-label="Reference designator"
 			/>
 			<span class="truncate px-1 text-2xs text-muted">{def.label}</span>
@@ -237,10 +238,15 @@
 	{/if}
 
 	<div class="flex gap-1.5">
-		<Button class="flex-1" onclick={() => app.rotateSelection()} title="Turn a quarter turn; wires follow">
+		<Button
+			class="flex-1"
+			disabled={app.locked}
+			onclick={() => app.rotateSelection()}
+			title="Turn a quarter turn; wires follow"
+		>
 			<RotateCw /> Rotate <kbd class="font-mono text-3xs text-muted">R</kbd>
 		</Button>
-		<Button class="flex-1 text-danger" onclick={() => app.deleteSelection()} title="Remove it">
+		<Button class="flex-1 text-danger" disabled={app.locked} onclick={() => app.deleteSelection()} title="Remove it">
 			<Trash2 /> Delete <kbd class="font-mono text-3xs text-muted">Del</kbd>
 		</Button>
 	</div>

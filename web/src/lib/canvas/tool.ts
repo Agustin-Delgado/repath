@@ -46,6 +46,14 @@ export interface EditorPointer {
 	native: PointerEvent;
 }
 
+export interface EditorWheel {
+	world: Vec2;
+	screen: Vec2;
+	deltaY: number;
+	shift: boolean;
+	ctrl: boolean;
+}
+
 export interface ToolContext {
 	viewport: Viewport;
 	scene: Scene;
@@ -82,6 +90,12 @@ export interface Tool {
 
 	/** Return true to mark the key as handled. */
 	keyDown?(event: KeyboardEvent, ctx: ToolContext): boolean | void;
+
+	/**
+	 * A wheel over the drawing, before it zooms. Return true to take it: a
+	 * knob under the pointer during a run is turned instead.
+	 */
+	wheel?(wheel: EditorWheel, ctx: ToolContext): boolean | void;
 
 	/** Draw feedback on the overlay layer: rubber bands, marquees, hints. */
 	drawOverlay?(painter: Painter, ctx: ToolContext): void;

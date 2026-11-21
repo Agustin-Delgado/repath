@@ -445,6 +445,14 @@ export class CanvasEditor {
 	private onWheel = (event: WheelEvent) => {
 		event.preventDefault();
 		const screen = this.localPoint(event);
+		const wheel = {
+			world: this.viewport.toWorld(screen),
+			screen,
+			deltaY: event.deltaY,
+			shift: event.shiftKey,
+			ctrl: event.ctrlKey
+		};
+		if (this.activeTool?.wheel?.(wheel, this.context) === true) return;
 
 		if (event.shiftKey && !event.ctrlKey) {
 			this.viewport.panBy(-event.deltaY, 0);

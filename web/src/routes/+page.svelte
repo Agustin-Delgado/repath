@@ -452,7 +452,7 @@
 		<span class="flex-1"></span>
 		<Button
 			size="touch"
-			disabled={app.selection.length === 0}
+			disabled={app.selection.length === 0 || app.locked}
 			onclick={() => app.rotateSelection()}
 			title="Turn a quarter turn; wires follow"
 		>
@@ -461,7 +461,7 @@
 		<Button
 			size="touch"
 			class="text-danger"
-			disabled={app.selection.length === 0}
+			disabled={app.selection.length === 0 || app.locked}
 			onclick={() => app.deleteSelection()}
 		>
 			Delete
