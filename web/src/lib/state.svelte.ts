@@ -260,6 +260,18 @@ interface HistoryEntry {
 	 * pointing at parts that were no longer there.
 	 */
 	around?: DocumentAround;
+	/**
+	 * The levels under the open one that the step changed, as they were before
+	 * it: slot `k` is the drawing of `outside[k]`, left empty where the step did
+	 * not touch that level. With a block open the drawing underneath waits on
+	 * its own level, and an edit up here can still change it — leaving a block
+	 * re-attaches the wires of its copies there, and a port renamed or moved
+	 * from the inspector moves the pins of every copy wherever it is placed. A
+	 * step that put back only the open level left those levels as the edit had
+	 * them. Only what changed is kept, so a step that touched no other level
+	 * costs nothing more.
+	 */
+	levels?: Array<string | undefined>;
 }
 
 /** What goes with a drawing besides its parts: what is watched and how it is run. */
@@ -286,6 +298,13 @@ const HISTORY_LIMIT = 100;
  * ones least likely to be wanted.
  */
 const HISTORY_BYTES = 8 * 1024 * 1024;
+
+/** What a step on the undo stack holds, against `HISTORY_BYTES`: its drawing and the other levels it changed. */
+function entryBytes(entry: HistoryEntry): number {
+	let bytes = entry.document.length;
+	for (const level of entry.levels ?? []) bytes += level?.length ?? 0;
+	return bytes;
+}
 
 /**
  * How many places a paste with nowhere to land tries, a few grid steps further
@@ -1079,7 +1098,7 @@ class AppState {
 	private remember(entry: HistoryEntry): void {
 		this.past.push(entry);
 		this.historyChanged();
-		this.historyBytes += entry.document.length;
+		this.historyBytes += entryBytes(entry);
 		// Capped by size as well as by count: a hundred snapshots of a large
 		// schematic is megabytes, and the oldest of them are worth the least.
 		while (
@@ -1088,7 +1107,7 @@ class AppState {
 		) {
 			const dropped = this.past.shift();
 			if (!dropped) break;
-			this.historyBytes -= dropped.document.length;
+			this.historyBytes -= entryBytes(dropped);
 		}
 		this.clearedFuture = this.future;
 		this.future = [];
@@ -1107,8 +1126,52 @@ class AppState {
 		if (this.past[this.past.length - 1]?.document !== was.document) return;
 		const dropped = this.past.pop();
 		this.historyChanged();
-		if (dropped) this.historyBytes -= dropped.document.length;
+		if (dropped) this.historyBytes -= entryBytes(dropped);
 		this.future = this.clearedFuture;
+	}
+
+	/** Each level under the open one, as text: what a step's `levels` holds. */
+	private levelDocs(): string[] {
+		return this.outside.map((frame) => JSON.stringify($state.snapshot(frame.schematic)));
+	}
+
+	/**
+	 * Note on `entry` the levels under the open one that changed since `before`
+	 * (`levelDocs` as it was), as they were then. A level the entry already
+	 * holds keeps its older state: the entry is the moment before all of it.
+	 * Counted against the history's budget when the entry is already on it.
+	 * Returns whether any level changed.
+	 */
+	private noteLevels(entry: HistoryEntry, before: readonly string[]): boolean {
+		const after = this.levelDocs();
+		const counted = this.past.includes(entry);
+		let changed = false;
+		after.forEach((doc, k) => {
+			if (doc === before[k]) return;
+			changed = true;
+			if (entry.levels?.[k] !== undefined) return;
+			(entry.levels ??= [])[k] = before[k];
+			if (counted) this.historyBytes += before[k].length;
+		});
+		return changed;
+	}
+
+	/**
+	 * Put the levels under the open one back as `levels` has them, and return
+	 * the same slots as they stood, for the step that goes the other way. The
+	 * open level is put back after this, so its definitions are the ones the
+	 * catalog ends with.
+	 */
+	private swapLevels(levels: ReadonlyArray<string | undefined>): Array<string | undefined> {
+		const current = this.levelDocs();
+		const was: Array<string | undefined> = [];
+		levels.forEach((doc, k) => {
+			const frame = this.outside[k];
+			if (doc === undefined || !frame) return;
+			was[k] = current[k];
+			frame.schematic = adopt(JSON.parse(doc) as Schematic);
+		});
+		return was;
 	}
 
 	/**
@@ -1136,8 +1199,10 @@ class AppState {
 		this.trace.record({ op: 'undo' });
 		const previous = this.past.pop();
 		if (!previous) return;
-		this.historyBytes -= previous.document.length;
-		this.future.push(this.snapshot(previous.around !== undefined));
+		this.historyBytes -= entryBytes(previous);
+		const now = this.snapshot(previous.around !== undefined);
+		if (previous.levels) now.levels = this.swapLevels(previous.levels);
+		this.future.push(now);
 		this.historyChanged();
 		this.schematic = adopt(JSON.parse(previous.document) as Schematic);
 		if (previous.around) this.restoreAround(previous.around);
@@ -1151,9 +1216,11 @@ class AppState {
 		this.trace.record({ op: 'redo' });
 		const next = this.future.pop();
 		if (!next) return;
-		this.past.push(this.snapshot(next.around !== undefined));
+		const now = this.snapshot(next.around !== undefined);
+		if (next.levels) now.levels = this.swapLevels(next.levels);
+		this.past.push(now);
 		this.historyChanged();
-		this.historyBytes += this.past[this.past.length - 1].document.length;
+		this.historyBytes += entryBytes(now);
 		this.schematic = adopt(JSON.parse(next.document) as Schematic);
 		if (next.around) this.restoreAround(next.around);
 		this.selection = this.stillPresent(next.selection);
@@ -1802,7 +1869,7 @@ class AppState {
 			// The checkpoint was taken on the first movement. There is nothing left to
 			// undo, so it goes, and the redo stack it cleared comes back.
 			const dropped = this.past.pop();
-			if (dropped) this.historyBytes -= dropped.document.length;
+			if (dropped) this.historyBytes -= entryBytes(dropped);
 			this.future = origin.future;
 			this.historyChanged();
 		}
@@ -2285,6 +2352,11 @@ class AppState {
 		editing: BlockDef;
 		/** The drawing as it stood on the way in, to undo the whole visit back to. */
 		entered: HistoryEntry;
+		/**
+		 * The levels under that drawing as they stood on the way in, so the
+		 * visit's step can put back the ones leaving changed (`levels`).
+		 */
+		enteredLevels: string[];
 	}> = [];
 
 	/**
@@ -2638,6 +2710,7 @@ class AppState {
 
 	private descend(block: BlockDef): void {
 		this.discardRun();
+		const enteredLevels = this.levelDocs();
 		this.outside.push({
 			schematic: this.schematic,
 			selection: this.selection,
@@ -2646,7 +2719,8 @@ class AppState {
 			future: this.future,
 			historyBytes: this.historyBytes,
 			editing: block,
-			entered: this.snapshot()
+			entered: this.snapshot(),
+			enteredLevels
 		});
 		this.past = [];
 		this.future = [];
@@ -2705,8 +2779,12 @@ class AppState {
 		// Everything done inside is one step on the drawing's history. Written
 		// back without one, the edits could not be undone once outside, and the
 		// next undo reached past them to whatever came before — taking the
-		// edits with it as part of an unrelated step.
-		if (JSON.stringify($state.snapshot(this.schematic)) !== frame.entered.document) {
+		// edits with it as part of an unrelated step. The levels further down
+		// that the visit changed are part of the same step: the copies there
+		// whose wires leaving re-attached, and anything the inspector reached
+		// from inside.
+		const below = this.noteLevels(frame.entered, frame.enteredLevels);
+		if (below || JSON.stringify($state.snapshot(this.schematic)) !== frame.entered.document) {
 			this.remember(frame.entered);
 		}
 		this.selection = this.stillPresent(frame.selection);
@@ -2824,27 +2902,47 @@ class AppState {
 		const inside = (this.schematic.blocks ?? []).filter(
 			(block) => !open.has(block.id) && block.instances.some((i) => i.kind === kind)
 		);
-		this.reshape(this.schematic.instances.filter((i) => i.kind === kind), change, rename, inside);
+		// So are the copies on the levels under this one, the drawing at the
+		// bottom included: the catalog draws them with the new pins at once,
+		// and they are the same step as this level's, undone with it.
+		const before = this.levelDocs();
+		this.reshape(
+			this.schematic.instances.filter((i) => i.kind === kind),
+			change,
+			rename,
+			inside,
+			this.outside.map((frame) => frame.schematic)
+		);
+		const step = this.past.at(-1);
+		if (step) this.noteLevels(step, before);
 	}
 
 	/**
 	 * `reshapeBlock` for the given boxes, which may be about to become another
 	 * block's. In each block of `inside`, every box of the same kind as one of
-	 * `copies` is followed too, with the wires inside that block.
+	 * `copies` is followed too, with the wires inside that block, and likewise
+	 * on each drawing of `below` — the levels under the open one.
 	 */
 	private reshape(
 		copies: Instance[],
 		change: () => void,
 		rename: (after: string) => string = (name) => name,
-		inside: readonly BlockDef[] = []
+		inside: readonly BlockDef[] = [],
+		below: readonly Schematic[] = []
 	): void {
+		const kinds = new Set(copies.map((c) => c.kind));
 		const drawings = [
-			{ drawing: this.schematic, copies, block: null as BlockDef | null },
+			{ drawing: this.schematic, copies, block: null as BlockDef | null, level: null as Schematic | null },
 			...inside.map((block) => {
-				const kinds = new Set(copies.map((c) => c.kind));
 				const drawing = interior(block, this.schematic);
-				return { drawing, copies: block.instances.filter((i) => kinds.has(i.kind)), block };
-			})
+				return { drawing, copies: block.instances.filter((i) => kinds.has(i.kind)), block, level: null };
+			}),
+			...below.map((level) => ({
+				drawing: level,
+				copies: level.instances.filter((i) => kinds.has(i.kind)),
+				block: null,
+				level
+			}))
 		];
 		const before = new Map<string, Point>();
 		for (const { copies } of drawings) {
@@ -2856,7 +2954,7 @@ class AppState {
 		}
 		change();
 		registerBlocks(this.schematic);
-		for (const { drawing, copies, block } of drawings) {
+		for (const { drawing, copies, block, level } of drawings) {
 			const moved = new Map<string, Point>();
 			for (const placed of copies) {
 				for (const pin of definitionFor(placed).pins) {
@@ -2868,6 +2966,7 @@ class AppState {
 			if (moved.size === 0) continue;
 			this.rewire(moved, this.router(drawing), drawing);
 			if (block) block.wires = tidiedWires(drawing, freshId);
+			else if (level) level.wires = tidiedWires(level, freshId);
 			else this.tidyWires();
 		}
 	}

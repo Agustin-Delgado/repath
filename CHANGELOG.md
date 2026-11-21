@@ -11,6 +11,24 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — One undo takes back everything an edit inside a block did
+
+**Undo reaches the levels underneath.** Leaving a block whose pins moved
+re-attaches the wires of its copies everywhere it is placed, the drawing
+underneath included. Undo used to take back only the level you were on, so those
+copies kept wires re-attached for an edit that, as far as that level knew, had
+never happened. Now leaving is one step on every level it changed, and Undo and
+Redo put all of them back exactly.
+
+**Ports changed from the inspector, inside another block.** Renaming a port or
+moving it to the other side or up the box, with another block open, now moves
+the wires of the copies on the levels underneath as well — they used to be left
+hanging until you came back down — and one Undo takes all of it back.
+
+[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+
+---
+
 ## 21 November 2026 — The chip's timers, pins and serial port, closer to the datasheet
 
 **Phase-correct PWM changes frequency cleanly.** Raising TOP in a phase-correct
