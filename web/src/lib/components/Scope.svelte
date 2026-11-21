@@ -7,6 +7,8 @@
 	import { app } from '$lib/state.svelte';
 	import { formatWithUnit } from '$lib/units';
 	import { decimate, extent, ticks, timeLabel, visibleRange, wheelFactor } from '$lib/plot';
+	import { advance, freshScan, pickFrame, resolveLevels, type TriggerScan } from '$lib/trigger';
+	import { spectrumSpan } from '$lib/spectrum';
 	import {
 		axisY,
 		fitLabel,
@@ -21,6 +23,9 @@
 	import BodePlot from './BodePlot.svelte';
 	import SweepPlot from './SweepPlot.svelte';
 	import SignalsPanel from './scope/SignalsPanel.svelte';
+	import SpectrumPlot from './scope/SpectrumPlot.svelte';
+	import TriggerPanel from './scope/TriggerPanel.svelte';
+	import { Button } from '$lib/ui';
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let host = $state<HTMLDivElement | null>(null);
@@ -182,6 +187,92 @@
 	});
 	const narrowed = $derived(app.result !== null && coverage < Math.max(app.stopTime, 1e-12) * 0.999);
 
+	/**
+	 * The trace the trigger watches: the one chosen, or the first while the
+	 * chosen one is not plotted.
+	 */
+	const triggerIndex = $derived(
+		traces.length === 0 ? -1 : Math.min(app.trigger.source, traces.length - 1)
+	);
+
+	/** What an automatic level and hysteresis come to, from all the source has done in memory. */
+	const triggerLevels = $derived.by(() => {
+		const source = traces[triggerIndex];
+		if (!source || app.trigger.mode === 'off') return null;
+		const { lo, hi } = extent(source.samples, 0, source.samples.length);
+		return resolveLevels(app.trigger, lo, hi);
+	});
+
+	/**
+	 * Where the trigger search has got to. Not reactive: it is the memo of the
+	 * search, carried from chunk to chunk, and started again from nothing when
+	 * the run, the source or a setting that decides where it fires changes —
+	 * an automatic level included, once it has moved by a hysteresis.
+	 */
+	let scan: TriggerScan = freshScan();
+	let scanFor: { acquiring: unknown; key: string } = { acquiring: null, key: '' };
+
+	/** When single was last armed: a trigger before it is not the one it waits for. */
+	let armedAt = $state(-Infinity);
+
+	const triggerFrame = $derived.by(() => {
+		const run = app.result;
+		const source = traces[triggerIndex];
+		const t = app.trigger;
+		if (!run || !source || !triggerLevels || t.mode === 'off') return null;
+		// The level as it resolved, in steps of the hysteresis: an automatic level
+		// that moves by more than that — the swing still growing at the start of
+		// a run — searches again, so a trigger found at a level that has since
+		// moved does not stand. One that settles stops moving, and stops this.
+		const step = Math.max(triggerLevels.hysteresis, 1e-12);
+		const key = [source.key, t.edge, t.holdoff, Math.round(triggerLevels.level / step), step].join('|');
+		const newest = run.time[run.time.length - 1] ?? 0;
+		if (scanFor.acquiring !== app.acquiring || scanFor.key !== key || newest < scan.scanned) {
+			scan = freshScan();
+			scanFor = { acquiring: app.acquiring, key };
+		}
+		scan = advance(scan, run.time, source.samples, { ...triggerLevels, edge: t.edge, holdoff: t.holdoff });
+		return pickFrame(scan.events, {
+			mode: t.mode,
+			width: coverage,
+			position: t.position,
+			now: held.now,
+			running: app.playing,
+			armedAt
+		});
+	});
+
+	// Single arms from the start of a new run, when a stopped run is picked up
+	// again, and when single is chosen.
+	let armedFor: unknown = null;
+	let wasPlaying = false;
+	let lastMode = untrack(() => app.trigger.mode);
+	$effect(() => {
+		const acquiring = app.acquiring;
+		const playing = app.playing;
+		const mode = app.trigger.mode;
+		untrack(() => {
+			if (acquiring !== armedFor) armedAt = -Infinity;
+			else if ((playing && !wasPlaying) || (mode === 'single' && lastMode !== 'single')) armedAt = held.now;
+			armedFor = acquiring;
+			wasPlaying = playing;
+			lastMode = mode;
+		});
+	});
+
+	// Caught: a single stops the run, as Single on a bench scope does, so the
+	// screen it caught stays in memory to be looked at.
+	$effect(() => {
+		if (triggerFrame?.status === 'captured' && untrack(() => app.playing)) app.stop();
+	});
+
+	/** Wait for the next trigger, running on if the run had stopped. */
+	function arm() {
+		armedAt = held.now;
+		view = null;
+		if (!app.playing && app.acquiring) app.togglePlay();
+	}
+
 	const span = $derived.by(() => {
 		const width = coverage;
 		if (!app.result) return { from: 0, to: width };
@@ -189,6 +280,8 @@
 		// it was stopped is kept for when it stops again, but it cannot hold the
 		// screen still over a run that has moved on.
 		if (view && !app.playing) return view;
+		// Triggered, the screen is placed around the trigger instead.
+		if (triggerFrame?.window) return triggerFrame.window;
 		// Before the first full window has gone by, the axis holds still and the
 		// trace grows into it; after that the window slides along with the sweep.
 		const to = Math.max(held.now, width);
@@ -316,6 +409,25 @@
 			return { key: t.key, label: t.label, colour: t.colour, m };
 		});
 	});
+
+	/** The trace the spectrum is of: the one chosen, or the first while that one is not plotted. */
+	const spectrumOf = $derived(
+		traces.length === 0 ? null : traces[Math.min(app.spectrum.source, traces.length - 1)]
+	);
+
+	/** The stretch of time the spectrum is taken over. */
+	const fftSpan = $derived.by(() => {
+		const run = app.result;
+		if (!run || !spectrumOf || !app.spectrum.on) return { from: span.from, to: span.to, whole: false };
+		const period =
+			app.spectrum.span === 'periods'
+				? (measureVisible(run.time, spectrumOf.samples, span.from, span.to)?.period ?? null)
+				: null;
+		return spectrumSpan(app.spectrum, span, held, period);
+	});
+
+	/** The analog traces by their place in the list, for the pickers that choose one. */
+	const sourceItems = $derived(traces.map((t, i) => ({ value: String(i), label: t.label })));
 
 	/** One range per trace, for when they are drawn separated. */
 	const lanes = $derived(traces.map((t) => spanOf([t.samples, t.low, t.high])));
@@ -654,6 +766,56 @@
 			ctx.fill();
 		}
 
+		// The trigger: a tab on the top edge where it fired, and one on the right
+		// edge at its level, in the colour of the trace it watches.
+		const source = traces[triggerIndex];
+		if (source && triggerLevels) {
+			ctx.fillStyle = source.colour;
+			if (triggerFrame?.at != null) {
+				const x = toX(triggerFrame.at);
+				ctx.beginPath();
+				ctx.moveTo(x - 5, plot.y - 10);
+				ctx.lineTo(x + 5, plot.y - 10);
+				ctx.lineTo(x, plot.y - 3);
+				ctx.closePath();
+				ctx.fill();
+				ctx.save();
+				ctx.globalAlpha = 0.5;
+				ctx.setLineDash([2, 4]);
+				ctx.strokeStyle = source.colour;
+				ctx.lineWidth = 1;
+				ctx.beginPath();
+				ctx.moveTo(x, plot.y);
+				ctx.lineTo(x, plot.y + plot.h);
+				ctx.stroke();
+				ctx.restore();
+			}
+			const y = mapY(triggerIndex, triggerLevels.level);
+			if (y >= plot.y - 1 && y <= plot.y + plot.h + 1) {
+				const right = plot.x + plot.w;
+				ctx.beginPath();
+				ctx.moveTo(right + 1, y);
+				ctx.lineTo(right + 9, y - 5);
+				ctx.lineTo(right + 9, y + 5);
+				ctx.closePath();
+				ctx.fill();
+			}
+		}
+
+		// What the spectrum under the scope is taken over, as a bar along the
+		// bottom of the plot: it need not be the screen.
+		if (app.spectrum.on && spectrumOf) {
+			const a = Math.max(toX(fftSpan.from), plot.x);
+			const b = Math.min(toX(fftSpan.to), plot.x + plot.w);
+			if (b > a) {
+				ctx.save();
+				ctx.globalAlpha = 0.6;
+				ctx.fillStyle = spectrumOf.colour;
+				ctx.fillRect(a, plot.y + plot.h - 3, b - a, 3);
+				ctx.restore();
+			}
+		}
+
 		// Cursor.
 		if (marker !== null) {
 			const x = toX(marker);
@@ -960,7 +1122,11 @@
 			span,
 			padding,
 			dpr,
-			app.channels
+			app.channels,
+			triggerFrame,
+			triggerLevels,
+			fftSpan,
+			app.spectrum.on
 		];
 		// Untracked, so the list above is the whole of what repaints it. `draw`
 		// reads the raw playback time, and tracked it would repaint the canvas on
@@ -976,6 +1142,7 @@
 	{:else if app.analysis === 'dc'}
 		<SweepPlot />
 	{:else}
+	<div class="stack" class:split={app.spectrum.on}>
 	<div class="plot" bind:this={host}>
 		<canvas
 			bind:this={canvas}
@@ -1041,10 +1208,44 @@
 			</div>
 		{/if}
 	</div>
+	{#if app.spectrum.on}
+		<SpectrumPlot
+			time={app.result?.time ?? null}
+			samples={spectrumOf?.samples ?? null}
+			from={fftSpan.from}
+			to={fftSpan.to}
+			whole={fftSpan.whole}
+			colour={spectrumOf?.colour ?? 'currentColor'}
+			sources={sourceItems}
+		/>
+	{/if}
+	</div>
 	{/if}
 
 	<SignalsPanel bind:measuring bind:separate traceCount={traces.length}>
+		{#snippet actions()}
+			{#if app.analysis === 'transient'}
+				<Button
+					size="sm"
+					class="h-5 px-1.5 text-3xs"
+					active={app.spectrum.on}
+					aria-pressed={app.spectrum.on}
+					onclick={() => app.setSpectrum({ on: !app.spectrum.on })}
+					title="The spectrum of a trace, under the scope: tones, levels and THD"
+				>
+					fft
+				</Button>
+			{/if}
+		{/snippet}
 		{#snippet measures()}
+		{#if app.analysis === 'transient'}
+			<TriggerPanel
+				sources={sourceItems}
+				status={triggerFrame?.status ?? null}
+				resolved={triggerLevels}
+				{arm}
+			/>
+		{/if}
 		{#if measurements.length > 0 || logicMeasurements.length > 0}
 			<!--
 				Each of these is something you could get from two cursors and some
@@ -1221,6 +1422,17 @@
 		.scope {
 			grid-template-columns: minmax(0, 1fr) 160px;
 		}
+	}
+
+	.stack {
+		display: grid;
+		grid-template-rows: minmax(0, 1fr);
+		min-width: 0;
+		min-height: 0;
+	}
+
+	.stack.split {
+		grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
 	}
 
 	.plot {

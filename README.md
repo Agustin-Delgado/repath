@@ -293,7 +293,7 @@ would show you.
 | **Microcontrollers** | ATmega328P and an Arduino Uno board running a `.hex` you load: timers and PWM, ADC, USART to a serial monitor, SPI, I²C, EEPROM and the watchdog |
 | **Blocks** | any part of a drawing boxed up as one part, edited inside, placed again and nested |
 | **Imported** | `.model` cards pasted onto a part, and `.subckt` definitions placed as one |
-| **Instruments** | probe, scope with cursors, measurements and per-channel gain, Bode plot |
+| **Instruments** | probe, scope with cursors, measurements, per-channel gain and an edge trigger, FFT of a trace with THD, Bode plot |
 | **Analyses** | DC operating point, mixed-signal transient, AC frequency sweep, tolerance sweep |
 
 ## Using the editor
@@ -326,6 +326,8 @@ would show you.
 | Run / stop the sweep | `Space` |
 | Simulate | press Run — nothing runs until you ask |
 | Plot a net | type its name under **Add a signal** beside the scope; the × on a plotted one takes it off |
+| Hold a waveform still | **Trigger** beside the scope: Auto, Normal or Single, on a trace's rising or falling edge, with level, hysteresis, holdoff and how much of the screen comes before the trigger |
+| See a trace's spectrum | **fft** beside the scope: the spectrum of a trace under it, its strongest tones with their frequency and level, and the THD of the strongest to the 10th harmonic |
 | Read it in your own symbols | the **ANSI / IEC / GOST** selector in the toolbar — zigzag or box resistors, shaped or boxed gates, an EMF drawn with an arrow |
 
 Nothing simulates when the page opens: press **Run**, under the drawing, or open one of the
