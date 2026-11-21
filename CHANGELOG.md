@@ -33,6 +33,8 @@ an ammeter, and a part that is not a source is refused with that advice. The
 choice follows a rename, a copy pasted with its source reads the copy, and
 inside a block each copy reads its own.
 
+[#101](https://github.com/Agustin-Delgado/repath/pull/101)
+
 ---
 
 ## 21 November 2026 — A DC sweep, for I-V curves
