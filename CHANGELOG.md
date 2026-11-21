@@ -58,6 +58,28 @@ Nothing about the outputs changed: they reach the same levels as before. What
 one figure cannot say — CMOS switching current, a memory's draw while
 selected, a lit LED matrix, an LCD's backlight — is listed in the backlog.
 ([#96](https://github.com/Agustin-Delgado/repath/pull/96))
+\n---\n\n## 21 November 2026 — One undo takes back everything an edit inside a block did
+
+**Undo reaches the levels underneath.** Leaving a block whose pins moved
+re-attaches the wires of its copies everywhere it is placed, the drawing
+underneath included. Undo used to take back only the level you were on, so those
+copies kept wires re-attached for an edit that, as far as that level knew, had
+never happened. Now leaving is one step on every level it changed, and Undo and
+Redo put all of them back exactly.
+
+**Ports changed from the inspector, inside another block.** Renaming a port or
+moving it to the other side or up the box, with another block open, now moves
+the wires of the copies on the levels underneath as well — they used to be left
+hanging until you came back down — and one Undo takes all of it back.
+
+**Probes come back with what they were on.** Undoing a port rename used to put
+the old name back on the pin but leave its probe on the new name, watching
+nothing. The probes are now part of every step, on every level: Undo and Redo
+put them back exactly, and picking or dropping a probe — by hand, or Run picking
+a few for an empty scope — is a step of its own, so undoing an earlier edit no
+longer takes it with it.
+
+[#93](https://github.com/Agustin-Delgado/repath/pull/93)
 
 ---
 
