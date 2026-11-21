@@ -141,6 +141,25 @@ impl Trace {
         if order == 3 { step.cbrt() } else { step.sqrt() }
     }
 
+    /// Forget everything before the newest sample.
+    ///
+    /// For a corner: what is on the far side of a kink is not the same smooth
+    /// curve as what follows it, and a divided difference taken across one
+    /// measures the kink, not the curvature the next step has to follow.
+    pub fn restart(&mut self) {
+        self.filled = self.filled.min(1);
+    }
+
+    /// Largest next step under `integration` were `(time, value)` the newest
+    /// accepted sample — the estimate a step is checked against once it has been
+    /// solved and before it is accepted. Records nothing: a step that fails the
+    /// check is taken again shorter, and its sample was never part of the run.
+    pub fn suggested_step_after(&self, time: f64, value: f64, integration: Integration) -> f64 {
+        let mut trial = self.clone();
+        trial.push(time, value);
+        trial.suggested_step_for(integration)
+    }
+
     /// Most recent sample, if any.
     pub fn last(&self) -> Option<(f64, f64)> {
         (self.filled > 0).then(|| (self.t[0], self.v[0]))
@@ -150,6 +169,44 @@ impl Trace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The check a solved step is put to is the estimate it would leave were it
+    /// accepted, and putting it there leaves the history as it was: a rejected
+    /// step's sample must not be the first of the next window.
+    #[test]
+    fn a_trial_sample_is_judged_and_not_kept() {
+        let q = |t: f64| (t / 1e-6).powi(3) * 1e-9;
+        let mut tr = Trace::default();
+        for k in 0..3 {
+            tr.push(k as f64 * 1e-6, q(k as f64 * 1e-6));
+        }
+        let before = tr.suggested_step();
+        for integration in [Integration::Trapezoidal, Integration::BackwardEuler] {
+            let trial = tr.suggested_step_after(3e-6, q(3e-6), integration);
+            let mut kept = tr.clone();
+            kept.push(3e-6, q(3e-6));
+            assert_eq!(trial, kept.suggested_step_for(integration));
+        }
+        assert_eq!(tr.last(), Some((2e-6, q(2e-6))));
+        assert_eq!(tr.suggested_step().to_bits(), before.to_bits());
+    }
+
+    /// Past a corner the window starts again from the corner itself, so that
+    /// the kink is not read as curvature for the three steps after it.
+    #[test]
+    fn a_restart_keeps_only_the_newest_sample() {
+        let mut tr = Trace::default();
+        for k in 0..4 {
+            let t = k as f64 * 1e-6;
+            tr.push(t, (t / 1e-6).powi(3) * 1e-9);
+        }
+        assert!(tr.suggested_step().is_finite());
+        tr.restart();
+        assert_eq!(tr.last(), Some((3e-6, 27e-9)));
+        tr.push(4e-6, 30e-9);
+        tr.push(5e-6, 33e-9);
+        assert!(tr.suggested_step().is_infinite(), "the samples before the corner were still read");
+    }
 
     #[test]
     fn no_opinion_without_enough_history() {

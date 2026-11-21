@@ -287,6 +287,30 @@ pub trait Element: std::fmt::Debug + Send + AsAny {
         f64::INFINITY
     }
 
+    /// A corner — an edge of a source, a logic level arriving — has reached this
+    /// element at its newest accepted timepoint. Its error history from before
+    /// that point describes a different curve, and is to be forgotten.
+    fn corner(&mut self) {}
+
+    /// The same estimate as [`Element::max_timestep`], but taken with the
+    /// timepoint just solved in `ctx` counted as though it had been accepted,
+    /// and without accepting it.
+    ///
+    /// This is how a step is judged after it is taken. `max_timestep` sizes the
+    /// next step from history alone, which cannot see an onset that begins
+    /// inside that step — a junction starting to conduct, a ramp turning a
+    /// corner nobody announced — so the step goes long across it and nothing
+    /// ever said so. Solved, the step's own point shows the curvature; if it
+    /// asks for a step shorter than the one just taken, the solver throws the
+    /// step away and takes it again, and the element has recorded nothing.
+    ///
+    /// Must change nothing. `INFINITY` means no opinion, which is right for
+    /// anything whose step limit is not a truncation error.
+    fn trial_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        let _ = ctx;
+        f64::INFINITY
+    }
+
     /// Next instant strictly after `t` where this element is not differentiable —
     /// the corner of a pulse, a point in a piecewise-linear table. The transient
     /// loop lands exactly on these instead of stepping across them, which is the

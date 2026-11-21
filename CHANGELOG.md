@@ -11,6 +11,28 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — A step that turns out too long is taken again
+
+**A 555 blinks at the same rate every cycle.** Its capacitor now turns round
+within a millivolt of a third and two thirds of the supply, every time. Before,
+each comparator trip was crossed in one long step, so the capacitor overshot by
+up to 36 mV, and no two periods came out the same length. The same goes for
+anything that switches without a source edge or a logic edge to announce it:
+a comparator, a transistor coming out of cutoff, a diode starting to conduct.
+The solver used to size each step from the steps before it, so it could not
+see an onset that started inside the step. Now it checks every solved step
+against its own error estimate. When the step was too long, it takes it again
+shorter, before anything downstream (the logic, the chip, the screen) has used
+it.
+
+It costs little where nothing switches. On circuits that do, it pays for the
+accuracy. The 555 blinker takes 1.6 times as many steps, the Arduino blink
+1.2 times. The LED matrix takes fewer steps than before.
+
+[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+
+---
+
 ## 21 November 2026 — The chip's timers, pins and serial port, closer to the datasheet
 
 **Phase-correct PWM changes frequency cleanly.** Raising TOP in a phase-correct
