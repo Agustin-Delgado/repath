@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Dialog } from '@human-kit/ui';
-	import type { Snippet } from 'svelte';
+	import { untrack, type Snippet } from 'svelte';
 
 	/**
 	 * A modal panel over a dimmed app. Escape and a press outside close it,
@@ -17,9 +17,23 @@
 	};
 
 	let { open = $bindable(false), title, class: className = '', children }: Props = $props();
+
+	/**
+	 * Where the focus was when it opened. The library hands the focus back to
+	 * its trigger, and a dialog opened by a shortcut has none, so without this
+	 * Escape left the focus on the page's body.
+	 */
+	let returnTo = $state<HTMLElement | null>(null);
+	$effect.pre(() => {
+		if (!open) return;
+		untrack(() => {
+			const focused = document.activeElement;
+			returnTo = focused instanceof HTMLElement && focused !== document.body ? focused : null;
+		});
+	});
 </script>
 
-<Dialog.Root bind:open>
+<Dialog.Root bind:open triggerRef={returnTo}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/45" />
 		<Dialog.Content
