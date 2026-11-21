@@ -42,6 +42,7 @@ discrete part's, about a 2N7000 or a BS250 — a few ohms on — rather than a
 transistor on a chip at 1.7 kΩ. An LM358's input bias current now flows out of
 its inputs, as its PNP inputs push it, so an offset through a source
 resistance comes out the right way round.
+[#89](https://github.com/Agustin-Delgado/repath/pull/89)
 
 ---
 
