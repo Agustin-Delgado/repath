@@ -11,6 +11,20 @@ early entries point at those instead.
 
 ---
 
+## 20 November 2026 — Saving from inside a block keeps the whole circuit
+
+**Save and Share work wherever you are.** With a block open for editing, File
+→ Save and Share used to write only what was on screen: the block's inside.
+Opening that file or link lost the drawing around it, and the block lost what
+you had just changed in it. Now both write the whole circuit, with the edits
+inside the open block (or blocks, when one is open inside another) in place,
+exactly as if you had closed them first. You stay where you were, inside the
+block, with your undo history intact. The file or link opens on the drawing;
+which block was open is not part of it.
+[#83](https://github.com/Agustin-Delgado/repath/pull/83)
+
+---
+
 ## 20 November 2026 — The watchdog bites
 
 **The chip's watchdog works now.** A sketch that calls `wdt_enable()` and then
