@@ -11,6 +11,25 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Large circuits run in a fraction of the time
+
+**A circuit of hundreds of parts no longer slows to a crawl.** The engine used
+to solve every step as if each node in the drawing were wired to every other
+one, so doubling a circuit made each step up to eight times slower. It now
+works only with the connections that are actually there, and works out the
+order to take them in once per circuit rather than once per step. A ladder of
+a thousand resistors and capacitors runs about five times faster, a mesh of
+1700 parts eight times, a board of 48 counters lighting LEDs six times, a
+chain of 80 transistor stages five times; an AC sweep of that ladder went from
+nearly a second to twenty milliseconds. Circuits the size of the examples run
+as before, and the answers agree with the old ones to the last figure any plot
+shows. A failed solve still names the node and the parts to blame, however
+large the circuit around them.
+
+[#103](https://github.com/Agustin-Delgado/repath/pull/103)
+
+---
+
 ## 21 November 2026 — A DC sweep, for I-V curves
 
 **Run can now sweep a source instead of running in time.** Pick *DC sweep* as

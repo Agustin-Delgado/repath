@@ -118,7 +118,9 @@ because each step is what makes the next one worth having:
    unfolded into the netlist when the drawing compiles.)*
 4. **Sparse solver.** Dense LU is fine to a few hundred nodes and quadratic-ish
    past that. It matters once steps 2 and 3 bring circuits big enough to feel it,
-   which is why it is fourth and not first.
+   which is why it is fourth and not first. *(In: a sparse LU solves the real
+   and the complex systems, and a thousand-part ladder that took over half a
+   second runs in a few tens of milliseconds.)*
 5. **Measurement.** Parameter sweep, noise, Fourier and THD. *(The scope is
    mostly there: gain and position per channel, split scales, two cursors with
    deltas, and a panel that reads off frequency, duty, RMS, rise time and
@@ -139,8 +141,14 @@ because each step is what makes the next one worth having:
       block.
 - [ ] **Current-controlled sources** (`F`, `H`), which some vendor macromodels
       need before they will build.
-- [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
+- [x] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
       pivoting). The `LinearSystem` interface was kept narrow for this.
+      Minimum-degree ordering once per pattern, left-looking LU with threshold
+      pivoting, numeric refactoring on the same pivots every Newton iteration
+      and a fresh factorization when one of them goes bad; AC solves on the
+      same code over complex numbers. *What is left:* block triangular form
+      (KLU's first step), which would let a circuit of independent pieces be
+      factored piece by piece; nothing drawn by hand needs it yet.
 - [ ] **Meyer gate capacitance** on the MOSFET — the channel charge split that
       makes `CGS` and `CGD` follow the operating region instead of sitting still.
       What a gate charge curve needs; the constant values are already enough for
@@ -195,8 +203,13 @@ because each step is what makes the next one worth having:
       file, a share link and a draft are one versioned document (`format.ts`),
       read through an ordered list of migrations; a document from a newer build
       is refused with the reason.
-- [ ] **Performance budget and benchmarks** — a 500-component circuit that pans at
+- [x] **Performance budget and benchmarks** — a 500-component circuit that pans at
       60 fps and simulates in under a second, measured in CI rather than assumed.
+      The engine half is in: `cargo run --release -p repath-core --example bench`
+      times ladders, meshes, transistor chains, banks of counters and editor
+      examples, and the suite fails a 738-part mesh that stops simulating
+      inside its budget or a grid whose factors fill in. *What is left:* the
+      60 fps pan, which is the canvas's budget and needs a browser to measure.
 
 ---
 
