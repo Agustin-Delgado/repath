@@ -140,7 +140,7 @@
 	}
 
 	const tip = (part: PartEntry) =>
-		[part.label, part.description, part.caveat, removable(part) ? 'Right-click to remove' : '']
+		[part.label, part.description, part.caveat, removable(part) ? 'Right-click to delete' : '']
 			.filter(Boolean)
 			.join(' — ');
 </script>
@@ -216,7 +216,7 @@
 					</div>
 				{:else}
 					<p class="m-0 px-1 py-4 text-center text-2xs text-muted">
-						No part matches “{query.trim()}”.
+						No match for “{query.trim()}”.
 					</p>
 				{/each}
 			</div>
@@ -230,7 +230,7 @@
 						-->
 						<PartTile
 							label="Wire"
-							title="Draw a wire between two pins, or off an existing wire (W)"
+							title="Draw a wire, or branch off a wire (W)"
 							active={app.tool.mode === 'wire'}
 							disabled={app.locked}
 							onclick={wire}
@@ -257,7 +257,7 @@
 						{#if app.inside}
 							<PartTile
 								label="Port"
-								title="A terminal of this block: wire a pin to it and the box gets a pin under its name"
+								title="Block terminal: each port is a pin on the box"
 								active={isArmed(app, 'port')}
 								onclick={() => pick('port')}
 							>

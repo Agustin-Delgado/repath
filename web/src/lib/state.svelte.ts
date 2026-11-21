@@ -1443,7 +1443,7 @@ class AppState {
 		// way of asking — a replayed step, a part still in the hand from before.
 		const block = blockOf(this.whole, kind);
 		if (block && this.wouldContainItself(block.id)) {
-			this.notice = `${block.name} cannot go in here: it would end up inside itself.`;
+			this.notice = `Cannot put ${block.name} here: it would be inside itself.`;
 			return null;
 		}
 		this.checkpoint();
@@ -1766,8 +1766,8 @@ class AppState {
 			this.withdrawCheckpoint(was);
 			const names = rotating.map((i) => i.name).join(', ');
 			this.notice = joined
-				? `Turning ${names} would put ${joined[0]} on the same net as ${joined[1]}. Move it clear first.`
-				: `Turning ${names} would change what is connected. Move it clear first.`;
+				? `Rotating ${names} would put ${joined[0]} on the same net as ${joined[1]}. Move it clear first.`
+				: `Rotating ${names} would change the connections. Move it clear first.`;
 			return;
 		}
 
@@ -2163,7 +2163,7 @@ class AppState {
 			);
 			if (joined) {
 				this.cancelMove();
-				this.notice = `That would put ${joined[0]} on the same net as ${joined[1]}, so nothing moved. Drop it somewhere clear.`;
+				this.notice = `Not moved: ${joined[0]} would be on the same net as ${joined[1]}. Drop it in a clear area.`;
 				return;
 			}
 		}
@@ -2412,7 +2412,7 @@ class AppState {
 		const trimmed = name.trim();
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return null;
-		if (!trimmed) return 'A component needs a name.';
+		if (!trimmed) return 'A part needs a name.';
 		// A port's name is a pin name on the box, and pin names are one word
 		// that fits inside its edge.
 		if (instance.kind === 'port' && /\s/.test(trimmed)) return 'A port name cannot have spaces in it.';
@@ -3102,7 +3102,7 @@ class AppState {
 		if (!trimmed) return 'A block needs a name.';
 		if (block.name === trimmed) return null;
 		if ((this.schematic.blocks ?? []).some((b) => b.id !== id && b.name === trimmed)) {
-			return `There is already a block called ${trimmed}.`;
+			return `A block called ${trimmed} already exists.`;
 		}
 		this.trace.record({ op: 'reblock', from: block.name, to: trimmed });
 		this.checkpoint();
@@ -3273,7 +3273,7 @@ class AppState {
 		if (trimmed.length > BLOCK_PORT_WIDTH) return PORT_TOO_LONG;
 		if (entry.name === trimmed) return null;
 		if (block.instances.some((i) => i.name === trimmed)) {
-			return `${block.name} already has something called ${trimmed}.`;
+			return `${block.name} already has a port or part called ${trimmed}.`;
 		}
 		this.trace.record({ op: 'port', block: block.name, from: port, to: trimmed });
 		this.checkpoint();
@@ -3369,15 +3369,15 @@ class AppState {
 		// them still places left a box that nothing could build — a link that
 		// would not open and a file that would not load.
 		if (this.openBlocks.includes(id)) {
-			this.notice = `${block.name} is open for editing, so it stays.`;
+			this.notice = `Cannot delete ${block.name}: it is open for editing.`;
 			return false;
 		}
 		if (this.usesElsewhere(kind) > 0) {
 			const why =
 				this.outside.length > 0 && this.whole.instances.some((i) => i.kind === kind)
-					? 'is placed on the drawing outside this block'
-					: 'is used inside another block';
-			this.notice = `${block.name} ${why}, so it stays.`;
+					? 'it is in the circuit outside this block'
+					: 'another block uses it';
+			this.notice = `Cannot delete ${block.name}: ${why}.`;
 			return false;
 		}
 		this.trace.record({ op: 'unblock', name: block.name });
@@ -3453,7 +3453,7 @@ class AppState {
 	importSubcircuits(source: string): { added: string[]; ids: string[]; error?: string } {
 		const found = parseSubcircuits(source);
 		if (found.length === 0) {
-			return { added: [], ids: [], error: 'No .subckt definition found in that text.' };
+			return { added: [], ids: [], error: 'No .subckt definition found.' };
 		}
 
 		const existing = this.schematic.subcircuits ?? [];
@@ -3518,9 +3518,9 @@ class AppState {
 		if (this.usesElsewhere(kind) > 0) {
 			const why =
 				this.outside.length > 0 && this.whole.instances.some((i) => i.kind === kind)
-					? 'is placed on the drawing outside this block'
-					: 'is used inside a block';
-			this.notice = `${sub.name} ${why}, so it stays.`;
+					? 'it is in the circuit outside this block'
+					: 'a block uses it';
+			this.notice = `Cannot delete ${sub.name}: ${why}.`;
 			return false;
 		}
 		this.trace.record({ op: 'unimport', name: sub.name });
@@ -3603,7 +3603,7 @@ class AppState {
 		for (const id of reached.blocks) {
 			if (!this.wouldContainItself(id, clipboard.blocks ?? [])) continue;
 			const name = lookup.blocks?.find((b) => b.id === id)?.name ?? 'a block in it';
-			this.notice = `That cannot be pasted in here: ${name} would end up inside itself.`;
+			this.notice = `Cannot paste here: ${name} would be inside itself.`;
 			return;
 		}
 
@@ -3638,7 +3638,7 @@ class AppState {
 		this.selection = this.stillPresent(was.selection);
 		this.withdrawCheckpoint(was);
 		if (joined) {
-			this.notice = `Pasting there would put ${joined[0]} on the same net as ${joined[1]}, so nothing was pasted. Paste it somewhere clear.`;
+			this.notice = `Not pasted: ${joined[0]} would be on the same net as ${joined[1]}. Paste in a clear area.`;
 		}
 	}
 
@@ -4183,7 +4183,7 @@ class AppState {
 			groups: block.groups
 		}));
 		const looped = selfContained({ instances: [], wires: [], blocks });
-		if (looped) throw new Error(`That file has ${looped} placed inside itself, so it cannot be opened.`);
+		if (looped) throw new Error(`Cannot open the file: ${looped} is placed inside itself.`);
 		registerBlocks({ instances: [], wires: [], blocks });
 		// The parts inside a block are asked of the catalog as well as the drawing's:
 		// one it does not know would otherwise surface later, on every compile.
@@ -4458,7 +4458,7 @@ class AppState {
 					try {
 						definitionOf(step.kind);
 					} catch {
-						return stop(`no component called ${step.kind}`);
+						return stop(`no part type ${step.kind}`);
 					}
 					if (!this.place(step.kind, step.x, step.y, step.rotation)) {
 						return stop(this.notice ?? `${step.kind} cannot be placed here`);
@@ -4501,7 +4501,7 @@ class AppState {
 					break;
 				case 'rename': {
 					const id = partId(step.part);
-					if (!id) return stop(`no component named ${step.part}`);
+					if (!id) return stop(`no part named ${step.part}`);
 					this.rename(id, step.to);
 					break;
 				}
@@ -4510,7 +4510,7 @@ class AppState {
 					const ids: string[] = [];
 					for (const name of step.parts) {
 						const id = partId(name);
-						if (!id) return stop(`no component named ${name}`);
+						if (!id) return stop(`no part named ${name}`);
 						ids.push(id);
 					}
 					this.selection = ids;
@@ -4545,7 +4545,7 @@ class AppState {
 					const ids: string[] = [];
 					for (const name of step.parts) {
 						const id = partId(name);
-						if (!id) return stop(`no component named ${name}`);
+						if (!id) return stop(`no part named ${name}`);
 						ids.push(id);
 					}
 					this.selection = ids;
@@ -4558,7 +4558,7 @@ class AppState {
 				}
 				case 'regroup': {
 					const id = partId(step.part);
-					if (!id) return stop(`no component named ${step.part}`);
+					if (!id) return stop(`no part named ${step.part}`);
 					const group = this.groupOf(id);
 					if (!group) return stop(`${step.part} is not in a group`);
 					this.renameGroup(group.id, step.name);
@@ -4566,13 +4566,13 @@ class AppState {
 				}
 				case 'detach': {
 					const id = partId(step.part);
-					if (!id) return stop(`no component named ${step.part}`);
+					if (!id) return stop(`no part named ${step.part}`);
 					if (!this.detachBlock(id)) return stop(`${step.part} is not a copy of a block`);
 					break;
 				}
 				case 'param': {
 					const id = partId(step.part);
-					if (!id) return stop(`no component named ${step.part}`);
+					if (!id) return stop(`no part named ${step.part}`);
 					this.setParam(id, step.key, step.value);
 					break;
 				}
@@ -4591,7 +4591,7 @@ class AppState {
 					const ids: string[] = [];
 					for (const name of step.parts) {
 						const id = partId(name);
-						if (!id) return stop(`no component named ${name}`);
+						if (!id) return stop(`no part named ${name}`);
 						ids.push(id);
 					}
 					for (const ref of step.wires) {
@@ -4734,7 +4734,7 @@ class AppState {
 		// the inside alone — which has no ground — and failing for it.
 		if (this.depth > 0) {
 			this.discardRun();
-			this.notice = 'Leave the block to run the circuit. A block’s inside is shared by every copy of it, so it has no voltages of its own to show.';
+			this.notice = 'Leave the block to run the circuit. A block inside has no voltages: all copies share it.';
 			return;
 		}
 		if (!this.compiled.netlist) {
@@ -4760,7 +4760,7 @@ class AppState {
 				this.discardRun();
 				if (!this.hasAcDrive) {
 					throw new Error(
-						'No source is driving the sweep. Set a voltage source’s AC drive to 1 to make it the input.'
+						'No source drives the sweep. Set the AC drive of a voltage source to 1.'
 					);
 				}
 				this.acResult = await runFrequencySweep(compiled.netlist, this.acStart, this.acStop);
@@ -4770,7 +4770,7 @@ class AppState {
 				const source = this.dcSwept;
 				if (!source) {
 					throw new Error(
-						'There is no source to sweep. Place a voltage source, a current source, a battery or a supply.'
+						'There is no source to sweep. Add a voltage source, current source, battery or supply.'
 					);
 				}
 				const plan = this.dcPlan;

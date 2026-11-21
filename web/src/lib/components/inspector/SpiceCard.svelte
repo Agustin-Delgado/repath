@@ -38,9 +38,9 @@
 	const cardProblem = $derived.by(() => {
 		if (card || !text.trim()) return null;
 		const cards = parseModelCards(text);
-		if (cards.length === 0) return 'No .model card found in that text.';
+		if (cards.length === 0) return 'No .model card found.';
 		const types = [...new Set(cards.map((c) => c.type))].join(', ');
-		return `That card is a ${types}, which does not fit a ${label}.`;
+		return `A ${types} card does not fit a ${label}.`;
 	});
 
 	/**
@@ -54,10 +54,10 @@
 	<h3 class={sectionTitle}>SPICE model</h3>
 	{#if card}
 		<p class={hint}>
-			Using <strong class="text-fg">{card.name}</strong>. Its values override the fields above.
+			Uses <strong class="text-fg">{card.name}</strong>. It overrides the fields above.
 		</p>
 		{#if card.ignored.length > 0}
-			<p class={hint}>Not modelled here: {card.ignored.join(', ')}.</p>
+			<p class={hint}>Not modelled: {card.ignored.join(', ')}.</p>
 		{/if}
 	{/if}
 	<TextArea

@@ -207,29 +207,28 @@ impl std::fmt::Display for SimError {
                 "failed to converge at t = {time:.6e} s after {iterations} iterations{culprits}"
             ),
             SimError::TimestepTooSmall { time, step, culprits } => {
-                write!(f, "timestep collapsed to {step:.3e} s at t = {time:.6e} s{culprits}")
+                write!(f, "time step became too small ({step:.3e} s) at t = {time:.6e} s{culprits}")
             }
             SimError::StepLimit { time } => {
-                write!(f, "hit the step limit at t = {time:.6e} s")
+                write!(f, "reached the step limit at t = {time:.6e} s")
             }
             SimError::Empty => write!(f, "the circuit has nothing to solve"),
             SimError::NonFinite { time, culprits } => write!(
                 f,
-                "the solution became infinite at t = {time:.6e} s{culprits}; check for a part value of zero or one far out of range"
+                "the solution became infinite at t = {time:.6e} s{culprits}; check for a part value of zero or far out of range"
             ),
             SimError::DigitalLoop { time, nets } => write!(
                 f,
-                "a loop of logic never settles at t = {time:.6e} s (nets {}); a gate in it needs a delay",
+                "a logic loop does not settle at t = {time:.6e} s (nets {}); add a gate delay in the loop",
                 nets.join(", ")
             ),
-            SimError::TooLarge { unknowns, limit } => write!(
-                f,
-                "the circuit has {unknowns} unknowns and the solver holds at most {limit}"
-            ),
+            SimError::TooLarge { unknowns, limit } => {
+                write!(f, "the circuit has {unknowns} unknowns; the maximum is {limit}")
+            }
             SimError::Invalid { reason } => write!(f, "{reason}"),
             SimError::TooMuchData { time } => write!(
                 f,
-                "the run was stopped at t = {time:.6e} s because it had recorded more than can be kept in memory; shorten it or widen the step"
+                "the run stopped at t = {time:.6e} s: memory is full; shorten the run or use a larger step"
             ),
         }
     }
@@ -744,7 +743,7 @@ impl AcConfig {
         if count > MAX_AC_POINTS {
             return Err(SimError::Invalid {
                 reason: format!(
-                    "that sweep is {count} frequencies; the most one sweep solves is {MAX_AC_POINTS}"
+                    "the sweep has {count} frequencies; the maximum is {MAX_AC_POINTS}"
                 ),
             });
         }
@@ -1493,7 +1492,7 @@ impl Simulator {
         if values.len() > MAX_DC_POINTS {
             return Err(SimError::Invalid {
                 reason: format!(
-                    "that sweep is {} points; the most one sweep solves is {MAX_DC_POINTS}",
+                    "the sweep has {} points; the maximum is {MAX_DC_POINTS}",
                     values.len()
                 ),
             });

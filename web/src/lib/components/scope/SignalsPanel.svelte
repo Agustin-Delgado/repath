@@ -92,7 +92,7 @@
 	{#if c.mixed}
 		<span
 			class="{chip} bg-[var(--badge-mixed)] text-[var(--badge-mixed-text)]"
-			title="This net is bridged between the analog and digital domains">mixed</span
+			title="Net bridges the analog and digital domains">mixed</span
 		>
 	{:else if c.logic}
 		<span class="{chip} bg-[var(--badge-logic)] text-[var(--badge-logic-text)]">logic</span>
@@ -110,7 +110,7 @@
 			active={measuring}
 			aria-pressed={measuring}
 			onclick={() => (measuring = !measuring)}
-			title="Read off frequency, period, duty, RMS, rise time and overshoot — logic lanes too"
+			title="Frequency, period, duty, RMS, rise time, overshoot"
 		>
 			measure
 		</Button>
@@ -122,8 +122,8 @@
 				aria-pressed={separate}
 				onclick={() => (separate = !separate)}
 				title={separate
-					? 'One axis for everything'
-					: 'Give each signal its own scale, so a small one is not flattened by a large one'}
+					? 'Use one axis for all traces'
+					: 'Give each trace its own scale'}
 			>
 				<!--
 					One name, pressed or not. Named for the state it was in, the
@@ -159,7 +159,7 @@
 					{#if c}{@render badge(c)}{/if}
 					{#if c}
 						{@const placed = app.isPlacedProbe(probe.key)}
-						{@const what = placed ? `Remove probe ${probe.label} from the drawing` : `Stop plotting ${probe.label}`}
+						{@const what = placed ? `Delete probe ${probe.label}` : `Stop plotting ${probe.label}`}
 						<Pressable
 							type="button"
 							class="flex cursor-pointer border-0 bg-transparent p-0 text-muted opacity-60 group-hover:opacity-100 hover:text-fg"
@@ -185,18 +185,18 @@
 						: 'hidden'}"
 				>
 					{#if probe.analog}
-						<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustGain(probe.key, -1)} title="Less gain" aria-label="Less gain">
+						<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustGain(probe.key, -1)} title="Less gain" aria-label="Less gain on {probe.label}">
 							<Minus />
 						</Button>
 						<span class="min-w-6 text-center font-mono text-3xs">×{knob.gain}</span>
-						<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustGain(probe.key, 1)} title="More gain" aria-label="More gain">
+						<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustGain(probe.key, 1)} title="More gain" aria-label="More gain on {probe.label}">
 							<Plus />
 						</Button>
 					{/if}
-					<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustOffset(probe.key, 1)} title="Move up" aria-label="Move up">
+					<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustOffset(probe.key, 1)} title="Move up" aria-label="Move {probe.label} up">
 						<ArrowUp />
 					</Button>
-					<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustOffset(probe.key, -1)} title="Move down" aria-label="Move down">
+					<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustOffset(probe.key, -1)} title="Move down" aria-label="Move {probe.label} down">
 						<ArrowDown />
 					</Button>
 					{#if turned}
@@ -204,13 +204,13 @@
 							type="button"
 							class="ml-auto cursor-pointer border-0 bg-transparent p-0 font-mono text-3xs text-accent hover:underline"
 							onclick={() => app.resetChannel(probe.key)}
-							title="Back to automatic">auto</Pressable
+							title="Reset to automatic">auto</Pressable
 						>
 					{/if}
 				</div>
 			</li>
 		{:else}
-			<li class="px-1 py-1 text-muted">Nothing plotted yet. Add a signal below.</li>
+			<li class="px-1 py-1 text-muted">Nothing plotted.</li>
 		{/each}
 	</ul>
 
@@ -254,12 +254,12 @@
 						</Pressable>
 					</li>
 				{:else}
-					<li class="px-1 py-0.5 text-muted">No net called “{query.trim()}”.</li>
+					<li class="px-1 py-0.5 text-muted">No match for “{query.trim()}”.</li>
 				{/each}
 			</ul>
 			{#if found.length > listed.length}
 				<p class="m-0 px-1 text-3xs text-muted">
-					{found.length - listed.length} more — type to narrow them down.
+					+{found.length - listed.length} more. Type to filter.
 				</p>
 			{/if}
 		</section>
@@ -297,7 +297,7 @@
 							type="button"
 							class="flex w-full cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-strong hover:bg-hover hover:text-fg"
 							onclick={() => app.toggleCurrent(part.name)}
-							title="Plot the current through {part.name}"
+							title="Plot I({part.name})"
 						>
 							<Plus class="size-3 shrink-0 text-muted" />
 							<span class="min-w-0 flex-1 truncate font-mono">I({part.name})</span>
@@ -305,7 +305,7 @@
 					</li>
 				{:else}
 					{#if app.plottedCurrents.length === 0}
-						<li class="px-1 py-0.5 text-muted">No part to measure yet.</li>
+						<li class="px-1 py-0.5 text-muted">No parts.</li>
 					{/if}
 				{/each}
 			</ul>

@@ -78,7 +78,7 @@
 							<Pressable
 								type="button"
 								onclick={() => open(example)}
-								title="Open {example.name}; it replaces the drawing, and Ctrl+Z brings the drawing back"
+								title="Replaces the circuit. Ctrl+Z to undo."
 								class="flex w-full cursor-pointer flex-col gap-0.5 rounded-md border-0 bg-transparent px-1.5 py-1.5 text-left hover:bg-hover"
 							>
 								<span class="flex items-center gap-1.5 text-ui text-fg">
@@ -99,7 +99,7 @@
 				</ul>
 			</section>
 		{:else}
-			<p class="m-0 px-1 py-4 text-center text-2xs text-muted">No example matches “{query.trim()}”.</p>
+			<p class="m-0 px-1 py-4 text-center text-2xs text-muted">No match for “{query.trim()}”.</p>
 		{/each}
 	</div>
 </div>

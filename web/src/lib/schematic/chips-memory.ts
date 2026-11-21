@@ -75,10 +75,10 @@ const DIP28 = [
 ];
 
 const EEPROM_CAVEAT =
-	'Writes need OE high, take their time and are polled on I/O7, as on the part. The toggle bit on I/O6 and the software data protection sequence are not modelled, and the other outputs read as undetermined while a write is going on.';
+	'Writes need OE high, take the write time and poll on I/O7. Not modelled: the I/O6 toggle bit and software data protection. Other outputs are undetermined during a write.';
 
 const RAM_CAVEAT =
-	'It powers up holding nothing in particular, and reads as undetermined until each byte has been written.';
+	'Contents are undetermined at power-up until each byte is written.';
 
 export const MEMORY_CHIPS: ChipDef[] = [
 	{

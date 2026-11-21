@@ -35,7 +35,6 @@
 	value={app.analysis}
 	onChange={(value) => app.setAnalysis(value as Analysis)}
 	aria-label="Analysis"
-	title="Which analysis Run performs"
 />
 
 {#if app.analysis === 'frequency'}
@@ -70,10 +69,9 @@
 			value={app.dcSwept?.name ?? ''}
 			onChange={(value) => (app.dcSource = value)}
 			aria-label="Source to sweep"
-			title="Which source the sweep turns"
 		/>
 	{:else}
-		<span class="shrink-0 font-mono text-2xs text-muted" title="The source the sweep turns">
+		<span class="shrink-0 font-mono text-2xs text-muted" title="Swept source">
 			{app.dcSwept?.name ?? 'no source'}
 		</span>
 	{/if}
@@ -116,7 +114,7 @@
 			invalid
 		</span>
 	{:else}
-		<span class="shrink-0 font-mono text-2xs text-muted" title="Operating points the sweep solves">
+		<span class="shrink-0 font-mono text-2xs text-muted" title="Points in the sweep">
 			{app.dcPlan.values.length} pts
 		</span>
 	{/if}
@@ -129,13 +127,13 @@
 	<UnitField
 		prefix="window"
 		unit="s"
-		title="How much simulated time the screen covers"
+		title="Simulated time across the screen"
 		value={formatValue(app.stopTime, 3)}
 		commit={(text) => {
 			const parsed = positive(text);
 			if (parsed !== null) app.setStopTime(parsed);
 		}}
-		aria-label="Timebase: seconds across the screen"
+		aria-label="Timebase"
 	/>
 {/if}
 
@@ -168,7 +166,7 @@
 		value={app.logicFamily}
 		onChange={(value) => app.setLogicFamily(value)}
 		aria-label="Logic family"
-		title="What a digital one and a digital zero are, in volts"
+		title="Logic voltage levels"
 	/>
 {/if}
 
@@ -186,8 +184,8 @@
 		app.setSample(0);
 	}}
 	title={app.sample > 0
-		? `Sample #${app.sample} — click for another, right-click for nominal`
-		: 'Draw every part from inside its tolerance instead of using its marking'}
+		? `Sample #${app.sample}. Click: new sample. Right-click: nominal values.`
+		: 'Use random part values within each tolerance'}
 >
 	{app.sample > 0 ? `sample #${app.sample}` : 'nominal'}
 </Button>
@@ -202,8 +200,8 @@
 	class="tabular-nums"
 	onclick={() => app.setSweep(app.sweepCount > 0 ? 0 : 25)}
 	title={app.sweepCount > 0
-		? `Running ${app.sweepCount} samples and shading where they all went`
-		: 'Run many samples and shade the band they cover'}
+		? `${app.sweepCount} samples. The band shows their spread.`
+		: 'Run 25 samples and shade their spread'}
 >
 	{app.sweepCount > 0 ? `×${app.sweepCount}` : 'sweep'}
 </Button>

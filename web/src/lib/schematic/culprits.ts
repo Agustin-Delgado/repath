@@ -136,17 +136,17 @@ function describe(failure: SolveFailure, parts: readonly string[], nets: readonl
 	switch (failure.kind) {
 		case 'singular':
 			return (
-				`The circuit has no single answer${at}. ` +
-				'Two voltage sources straight across each other, a source with a wire or a coil across it, ' +
-				'or a part connected to nothing on one side all do this.'
+				`No single solution${at}. ` +
+				'Usual causes: two voltage sources in parallel, a source shorted by a wire or an inductor, ' +
+				'or a part with one side not connected.'
 			);
 		case 'no_convergence':
-			return `The solver could not settle${at}. Look for a part value far out of range, or feedback with no resistance in it.`;
+			return `The solver did not converge${at}. Look for a part value far out of range, or feedback with no resistance.`;
 		case 'timestep':
-			return `The run could go no further${at}: the step shrank to nothing without the solver settling there.`;
+			return `The time step became too small${at}: the solver did not converge.`;
 		case 'non_finite':
-			return `The voltages ran off to infinity${at}. Look for a part value of zero, or one far out of range.`;
+			return `The voltages went to infinity${at}. Look for a part value of zero or far out of range.`;
 		default:
-			return `The circuit could not be solved${at}.`;
+			return `Could not solve the circuit${at}.`;
 	}
 }

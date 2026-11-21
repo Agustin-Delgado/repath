@@ -68,5 +68,5 @@ export function removeDrawingPart(app: App, part: PartEntry): string | null {
 			: part.section === 'imported'
 				? app.removeSubcircuit(part.kind.slice(SUBCIRCUIT_PREFIX.length))
 				: false;
-	return removed ? `Removed ${part.label} — Ctrl+Z brings it back` : null;
+	return removed ? `Deleted ${part.label}. Ctrl+Z to undo.` : null;
 }

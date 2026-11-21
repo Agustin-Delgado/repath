@@ -45,8 +45,8 @@
 	size="icon"
 	disabled={empty}
 	onclick={() => clearAndReport(app)}
-	title="Clear the drawing"
-	aria-label="Clear the drawing"
+	title="Clear circuit"
+	aria-label="Clear circuit"
 >
 	<Eraser />
 </Button>
@@ -62,21 +62,20 @@
 	value={app.symbolStandard}
 	onChange={(value) => app.setSymbolStandard(value)}
 	aria-label="Symbol standard"
-	title="How the parts are drawn: zigzag or box resistors, shaped or boxed gates"
 />
 
-<Menu label="File" title="Save, open, or hand over this circuit">
-	<MenuItem onAction={() => saveToFile(app)} shortcut="Ctrl+S"><FileDown /> Save to a file</MenuItem>
-	<MenuItem onAction={() => openFromFile(app)} shortcut="Ctrl+O"><FolderOpen /> Open a file…</MenuItem>
+<Menu label="File">
+	<MenuItem onAction={() => saveToFile(app)} shortcut="Ctrl+S"><FileDown /> Save to file</MenuItem>
+	<MenuItem onAction={() => openFromFile(app)} shortcut="Ctrl+O"><FolderOpen /> Open file…</MenuItem>
 	<MenuSeparator />
 	<MenuItem
 		onAction={() => copyStepsAndReport(app)}
-		title="Copy every step taken here, as text, so it can be replayed"
+		title="Copy the edit steps as text, for replay"
 	>
-		<ListOrdered /> Copy the steps taken
+		<ListOrdered /> Copy edit steps
 	</MenuItem>
 </Menu>
 
-<Button onclick={() => shareAndReport(app, share)} title="Copy a link that contains this circuit">
+<Button onclick={() => shareAndReport(app, share)} title="Copy a link that contains the circuit">
 	<Share2 /> Share
 </Button>

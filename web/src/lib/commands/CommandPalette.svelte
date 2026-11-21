@@ -155,7 +155,7 @@
 
 <Dialog
 	bind:open
-	title="Find a part or a command"
+	title="Find part or command"
 	class="top-[12vh] left-1/2 max-h-[70vh] w-[min(560px,calc(100vw-2rem))] -translate-x-1/2"
 >
 	<label class="flex items-center gap-2 border-b border-border px-3">
@@ -163,8 +163,8 @@
 		<TextInput
 			bind:value={query}
 			onkeydown={onKey}
-			placeholder="Find a part, a command, an example…"
-			aria-label="Find a part or a command"
+			placeholder="Part, command or example…"
+			aria-label="Find part or command"
 			aria-controls="command-rows"
 			aria-activedescendant={rows.length ? `command-row-${active}` : undefined}
 			autocomplete="off"
@@ -214,7 +214,7 @@
 				{#if i === active}<CornerDownLeft class="size-3.5 shrink-0 text-muted" />{/if}
 			</div>
 		{:else}
-			<p class="m-0 px-2 py-6 text-center text-ui text-muted">Nothing called “{query.trim()}”.</p>
+			<p class="m-0 px-2 py-6 text-center text-ui text-muted">No match for “{query.trim()}”.</p>
 		{/each}
 	</div>
 </Dialog>
