@@ -31,7 +31,7 @@
 			aria-label={rest['aria-label']}
 			spellcheck="false"
 			class={prominent
-				? 'w-full min-w-0 rounded-control border border-transparent bg-transparent px-1 py-0.5 font-mono text-sm font-semibold text-fg outline-none hover:border-border focus:border-accent/70'
+				? 'w-full min-w-0 rounded-control border border-transparent bg-transparent px-1 py-0.5 font-mono text-md font-semibold text-fg outline-none hover:border-border-strong focus:border-accent'
 				: fieldInput}
 			onchange={(e) => {
 				const field = e.currentTarget;

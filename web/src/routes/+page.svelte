@@ -353,7 +353,7 @@
 			// The scope may not take the whole window, however tall the limit says.
 			layout.resize(which, which === 'scope' ? Math.min(size, window.innerHeight * 0.7) : size)}
 		onCommit={() => layout.save()}
-		class="max-[900px]:hidden"
+		class="narrow:hidden"
 	/>
 {/snippet}
 
@@ -541,8 +541,14 @@
 		align-items: baseline;
 		gap: 0.5rem;
 		padding: 0.4rem 0.75rem;
-		font-size: 0.78rem;
+		font-size: var(--text-2xs);
+		line-height: var(--text-2xs--line-height);
 		border-bottom: 1px solid var(--border);
+	}
+
+	/* The colour of what it says, as a rule down its leading edge. */
+	.banner {
+		box-shadow: inset 3px 0 0 var(--tone);
 	}
 
 	.dismiss {
@@ -554,19 +560,28 @@
 		line-height: 1;
 		cursor: pointer;
 		padding: 0 0.25rem;
+		border-radius: var(--radius-sm);
+		transition: color var(--duration-fast) var(--ease-out-strong);
 	}
 
 	.dismiss:hover {
 		color: var(--text);
 	}
 
+	/* Tinted, not painted: the text stays the text colour, the tone says what kind. */
 	.banner.error {
-		background: color-mix(in srgb, var(--danger) 16%, var(--panel-bg));
+		--tone: var(--danger);
+		background: color-mix(in srgb, var(--danger) 12%, var(--panel-bg));
 		color: var(--text);
 	}
 
+	.banner.error strong {
+		color: var(--danger);
+	}
+
 	.banner.warn {
-		background: color-mix(in srgb, var(--selection) 14%, var(--panel-bg));
+		--tone: var(--warn);
+		background: color-mix(in srgb, var(--warn) 9%, var(--panel-bg));
 		color: var(--text);
 	}
 
@@ -662,8 +677,8 @@
 			bottom: 0;
 			width: min(300px, 85%);
 			z-index: 40;
-			transition: transform 0.18s ease-out;
-			box-shadow: 0 0 24px rgba(0, 0, 0, 0.45);
+			transition: transform var(--duration-slow) var(--ease-drawer);
+			box-shadow: var(--shadow-drawer);
 		}
 
 		.left {
@@ -688,7 +703,7 @@
 			z-index: 39;
 			border: none;
 			padding: 0;
-			background: rgba(0, 0, 0, 0.35);
+			background: var(--scrim);
 			cursor: pointer;
 		}
 

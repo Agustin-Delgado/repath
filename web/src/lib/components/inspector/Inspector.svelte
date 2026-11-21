@@ -88,7 +88,7 @@
 		<!-- Keys are no help on a touch screen. -->
 		<section class="flex flex-col gap-1.5 [@media(pointer:coarse)]:hidden">
 			<h3 class={sectionTitle}>Getting around</h3>
-			<ul class="m-0 flex list-none flex-col gap-1 p-0 text-[0.7rem] text-muted">
+			<ul class="m-0 flex list-none flex-col gap-1 p-0 text-3xs text-muted">
 				<li><kbd class={kbd}>/</kbd> find a part</li>
 				<li><kbd class={kbd}>Ctrl</kbd>+<kbd class={kbd}>K</kbd> find any part or command</li>
 				<li>Drag from a pin to draw a wire</li>

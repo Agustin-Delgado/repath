@@ -28,7 +28,7 @@
 
 <label
 	{title}
-	class="flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-[0.75rem] text-muted focus-within:border-accent/70"
+	class="flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-2xs text-muted field"
 >
 	{#if prefix}<span>{prefix}</span>{/if}
 	<input

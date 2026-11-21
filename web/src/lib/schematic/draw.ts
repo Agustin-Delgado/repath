@@ -37,6 +37,7 @@ import {
 	type SymbolLabel
 } from './symbols';
 import { SERVO_KIND } from './servo';
+import { CANVAS_PALETTE, CANVAS_TOKENS } from '$lib/theme';
 
 export interface Theme {
 	background: string;
@@ -53,26 +54,7 @@ export interface Theme {
 	danger: string;
 }
 
-const FALLBACK: Theme = {
-	background: '#0e1116',
-	gridDot: '#232936',
-	wire: '#8b96aa',
-	symbol: '#cfd7e4',
-	pin: '#6d7a8f',
-	pinDigital: '#d09b4a',
-	accent: '#4ea8ff',
-	/**
-	 * Yellow, and nothing else on the canvas is.
-	 *
-	 * It was orange before, which was the second trace colour *exactly* — so a
-	 * selected wire and a probed one were the same shade. Yellow is clear of the
-	 * traces, of the diverging voltage scale, of danger, and of the LED inks.
-	 */
-	selection: '#ffd400',
-	labelStrong: '#cdd5e2',
-	labelDim: '#7c8496',
-	danger: '#ff6b7a'
-};
+const FALLBACK: Theme = CANVAS_PALETTE;
 
 /**
  * The theme in effect, so tools can draw overlay feedback without every one of
@@ -145,20 +127,11 @@ export function drawnReach(def: ComponentDef, rotation: Rotation): { x: number; 
 
 export function readTheme(element: HTMLElement): Theme {
 	const style = getComputedStyle(element);
-	const read = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
-	return {
-		background: read('--canvas-bg', FALLBACK.background),
-		gridDot: read('--grid-dot', FALLBACK.gridDot),
-		wire: read('--wire', FALLBACK.wire),
-		symbol: read('--symbol', FALLBACK.symbol),
-		pin: read('--pin', FALLBACK.pin),
-		pinDigital: read('--pin-digital', FALLBACK.pinDigital),
-		accent: read('--accent', FALLBACK.accent),
-		selection: read('--selection', FALLBACK.selection),
-		labelStrong: read('--label-strong', FALLBACK.labelStrong),
-		labelDim: read('--label-dim', FALLBACK.labelDim),
-		danger: read('--danger', FALLBACK.danger)
-	};
+	const theme = { ...FALLBACK };
+	for (const key of Object.keys(CANVAS_TOKENS) as Array<keyof Theme>) {
+		theme[key] = style.getPropertyValue(CANVAS_TOKENS[key]).trim() || FALLBACK[key];
+	}
+	return theme;
 }
 
 // ---------------------------------------------------------------------------

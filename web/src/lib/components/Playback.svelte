@@ -69,14 +69,14 @@
 
 <div
 	use:overflowHint
-	class="scroll-row flex items-center gap-1.5 bg-panel px-2.5 py-1 text-[0.75rem] max-[900px]:*:shrink-0 {layout.scopeOpen
+	class="scroll-row flex items-center gap-1.5 bg-panel px-2.5 py-1 text-2xs narrow:*:shrink-0 {layout.scopeOpen
 		? 'border-b border-border'
 		: ''}"
 >
 	<!-- Outside the analysis switch: a frequency sweep is started here too. -->
 	<RunButton />
 	{#if app.analysis !== 'transient'}
-		<span class="text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
+		<span class="eyebrow">
 			{app.analysis === 'dc' ? 'DC sweep' : 'Frequency response'}
 		</span>
 		<span class="flex-1"></span>
@@ -115,16 +115,16 @@
 			{formatWithUnit(app.playbackTime, 's', 3)}
 		</span>
 		{#if !started}
-			<span class="whitespace-nowrap text-muted max-[900px]:hidden">nothing running — press Run</span>
+			<span class="whitespace-nowrap text-muted narrow:hidden">nothing running — press Run</span>
 		{:else if lagging}
 			<span
-				class="whitespace-nowrap text-(--warn-text) max-[900px]:hidden"
+				class="whitespace-nowrap text-(--warn-text) narrow:hidden"
 				title="The circuit is being solved slower than the timebase asks for"
 			>
 				{Math.round(keeping * 100)}% of the timebase
 			</span>
 		{:else if !app.playing}
-			<span class="whitespace-nowrap text-muted max-[900px]:hidden">
+			<span class="whitespace-nowrap text-muted narrow:hidden">
 				stopped · drag the scope to look around
 			</span>
 		{/if}
@@ -194,7 +194,7 @@
 				>
 					{#if layer.key === 'showVoltage'}
 						<span
-							class="inline-block h-2 w-5 rounded-[2px]"
+							class="inline-block h-2 w-5 rounded-xs"
 							style:background="linear-gradient(90deg, {VOLTAGE_SCALE.negative}, {VOLTAGE_SCALE.neutral}, {VOLTAGE_SCALE.positive})"
 						></span>
 					{:else if layer.key === 'showCurrent'}
@@ -210,12 +210,12 @@
 		</div>
 	{/if}
 
-	<span class="mx-0.5 h-5 w-px shrink-0 bg-border max-[900px]:hidden" aria-hidden="true"></span>
+	<span class="mx-0.5 h-5 w-px shrink-0 bg-border narrow:hidden" aria-hidden="true"></span>
 	<!-- The phone bar has its own Scope button, and the scope its own row there. -->
 	<Button
 		variant="ghost"
 		size="icon"
-		class="size-6.5 max-[900px]:hidden"
+		class="size-6.5 narrow:hidden"
 		aria-expanded={layout.scopeOpen}
 		onclick={() => layout.toggleScope()}
 		title={layout.scopeOpen ? 'Fold the scope away' : 'Bring the scope back'}

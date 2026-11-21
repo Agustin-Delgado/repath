@@ -18,10 +18,10 @@
 		{#snippet children(toast)}
 			<Toast.Root
 				{toast}
-				class="pointer-events-auto absolute top-0 flex items-center gap-2 rounded-md whitespace-nowrap border border-border bg-panel px-3 py-1.5 text-ui text-fg shadow-xl shadow-black/40 outline-none
+				class="pointer-events-auto absolute top-0 flex items-center gap-2 rounded-lg whitespace-nowrap border border-border bg-raised px-3 py-1.5 text-ui text-fg shadow-popover outline-none
 					[translate:var(--toast-swipe-movement-x)_var(--toast-swipe-movement-y)]
-					transition-[opacity,translate] duration-150 ease-out
-					focus-visible:ring-2 focus-visible:ring-accent/60
+					transition-[opacity,translate] duration-(--duration-base) ease-out
+					focus-visible:focus-ring
 					data-[entering]:[translate:0_-8px] data-[entering]:opacity-0
 					data-[exiting]:[translate:0_-8px] data-[exiting]:opacity-0
 					data-[swiping]:transition-none"

@@ -257,7 +257,7 @@
 				/>
 			{/if}
 			{#if param.unit}
-				<span class="shrink-0 border-l border-border px-2 font-mono text-[0.7rem] text-muted">
+				<span class="shrink-0 border-l border-border px-2 font-mono text-3xs text-muted">
 					{param.unit}
 				</span>
 			{/if}
