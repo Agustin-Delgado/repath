@@ -13,7 +13,7 @@
 	 * away: the overlays and the transport are what a folded scope still needs.
 	 */
 	import { ChevronDown, Play, RotateCcw, StepForward, Volume2, VolumeX } from '@lucide/svelte';
-	import { Button } from '$lib/ui';
+	import { Button, ToolbarSeparator } from '$lib/ui';
 	import { overflowHint } from '$lib/ui/overflow';
 	import { VOLTAGE_SCALE } from '$lib/schematic/animate';
 	import { BUZZER_KIND } from '$lib/schematic/buzzer';
@@ -180,7 +180,7 @@
 			{/each}
 		</div>
 
-		<span class="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
+		<ToolbarSeparator />
 
 		<div class="flex gap-1" role="group" aria-label="Live overlay">
 			{#each LAYERS as layer (layer.key)}
@@ -210,7 +210,7 @@
 		</div>
 	{/if}
 
-	<span class="mx-0.5 h-5 w-px shrink-0 bg-border max-[900px]:hidden" aria-hidden="true"></span>
+	<ToolbarSeparator class="max-[900px]:hidden" />
 	<!-- The phone bar has its own Scope button, and the scope its own row there. -->
 	<Button
 		variant="ghost"
