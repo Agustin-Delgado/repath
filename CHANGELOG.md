@@ -31,7 +31,7 @@ turned into drawers at 900 px while the toolbar still showed its wide layout,
 so a window that size had a phone's bottom bar, no *More* menu, and the full
 toolbar crammed above it. Narrow now starts below 900 px for all of them.
 
-[#99](https://github.com/Agustin-Delgado/repath/pull/99)
+[#102](https://github.com/Agustin-Delgado/repath/pull/102)
 
 ---
 
