@@ -90,6 +90,7 @@ export function formatValue(value: number, digits = 4): string {
 	if (value === 0) return '0';
 
 	const magnitude = Math.abs(value);
+	if (offLadder(magnitude)) return exponent(value, digits);
 	let index = SCALE.findIndex(([s]) => magnitude >= s);
 	if (index === -1) index = SCALE.length - 1;
 
@@ -110,6 +111,22 @@ export function formatValue(value: number, digits = 4): string {
 		.replace(/(\.\d*?)0+$/, '$1')
 		.replace(/\.$/, '');
 	return `${text}${suffix}`;
+}
+
+/**
+ * Past the ends of the prefix ladder by more than its own step, where a
+ * prefix would only carry an exponent along with it: 1e30 used to read
+ * `1e+18T`, and 1e-30 `1e-15f`.
+ */
+function offLadder(magnitude: number): boolean {
+	return magnitude >= 1e15 || magnitude < 1e-18;
+}
+
+/** Plain exponent notation, trimmed the way the prefixed form is: `1e30`, `4.7e-21`. */
+function exponent(value: number, digits: number): string {
+	const [mantissa, power] = value.toExponential(digits - 1).split('e');
+	const trimmed = mantissa.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+	return `${trimmed}e${Number(power)}`;
 }
 
 /** Format with a unit, e.g. `formatWithUnit(4700, 'Ω')` → `4.7 kΩ`. */
@@ -151,11 +168,13 @@ export function splitValue(value: number, digits = 4): SplitValue {
 	if (!Number.isFinite(value) || value === 0) return { mantissa: 0, prefix: '' };
 
 	const magnitude = Math.abs(value);
+	// Off the ladder the number carries its own exponent, and no prefix: the
+	// field reads `1e+30` beside no scale rather than a quintillion terahms.
+	if (offLadder(magnitude)) return { mantissa: Number(value.toPrecision(digits)), prefix: '' };
 	let index = SCALE.findIndex(([s]) => magnitude >= s);
-	if (index < 0) index = SCALE.length - 1;
-	// Rounding can carry into the next decade — 999.96 at four figures is 1000 —
-	// and then it belongs in that decade, as `formatValue` already puts it: the
-	// label read 1k while the field beside it read 1000.
+	if (index === -1) index = SCALE.length - 1;
+	// Rounding can carry a value into the next decade, as in `formatValue`:
+	// 999.96 at four figures is 1000, which is 1 k and not a fourth digit.
 	while (index > 0 && Math.abs(Number((value / SCALE[index][0]).toPrecision(digits))) >= 1000) {
 		index--;
 	}

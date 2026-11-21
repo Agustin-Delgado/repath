@@ -324,7 +324,8 @@ would show you.
 | Plot a net | type its name under **Add a signal** beside the scope; the × on a plotted one takes it off |
 | Read it in your own symbols | the **ANSI / IEC / GOST** selector in the toolbar — zigzag or box resistors, shaped or boxed gates, an EMF drawn with an arrow |
 
-Nothing simulates on load. Press **Run**, under the drawing, and the simulation starts and keeps
+Nothing simulates when the page opens: press **Run**, under the drawing, or open one of the
+examples, which starts running so that it shows what it is for. The simulation then keeps
 going, the way an instrument does: simulated time moves forward, the scope rolls,
 and the drawing shows the newest instant. There is no scrubber, because a running
 acquisition has nothing to scrub — **Stop** freezes what was caught, and only then
@@ -336,10 +337,14 @@ Clicking a switch or a logic toggle while it is running operates it *now*: the
 engine is carried on from where it was, so everything already solved stays solved
 and the waveform gets the edge at the instant of the click. A push-button is held
 rather than clicked: its contacts move when the pointer goes down and come back
-when it comes up. Change a value instead
-and the sweep restarts from zero — a different circuit is a different run. Moving a
-part around does not count as a change, since the circuit it describes has not
-changed.
+when it comes up. A value changed while it runs — a resistance, a capacitance, a
+source's level, a potentiometer's wiper — goes in at the instant the sweep has
+reached, the same way. Any other change to the circuit restarts the sweep from zero,
+since a different circuit is a different run; with the sweep stopped, the change puts
+the run away instead, and nothing simulates again until Run. Moving a part around does
+not count as a change, since the circuit it describes has not changed. Inside a block
+there is nothing to run on its own — its inside is shared by every copy — so Run asks
+to be pressed from the drawing.
 
 With nothing running, a click on a switch, toggle or button only selects it, so it
 can be dragged like any other part; where it starts is set in the inspector.

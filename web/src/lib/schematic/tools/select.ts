@@ -571,9 +571,14 @@ export function createSelectTool(): Tool {
 		},
 
 		keyDown(event, ctx) {
+			// A plain key held with Ctrl, Cmd or Alt is somebody else's shortcut:
+			// Ctrl+R reloads the page and Alt+Left goes back, and taking them for
+			// a rotation and a nudge kept the browser from ever seeing them.
+			const chord = event.ctrlKey || event.metaKey || event.altKey;
 			switch (event.key) {
 				case 'Delete':
 				case 'Backspace':
+					if (chord) return false;
 					// One-off edits get the full router — no frame deadline, the whole
 					// cell budget. `routeDragged` is for the sixty routes a second of a
 					// drag; a rotation is one, and it was the frame budget running out
@@ -584,6 +589,7 @@ export function createSelectTool(): Tool {
 					return true;
 				case 'r':
 				case 'R':
+					if (chord) return false;
 					app.rotateSelection();
 					ctx.invalidate();
 					return true;
@@ -635,7 +641,7 @@ export function createSelectTool(): Tool {
 					// One grid point, or five with Shift. Not while a drag is in flight:
 					// the keyboard and the pointer would be fighting over the same
 					// snapshot.
-					if (mode !== 'idle' || app.selection.length === 0) return false;
+					if (chord || mode !== 'idle' || app.selection.length === 0) return false;
 					const step = ctx.gridSize * (event.shiftKey ? 5 : 1);
 					const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
 					const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;

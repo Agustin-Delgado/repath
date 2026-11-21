@@ -139,12 +139,14 @@
 					<span class="min-w-0 flex-1 truncate font-mono text-fg" title={probe.label}>{probe.label}</span>
 					{#if c}{@render badge(c)}{/if}
 					{#if c}
+						{@const placed = app.isPlacedProbe(probe.key)}
+						{@const what = placed ? `Remove probe ${probe.label} from the drawing` : `Stop plotting ${probe.label}`}
 						<button
 							type="button"
 							class="flex cursor-pointer border-0 bg-transparent p-0 text-muted opacity-60 group-hover:opacity-100 hover:text-fg"
-							title="Stop plotting {probe.label}"
-							aria-label="Stop plotting {probe.label}"
-							onclick={() => app.toggleProbe(c.point)}
+							title={what}
+							aria-label={what}
+							onclick={() => app.unplot(probe.key)}
 						>
 							<X class="size-3.5" />
 						</button>

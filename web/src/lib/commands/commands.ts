@@ -42,6 +42,11 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 			group: 'Simulation',
 			keywords: ['start', 'simulate', 'play', 'sweep'],
 			available: () => !app.playing && !app.running,
+			// Space starts a run only when there is no stopped one to pick up:
+			// with one, it resumes, which is not what this command does.
+			get shortcut() {
+				return app.acquiring ? undefined : 'Space';
+			},
 			run: () => void app.run()
 		},
 		{
@@ -49,6 +54,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 			label: 'Stop',
 			group: 'Simulation',
 			keywords: ['pause', 'freeze', 'halt'],
+			shortcut: 'Space',
 			available: () => app.playing,
 			run: () => app.stop()
 		},
@@ -304,4 +310,14 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 	];
 
 	return commands;
+}
+
+/**
+ * Where the highlight is in `keys`: on the row it was put on, wherever that
+ * row has moved to, or on the first row when it has gone or was never set.
+ */
+export function keepHighlight(keys: readonly string[], key: string | null): number {
+	if (key === null) return 0;
+	const index = keys.indexOf(key);
+	return index < 0 ? 0 : index;
 }

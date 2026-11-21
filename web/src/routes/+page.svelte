@@ -24,6 +24,7 @@
 	import { PANEL_LIMITS, layout, type Panel } from '$lib/layout.svelte';
 	import { decodeCircuit, shareUrl } from '$lib/share';
 	import { app } from '$lib/state.svelte';
+	import { DRAWER_QUERY, drawerClosed } from '$lib/drawers';
 
 	let schematic = $state<ReturnType<typeof Schematic> | null>(null);
 	/**
@@ -37,6 +38,16 @@
 	let panel = $state<'parts' | 'details' | null>(null);
 	/** Whether the command palette is open. */
 	let finding = $state(false);
+
+	/** Whether the side panels are drawers: see `drawerClosed`. */
+	let narrow = $state(false);
+	$effect(() => {
+		const query = window.matchMedia(DRAWER_QUERY);
+		narrow = query.matches;
+		const follow = (event: MediaQueryListEvent) => (narrow = event.matches);
+		query.addEventListener('change', follow);
+		return () => query.removeEventListener('change', follow);
+	});
 
 	$effect(() => {
 		if (app.tool.mode !== 'select') panel = null;
@@ -295,9 +306,10 @@
 			lastSignature = app.netlistSignature;
 			// A different circuit is a different run: the samples on screen were
 			// solved for the old one, and carrying them over would be a chart of two
-			// circuits spliced together. So this starts again from zero — which is
-			// also why operating a switch deliberately does not come through here.
-			app.run({ quiet: true });
+			// circuits spliced together. So a sweep that is going starts again from
+			// zero — which is also why operating a switch deliberately does not come
+			// through here — and one that was stopped is put away: `followEdit`.
+			app.followEdit();
 		};
 		clearTimeout(pending);
 		pending = setTimeout(rerun, 120);
@@ -383,17 +395,17 @@
 			<strong>Could not simulate.</strong>
 			{app.failure?.message ?? app.error}
 		</div>
-	{:else if app.compiled.errors.length > 0}
-		<div class="banner warn" role="status">{app.compiled.errors[0]}</div>
+	{:else if app.circuit.errors.length > 0}
+		<div class="banner warn" role="status">{app.circuit.errors[0]}</div>
 	{/if}
 
 	<main>
-		<aside class="left" class:open={panel === 'parts'}>
+		<aside class="left" class:open={panel === 'parts'} inert={drawerClosed(narrow, panel, 'parts')}>
 			<Sidebar />
 			{@render splitter('left', 'right', 'Resize the parts panel')}
 		</aside>
 		<section class="canvas"><Schematic bind:this={schematic} /></section>
-		<aside class="right" class:open={panel === 'details'}>
+		<aside class="right" class:open={panel === 'details'} inert={drawerClosed(narrow, panel, 'details')}>
 			<Inspector />
 			{@render splitter('right', 'left', 'Resize the details panel')}
 		</aside>

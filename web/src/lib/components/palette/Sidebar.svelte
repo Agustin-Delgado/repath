@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Examples from './Examples.svelte';
 	import Palette from './Palette.svelte';
+	import { findsPart } from '$lib/shortcuts';
 
 	/**
 	 * The left panel: parts to draw with, or whole circuits to start from.
@@ -24,6 +25,7 @@
 
 	function choose(next: Tab) {
 		tab = next;
+		if (next !== 'parts') searching = false;
 		try {
 			localStorage.setItem(KEY, next);
 		} catch {
@@ -31,11 +33,28 @@
 		}
 	}
 
+	/** Whether the parts list should take the focus when it next comes up. */
+	let searching = $state(false);
+
+	/**
+	 * `/` on the examples tab: the parts list is not mounted there to hear it,
+	 * so the sidebar turns to it, and the list puts its search box in focus.
+	 * On the parts tab the list hears it itself.
+	 */
+	function onWindowKey(event: KeyboardEvent) {
+		if (tab !== 'examples' || !findsPart(event, event.target as HTMLElement | null)) return;
+		event.preventDefault();
+		searching = true;
+		choose('parts');
+	}
+
 	const TABS: Array<{ id: Tab; label: string }> = [
 		{ id: 'parts', label: 'Components' },
 		{ id: 'examples', label: 'Examples' }
 	];
 </script>
+
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
 	<div role="tablist" aria-label="Sidebar" class="flex shrink-0 gap-1 border-b border-border px-2 pt-2">
@@ -57,7 +76,7 @@
 	</div>
 	<div id="sidebar-panel" role="tabpanel" aria-labelledby="sidebar-tab-{tab}" class="min-h-0 flex-1">
 		{#if tab === 'parts'}
-			<Palette />
+			<Palette focusSearch={searching} />
 		{:else}
 			<Examples />
 		{/if}
