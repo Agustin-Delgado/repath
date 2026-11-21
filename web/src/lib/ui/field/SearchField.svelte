@@ -29,7 +29,7 @@
 
 <!-- A label, so a press anywhere in the frame lands in the box. -->
 <label
-	class="flex h-7 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-muted focus-within:border-accent/70 {className}"
+	class="flex h-7 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-muted field {className}"
 >
 	<Search class="size-3.5 shrink-0" />
 	<SearchField.Root bind:value class="contents">

@@ -35,9 +35,9 @@
 
 <Dialog.Root bind:open triggerRef={returnTo}>
 	<Dialog.Portal>
-		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/45" />
+		<Dialog.Overlay class="fixed inset-0 z-50 bg-(--scrim)" />
 		<Dialog.Content
-			class="fixed z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-panel text-fg shadow-2xl shadow-black/60 outline-none {className}"
+			class="fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-raised text-fg shadow-dialog outline-none {className}"
 		>
 			<Dialog.Title class="sr-only">{title}</Dialog.Title>
 			{@render children()}

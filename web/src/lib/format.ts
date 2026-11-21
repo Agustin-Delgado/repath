@@ -15,6 +15,8 @@
  */
 
 import type { Schematic } from './schematic/model';
+import type { SpectrumSettings } from './spectrum';
+import type { TriggerSettings } from './trigger';
 
 /**
  * How the circuit is run, as opposed to what it is.
@@ -40,6 +42,10 @@ export interface CircuitSettings {
 	dcStep?: number;
 	/** Parts whose current a DC sweep plots, by name. */
 	dcCurrents?: string[];
+	/** The scope's trigger, only what differs from its defaults. */
+	trigger?: Partial<TriggerSettings>;
+	/** The scope's spectrum, only what differs from its defaults. */
+	spectrum?: Partial<SpectrumSettings>;
 }
 
 /** What Run does: follow the circuit in time, sweep its frequency response, or sweep a source. */

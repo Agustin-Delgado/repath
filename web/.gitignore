@@ -24,3 +24,7 @@ vite.config.ts.timestamp-*
 
 .vercel
 .env*
+
+# Browser checks: traces and screenshots of failures.
+/test-results
+/playwright-report

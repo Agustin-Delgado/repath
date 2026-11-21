@@ -187,7 +187,7 @@ pub enum SimError {
     /// A loop of logic was still changing at one instant after every delta
     /// cycle it was allowed: zero-delay gates chasing each other.
     DigitalLoop { time: f64, nets: Vec<String> },
-    /// More unknowns than the dense solver can hold.
+    /// More unknowns than the engine takes on; see [`MAX_UNKNOWNS`].
     TooLarge { unknowns: usize, limit: usize },
     /// The analysis was asked for something that cannot be done.
     Invalid { reason: String },
@@ -901,12 +901,14 @@ const DAMPED_STEP: f64 = 0.5;
 /// Smallest step the transient loop will attempt, relative to the run length.
 const MIN_STEP_FRACTION: f64 = 1e-11;
 
-/// Most unknowns the dense solver takes on.
+/// Most unknowns the engine takes on.
 ///
-/// The matrix is `n²` doubles, factored in place: four thousand unknowns is
-/// 128 MB and a solve of about twenty billion operations, which is already far
-/// past interactive. Past this a circuit is refused with a reason, rather than
-/// asking a 32-bit address space for gigabytes and having the tab die.
+/// No longer the solver's limit: the matrix is sparse, and its cost grows with
+/// the parts rather than with their square. What grows with the unknowns now
+/// is everything recorded about them — a transient keeps every unknown at
+/// every timepoint — and a drawing past four thousand of them is far beyond
+/// what the editor is for. Past this a circuit is refused with a reason,
+/// rather than run until a 32-bit address space runs out and the tab dies.
 pub const MAX_UNKNOWNS: usize = 4096;
 
 /// Most values one call to [`Simulator::advance_transient`] records, across
@@ -1619,12 +1621,14 @@ impl Simulator {
             let ctx = AcCtx { omega: std::f64::consts::TAU * hz, gmin: self.config.gmin };
             circuit.ac_stamp_all(&mut sys, &ctx);
 
-            sys.solve_into(&mut x).map_err(|e| match e.row {
+            sys.solve_into(&mut x).map_err(|e| match e {
                 // Not a node's fault: the numbers themselves overflowed.
-                None => SimError::NonFinite { time: 0.0, culprits: Culprits::default() },
+                SolveError::NonFinite => {
+                    SimError::NonFinite { time: 0.0, culprits: Culprits::default() }
+                }
                 // Only the row the complex solve stopped at is known here: blame
                 // that unknown and whatever owns it.
-                Some(row) => SimError::Singular {
+                SolveError::Singular { row } => SimError::Singular {
                     unknown: unknown_names.get(row).cloned().unwrap_or_else(|| format!("#{row}")),
                     culprits: blame(circuit, &[row], None),
                 },

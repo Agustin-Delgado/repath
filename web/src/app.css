@@ -9,9 +9,18 @@
 @import 'tailwindcss/utilities.css' layer(utilities);
 
 /*
- * The palette. These names are read by more than CSS: the schematic painter, the
- * scope and the Bode plot pull them out of the computed style to draw with, so
- * a rename here is a rename there too.
+ * The design system, in one place.
+ *
+ * Every colour, size, radius, shadow and duration the app uses is named here,
+ * and the components use the names. Where a number appears in a component
+ * instead, it is a layout dimension, not a style.
+ *
+ * These names are read by more than CSS: the schematic painter, the scope and
+ * the Bode plot pull them out of the computed style to draw with, so a rename
+ * here is a rename there too. The values the canvas needs before there is a
+ * stylesheet — and the probe colours — are in `$lib/theme.ts`, and a test holds
+ * the two files to each other and every text colour here to WCAG AA against
+ * every surface it can sit on.
  */
 /* Dark native chrome too: scrollbars, date pickers, the checkbox tick. */
 :root {
@@ -20,31 +29,47 @@
 	--font-sans: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
 	--font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
+	/*
+	 * Surfaces, darkest to lightest. In a dark interface height is light: the
+	 * drawing is the floor, panels sit on it, controls on the panels, and what
+	 * floats — menus, the command palette, a toast — sits highest of all.
+	 */
+	--canvas-bg: #0e1116;
 	--bg: #12151c;
 	--panel-bg: #171b24;
-	--canvas-bg: #0e1116;
-	--border: #262c38;
-	--hover: #1f2531;
-	--control-bg: #1b202a;
+	--raised: #1c2129;
+	--control-bg: #1d222c;
+	--hover: #242a35;
 
-	--text: #e3e8f0;
+	/* Hairlines between regions, and the firmer edge a control is given. */
+	--border: #2a3140;
+	--border-strong: #3a4354;
+
+	/* Text, in three tiers. Each clears 4.5:1 on every surface above. */
+	--text: #e6eaf1;
 	--label-strong: #cdd5e2;
-	--label-dim: #7c8496;
+	--label-dim: #8a93a6;
+
+	--accent: #4ea8ff;
+	--accent-text: #08111c;
+	--focus: var(--accent);
+
+	/* What a state means, the same everywhere it is said. */
+	--danger: #ff6b7a;
+	--warn: #ffb066;
+	--success: #5ddc9a;
 
 	--symbol: #cfd7e4;
 	--wire: #8b96aa;
 	--pin: #6d7a8f;
 	--pin-digital: #d09b4a;
 	--grid-dot: #232936;
-	--grid-line: #1e2430;
-
-	--accent: #4ea8ff;
-	--accent-text: #08111c;
+	--grid-line: #222a36;
+	--grid-minor: #1c212c;
 	--selection: #ffd400;
-	--danger: #ff6b7a;
 
 	--scope-axis: #39414f;
-	--scope-cursor: #7c8496;
+	--scope-cursor: var(--label-dim);
 
 	--badge-mixed: #3a2d4d;
 	--badge-mixed-text: #c58bff;
@@ -59,7 +84,30 @@
 	--overlay-volts: #7fe3a0;
 	--overlay-amps: #ffe9a8;
 	--overlay-glow: #ff4e3e;
-	--warn-text: #ffb066;
+	--warn-text: var(--warn);
+
+	/*
+	 * Elevation. A dark surface hides a soft shadow, so each pairs a tight
+	 * contact shadow with a wide ambient one; the inset hairline is the edge
+	 * a light source would catch.
+	 */
+	--shadow-popover: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -6px rgb(0 0 0 / 0.55),
+		inset 0 1px 0 rgb(255 255 255 / 0.03);
+	--shadow-dialog: 0 2px 6px rgb(0 0 0 / 0.4), 0 24px 64px -12px rgb(0 0 0 / 0.7),
+		inset 0 1px 0 rgb(255 255 255 / 0.04);
+	--shadow-drawer: 0 0 32px rgb(0 0 0 / 0.5);
+	--scrim: rgb(5 7 10 / 0.55);
+
+	/*
+	 * Motion: short, and decelerating, because everything that moves here is
+	 * answering something the reader just did. Nothing that a key does is
+	 * animated at all.
+	 */
+	--ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+	--ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+	--duration-fast: 100ms;
+	--duration-base: 160ms;
+	--duration-slow: 220ms;
 }
 
 /* The same palette as utilities: `bg-panel`, `text-muted`, `border-border`… */
@@ -67,7 +115,9 @@
 	--color-bg: var(--bg);
 	--color-panel: var(--panel-bg);
 	--color-canvas: var(--canvas-bg);
+	--color-raised: var(--raised);
 	--color-border: var(--border);
+	--color-border-strong: var(--border-strong);
 	--color-hover: var(--hover);
 	--color-control: var(--control-bg);
 
@@ -77,18 +127,92 @@
 
 	--color-accent: var(--accent);
 	--color-accent-fg: var(--accent-text);
+	--color-focus: var(--focus);
 	--color-selection: var(--selection);
 	--color-danger: var(--danger);
+	--color-warn: var(--warn);
+	--color-success: var(--success);
 
-	--radius-control: 5px;
+	--shadow-popover: var(--shadow-popover);
+	--shadow-dialog: var(--shadow-dialog);
+
+	--ease-out: var(--ease-out-strong);
+	--default-transition-duration: var(--duration-fast);
+	--default-transition-timing-function: var(--ease-out-strong);
+}
+
+@theme static {
 	/*
-	 * The smallest type there is. Hints, badges and shortcut keys used to be
-	 * set in one-off sizes down to 0.56rem — eight pixels — and every one of
-	 * them is now one of these two.
+	 * Radii: a small one for marks inside a row (a key, a badge, a swatch),
+	 * one for everything pressable and every card, and a larger one for what
+	 * floats. `rounded` alone is the small one.
 	 */
-	--text-3xs: 0.72rem;
-	--text-2xs: 0.76rem;
-	--text-ui: 0.8rem;
+	--radius: 4px;
+	--radius-xs: 2px;
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-control: 6px;
+	--radius-lg: 8px;
+	--radius-xl: 12px;
+
+	/*
+	 * Type: four sizes, at 10.5, 11, 12 and 14 px when the browser is at its
+	 * default. Hints, badges and shortcut keys used to be set in one-off sizes
+	 * down to 0.56rem — eight pixels — and then in five sizes between 0.7 and
+	 * 0.8rem that nobody could tell apart; every one of them is one of these.
+	 */
+	--text-3xs: 0.75rem;
+	--text-3xs--line-height: 1.4;
+	--text-2xs: 0.7857rem;
+	--text-2xs--line-height: 1.45;
+	--text-ui: 0.8571rem;
+	--text-ui--line-height: 1.45;
+	--text-md: 1rem;
+	--text-md--line-height: 1.4;
+}
+
+/* The breakpoint the layout changes at, inclusive, as the stylesheets' own `max-width: 900px` is. */
+@custom-variant narrow (@media (max-width: 900px));
+
+/* A section's title: small capitals above what they name. */
+@utility eyebrow {
+	font-size: var(--text-3xs);
+	line-height: var(--text-3xs--line-height);
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--label-dim);
+}
+
+/*
+ * The edge of anything typed into: firmer under the pointer, and the accent
+ * with a soft halo while it has the caret. `data-rejected` keeps its red.
+ */
+@utility field {
+	transition-property: border-color, box-shadow;
+	transition-duration: var(--duration-fast);
+	transition-timing-function: var(--ease-out-strong);
+
+	@media (hover: hover) {
+		&:hover {
+			border-color: var(--border-strong);
+		}
+	}
+
+	&:focus-within {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+	}
+
+	&[data-rejected] {
+		border-color: var(--danger);
+	}
+}
+
+/* The one focus ring, for anything a keyboard can land on. */
+@utility focus-ring {
+	outline: 2px solid var(--focus);
+	outline-offset: 1px;
 }
 
 /* In a layer, so the utilities on a component win over these defaults. */
@@ -124,6 +248,37 @@
 
 	button {
 		font: inherit;
+	}
+
+	/* Native controls that no component styles still get the ring. */
+	:focus-visible {
+		outline: 2px solid var(--focus);
+		outline-offset: 1px;
+	}
+
+	::selection {
+		background: color-mix(in srgb, var(--accent) 35%, transparent);
+	}
+
+	/* Thin and quiet: the panels scroll often, and a bright gutter is noise. */
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--border-strong) transparent;
+	}
+
+	/*
+	 * Motion that moves things goes; the state it ends in stays. The drawers
+	 * still open, the toast still comes and goes — instantly.
+	 */
+	@media (prefers-reduced-motion: reduce) {
+		*,
+		::before,
+		::after {
+			transition-duration: 0.01ms !important;
+			animation-duration: 0.01ms !important;
+			animation-iteration-count: 1 !important;
+			scroll-behavior: auto !important;
+		}
 	}
 
 	/* Shortcut hints on a touch screen name keys that are not there. */
@@ -185,6 +340,7 @@
 	z-index: 100;
 	padding: 0.4rem 0.75rem;
 	border-radius: var(--radius-control);
+	box-shadow: var(--shadow-popover);
 	background: var(--accent);
 	color: var(--accent-text);
 	font-size: var(--text-ui);

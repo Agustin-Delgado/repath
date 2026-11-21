@@ -176,6 +176,24 @@ impl Circuit {
             }
         }
         self.extra_unknowns = next - self.node_names.len().saturating_sub(1);
+
+        // A current-controlled source reads another element's branch current,
+        // whose index exists only now. A name that is not a voltage source is
+        // left unbound; the netlist refuses one before it gets this far.
+        let branches: HashMap<String, usize> = self
+            .elements
+            .iter()
+            .filter_map(|e| {
+                let source = (**e).as_any().downcast_ref::<VoltageSource>()?;
+                Some((source.name.clone(), source.branch_index()))
+            })
+            .collect();
+        for element in &mut self.elements {
+            let Some(control) = element.controlling_source() else { continue };
+            if let Some(&branch) = branches.get(control) {
+                element.bind_control(branch);
+            }
+        }
         self.built = true;
     }
 

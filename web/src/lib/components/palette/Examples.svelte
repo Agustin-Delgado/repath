@@ -65,7 +65,7 @@
 		{#each shelves as { shelf, examples } (shelf)}
 			<section class="mb-2">
 				<h3
-					class="m-0 flex items-center px-0.5 py-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase"
+					class="m-0 flex items-center px-0.5 py-1 eyebrow"
 				>
 					{shelf}
 					<span class="ml-auto font-mono text-3xs font-normal tracking-normal opacity-60">

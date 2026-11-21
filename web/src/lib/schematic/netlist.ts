@@ -11,7 +11,7 @@
 
 import { contactControl, restingContact } from './contacts';
 import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
-import { blockOf, chipOf, NMOS_KP, PMOS_KP, pointKey } from './model';
+import { blockOf, chipOf, CONTROLLING_KINDS, NMOS_KP, PMOS_KP, pointKey } from './model';
 import { LCD_KIND, LCD_LEGS, lcdAddress } from './lcd';
 import { MATRIX_KIND, MATRIX_LEGS } from './max7219';
 import { LCD_SUPPLY_CURRENT, MATRIX_SUPPLY_CURRENT, quiescentCurrent } from './supply';
@@ -361,6 +361,7 @@ const NO_DC_PATH = new Set([
 	'varcap',
 	'crystal',
 	'isource',
+	'cccs',
 	'probe',
 	'port',
 	LCD_KIND,
@@ -654,6 +655,8 @@ function compileFresh(
 				case 'current_source':
 				case 'supply_current':
 				case 'vcvs':
+				case 'cccs':
+				case 'ccvs':
 					at(c.plus, c.name, -1);
 					at(c.minus, c.name, 1);
 					break;
@@ -1620,6 +1623,51 @@ function compileFresh(
 					ac_phase: 0
 				});
 				break;
+			// SPICE's F and H. The current they follow is a voltage source's,
+			// named on the part; one that is not on the drawing, or is not a
+			// source, is said here in the drawing's terms rather than left to the
+			// engine, which only knows the netlist's.
+			case 'cccs':
+			case 'ccvs': {
+				const control = String(instance.params.control ?? '').trim();
+				const source = schematic.instances.find((i) => i.name === control);
+				if (control === '') {
+					errors.push(`${name}: choose the voltage source whose current it follows.`);
+					break;
+				}
+				if (!source) {
+					errors.push(`${name} follows the current through ${control}, which is not on the drawing.`);
+					break;
+				}
+				if (!CONTROLLING_KINDS.has(source.kind)) {
+					errors.push(
+						`${name} follows the current through ${control}, which is not a voltage source or a battery. Put a 0 V voltage source in series with it and choose that.`
+					);
+					break;
+				}
+				if (instance.kind === 'cccs') {
+					components.push({
+						type: 'cccs',
+						name,
+						// Crossed, as for the current source: it delivers at the pin
+						// its arrow points at, which is our `plus`.
+						plus: analogOf(instance, 'minus'),
+						minus: analogOf(instance, 'plus'),
+						control,
+						gain: num(instance, 'gain', 1)
+					});
+				} else {
+					components.push({
+						type: 'ccvs',
+						name,
+						plus: analogOf(instance, 'plus'),
+						minus: analogOf(instance, 'minus'),
+						control,
+						transresistance: num(instance, 'transresistance', 1000)
+					});
+				}
+				break;
+			}
 			case 'diode':
 				components.push({
 					type: 'diode',

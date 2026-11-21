@@ -19,3 +19,7 @@ serde_json = { workspace = true }
 [[test]]
 name = "circuits"
 path = "../../tests/core/circuits.rs"
+
+[[test]]
+name = "sparse"
+path = "../../tests/core/sparse.rs"

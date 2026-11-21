@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="repath">
+	<title>repath</title>
+	<defs><linearGradient id="ground" x2="0" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#f1f3f6"/></linearGradient><linearGradient id="signal" x1="40" x2="104" gradientUnits="userSpaceOnUse"><stop offset=".25" stop-color="#1f7fe0"/><stop offset="1" stop-color="#17a35a"/></linearGradient></defs>
+	<rect x=".75" y=".75" width="126.5" height="126.5" rx="28" fill="url(#ground)" stroke="#dfe3ea" stroke-width="1.5"/>
+	<g transform="translate(-8 0)"><path d="M36 102V66c0-26 6-40 14-40s9 30 17 30 8-18 15-18 7 9 14 9 5-4 12-4" fill="none" stroke="url(#signal)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></g>
+</svg>

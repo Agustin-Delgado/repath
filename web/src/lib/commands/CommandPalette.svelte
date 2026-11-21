@@ -168,7 +168,7 @@
 			aria-activedescendant={rows.length ? `command-row-${active}` : undefined}
 			autocomplete="off"
 			spellcheck="false"
-			class="h-11 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-fg outline-none placeholder:text-muted"
+			class="h-11 min-w-0 flex-1 border-0 bg-transparent p-0 text-md text-fg outline-none placeholder:text-muted"
 		/>
 		<kbd class="rounded border border-border px-1.5 font-mono text-3xs leading-4 text-muted">Esc</kbd>
 	</label>
@@ -176,7 +176,7 @@
 	<div id="command-rows" role="listbox" aria-label="Results" class="min-h-0 flex-1 overflow-y-auto p-1.5">
 		{#each rows as row, i (row.key)}
 			{#if i === 0 || heading(rows[i - 1]) !== heading(row)}
-				<div class="px-2 pt-2 pb-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
+				<div class="px-2 pt-2 pb-1 eyebrow">
 					{heading(row)}
 				</div>
 			{/if}
@@ -189,7 +189,7 @@
 				onclick={() => choose(row)}
 				onpointermove={() => highlight(i)}
 				class="flex min-h-8 cursor-pointer items-center gap-2.5 rounded-md px-2 py-1 [--symbol-stroke:var(--symbol)]
-					{i === active ? 'bg-hover' : ''}"
+					{i === active ? 'bg-hover [--symbol-stroke:var(--text)]' : ''}"
 			>
 				{#if row.type === 'part'}
 					<PartIcon kind={row.part.kind} class="h-[22px] w-[30px]" />

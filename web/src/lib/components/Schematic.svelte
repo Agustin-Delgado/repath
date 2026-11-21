@@ -994,22 +994,24 @@
 		gap: 0.75rem;
 		padding: 0.4rem 0.75rem;
 		background: var(--panel-bg);
-		border-bottom: 1px solid var(--accent, #4ea8ff);
-		color: var(--text, inherit);
-		font-size: 0.8rem;
+		border-bottom: 1px solid var(--accent);
+		color: var(--text);
+		font-size: var(--text-ui);
 		pointer-events: none;
 	}
 
 	.inside :global(button) {
 		pointer-events: auto;
 		padding: 0.3rem 0.6rem;
-		font-size: 0.75rem;
-		border: 1px solid var(--accent, #4ea8ff);
-		border-radius: 5px;
+		font-size: var(--text-2xs);
+		font-weight: 500;
+		border: 1px solid var(--accent);
+		border-radius: var(--radius-control);
 		background: var(--control-bg);
 		color: inherit;
 		cursor: pointer;
 		white-space: nowrap;
+		transition: background-color var(--duration-fast) var(--ease-out-strong);
 	}
 
 	.inside :global(button:hover) {
@@ -1019,10 +1021,10 @@
 	.stage :global(.rename) {
 		position: absolute;
 		padding: 2px 3px;
-		border: 1px solid var(--accent, #4ea8ff);
-		border-radius: 3px;
+		border: 1px solid var(--accent);
+		border-radius: var(--radius-xs);
 		background: var(--panel-bg);
-		color: var(--text, inherit);
+		color: var(--text);
 		/* The canvas labels' own face, so editing one does not change its glyphs. */
 		font-family: var(--font-mono);
 		line-height: 1;

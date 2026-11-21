@@ -79,7 +79,7 @@
 			app.setParam(instance.id, 'spice', e.currentTarget.value);
 		}}
 		aria-label="SPICE model card"
-		class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none focus:border-accent/70"
+		class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none field"
 	/>
 	{#if cardProblem}<p class={problem} role="alert">{cardProblem}</p>{/if}
 </section>

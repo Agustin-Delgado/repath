@@ -271,7 +271,7 @@
 
 				{#if recent.length > 0}
 					<section>
-						<h3 class="m-0 px-0.5 py-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
+						<h3 class="m-0 px-0.5 py-1 eyebrow">
 							Recent
 						</h3>
 						<div class="grid grid-cols-[repeat(auto-fill,minmax(58px,1fr))] gap-1">
@@ -293,7 +293,7 @@
 						<Disclosure
 							open={!folded.has(section.id)}
 							onOpenChange={() => toggleShelf(section.id)}
-							triggerClass="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left text-3xs font-semibold tracking-[0.08em] text-muted uppercase hover:text-fg"
+							triggerClass="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left eyebrow hover:text-fg"
 						>
 							{#snippet trigger()}
 								{@render shelfHeading(section.id, section.label, shelf.length)}

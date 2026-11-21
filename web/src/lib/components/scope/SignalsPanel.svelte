@@ -21,6 +21,8 @@
 		traceCount: number;
 		/** The measurement rows, drawn by the scope that computes them. */
 		measures?: Snippet;
+		/** More buttons for the header, from the plot they act on. */
+		actions?: Snippet;
 		footer?: Snippet;
 	};
 
@@ -29,6 +31,7 @@
 		separate = $bindable(),
 		traceCount,
 		measures,
+		actions,
 		footer
 	}: Props = $props();
 
@@ -96,9 +99,9 @@
 	{/if}
 {/snippet}
 
-<aside class="flex h-full min-h-0 flex-col overflow-y-auto border-l border-border bg-panel text-[0.72rem]">
-	<header class="flex items-center gap-1 px-2.5 pt-2 pb-1">
-		<h3 class="m-0 mr-auto text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
+<aside class="flex h-full min-h-0 flex-col overflow-y-auto border-l border-border bg-panel text-3xs">
+	<header class="flex flex-wrap items-center gap-1 px-2.5 pt-2 pb-1">
+		<h3 class="m-0 mr-auto eyebrow">
 			Signals
 		</h3>
 		<Button
@@ -130,6 +133,7 @@
 				split
 			</Button>
 		{/if}
+		{@render actions?.()}
 	</header>
 
 	<!--
@@ -213,7 +217,7 @@
 	{#if unplotted.length > 0}
 		<section class="mt-2 flex flex-col gap-1 border-t border-border px-1.5 pt-2">
 			<label
-				class="mx-1 flex h-6 items-center gap-1.5 rounded-control border border-border bg-control px-1.5 text-muted focus-within:border-accent/70"
+				class="mx-1 flex h-6 items-center gap-1.5 rounded-control border border-border bg-control px-1.5 text-muted field"
 			>
 				<Search class="size-3 shrink-0" />
 				<TextInput
@@ -268,7 +272,7 @@
 			fewer parts worth a current than it has nets.
 		-->
 		<section class="mt-2 flex flex-col gap-0.5 border-t border-border px-1.5 pt-2">
-			<h3 class="m-0 px-1 pb-0.5 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
+			<h3 class="m-0 px-1 pb-0.5 eyebrow">
 				Currents
 			</h3>
 			<ul class="m-0 flex list-none flex-col gap-0.5 p-0">

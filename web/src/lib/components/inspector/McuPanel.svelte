@@ -163,7 +163,7 @@
 				app.setParam(instance.id, 'firmware', e.currentTarget.value);
 			}}
 			aria-label="Program as Intel HEX"
-			class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none focus:border-accent/70"
+			class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none field"
 		/>
 	{/if}
 	<p class={hint}>

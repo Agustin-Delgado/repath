@@ -1,4 +1,10 @@
-# repath
+<h1>
+	<picture>
+		<source media="(prefers-color-scheme: dark)" srcset="brand/logo/repath-logo.svg" />
+		<source media="(prefers-color-scheme: light)" srcset="brand/logo/repath-logo-day.svg" />
+		<img src="brand/logo/repath-logo-day.svg" alt="repath" height="56" />
+	</picture>
+</h1>
 
 A free, open source, mixed-signal circuit simulator that runs entirely in your browser.
 
@@ -284,16 +290,16 @@ would show you.
 | | |
 |---|---|
 | **Passive** | resistor, capacitor, variable capacitor, inductor, transformer, crystal, fuse, potentiometer, lamp, switch you can click while it runs, changeover (SPDT) switch, push-button you hold down, relay whose blade follows its coil, ground, supply terminal |
-| **Sources** | voltage and current, with DC / sine / pulse waveforms; battery |
+| **Sources** | voltage and current, with DC / sine / pulse waveforms; battery; current-controlled current and voltage sources (SPICE `F` and `H`), reading the current through a voltage source |
 | **Semiconductors** | diode (five presets, one of them a zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP, voltage regulator |
 | **Displays and actuators** | 7-segment digit and 4-digit display, LED bar graph, 16×2 LCD on I²C, 8×8 LED matrix on a MAX7219, piezo buzzer you can hear, servo motor |
-| **Analog** | op-amp with finite gain, bandwidth, slew rate and rail saturation; LM358, LM324, LM741, LM339 and LM393 packages; NE555 timer; voltage-controlled switch, VCVS and VCCS inside an imported `.subckt` |
+| **Analog** | op-amp with finite gain, bandwidth, slew rate and rail saturation; LM358, LM324, LM741, LM339 and LM393 packages; NE555 timer; voltage-controlled switch, VCVS, VCCS, CCCS and CCVS (`E`, `G`, `F`, `H`) inside an imported `.subckt` |
 | **Logic** | AND, NAND, OR, NOR, XOR, XNOR — two to four inputs each — NOT, buffer, D flip-flop, tri-state buffer, clock, logic toggle; the 74xx and 4000 series as packages, counters, shift registers, decoders, multiplexers and latches among them |
 | **Memory** | 62256 static RAM, 28C16 and 28C256 EEPROMs |
 | **Microcontrollers** | ATmega328P and an Arduino Uno board running a `.hex` you load: timers and PWM, ADC, USART to a serial monitor, SPI, I²C, EEPROM and the watchdog |
 | **Blocks** | any part of a drawing boxed up as one part, edited inside, placed again and nested |
 | **Imported** | `.model` cards pasted onto a part, and `.subckt` definitions placed as one |
-| **Instruments** | probe, scope with cursors, measurements and per-channel gain, Bode plot |
+| **Instruments** | probe, scope with cursors, measurements, per-channel gain and an edge trigger, FFT of a trace with THD, Bode plot |
 | **Analyses** | DC operating point, mixed-signal transient, AC frequency sweep, tolerance sweep |
 
 ## Using the editor
@@ -326,6 +332,8 @@ would show you.
 | Run / stop the sweep | `Space` |
 | Simulate | press Run — nothing runs until you ask |
 | Plot a net | type its name under **Add a signal** beside the scope; the × on a plotted one takes it off |
+| Hold a waveform still | **Trigger** beside the scope: Auto, Normal or Single, on a trace's rising or falling edge, with level, hysteresis, holdoff and how much of the screen comes before the trigger |
+| See a trace's spectrum | **fft** beside the scope: the spectrum of a trace under it, its strongest tones with their frequency and level, and the THD of the strongest to the 10th harmonic |
 | Read it in your own symbols | the **ANSI / IEC / GOST** selector in the toolbar — zigzag or box resistors, shaped or boxed gates, an EMF drawn with an arrow |
 
 Nothing simulates when the page opens: press **Run**, under the drawing, or open one of the

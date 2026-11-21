@@ -54,7 +54,7 @@
 			app.setParam(instance.id, 'contents', e.currentTarget.value);
 		}}
 		aria-label="Memory contents"
-		class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none focus:border-accent/70"
+		class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none field"
 	/>
 	{#each parsed.problems.slice(0, 3) as message (message)}
 		<p class={problem} role="alert">{message}</p>

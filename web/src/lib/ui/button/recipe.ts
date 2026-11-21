@@ -5,27 +5,32 @@ import { tv } from '../tv';
  * The one look every pressable thing in the app shares. Menu triggers and
  * select triggers are buttons too, so they take their chrome from here rather
  * than growing their own.
+ *
+ * A press gives way a little — a hair under full size — so a click is felt as
+ * well as seen. Only the pointer does that: a key press is instant, and with
+ * reduced motion the transition is gone and so is the give.
  */
 export const buttonVariants = tv({
 	base: [
 		'relative inline-flex shrink-0 cursor-pointer select-none items-center justify-center gap-1.5',
-		'whitespace-nowrap rounded-control border font-[inherit] leading-none outline-none',
-		'transition-colors duration-100',
-		'data-[focus-visible]:ring-2 data-[focus-visible]:ring-accent/60',
-		'disabled:cursor-not-allowed disabled:opacity-50 data-[pending]:cursor-progress data-[pending]:opacity-60',
+		'whitespace-nowrap rounded-control border font-[inherit] font-medium leading-none outline-none',
+		'transition-[color,background-color,border-color,scale] duration-(--duration-fast)',
+		'data-[pressed]:scale-[0.97] motion-reduce:data-[pressed]:scale-100',
+		'data-[focus-visible]:focus-ring',
+		'disabled:cursor-not-allowed disabled:opacity-45 data-[pending]:cursor-progress data-[pending]:opacity-60',
 		'[&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0'
 	],
 	variants: {
 		variant: {
 			/** The ordinary control: a raised chip on the panel. */
 			default:
-				'border-border bg-control text-fg data-[hovered]:bg-hover data-[pressed]:bg-hover',
+				'border-border bg-control text-fg data-[hovered]:border-border-strong data-[hovered]:bg-hover data-[pressed]:bg-hover',
 			/** The one thing on the screen the user came to press. */
 			primary:
-				'border-accent bg-accent font-semibold text-accent-fg data-[hovered]:bg-accent/90',
+				'border-accent bg-accent font-semibold text-accent-fg data-[hovered]:bg-accent/88',
 			/** Quiet until touched: toolbar icons, dismiss crosses. */
 			ghost:
-				'border-transparent bg-transparent text-muted data-[hovered]:bg-hover data-[hovered]:text-fg'
+				'border-transparent bg-transparent text-muted data-[hovered]:bg-hover data-[hovered]:text-fg data-[pressed]:bg-hover'
 		},
 		size: {
 			default: 'h-7 px-2.5 text-ui',
@@ -36,7 +41,7 @@ export const buttonVariants = tv({
 		},
 		/** Lit while a mode the button controls is on. */
 		active: {
-			true: 'border-accent bg-accent/15 text-fg data-[hovered]:bg-accent/25',
+			true: 'border-accent/70 bg-accent/15 text-fg data-[hovered]:border-accent data-[hovered]:bg-accent/22',
 			false: ''
 		}
 	},

@@ -73,7 +73,7 @@
 			title="Which source the sweep turns"
 		/>
 	{:else}
-		<span class="shrink-0 font-mono text-[0.72rem] text-muted" title="The source the sweep turns">
+		<span class="shrink-0 font-mono text-2xs text-muted" title="The source the sweep turns">
 			{app.dcSwept?.name ?? 'no source'}
 		</span>
 	{/if}
@@ -112,11 +112,11 @@
 	/>
 	<!-- How many points that is, or what is wrong with it, before Run is pressed. -->
 	{#if 'error' in app.dcPlan}
-		<span class="shrink-0 text-[0.72rem] text-danger" title={app.dcPlan.error} role="status">
+		<span class="shrink-0 text-2xs text-danger" title={app.dcPlan.error} role="status">
 			invalid
 		</span>
 	{:else}
-		<span class="shrink-0 font-mono text-[0.72rem] text-muted" title="Operating points the sweep solves">
+		<span class="shrink-0 font-mono text-2xs text-muted" title="Operating points the sweep solves">
 			{app.dcPlan.values.length} pts
 		</span>
 	{/if}
@@ -179,7 +179,7 @@
 -->
 <Button
 	active={app.sample > 0}
-	class="font-mono text-[0.72rem]"
+	class="tabular-nums"
 	onclick={() => app.setSample(app.sample > 0 ? app.sample + 1 : 1)}
 	oncontextmenu={(e) => {
 		e.preventDefault();
@@ -199,7 +199,7 @@
 -->
 <Button
 	active={app.sweepCount > 0}
-	class="font-mono text-[0.72rem]"
+	class="tabular-nums"
 	onclick={() => app.setSweep(app.sweepCount > 0 ? 0 : 25)}
 	title={app.sweepCount > 0
 		? `Running ${app.sweepCount} samples and shading where they all went`
