@@ -451,7 +451,7 @@ export const EXAMPLES: Example[] = [
 		id: 'led-driver',
 		name: 'LED driver',
 		description:
-			'Two LEDs across the same 5 V. One through 330 Ω lights and stays lit; one through 33 Ω — a decimal point in the wrong place — lights brighter and lasts about a third of a millisecond.',
+			'Two LEDs across the same 5 V. One through 330 Ω lights and stays lit; one through 33 Ω — a decimal point in the wrong place — lights brighter and lasts about half a millisecond.',
 		stopTime: 2e-3,
 		build: () =>
 			build(

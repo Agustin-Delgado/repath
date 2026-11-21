@@ -168,8 +168,11 @@ Neither side ever sees a discontinuity:
   has to re-solve a timepoint it already accepted.
 - An **analog-to-digital** bridge watches a node between accepted timepoints and,
   when the voltage crosses a threshold, interpolates the crossing instant and
-  schedules the digital event *there* rather than at the end of the step. Thresholds
-  have hysteresis, so a slow edge produces one event rather than a burst.
+  schedules the digital event *there* rather than at the end of the step. An
+  ordinary input switches where a real one does — about half the supply for
+  CMOS, 1.3 V for TTL — with a fifth of a volt of hysteresis so a slow edge
+  produces one event rather than a burst; a Schmitt input, or a
+  microcontroller's port pin, has its own wider pair.
 
 The editor works out where a bridge is needed from the pins on each net. Analog pins
 and digital pins on the same wire means a bridge — in whichever direction the

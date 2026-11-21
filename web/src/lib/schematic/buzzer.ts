@@ -3,14 +3,17 @@
  *
  * A passive piezo is a ceramic disc with a terminal on each face, which is a
  * capacitor: 20 nF is typical of the 12 mm ones in Arduino kits. Driven by a
- * square wave it draws a spike of charge at every edge, 2·C·V a period, and
- * nothing in between. The netlist does not build it as a capacitor: resolving
- * the microsecond spike at each of thousands of edges a second tripled what a
- * run with one costs, and put an Uno playing a tune well behind real time.
- * It is the resistance that draws the same average current at 1 kHz instead
- * — 1 / (2·C·1 kHz), 25 kΩ for 20 nF, 0.2 mA from a 5 V pin — which is the
- * load the pin and the supply see, without the spikes nobody can see at the
- * scope's resolution anyway. No series resistor is needed, as none is on the
+ * square wave it draws a spike of charge at every edge and nothing in between:
+ * C·V into it on the rising edge, from the supply, and the same C·V out to
+ * ground on the falling one. The netlist does not build it as a capacitor:
+ * resolving the microsecond spike at each of thousands of edges a second
+ * tripled what a run with one costs, and put an Uno playing a tune well behind
+ * real time. It is the resistance that takes the same mean current from the
+ * supply at 1 kHz instead: C·V·f, 0.1 mA from 5 V, against V / R for the half
+ * of each period the pin is high, so R = 1 / (2·C·1 kHz), 25 kΩ for 20 nF.
+ * That is 0.2 mA while the pin is high and 0.1 mA on average — the load the
+ * supply sees, without the spikes nobody can see at the scope's resolution
+ * anyway. No series resistor is needed, as none is on the
  * bench. It has no oscillator of its own: it sounds at whatever it is driven
  * at, which is what `tone()` is for.
  *
@@ -29,7 +32,10 @@ export const PIEZO_CAPACITANCE = 20e-9;
 /** The drive frequency the disc's resistance is matched at. */
 const MATCHED_AT = 1000;
 
-/** The resistance standing in for a disc of `capacitance`: its average current at 1 kHz. */
+/**
+ * The resistance standing in for a disc of `capacitance`: the one that takes
+ * the disc's mean supply current, C·V·f, on a 50 % square wave at 1 kHz.
+ */
 export function piezoResistance(capacitance: number): number {
 	return 1 / (2 * Math.max(capacitance, 1e-15) * MATCHED_AT);
 }

@@ -20,9 +20,18 @@ export interface LogicFamily {
 	v_low: number;
 	/** Volts a driven High produces. */
 	v_high: number;
-	/** At or below this, an input reads Low. */
+	/**
+	 * At or below this, an input reads Low. Where a real input switches, not the
+	 * datasheet's guaranteed V_IL: a gate is guaranteed to read a low below
+	 * 1.35 V and in practice switches near half its supply, and it is the second
+	 * that decides when an RC edge arrives.
+	 */
 	v_il: number;
-	/** At or above this, an input reads High. The gap to `v_il` is hysteresis. */
+	/**
+	 * At or above this, an input reads High. The gap to `v_il` is hysteresis: a
+	 * narrow one for an ordinary gate, which has next to none, kept only so a
+	 * slow edge resolves to one event. A Schmitt input sets its own, wider.
+	 */
 	v_ih: number;
 	/** Output impedance of a driven output. Nothing drives a load for free. */
 	r_out: number;
@@ -40,30 +49,33 @@ export const LOGIC_FAMILIES: FamilyOption[] = [
 	{
 		value: 'cmos5',
 		label: 'CMOS 5 V',
-		// 74HC. A CMOS output pulls all the way to each rail, and decides at a
-		// third and two thirds of the supply — which is the wide noise margin that
-		// makes the family forgiving.
-		family: { v_low: 0, v_high: 5, v_il: 1.5, v_ih: 3.5, r_out: 50, rise: 2e-9, fall: 2e-9 }
+		// 74HC. A CMOS output pulls all the way to each rail, and an input
+		// switches near half the supply: NXP's typical V_IH and V_IL at 4.5 V are
+		// 2.4 V and 2.1 V. The 1.5 V and 3.5 V a datasheet guarantees are the wide
+		// noise margin that makes the family forgiving, not where it switches —
+		// read at those, every gate was a 74HC14, and an RC delay into one took
+		// 1.2 RC to arrive where the bench gives 0.69 RC.
+		family: { v_low: 0, v_high: 5, v_il: 2.4, v_ih: 2.6, r_out: 50, rise: 2e-9, fall: 2e-9 }
 	},
 	{
 		value: 'cmos3v3',
 		label: 'CMOS 3.3 V',
-		// The same silicon on a lower rail: faster, and with proportionally less
-		// room between a one and a zero.
-		family: { v_low: 0, v_high: 3.3, v_il: 0.99, v_ih: 2.31, r_out: 50, rise: 1e-9, fall: 1e-9 }
+		// The same silicon on a lower rail: faster, and switching at half of it.
+		family: { v_low: 0, v_high: 3.3, v_il: 1.55, v_ih: 1.75, r_out: 50, rise: 1e-9, fall: 1e-9 }
 	},
 	{
 		value: 'ttl',
 		label: 'TTL 5 V',
 		// 74LS. Neither output level reaches its rail — a high is a diode drop or
-		// two below 5 V — and the thresholds sit low and close together, which is
-		// why TTL is the family that gets upset by noise on the ground.
+		// two below 5 V — and an input switches around 1.3 to 1.4 V, two diode
+		// drops up, inside the guaranteed 0.8 V and 2 V. That threshold sits low,
+		// which is why TTL is the family that gets upset by noise on the ground.
 		//
 		// One output impedance is a simplification worth naming: a real LS output
 		// sinks hard and sources weakly, so a high sags under load in a way a low
 		// does not. This is a single number, closer to the sourcing case, because
 		// that is the one that catches people out.
-		family: { v_low: 0.25, v_high: 3.4, v_il: 0.8, v_ih: 2.0, r_out: 100, rise: 5e-9, fall: 4e-9 }
+		family: { v_low: 0.25, v_high: 3.4, v_il: 1.25, v_ih: 1.45, r_out: 100, rise: 5e-9, fall: 4e-9 }
 	}
 ];
 

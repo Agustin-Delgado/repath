@@ -1257,13 +1257,41 @@ mod tests {
     }
 
     #[test]
-    fn a_small_overload_takes_seconds_to_blow_a_fuse() {
-        // Half as much again through a 1 A fuse: the element alone would never
-        // melt at that, so it waits on the end caps and glass warming behind it —
-        // about a second, where ten amps took five milliseconds.
-        let run = fused_for(1.5, 3.0);
-        let failure = run.failures.first().expect("half again over its rating should blow it");
-        assert!(failure.time > 0.5 && failure.time < 2.0, "blew at {} s", failure.time);
+    fn a_modest_overload_takes_its_time_to_blow_a_fuse() {
+        // 2.75 times the rating through a 1 A fuse: IEC 60127-2 gives a type F
+        // fuse between 10 ms and 2 s for that. The element alone would never
+        // melt, so it waits on the end caps and glass warming behind it.
+        let run = fused_for(2.75 * 1.01, 3.0);
+        let failure = run.failures.first().expect("2.75 times its rating should blow it");
+        assert!(failure.time > 10e-3 && failure.time < 2.0, "blew at {} s", failure.time);
+    }
+
+    #[test]
+    fn half_as_much_again_as_its_rating_does_not_blow_a_fuse() {
+        // IEC 60127-2 has a type F fuse hold 1.5 times its rating for an hour,
+        // and UL 248 has one carry 110 % indefinitely. Run for a minute — a
+        // hundred and twenty of the slow mass's time constants are not needed
+        // to see that it is not on its way: the load sits below the fusing
+        // current, which is where it settles.
+        for amps in [1.1, 1.35, 1.5] {
+            let run = fused_for(amps * 1.01, 60.0);
+            assert!(run.failures.is_empty(), "{amps} A blew it: {:?}", run.failures);
+        }
+    }
+
+    #[test]
+    fn a_fuse_follows_the_iec_60127_type_f_table() {
+        // The whole curve, read off the thermal model rather than simulated:
+        // multiples of the rating against the window IEC 60127-2 sheet 1 allows.
+        use crate::elements::Fuse;
+        let fuse = Fuse::new("F1", 1, 0, 0.01, 1.0, 0.5);
+        assert_eq!(fuse.time_to_blow(1.5), None, "1.5 times must hold for an hour, it never blows");
+        for (multiple, lo, hi) in
+            [(2.1, 0.0, 30.0 * 60.0), (2.75, 10e-3, 2.0), (4.0, 3e-3, 0.3), (10.0, 0.0, 20e-3)]
+        {
+            let t = fuse.time_to_blow(multiple).unwrap_or(f64::INFINITY);
+            assert!(t > lo && t < hi, "{multiple} times the rating blew it in {t} s");
+        }
     }
 
     fn transformer(load: f64) -> (crate::solver::TransientResult, usize, usize) {

@@ -28,8 +28,6 @@ import {
 	BARS,
 	brightness,
 	ledColour,
-	ledRating,
-	RATED,
 	SEGMENTS,
 	SEGMENT_SHAPES,
 	type Burnout,
@@ -499,7 +497,6 @@ function drawSegments(
 	bars: ReadonlyArray<readonly [string, readonly [number, number, number, number]]>,
 	width: number
 ): void {
-	const rated = ledRating(instance);
 	const { rgb } = ledColour(instance.params.colour);
 	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
@@ -510,7 +507,7 @@ function drawSegments(
 			if (drawBurntBar(painter, view, `${instance.id}:${key}`, from, to, width)) continue;
 			if (!view.showLight) continue;
 			const current = view.frame.segmentCurrent.get(`${instance.id}:${key}`) ?? 0;
-			const lit = brightness(current, rated);
+			const lit = brightness(current);
 			// Same floor as a single LED: below this it is leakage, and painting it
 			// would leave every bar faintly on and the digit unreadable.
 			if (lit < 0.05) continue;
@@ -726,7 +723,6 @@ function drawServo(painter: Painter, view: DynamicView, instance: Instance): voi
 
 /** A bar graph: the digit's lighting, one bar at a time. */
 function drawBars(painter: Painter, view: DynamicView, instance: Instance): void {
-	const rated = ledRating(instance);
 	const { rgb } = ledColour(instance.params.colour);
 	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
@@ -738,7 +734,7 @@ function drawBars(painter: Painter, view: DynamicView, instance: Instance): void
 			if (drawBurntBar(painter, view, `${instance.id}:${bar}`, from, to, 5)) continue;
 			if (!view.showLight) continue;
 			const current = view.frame.segmentCurrent.get(`${instance.id}:${bar}`) ?? 0;
-			const lit = brightness(current, rated);
+			const lit = brightness(current);
 			if (lit < 0.05) continue;
 			painter.polyline([from, to], { color: ink, width: 9, alpha: 0.18 + 0.22 * lit });
 			painter.polyline([from, to], {
@@ -787,7 +783,7 @@ function drawBoardLights(
 	if (!view.showLight) return;
 	for (const light of lights) {
 		const current = view.frame.segmentCurrent.get(`${instance.id}:${light.name}`) ?? 0;
-		const lit = brightness(current, RATED);
+		const lit = brightness(current);
 		if (lit < 0.05) continue;
 		const { rgb } = ledColour(light.colour);
 		const turned = rotatePoint(light.x, light.y, instance.rotation);
@@ -808,7 +804,7 @@ function drawLed(painter: Painter, view: DynamicView, instance: Instance): void 
 	if (!burn || view.time < burn.time) {
 		if (!view.showLight) return;
 		const current = view.frame.instanceCurrent.get(instance.id) ?? 0;
-		const lit = brightness(current, ledRating(instance));
+		const lit = brightness(current);
 		// Below this it is a leakage current, not a light. Drawing it would put a
 		// permanent smudge on every LED in the circuit, lit or not.
 		if (lit < 0.05) return;
