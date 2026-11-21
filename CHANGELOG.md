@@ -38,6 +38,7 @@ voltages around it by several percent. A run played live takes no more steps
 than the same run in one go. A single shot with an edge a hair before its end
 finishes instead of hanging. A circuit with hundreds of parts that fails to
 solve is explained in a moment rather than freezing the tab first.
+[#91](https://github.com/Agustin-Delgado/repath/pull/91)
 
 ---
 
