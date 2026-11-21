@@ -283,14 +283,18 @@ would show you.
 
 | | |
 |---|---|
-| **Passive** | resistor, capacitor, inductor, switch you can click while it runs, push-button you hold down, relay whose blade follows its coil, ground, supply terminal |
-| **Sources** | voltage and current, with DC / sine / pulse waveforms |
-| **Semiconductors** | diode (five presets, one of them a zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP |
-| **Analog** | op-amp with finite gain, bandwidth, slew rate and rail saturation; voltage-controlled switch; VCVS; VCCS |
-| **Logic** | AND, NAND, OR, NOR, XOR, XNOR — two to four inputs each — NOT, buffer, D flip-flop, tri-state buffer, clock, logic toggle |
+| **Passive** | resistor, capacitor, variable capacitor, inductor, transformer, crystal, fuse, potentiometer, lamp, switch you can click while it runs, changeover (SPDT) switch, push-button you hold down, relay whose blade follows its coil, ground, supply terminal |
+| **Sources** | voltage and current, with DC / sine / pulse waveforms; battery |
+| **Semiconductors** | diode (five presets, one of them a zener), LED (five colours, lights and burns out), NMOS, PMOS, NPN, PNP, voltage regulator |
+| **Displays and actuators** | 7-segment digit and 4-digit display, LED bar graph, 16×2 LCD on I²C, 8×8 LED matrix on a MAX7219, piezo buzzer you can hear, servo motor |
+| **Analog** | op-amp with finite gain, bandwidth, slew rate and rail saturation; LM358, LM324, LM741, LM339 and LM393 packages; NE555 timer; voltage-controlled switch, VCVS and VCCS inside an imported `.subckt` |
+| **Logic** | AND, NAND, OR, NOR, XOR, XNOR — two to four inputs each — NOT, buffer, D flip-flop, tri-state buffer, clock, logic toggle; the 74xx and 4000 series as packages, counters, shift registers, decoders, multiplexers and latches among them |
+| **Memory** | 62256 static RAM, 28C16 and 28C256 EEPROMs |
+| **Microcontrollers** | ATmega328P and an Arduino Uno board running a `.hex` you load: timers and PWM, ADC, USART to a serial monitor, SPI, I²C, EEPROM and the watchdog |
+| **Blocks** | any part of a drawing boxed up as one part, edited inside, placed again and nested |
 | **Imported** | `.model` cards pasted onto a part, and `.subckt` definitions placed as one |
-| **Instruments** | probe, scope with cursors and per-channel gain, Bode plot |
-| **Analyses** | DC operating point, mixed-signal transient, AC frequency sweep |
+| **Instruments** | probe, scope with cursors, measurements and per-channel gain, Bode plot |
+| **Analyses** | DC operating point, mixed-signal transient, AC frequency sweep, tolerance sweep |
 
 ## Using the editor
 
@@ -338,13 +342,15 @@ engine is carried on from where it was, so everything already solved stays solve
 and the waveform gets the edge at the instant of the click. A push-button is held
 rather than clicked: its contacts move when the pointer goes down and come back
 when it comes up. A value changed while it runs — a resistance, a capacitance, a
-source's level, a potentiometer's wiper — goes in at the instant the sweep has
-reached, the same way. Any other change to the circuit restarts the sweep from zero,
-since a different circuit is a different run; with the sweep stopped, the change puts
-the run away instead, and nothing simulates again until Run. Moving a part around does
-not count as a change, since the circuit it describes has not changed. Inside a block
-there is nothing to run on its own — its inside is shared by every copy — so Run asks
-to be pressed from the drawing.
+source's level, a potentiometer's wiper — lands at that instant in the same way,
+and everything before it stays as it was solved. A change the run cannot take in
+its stride — a part or wire added or removed, a type changed, a source's
+frequency — starts the sweep again from zero, since a different circuit is a
+different run; with the sweep stopped, the change puts the run away instead, and
+nothing simulates again until Run. Moving a part around does not count as a
+change, since the circuit it describes has not changed. Inside a block there is
+nothing to run on its own — its inside is shared by every copy — so Run asks to
+be pressed from the drawing.
 
 With nothing running, a click on a switch, toggle or button only selects it, so it
 can be dragged like any other part; where it starts is set in the inspector.
@@ -438,23 +444,23 @@ much they would change what repath is good for:
 
 - **Sparse matrix solver.** The dense LU is fine to a few hundred nodes and then it
   is not.
-- **Drawn subcircuits.** One pasted from a file is a part today; drawing a block
-  once and nesting it is not.
 - **Dirty-rectangle repaint.** Layer-level invalidation plus viewport culling
   covers most of the benefit today; per-region repaint is the next step up.
 - **Noise and distortion analysis**, once AC has proved itself.
-- **Netlist import/export** in SPICE format.
+- **Netlist export** in SPICE format. Import is in: `.model` cards and `.subckt`
+  definitions.
 - **Richer device models** — MOSFET levels beyond Shichman-Hodges, and a BJT with
   high-level injection in it. The Early effect, channel-length modulation, the
   junction and gate capacitances and a diode's series resistance are all in, which
   is what gives a stage a top end and a rectifier a recovery.
-- **More logic**: counters, registers, decoders, memory.
+- **More of the microcontroller**: the ATmega328P is the one chip with a CPU;
+  other AVRs, and the peripherals it does not have yet, are in the backlog.
 
 ## Testing
 
 ```sh
 cargo test --workspace     # engine
-cd web && npm test         # canvas engine
+cd web && npm test         # editor, canvas, netlist, scope and the engine through wasm
 cd web && npm run check    # types
 ```
 

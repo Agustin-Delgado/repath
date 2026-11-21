@@ -117,7 +117,7 @@
 				commit={(raw) => app.rename(instance.id, raw)}
 				aria-label="Reference designator"
 			/>
-			<span class="truncate px-1 text-[0.68rem] text-muted">{def.label}</span>
+			<span class="truncate px-1 text-2xs text-muted">{def.label}</span>
 		</div>
 	</header>
 
@@ -143,13 +143,13 @@
 				type="button"
 				aria-expanded={more}
 				onclick={toggleMore}
-				class="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-left text-[0.68rem] text-muted hover:text-fg"
+				class="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-left text-2xs text-muted hover:text-fg"
 			>
 				<ChevronRight class="size-3 transition-transform {more ? 'rotate-90' : ''}" />
 				More settings
 				<span class="font-mono opacity-70">({advanced.length})</span>
 				{#if changed > 0 && !more}
-					<span class="ml-auto rounded bg-accent/15 px-1.5 text-[0.62rem] text-accent">
+					<span class="ml-auto rounded bg-accent/15 px-1.5 text-3xs text-accent">
 						{changed} changed
 					</span>
 				{/if}
@@ -238,10 +238,10 @@
 
 	<div class="flex gap-1.5">
 		<Button class="flex-1" onclick={() => app.rotateSelection()} title="Turn a quarter turn; wires follow">
-			<RotateCw /> Rotate <kbd class="font-mono text-[0.6rem] text-muted">R</kbd>
+			<RotateCw /> Rotate <kbd class="font-mono text-3xs text-muted">R</kbd>
 		</Button>
 		<Button class="flex-1 text-danger" onclick={() => app.deleteSelection()} title="Remove it">
-			<Trash2 /> Delete <kbd class="font-mono text-[0.6rem] text-muted">Del</kbd>
+			<Trash2 /> Delete <kbd class="font-mono text-3xs text-muted">Del</kbd>
 		</Button>
 	</div>
 </div>

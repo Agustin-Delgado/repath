@@ -55,7 +55,7 @@
 			<CircleX class="size-3.5" />
 			{failure.kind === 'singular' ? 'No single answer' : 'Did not settle'}
 			{#if failure.time !== null && failure.time > 0}
-				<span class="ml-auto font-mono text-[0.62rem] font-normal opacity-70"
+				<span class="ml-auto font-mono text-3xs font-normal opacity-70"
 					>at {formatWithUnit(failure.time, 's')}</span
 				>
 			{/if}
@@ -79,7 +79,7 @@
 				</li>
 			{/each}
 		</ul>
-		<p class="m-0 text-[0.68rem] text-muted">{failure.message}</p>
+		<p class="m-0 text-2xs text-muted">{failure.message}</p>
 	</section>
 {/if}
 
@@ -96,7 +96,7 @@
 				</li>
 			{/each}
 		</ul>
-		<p class="m-0 text-[0.68rem] text-muted">
+		<p class="m-0 text-2xs text-muted">
 			Its program goes no further from there. One built for another chip, or one that ran off its end
 			into empty flash, stops like this.
 		</p>
@@ -120,7 +120,7 @@
 				</li>
 			{/each}
 		</ul>
-		<p class="m-0 text-[0.68rem] text-muted">
+		<p class="m-0 text-2xs text-muted">
 			{burnouts.length === 1 ? 'It is' : 'They are'} open from then on, and the rest of the run is the
 			circuit without {burnouts.length === 1 ? 'it' : 'them'}.
 			{#if leds > 0}Add a series resistor to keep {leds === 1 ? 'an LED' : 'the LEDs'} alive.{/if}
@@ -134,7 +134,7 @@
 	<section class="flex flex-col gap-1.5 rounded-md border border-selection/25 bg-selection/5 p-2">
 		<h3 class="m-0 flex items-center gap-1.5 text-[0.7rem] font-semibold text-selection">
 			<TriangleAlert class="size-3.5" /> Check the wiring
-			<span class="ml-auto font-mono text-[0.62rem] font-normal opacity-70">{warnings.length}</span>
+			<span class="ml-auto font-mono text-3xs font-normal opacity-70">{warnings.length}</span>
 		</h3>
 		<ul class="m-0 flex list-none flex-col gap-1 p-0 text-[0.7rem] leading-snug text-strong">
 			{#each warnings.slice(0, SHOWN) as warning, i (i)}
@@ -174,7 +174,7 @@
 				</li>
 			{/each}
 		</ul>
-		<p class="m-0 text-[0.68rem] text-muted">
+		<p class="m-0 text-2xs text-muted">
 			The program keeps running; only what it gets from these parts of the chip is not what a real one
 			would give.
 		</p>

@@ -72,7 +72,7 @@
 	const listed = $derived(query.trim() ? found.slice(0, 40) : found.slice(0, SHOWN));
 
 	const chip =
-		'rounded px-1 text-[0.58rem] font-medium leading-4 whitespace-nowrap';
+		'rounded px-1 text-3xs font-medium leading-4 whitespace-nowrap';
 </script>
 
 {#snippet badge(c: Candidate)}
@@ -88,12 +88,12 @@
 
 <aside class="flex h-full min-h-0 flex-col overflow-y-auto border-l border-border bg-panel text-[0.72rem]">
 	<header class="flex items-center gap-1 px-2.5 pt-2 pb-1">
-		<h3 class="m-0 mr-auto text-[0.62rem] font-semibold tracking-[0.08em] text-muted uppercase">
+		<h3 class="m-0 mr-auto text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
 			Signals
 		</h3>
 		<Button
 			size="sm"
-			class="h-5 px-1.5 text-[0.62rem]"
+			class="h-5 px-1.5 text-3xs"
 			active={measuring}
 			aria-pressed={measuring}
 			onclick={() => (measuring = !measuring)}
@@ -104,7 +104,7 @@
 		{#if traceCount > 1}
 			<Button
 				size="sm"
-				class="h-5 px-1.5 text-[0.62rem]"
+				class="h-5 px-1.5 text-3xs"
 				active={separate}
 				aria-pressed={separate}
 				onclick={() => (separate = !separate)}
@@ -112,7 +112,12 @@
 					? 'One axis for everything'
 					: 'Give each signal its own scale, so a small one is not flattened by a large one'}
 			>
-				{separate ? 'split' : 'shared'}
+				<!--
+					One name, pressed or not. Named for the state it was in, the
+					button read "shared, not pressed" to a screen reader while the
+					axis was shared — the opposite of what was on screen.
+				-->
+				split
 			</Button>
 		{/if}
 	</header>
@@ -169,7 +174,7 @@
 						<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustGain(probe.key, -1)} title="Less gain" aria-label="Less gain">
 							<Minus />
 						</Button>
-						<span class="min-w-6 text-center font-mono text-[0.62rem]">×{knob.gain}</span>
+						<span class="min-w-6 text-center font-mono text-3xs">×{knob.gain}</span>
 						<Button variant="ghost" size="icon" class="size-5" onclick={() => app.adjustGain(probe.key, 1)} title="More gain" aria-label="More gain">
 							<Plus />
 						</Button>
@@ -183,7 +188,7 @@
 					{#if turned}
 						<button
 							type="button"
-							class="ml-auto cursor-pointer border-0 bg-transparent p-0 font-mono text-[0.6rem] text-accent hover:underline"
+							class="ml-auto cursor-pointer border-0 bg-transparent p-0 font-mono text-3xs text-accent hover:underline"
 							onclick={() => app.resetChannel(probe.key)}
 							title="Back to automatic">auto</button
 						>
@@ -206,7 +211,7 @@
 					placeholder="Add a signal…"
 					aria-label="Find a net to plot"
 					spellcheck="false"
-					class="h-full min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[0.68rem] text-fg outline-none"
+					class="h-full min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-2xs text-fg outline-none"
 					onkeydown={(e) => {
 						if (e.key === 'Enter' && listed[0]) {
 							app.toggleProbe(listed[0].point);
@@ -239,7 +244,7 @@
 				{/each}
 			</ul>
 			{#if found.length > listed.length}
-				<p class="m-0 px-1 text-[0.64rem] text-muted">
+				<p class="m-0 px-1 text-3xs text-muted">
 					{found.length - listed.length} more — type to narrow them down.
 				</p>
 			{/if}

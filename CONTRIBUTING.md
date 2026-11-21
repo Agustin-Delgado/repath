@@ -68,7 +68,7 @@ With the `tests/` mount there is also the suite, and CI runs it on every push:
 ```sh
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cd web && npm test          # the canvas engine, the router, the editor rules
+cd web && npm test          # the editor, the canvas, the netlist, and the engine through wasm
 ```
 
 Clippy is `-D warnings` on purpose: a warning nobody is required to fix is a
@@ -91,7 +91,8 @@ Two boundaries are worth preserving:
   depend on from anything. Keep browser concerns in `repath-wasm`.
 - **`lib/canvas` has no idea circuits exist.** Viewport, layers, spatial index,
   snapping and tools are general. That is what makes them testable without a
-  browser, which is why `npm test` runs in about three seconds.
+  browser: the whole web suite runs in Node, in well under a minute, with no
+  page to load.
 
 ## A note on the editor
 

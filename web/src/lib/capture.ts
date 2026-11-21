@@ -120,6 +120,11 @@ export class Capture {
 	/** Level each net was at before the oldest transition in `history`. */
 	private readonly beforeHistory: LogicState[];
 	private cached: TransientRun | null = null;
+	/**
+	 * Wall-clock time spent solving, over every piece added. The footer read a
+	 * hard-coded 0 ms for every live run before this was kept.
+	 */
+	private elapsedMs = 0;
 
 	constructor(
 		readonly unknownNames: string[],
@@ -194,6 +199,7 @@ export class Capture {
 		// chunk that came after it, and the footer said a hundred thousand steps
 		// for a run of four hundred.
 		this.stats = { ...chunk.stats };
+		this.elapsedMs += chunk.elapsedMs ?? 0;
 		this.forget(this.earliest);
 		this.cached = null;
 	}
@@ -255,7 +261,7 @@ export class Capture {
 			bursts: this.bursts,
 			failures: this.failures,
 			stats: { ...this.stats },
-			elapsedMs: 0
+			elapsedMs: this.elapsedMs
 		};
 		return this.cached;
 	}

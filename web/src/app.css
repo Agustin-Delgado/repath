@@ -50,6 +50,16 @@
 	--badge-mixed-text: #c58bff;
 	--badge-logic: #3a3221;
 	--badge-logic-text: #ffb454;
+
+	/*
+	 * The live overlay's inks, for the legend under the drawing. The canvas
+	 * draws with the same values from `schematic/dynamic.ts`, and a test holds
+	 * the two to each other.
+	 */
+	--overlay-volts: #7fe3a0;
+	--overlay-amps: #ffe9a8;
+	--overlay-glow: #ff4e3e;
+	--warn-text: #ffb066;
 }
 
 /* The same palette as utilities: `bg-panel`, `text-muted`, `border-border`… */
@@ -71,8 +81,14 @@
 	--color-danger: var(--danger);
 
 	--radius-control: 5px;
-	--text-2xs: 0.68rem;
-	--text-ui: 0.78rem;
+	/*
+	 * The smallest type there is. Hints, badges and shortcut keys used to be
+	 * set in one-off sizes down to 0.56rem — eight pixels — and every one of
+	 * them is now one of these two.
+	 */
+	--text-3xs: 0.72rem;
+	--text-2xs: 0.76rem;
+	--text-ui: 0.8rem;
 }
 
 /* In a layer, so the utilities on a component win over these defaults. */
@@ -84,8 +100,20 @@
 		background: var(--bg);
 		color: var(--text);
 		font-family: var(--font-sans);
-		font-size: 14px;
 		overscroll-behavior: none;
+	}
+
+	/*
+	 * A share of the browser's own size rather than a number of pixels: 14 px
+	 * at the default 16, and larger or smaller with the reader's setting. Fixed
+	 * at 14 px, a browser told to use larger text had no effect on any of it.
+	 */
+	html {
+		font-size: 87.5%;
+	}
+
+	body {
+		font-size: 1rem;
 	}
 
 	*,
@@ -112,4 +140,59 @@
 	label {
 		touch-action: manipulation;
 	}
+}
+
+/*
+ * A row that scrolls sideways on a narrow screen, with its scrollbar hidden
+ * because it would cover the buttons — and faded at whichever end has more
+ * past it, so that hiding the scrollbar does not hide that there is more.
+ * `overflowHint` in `$lib/ui/overflow` sets the two attributes.
+ */
+@media (max-width: 900px) {
+	.scroll-row {
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+
+	.scroll-row::-webkit-scrollbar {
+		display: none;
+	}
+
+	.scroll-row[data-more-after] {
+		mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+	}
+
+	.scroll-row[data-more-before] {
+		mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+	}
+
+	.scroll-row[data-more-before][data-more-after] {
+		mask-image: linear-gradient(
+			to right,
+			transparent,
+			#000 28px,
+			#000 calc(100% - 28px),
+			transparent
+		);
+	}
+}
+
+/* For keyboard users: straight to the drawing, past a hundred palette buttons. */
+.skip-link {
+	position: fixed;
+	top: 0.5rem;
+	left: 0.5rem;
+	z-index: 100;
+	padding: 0.4rem 0.75rem;
+	border-radius: var(--radius-control);
+	background: var(--accent);
+	color: var(--accent-text);
+	font-size: var(--text-ui);
+	font-weight: 600;
+	text-decoration: none;
+	transform: translateY(-200%);
+}
+
+.skip-link:focus-visible {
+	transform: none;
 }
