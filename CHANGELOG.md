@@ -11,6 +11,23 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — A run stays smooth however often you press a button
+
+**Pressing a button again and again during a run no longer makes it lag.**
+On the Arduino Uno blink example, every press of the button made each later
+frame a little slower, until after a hundred or so frames took three times as
+long and the drawing stuttered, and it stayed that way after you stopped
+pressing. A run now keeps a steady frame rate through hundreds of presses,
+with no pauses. On a machine too busy to keep up, the run goes slightly slower
+than real time instead of freezing. The inspector says how many times a part
+was operated and lists only the last few, rather than every one. And the
+drawing no longer goes blank while you resize the window or drag a panel's
+edge.
+
+[#109](https://github.com/Agustin-Delgado/repath/pull/109)
+
+---
+
 ## 21 November 2026 — Large circuits run in a fraction of the time
 
 **A circuit of hundreds of parts no longer slows to a crawl.** The engine used
