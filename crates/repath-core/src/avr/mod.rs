@@ -56,6 +56,7 @@
 mod adc;
 #[cfg(test)]
 mod asm;
+mod baud;
 mod cpu;
 mod eeprom;
 pub mod hex;
@@ -1153,25 +1154,28 @@ mod tests {
         let txd = bench.net("txd");
         bench.mcu(&program, &[("PD1", output(txd))], None);
         let log = bench.run(400);
-        // TXD idles high from TXEN0 on. The frame starts as the store ends at
-        // 6: start bit low, then 'H' = 0x48 least significant bit first —
-        // 0 0 0 1 0 0 1 0 — then the stop bit, sixteen cycles each.
+        // TXD idles high from TXEN0 on. The store lands at 6, but the start
+        // bit waits for the transmitter's bit clock: every sixteenth tick of
+        // a baud generator ticking every cycle since reset (UBRR0 = 0), so
+        // the edges at 0, 16, 32… — it goes low at 16. Then 'H' = 0x48 least
+        // significant bit first — 0 0 0 1 0 0 1 0 — and the stop bit, sixteen
+        // cycles each.
         assert_eq!(
             edges(&log, txd),
             vec![
                 (3, Logic::High),
-                (6, Logic::Low),
-                (6 + 4 * 16, Logic::High),
-                (6 + 5 * 16, Logic::Low),
-                (6 + 7 * 16, Logic::High),
-                (6 + 8 * 16, Logic::Low),
-                (6 + 9 * 16, Logic::High),
+                (16, Logic::Low),
+                (16 + 4 * 16, Logic::High),
+                (16 + 5 * 16, Logic::Low),
+                (16 + 7 * 16, Logic::High),
+                (16 + 8 * 16, Logic::Low),
+                (16 + 9 * 16, Logic::High),
             ]
         );
         let mcu = bench.mcu_state();
         assert_eq!(mcu.serial().len(), 1);
         assert_eq!(mcu.serial()[0].byte, b'H');
-        assert!((mcu.serial()[0].time * F - 166.0).abs() < 1e-6);
+        assert!((mcu.serial()[0].time * F - 176.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1494,15 +1498,17 @@ mod tests {
         bench.mcu_as("U2", &receiver, &pins, None);
         let log = bench.run(400);
 
-        // U1's start bit falls at 6, sample 1 of U2's start bit. At UBRR0 = 0
-        // and normal speed a bit is sixteen cycles and votes 7, 8 and 9
-        // cycles in, so the stop bit's last vote — the byte complete — is at
-        // 6 + 9 · 16 + 9 = 159. The idle loop's next boundary is 160: 4
-        // cycles of response, `rjmp isr` 2, `lds` 2 and `out` 1, so port B
-        // shows 'H' = 0x48 — PB3 and PB6 — from 169.
+        // U1's store lands at 6, and its start bit waits for its bit clock,
+        // every sixteenth tick of a generator ticking every cycle: it falls
+        // at 16. U2's generator ticks every cycle too, so its first sample is
+        // at 16. At UBRR0 = 0 and normal speed a bit is sixteen cycles and
+        // votes 7, 8 and 9 cycles in, so the stop bit's last vote — the byte
+        // complete — is at 16 + 9 · 16 + 9 = 169. The idle loop's next
+        // boundary is 170: 4 cycles of response, `rjmp isr` 2, `lds` 2 and
+        // `out` 1, so port B shows 'H' = 0x48 — PB3 and PB6 — from 179.
         for (b, &net) in pb.iter().enumerate() {
             let expected = if 0x48 >> b & 1 != 0 {
-                vec![(7, Logic::Low), (169, Logic::High)]
+                vec![(7, Logic::Low), (179, Logic::High)]
             } else {
                 vec![(7, Logic::Low)]
             };
@@ -1556,15 +1562,21 @@ mod tests {
         let line_edges = edges(&log, line);
         assert_eq!(&line_edges[..2], &[(1_600, Logic::High), (1_736, Logic::Low)]);
 
-        // The receiver samples every 17 cycles, eight a bit, votes on samples
-        // 4, 5 and 6: the stop bit's last vote is (8 · 9 + 5) · 17 = 1309
-        // cycles after the start edge, at 3045. Served at the idle loop's
-        // next boundary, 3046: 4 cycles, `rjmp isr` 2, `lds` 2, and the store
-        // to UDR0 lands as it ends at 3056. Ten bits of 136 cycles later the
-        // echo is out.
+        // UBRR0L = 16 lands at 8 and reloads the generator: it reaches zero
+        // at 24 and ticks every 17 cycles from there. The receiver samples on
+        // those ticks, so the start edge at 1736 is first seen at the next
+        // one, 24 + 101 · 17 = 1741. Eight samples a bit, votes on samples 4,
+        // 5 and 6: the stop bit's last vote is (8 · 9 + 5) · 17 = 1309 cycles
+        // later, at 3050, and the ISR's store to UDR0 lands about a dozen
+        // cycles after. The transmitter's bit clock is every eighth tick
+        // (U2X0) counted since reset: the eight ticks at 0..7 came before the
+        // reload, so its edges are the ticks 24 + 17k with 8 + k a multiple of
+        // 8 — every 136 cycles from 24. The first after the store is
+        // 24 + 23 · 136 = 3152, and ten bits of 136 cycles later the echo is
+        // out, at 4512.
         let serial = bench.mcu_state().serial().to_vec();
         assert_eq!(serial.len(), 1, "{serial:?}");
         assert_eq!(serial[0].byte, b'A');
-        assert!((serial[0].time * F - (3_056.0 + 1_360.0)).abs() < 1e-6, "{}", serial[0].time * F);
+        assert!((serial[0].time * F - (3_152.0 + 1_360.0)).abs() < 1e-6, "{}", serial[0].time * F);
     }
 }

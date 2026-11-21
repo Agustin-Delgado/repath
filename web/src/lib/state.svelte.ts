@@ -249,9 +249,16 @@ interface Bond {
 	wireId: string;
 }
 
-/** A point on the undo stack: the drawing, and what was selected at the time. */
+/** A point on the undo stack: the drawing, what is probed on it, and what was selected at the time. */
 interface HistoryEntry {
 	document: string;
+	/**
+	 * The probes picked on this level, which are as much the document as its
+	 * parts: a file keeps them. Held apart from the drawing, so undo put back a
+	 * renamed port without the probe on it, which went on following the new
+	 * name and watched nothing.
+	 */
+	probes: string[];
 	selection: string[];
 	/**
 	 * What else the step replaced, for one that replaced the whole document —
@@ -260,11 +267,22 @@ interface HistoryEntry {
 	 * pointing at parts that were no longer there.
 	 */
 	around?: DocumentAround;
+	/**
+	 * The levels under the open one that the step changed, as they were before
+	 * it: slot `k` is `outside[k]`'s drawing and probes (`levelDocs`), left empty where the step did
+	 * not touch that level. With a block open the drawing underneath waits on
+	 * its own level, and an edit up here can still change it — leaving a block
+	 * re-attaches the wires of its copies there, and a port renamed or moved
+	 * from the inspector moves the pins of every copy wherever it is placed. A
+	 * step that put back only the open level left those levels as the edit had
+	 * them. Only what changed is kept, so a step that touched no other level
+	 * costs nothing more.
+	 */
+	levels?: Array<string | undefined>;
 }
 
 /** What goes with a drawing besides its parts: what is watched and how it is run. */
 interface DocumentAround {
-	probes: string[];
 	stopTime: number;
 	exampleId: string;
 	settings: CircuitSettings;
@@ -286,6 +304,23 @@ const HISTORY_LIMIT = 100;
  * ones least likely to be wanted.
  */
 const HISTORY_BYTES = 8 * 1024 * 1024;
+
+/** Whether two points on the history are the same document: the drawing and its probes. */
+function sameState(a: HistoryEntry, b: HistoryEntry): boolean {
+	return (
+		a.document === b.document &&
+		a.probes.length === b.probes.length &&
+		a.probes.every((probe, k) => probe === b.probes[k])
+	);
+}
+
+/** What a step on the undo stack holds, against `HISTORY_BYTES`: its drawing and the other levels it changed. */
+function entryBytes(entry: HistoryEntry): number {
+	let bytes = entry.document.length;
+	for (const probe of entry.probes) bytes += probe.length;
+	for (const level of entry.levels ?? []) bytes += level?.length ?? 0;
+	return bytes;
+}
 
 /**
  * How many places a paste with nowhere to land tries, a few grid steps further
@@ -1041,11 +1076,11 @@ class AppState {
 	private snapshot(around = false): HistoryEntry {
 		return {
 			document: JSON.stringify($state.snapshot(this.schematic)),
+			probes: [...this.probes],
 			selection: [...this.selection],
 			...(around
 				? {
 						around: {
-							probes: [...this.probes],
 							stopTime: this.stopTime,
 							exampleId: this.exampleId,
 							settings: this.settings()
@@ -1057,7 +1092,6 @@ class AppState {
 
 	/** Put back what went with a drawing that a step replaced whole. */
 	private restoreAround(around: DocumentAround): void {
-		this.probes = [...around.probes];
 		this.stopTime = around.stopTime;
 		this.exampleId = around.exampleId;
 		this.applySettings(around.settings);
@@ -1071,7 +1105,8 @@ class AppState {
 	private checkpoint(around = false): void {
 		const entry = this.snapshot(around);
 		// An operation that changed nothing should not cost an undo press.
-		if (this.past[this.past.length - 1]?.document === entry.document) return;
+		const top = this.past[this.past.length - 1];
+		if (top && sameState(top, entry)) return;
 		this.remember(entry);
 	}
 
@@ -1079,7 +1114,7 @@ class AppState {
 	private remember(entry: HistoryEntry): void {
 		this.past.push(entry);
 		this.historyChanged();
-		this.historyBytes += entry.document.length;
+		this.historyBytes += entryBytes(entry);
 		// Capped by size as well as by count: a hundred snapshots of a large
 		// schematic is megabytes, and the oldest of them are worth the least.
 		while (
@@ -1088,7 +1123,7 @@ class AppState {
 		) {
 			const dropped = this.past.shift();
 			if (!dropped) break;
-			this.historyBytes -= dropped.document.length;
+			this.historyBytes -= entryBytes(dropped);
 		}
 		this.clearedFuture = this.future;
 		this.future = [];
@@ -1104,11 +1139,60 @@ class AppState {
 	 * to cost everything that could have been redone.
 	 */
 	private withdrawCheckpoint(was: HistoryEntry): void {
-		if (this.past[this.past.length - 1]?.document !== was.document) return;
+		const top = this.past[this.past.length - 1];
+		if (!top || !sameState(top, was)) return;
 		const dropped = this.past.pop();
 		this.historyChanged();
-		if (dropped) this.historyBytes -= dropped.document.length;
+		if (dropped) this.historyBytes -= entryBytes(dropped);
 		this.future = this.clearedFuture;
+	}
+
+	/** Each level under the open one, its drawing and its probes, as text: what a step's `levels` holds. */
+	private levelDocs(): string[] {
+		return this.outside.map((frame) =>
+			JSON.stringify({ schematic: $state.snapshot(frame.schematic), probes: $state.snapshot(frame.probes) })
+		);
+	}
+
+	/**
+	 * Note on `entry` the levels under the open one that changed since `before`
+	 * (`levelDocs` as it was), as they were then. A level the entry already
+	 * holds keeps its older state: the entry is the moment before all of it.
+	 * Counted against the history's budget when the entry is already on it.
+	 * Returns whether any level changed.
+	 */
+	private noteLevels(entry: HistoryEntry, before: readonly string[]): boolean {
+		const after = this.levelDocs();
+		const counted = this.past.includes(entry);
+		let changed = false;
+		after.forEach((doc, k) => {
+			if (doc === before[k]) return;
+			changed = true;
+			if (entry.levels?.[k] !== undefined) return;
+			(entry.levels ??= [])[k] = before[k];
+			if (counted) this.historyBytes += before[k].length;
+		});
+		return changed;
+	}
+
+	/**
+	 * Put the levels under the open one back as `levels` has them, and return
+	 * the same slots as they stood, for the step that goes the other way. The
+	 * open level is put back after this, so its definitions are the ones the
+	 * catalog ends with.
+	 */
+	private swapLevels(levels: ReadonlyArray<string | undefined>): Array<string | undefined> {
+		const current = this.levelDocs();
+		const was: Array<string | undefined> = [];
+		levels.forEach((doc, k) => {
+			const frame = this.outside[k];
+			if (doc === undefined || !frame) return;
+			was[k] = current[k];
+			const level = JSON.parse(doc) as { schematic: Schematic; probes: string[] };
+			frame.schematic = adopt(level.schematic);
+			frame.probes = level.probes;
+		});
+		return was;
 	}
 
 	/**
@@ -1136,10 +1220,13 @@ class AppState {
 		this.trace.record({ op: 'undo' });
 		const previous = this.past.pop();
 		if (!previous) return;
-		this.historyBytes -= previous.document.length;
-		this.future.push(this.snapshot(previous.around !== undefined));
+		this.historyBytes -= entryBytes(previous);
+		const now = this.snapshot(previous.around !== undefined);
+		if (previous.levels) now.levels = this.swapLevels(previous.levels);
+		this.future.push(now);
 		this.historyChanged();
 		this.schematic = adopt(JSON.parse(previous.document) as Schematic);
+		this.probes = [...previous.probes];
 		if (previous.around) this.restoreAround(previous.around);
 		// Put the selection back too: undoing a nudge and finding nothing selected
 		// means re-picking the thing you were working on every single time.
@@ -1151,10 +1238,13 @@ class AppState {
 		this.trace.record({ op: 'redo' });
 		const next = this.future.pop();
 		if (!next) return;
-		this.past.push(this.snapshot(next.around !== undefined));
+		const now = this.snapshot(next.around !== undefined);
+		if (next.levels) now.levels = this.swapLevels(next.levels);
+		this.past.push(now);
 		this.historyChanged();
-		this.historyBytes += this.past[this.past.length - 1].document.length;
+		this.historyBytes += entryBytes(now);
 		this.schematic = adopt(JSON.parse(next.document) as Schematic);
+		this.probes = [...next.probes];
 		if (next.around) this.restoreAround(next.around);
 		this.selection = this.stillPresent(next.selection);
 	}
@@ -1802,7 +1892,7 @@ class AppState {
 			// The checkpoint was taken on the first movement. There is nothing left to
 			// undo, so it goes, and the redo stack it cleared comes back.
 			const dropped = this.past.pop();
-			if (dropped) this.historyBytes -= dropped.document.length;
+			if (dropped) this.historyBytes -= entryBytes(dropped);
 			this.future = origin.future;
 			this.historyChanged();
 		}
@@ -2285,6 +2375,11 @@ class AppState {
 		editing: BlockDef;
 		/** The drawing as it stood on the way in, to undo the whole visit back to. */
 		entered: HistoryEntry;
+		/**
+		 * The levels under that drawing as they stood on the way in, so the
+		 * visit's step can put back the ones leaving changed (`levels`).
+		 */
+		enteredLevels: string[];
 	}> = [];
 
 	/**
@@ -2638,6 +2733,7 @@ class AppState {
 
 	private descend(block: BlockDef): void {
 		this.discardRun();
+		const enteredLevels = this.levelDocs();
 		this.outside.push({
 			schematic: this.schematic,
 			selection: this.selection,
@@ -2646,7 +2742,8 @@ class AppState {
 			future: this.future,
 			historyBytes: this.historyBytes,
 			editing: block,
-			entered: this.snapshot()
+			entered: this.snapshot(),
+			enteredLevels
 		});
 		this.past = [];
 		this.future = [];
@@ -2705,12 +2802,16 @@ class AppState {
 		// Everything done inside is one step on the drawing's history. Written
 		// back without one, the edits could not be undone once outside, and the
 		// next undo reached past them to whatever came before — taking the
-		// edits with it as part of an unrelated step.
-		if (JSON.stringify($state.snapshot(this.schematic)) !== frame.entered.document) {
+		// edits with it as part of an unrelated step. The levels further down
+		// that the visit changed are part of the same step: the copies there
+		// whose wires leaving re-attached, and anything the inspector reached
+		// from inside.
+		this.probes = back.probes;
+		const below = this.noteLevels(frame.entered, frame.enteredLevels);
+		if (below || !sameState(frame.entered, this.snapshot())) {
 			this.remember(frame.entered);
 		}
 		this.selection = this.stillPresent(frame.selection);
-		this.probes = back.probes;
 		// The block still open around this level is its definition in the drawing
 		// just written back, not the one from before: a rename from here on has to
 		// reach what the editor says it is inside.
@@ -2824,27 +2925,47 @@ class AppState {
 		const inside = (this.schematic.blocks ?? []).filter(
 			(block) => !open.has(block.id) && block.instances.some((i) => i.kind === kind)
 		);
-		this.reshape(this.schematic.instances.filter((i) => i.kind === kind), change, rename, inside);
+		// So are the copies on the levels under this one, the drawing at the
+		// bottom included: the catalog draws them with the new pins at once,
+		// and they are the same step as this level's, undone with it.
+		const before = this.levelDocs();
+		this.reshape(
+			this.schematic.instances.filter((i) => i.kind === kind),
+			change,
+			rename,
+			inside,
+			this.outside.map((frame) => frame.schematic)
+		);
+		const step = this.past.at(-1);
+		if (step) this.noteLevels(step, before);
 	}
 
 	/**
 	 * `reshapeBlock` for the given boxes, which may be about to become another
 	 * block's. In each block of `inside`, every box of the same kind as one of
-	 * `copies` is followed too, with the wires inside that block.
+	 * `copies` is followed too, with the wires inside that block, and likewise
+	 * on each drawing of `below` — the levels under the open one.
 	 */
 	private reshape(
 		copies: Instance[],
 		change: () => void,
 		rename: (after: string) => string = (name) => name,
-		inside: readonly BlockDef[] = []
+		inside: readonly BlockDef[] = [],
+		below: readonly Schematic[] = []
 	): void {
+		const kinds = new Set(copies.map((c) => c.kind));
 		const drawings = [
-			{ drawing: this.schematic, copies, block: null as BlockDef | null },
+			{ drawing: this.schematic, copies, block: null as BlockDef | null, level: null as Schematic | null },
 			...inside.map((block) => {
-				const kinds = new Set(copies.map((c) => c.kind));
 				const drawing = interior(block, this.schematic);
-				return { drawing, copies: block.instances.filter((i) => kinds.has(i.kind)), block };
-			})
+				return { drawing, copies: block.instances.filter((i) => kinds.has(i.kind)), block, level: null };
+			}),
+			...below.map((level) => ({
+				drawing: level,
+				copies: level.instances.filter((i) => kinds.has(i.kind)),
+				block: null,
+				level
+			}))
 		];
 		const before = new Map<string, Point>();
 		for (const { copies } of drawings) {
@@ -2856,7 +2977,7 @@ class AppState {
 		}
 		change();
 		registerBlocks(this.schematic);
-		for (const { drawing, copies, block } of drawings) {
+		for (const { drawing, copies, block, level } of drawings) {
 			const moved = new Map<string, Point>();
 			for (const placed of copies) {
 				for (const pin of definitionFor(placed).pins) {
@@ -2868,6 +2989,7 @@ class AppState {
 			if (moved.size === 0) continue;
 			this.rewire(moved, this.router(drawing), drawing);
 			if (block) block.wires = tidiedWires(drawing, freshId);
+			else if (level) level.wires = tidiedWires(level, freshId);
 			else this.tidyWires();
 		}
 	}
@@ -2891,6 +3013,7 @@ class AppState {
 		}
 		this.trace.record({ op: 'port', block: block.name, from: port, to: trimmed });
 		this.checkpoint();
+		const before = this.levelDocs();
 		const kind = BLOCK_PREFIX + id;
 		// The box is as wide as its longest names, so a longer name can push
 		// every pin a step outward.
@@ -2911,6 +3034,9 @@ class AppState {
 			});
 		this.probes = follow(this.probes, this.schematic);
 		for (const frame of this.outside) frame.probes = follow(frame.probes, frame.schematic);
+		// The probes that followed underneath are the same step as the wires.
+		const step = this.past.at(-1);
+		if (step) this.noteLevels(step, before);
 		return null;
 	}
 
@@ -3396,13 +3522,18 @@ class AppState {
 		if (netIndex === undefined) return;
 		// Probe the net, not the point: clicking anywhere on the same wire toggles
 		// the same trace.
+		// A step like any other edit: the probes are part of the document, and
+		// one picked between two edits has to survive undoing the first.
 		const existing = this.probes.find((k) => this.netForProbe(k) === netIndex);
 		if (existing) {
+			this.checkpoint();
 			this.probes = this.probes.filter((k) => k !== existing);
 			return;
 		}
 		const handle = this.probeHandle(key);
-		if (handle) this.probes = [...this.probes, handle];
+		if (!handle) return;
+		this.checkpoint();
+		this.probes = [...this.probes, handle];
 	}
 
 	/**
@@ -3417,6 +3548,8 @@ class AppState {
 	unplot(key: string): void {
 		const placed = this.placedProbe(key);
 		if (!placed) {
+			if (!this.probes.includes(key)) return;
+			this.checkpoint();
 			this.probes = this.probes.filter((k) => k !== key);
 			return;
 		}
@@ -3441,6 +3574,21 @@ class AppState {
 
 	/** Pick a few interesting nets so a freshly loaded circuit plots something. */
 	autoProbe(): void {
+		const chosen = this.interestingProbes();
+		if (chosen.length === this.probes.length && chosen.every((probe, k) => probe === this.probes[k])) return;
+		// One step, like picking them by hand: Run probing an empty scope is an
+		// edit to the document, and undoing it is taking those probes back off.
+		this.checkpoint();
+		this.probes = chosen;
+	}
+
+	/** `autoProbe`'s choice, for a step that already has its own checkpoint. */
+	private pickProbes(): void {
+		this.probes = this.interestingProbes();
+	}
+
+	/** The nets `autoProbe` would plot. */
+	private interestingProbes(): string[] {
 		const compiled = compileSchematic(this.schematic, this.temperature + 273.15, this.sample, this.logicFamily);
 		const chosen: string[] = [];
 		// A board's SDA and A4 are one net through two points of one part, with no
@@ -3455,10 +3603,7 @@ class AppState {
 		// A drawing that already carries probes has said what it wants plotted:
 		// the servo, the melody and the matrix each put one on the wire they are
 		// about, and topping those up with the board's own nets buried them.
-		if (this.schematic.instances.some((i) => i.kind === 'probe')) {
-			this.probes = [];
-			return;
-		}
+		if (this.schematic.instances.some((i) => i.kind === 'probe')) return [];
 		// Wired nets first — a lone pin is rarely what you want — and pin-only ones
 		// after, rather than never. An output with nothing hanging off it is exactly
 		// what you want when the circuit is small enough that there is nothing else,
@@ -3476,7 +3621,7 @@ class AppState {
 				if (handle !== undefined && !chosen.includes(handle)) chosen.push(handle);
 			}
 		}
-		this.probes = chosen;
+		return chosen;
 	}
 
 	// -- examples ---------------------------------------------------------
@@ -3514,7 +3659,7 @@ class AppState {
 			this.error = null;
 			this.notice = null;
 			this.live = false;
-			this.autoProbe();
+			this.pickProbes();
 		});
 	}
 
@@ -3544,7 +3689,7 @@ class AppState {
 			// picking a few nets is for a link written before probes travelled, and for
 			// one sent with nothing probed.
 			this.probes = circuit.probes ?? [];
-			if (this.probes.length === 0) this.autoProbe();
+			if (this.probes.length === 0) this.pickProbes();
 		});
 	}
 

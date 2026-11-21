@@ -327,6 +327,77 @@ impl Element for CurrentSource {
     }
 }
 
+/// A packaged part's own supply current: what flows from its positive supply
+/// leg to its negative one just to keep it running, with no load on any output.
+///
+/// The datasheet quotes it as one figure at a stated supply (`I_CC`, `I_DD`,
+/// `I_Q`), and above a volt or two it barely moves with the supply. It is not
+/// a constant current, though: a part whose supply is off draws nothing, and a
+/// constant source on a supply that has fallen to zero would drag the rail
+/// below ground to keep its figure. So the current follows the supply up from
+/// zero and levels off at the datasheet figure, `i = I_q tanh(v / V_knee)`,
+/// which is within a part in a thousand of `I_q` from two volts up.
+#[derive(Debug, Clone)]
+pub struct SupplyCurrent {
+    pub name: String,
+    pub p: NodeId,
+    pub m: NodeId,
+    /// The datasheet figure, in amps.
+    pub current: f64,
+    /// Slope at the operating point, for the small-signal analysis.
+    slope: f64,
+}
+
+/// Supply across which the draw reaches three quarters of its figure.
+const SUPPLY_KNEE: f64 = 0.5;
+
+impl SupplyCurrent {
+    pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, current: f64) -> Self {
+        Self { name: name.into(), p, m, current, slope: 0.0 }
+    }
+
+    /// The draw at a supply voltage, and its slope against it.
+    pub fn at(&self, v: f64) -> (f64, f64) {
+        let t = (v / SUPPLY_KNEE).tanh();
+        (self.current * t, self.current * (1.0 - t * t) / SUPPLY_KNEE)
+    }
+}
+
+impl Element for SupplyCurrent {
+    fn kind(&self) -> &'static str {
+        "supply_current"
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn stamp(&mut self, sys: &mut LinearSystem, ctx: &StampCtx) -> StampReport {
+        let v = ctx.voltage(self.p) - ctx.voltage(self.m);
+        let (i, g) = self.at(v);
+        let (i, g) = (i * ctx.source_scale, g * ctx.source_scale);
+        self.slope = g;
+        let (p, m) = (node_index(self.p), node_index(self.m));
+        // Linearised about the iterate: a conductance `g` beside what is left over.
+        sys.add_conductance(p, m, g);
+        sys.add_current(p, m, i - g * v);
+        StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        let (p, m) = (node_index(self.p), node_index(self.m));
+        sys.add_admittance(p, m, C64::real(self.slope));
+    }
+
+    fn current(&self, x: &[f64]) -> Option<f64> {
+        let v = |n: NodeId| node_index(n).map_or(0.0, |i| x[i]);
+        Some(self.at(v(self.p) - v(self.m)).0)
+    }
+
+    fn reset(&mut self) {
+        self.slope = 0.0;
+    }
+}
+
 /// Voltage-controlled voltage source (SPICE `E`): `v(p,m) = gain * v(cp, cm)`.
 #[derive(Debug, Clone)]
 pub struct Vcvs {

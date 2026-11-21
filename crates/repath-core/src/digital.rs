@@ -1007,6 +1007,19 @@ pub struct DigitalDomain {
     samplers: Vec<usize>,
     /// How far the queue has been run out, in seconds.
     now: f64,
+    /// Drivers whose output current is drawn through a package's supply legs,
+    /// by driver id, and every time one of them started or stopped driving
+    /// since the log was last taken.
+    tapped: Vec<bool>,
+    driver_log: Vec<DriverChange>,
+}
+
+/// A tapped driver starting or stopping driving its net.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DriverChange {
+    pub time: f64,
+    pub driver: DriverId,
+    pub driving: bool,
 }
 
 /// One net taking a new level at an instant.
@@ -1253,6 +1266,43 @@ impl DigitalDomain {
         std::mem::swap(&mut self.log, into);
     }
 
+    /// A device's drivers on one net: the outputs of it that drive that net.
+    pub fn drivers_of(&self, device: &str, net: NetId) -> Vec<DriverId> {
+        let Some(index) = self.devices.iter().position(|d| d.name() == device) else {
+            return Vec::new();
+        };
+        let base = self.driver_base[index];
+        self.devices[index]
+            .output_nets()
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| **n == net)
+            .map(|(i, _)| DriverId(base + i))
+            .collect()
+    }
+
+    /// Log when this driver starts or stops driving (see [`Self::take_driver_log`]).
+    pub fn tap_driver(&mut self, driver: DriverId) {
+        if self.tapped.len() < self.driver_values.len() {
+            self.tapped.resize(self.driver_values.len(), false);
+        }
+        if let Some(flag) = self.tapped.get_mut(driver.0) {
+            *flag = true;
+        }
+    }
+
+    /// Whether a driver is putting a level on its net right now.
+    pub fn is_driving(&self, driver: DriverId) -> bool {
+        self.driver_values.get(driver.0).is_some_and(|v| *v != Logic::HighZ)
+    }
+
+    /// Every tapped driver that started or stopped driving since this was last
+    /// called, oldest first, into a buffer the caller keeps.
+    pub fn swap_driver_log(&mut self, into: &mut Vec<DriverChange>) {
+        into.clear();
+        std::mem::swap(&mut self.driver_log, into);
+    }
+
     /// Apply every event due at or before `time`, instant by instant, and
     /// propagate each until the domain is stable. Returns how many nets changed.
     pub fn settle(&mut self, time: f64) -> usize {
@@ -1320,10 +1370,24 @@ impl DigitalDomain {
             while let Some(event) = self.queue.pop_due(instant) {
                 applied = true;
                 events += 1;
-                if self.driver_values[event.driver.0] == event.state {
+                let was = self.driver_values[event.driver.0];
+                if was == event.state {
                     continue;
                 }
                 self.driver_values[event.driver.0] = event.state;
+                // Whether a tapped driver is driving at all is what decides whose
+                // supply an output's current comes from, and it can change with
+                // no change to the net: one bus driver letting go as another,
+                // at the same level, takes over.
+                if self.tapped.get(event.driver.0).copied().unwrap_or(false)
+                    && (was == Logic::HighZ) != (event.state == Logic::HighZ)
+                {
+                    self.driver_log.push(DriverChange {
+                        time: event.time,
+                        driver: event.driver,
+                        driving: event.state != Logic::HighZ,
+                    });
+                }
                 let resolved = self.resolve(event.net);
                 if resolved != self.resolved[event.net] {
                     self.resolved[event.net] = resolved;
@@ -1410,6 +1474,7 @@ impl DigitalDomain {
         for d in &mut self.devices {
             d.reset();
         }
+        self.driver_log.clear();
         self.dirty.clear();
         self.log.clear();
         self.now = 0.0;

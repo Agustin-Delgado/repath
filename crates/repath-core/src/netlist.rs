@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
 use crate::avr::{self, AnalogPins, Mcu, Pin, PinNets, UsbSerial};
-use crate::bridge::LogicFamily;
+use crate::bridge::{LogicFamily, SupplyTap};
 use crate::buzzer::Buzzer;
 use crate::circuit::Circuit;
 use crate::digital::{
@@ -20,8 +20,8 @@ use crate::element::NodeId;
 use crate::elements::semiconductor::TNOM;
 use crate::elements::{
     Bjt, BjtModel, Capacitor, CurrentSource, Diode, DiodeModel, Fuse, Inductor, Mosfet,
-    MosfetModel, OpAmp, OpAmpModel, Resistor, Supply, Switch, SwitchModel, Transformer, Vccs, Vcvs,
-    VoltageSource, Waveform,
+    MosfetModel, OpAmp, OpAmpModel, Resistor, Supply, SupplyCurrent, Switch, SwitchModel,
+    Transformer, Vccs, Vcvs, VoltageSource, Waveform,
 };
 use crate::i2c::{self, LcdModule, Target};
 use crate::servo::Servo;
@@ -107,6 +107,7 @@ fn check_values(component: &Component) -> Result<(), NetlistError> {
         Component::Resistor { resistance, .. } => not_negative("the resistance", *resistance),
         Component::Capacitor { capacitance, .. } => not_negative("the capacitance", *capacitance),
         Component::Inductor { inductance, .. } => not_negative("the inductance", *inductance),
+        Component::SupplyCurrent { current, .. } => not_negative("the supply current", *current),
         _ => None,
     };
     match found {
@@ -201,6 +202,9 @@ pub enum Component {
         #[serde(default)]
         ac_phase: f64,
     },
+    /// A packaged part's quiescent supply current, from its positive supply leg
+    /// to its negative one: the datasheet's `I_CC`, in amps.
+    SupplyCurrent { name: String, plus: String, minus: String, current: f64 },
     Diode {
         name: String,
         anode: String,
@@ -331,6 +335,7 @@ impl Component {
             | Component::Fuse { name, .. }
             | Component::VoltageSource { name, .. }
             | Component::CurrentSource { name, .. }
+            | Component::SupplyCurrent { name, .. }
             | Component::Diode { name, .. }
             | Component::Mosfet { name, .. }
             | Component::Bjt { name, .. }
@@ -590,7 +595,21 @@ pub enum Bridge {
         node: String,
         #[serde(default)]
         family: Option<LogicFamily>,
+        /// The packages whose outputs drive the net, each with the supply legs
+        /// that output's current comes in and goes out on. Empty for outputs
+        /// with no supply pins drawn, whose current returns through ground.
+        #[serde(default)]
+        supplies: Vec<SupplySpec>,
     },
+}
+
+/// One package driving a bridged net: its supply legs, and the digital devices
+/// inside it — named as in `devices` — whose outputs are on that net.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SupplySpec {
+    pub plus: String,
+    pub minus: String,
+    pub devices: Vec<String>,
 }
 
 impl Bridge {
@@ -785,6 +804,10 @@ impl Netlist {
                 source.ac_magnitude = *ac_magnitude;
                 source.ac_phase = *ac_phase;
                 c.add(Box::new(source));
+            }
+            Component::SupplyCurrent { name, plus, minus, current } => {
+                let (p, m) = (self.node(c, plus), self.node(c, minus));
+                c.add(Box::new(SupplyCurrent::new(name, p, m, *current)));
             }
             Component::Diode { name, anode, cathode, model } => {
                 let (a, k) = (self.node(c, anode), self.node(c, cathode));
@@ -1125,11 +1148,34 @@ impl Netlist {
                 adc.delay = *delay;
                 adc.reference = reference;
             }
-            Bridge::ToAnalog { name, net, node, family } => {
+            Bridge::ToAnalog { name, net, node, family, supplies } => {
                 let node = self.node(c, node);
                 let net = c.net(net);
                 let family = family.unwrap_or(self.logic_family);
-                c.bridge_to_analog(name, net, node, family);
+                // Kept in the order given even when a package has no output on
+                // this net, so the reported series stay numbered as they were
+                // asked for; such a tap only ever carries nothing.
+                let taps: Vec<SupplyTap> = supplies
+                    .iter()
+                    .map(|spec| SupplyTap {
+                        plus: self.node(c, &spec.plus),
+                        minus: self.node(c, &spec.minus),
+                        drivers: spec
+                            .devices
+                            .iter()
+                            .flat_map(|device| c.digital.drivers_of(device, net))
+                            .collect(),
+                    })
+                    .collect();
+                for tap in &taps {
+                    for driver in &tap.drivers {
+                        c.digital.tap_driver(*driver);
+                    }
+                }
+                let index = c.bridge_to_analog(name, net, node, family);
+                for tap in taps {
+                    c.dacs_mut()[index].add_tap(tap);
+                }
             }
         }
     }

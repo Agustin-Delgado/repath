@@ -113,6 +113,13 @@ impl AcceptCtx<'_> {
     pub fn unknown(&self, index: usize) -> f64 {
         self.x.get(index).copied().unwrap_or(0.0)
     }
+
+    /// Largest magnitude in the solution: what the rounding of any one entry
+    /// of it is relative to, since a linear solve is accurate to the vector,
+    /// not to each of its entries.
+    pub fn scale(&self) -> f64 {
+        self.x.iter().fold(0.0f64, |a, v| a.max(v.abs()))
+    }
 }
 
 /// What an element reports back after stamping.
@@ -149,6 +156,11 @@ pub struct RingDetector {
     cooldown: u8,
 }
 
+/// How far, in units in the last place, two values of a settled quantity can
+/// differ from the arithmetic alone: a node solved again from the same matrix
+/// comes back within one or two.
+const ROUNDING_ULPS: f64 = 4.0;
+
 /// How many steps stay damped once a branch has been caught ringing.
 ///
 /// Long, on purpose. One damped step kills the oscillation, and the next
@@ -161,8 +173,28 @@ pub struct RingDetector {
 const RING_COOLDOWN: u8 = 32;
 
 impl RingDetector {
-    /// Feed the mean current over the step just accepted.
-    pub fn push(&mut self, current: f64) {
+    /// Feed the stored quantity's state variable — a capacitor's voltage, an
+    /// inductor's current — at the start and the end of the step just accepted.
+    /// What is watched is the sign of the change, which is the sign of the mean
+    /// current (or voltage) across the step.
+    ///
+    /// A change within a few units in the last place of the values is no change:
+    /// it is the rounding of a node that has settled, and its sign is whatever
+    /// the order of the solver's arithmetic made it. Read as a current, that
+    /// noise alternated as readily as anything, and a decoupling capacitor on a
+    /// held reference was caught "ringing" on every step — which damped every
+    /// element coupled to it, a 555's timing capacitor among them, onto backward
+    /// Euler for good, with the period then set by that rule's error and by
+    /// which way the last bit happened to round on the machine running it.
+    ///
+    /// `scale` is the solution's own ([`AcceptCtx::scale`]): a capacitor's
+    /// voltage is a difference of two node voltages and is no more exact than
+    /// they are, however small the difference.
+    pub fn push(&mut self, before: f64, after: f64, scale: f64) {
+        let change = after - before;
+        let size = scale.max(before.abs()).max(after.abs());
+        let rounding = ROUNDING_ULPS * f64::EPSILON * size;
+        let current = if change.abs() <= rounding { 0.0 } else { change };
         let flipped = self.last != 0.0 && current != 0.0 && (current < 0.0) != (self.last < 0.0);
         self.flips = if flipped { self.flips.saturating_add(1) } else { 0 };
 
@@ -287,6 +319,30 @@ pub trait Element: std::fmt::Debug + Send + AsAny {
         f64::INFINITY
     }
 
+    /// A corner — an edge of a source, a logic level arriving — has reached this
+    /// element at its newest accepted timepoint. Its error history from before
+    /// that point describes a different curve, and is to be forgotten.
+    fn corner(&mut self) {}
+
+    /// The same estimate as [`Element::max_timestep`], but taken with the
+    /// timepoint just solved in `ctx` counted as though it had been accepted,
+    /// and without accepting it.
+    ///
+    /// This is how a step is judged after it is taken. `max_timestep` sizes the
+    /// next step from history alone, which cannot see an onset that begins
+    /// inside that step — a junction starting to conduct, a ramp turning a
+    /// corner nobody announced — so the step goes long across it and nothing
+    /// ever said so. Solved, the step's own point shows the curvature; if it
+    /// asks for a step shorter than the one just taken, the solver throws the
+    /// step away and takes it again, and the element has recorded nothing.
+    ///
+    /// Must change nothing. `INFINITY` means no opinion, which is right for
+    /// anything whose step limit is not a truncation error.
+    fn trial_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        let _ = ctx;
+        f64::INFINITY
+    }
+
     /// Next instant strictly after `t` where this element is not differentiable —
     /// the corner of a pulse, a point in a piecewise-linear table. The transient
     /// loop lands exactly on these instead of stepping across them, which is the
@@ -375,6 +431,36 @@ pub fn critical_voltage(is: f64, vt: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A node held at 6 V, solved again every step, comes back a unit in the
+    /// last place either side of it: that is rounding, not the trapezoidal
+    /// rule alternating, and nothing should be damped for it.
+    #[test]
+    fn a_settled_node_rounding_either_way_is_not_ringing() {
+        let ulp = 6.0 * f64::EPSILON;
+        let mut ring = RingDetector::default();
+        let mut v = 6.0;
+        for k in 0..10 {
+            let next = if k % 2 == 0 { 6.0 + ulp } else { 6.0 - ulp };
+            ring.push(v, next, 6.0);
+            v = next;
+        }
+        assert!(!ring.ringing());
+    }
+
+    /// A capacitor's voltage alternating by a millivolt each step is the
+    /// rule's ringing, and is caught on the second reversal.
+    #[test]
+    fn an_alternation_above_the_rounding_is_ringing() {
+        let mut ring = RingDetector::default();
+        let mut v = 6.0;
+        for k in 0..3 {
+            let next = if k % 2 == 0 { 6.001 } else { 6.0 };
+            ring.push(v, next, 6.0);
+            v = next;
+        }
+        assert!(ring.ringing());
+    }
 
     #[test]
     fn ground_maps_to_none() {

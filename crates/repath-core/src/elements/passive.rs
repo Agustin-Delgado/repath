@@ -173,6 +173,12 @@ pub struct Capacitor {
 }
 
 impl Capacitor {
+    /// The charge held at the timepoint in `ctx`, which is what the step
+    /// controller follows.
+    fn stored(&self, ctx: &AcceptCtx) -> f64 {
+        self.c * (ctx.voltage(self.p) - ctx.voltage(self.m))
+    }
+
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, c: f64) -> Self {
         Self {
             name: name.into(),
@@ -282,10 +288,10 @@ impl Element for Capacitor {
             // companion value above is the same number the stamp uses, and with a
             // settled voltage the trapezoidal form of it is simply `-i_prev`.
             self.i_mean = self.c * (v - self.v_prev) / ctx.dt;
-            self.ring.push(self.i_mean);
+            self.ring.push(self.v_prev, v, ctx.scale());
         }
         self.v_prev = v;
-        self.charge.push(ctx.time, self.c * v);
+        self.charge.push(ctx.time, self.stored(ctx));
     }
 
     fn reset(&mut self) {
@@ -302,6 +308,14 @@ impl Element for Capacitor {
 
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
         self.charge.suggested_step_for(ctx.integration)
+    }
+
+    fn trial_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.charge.suggested_step_after(ctx.time, self.stored(ctx), ctx.integration)
+    }
+
+    fn corner(&mut self) {
+        self.charge.restart();
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
@@ -338,6 +352,11 @@ pub struct Inductor {
 }
 
 impl Inductor {
+    /// The flux linked at the timepoint in `ctx`.
+    fn stored(&self, ctx: &AcceptCtx) -> f64 {
+        self.l * ctx.unknown(self.branch)
+    }
+
     pub fn new(name: impl Into<String>, p: NodeId, m: NodeId, l: f64) -> Self {
         Self {
             name: name.into(),
@@ -434,11 +453,11 @@ impl Element for Inductor {
             // What the branch actually had across it over the step, which cannot
             // ring by construction — the mirror of the capacitor's mean current.
             self.v_mean = self.l * (i - self.i_prev) / ctx.dt;
-            self.ring.push(self.v_mean);
+            self.ring.push(self.i_prev, i, ctx.scale());
         }
         self.i_prev = i;
         self.v_prev = ctx.voltage(self.p) - ctx.voltage(self.m);
-        self.flux.push(ctx.time, self.l * self.i_prev);
+        self.flux.push(ctx.time, self.stored(ctx));
     }
 
     fn reset(&mut self) {
@@ -458,6 +477,14 @@ impl Element for Inductor {
 
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
         self.flux.suggested_step_for(ctx.integration)
+    }
+
+    fn trial_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.flux.suggested_step_after(ctx.time, self.stored(ctx), ctx.integration)
+    }
+
+    fn corner(&mut self) {
+        self.flux.restart();
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {
@@ -726,6 +753,12 @@ pub struct Transformer {
 }
 
 impl Transformer {
+    /// The primary's flux linkage at the timepoint in `ctx`.
+    fn stored(&self, ctx: &AcceptCtx) -> f64 {
+        let [(_, _, k1), (_, _, k2)] = self.windings();
+        self.l1 * ctx.unknown(k1) + self.mutual() * ctx.unknown(k2)
+    }
+
     pub fn new(
         name: impl Into<String>,
         (p1, m1): (NodeId, NodeId),
@@ -842,7 +875,7 @@ impl Element for Transformer {
             ctx.voltage(self.p1) - ctx.voltage(self.m1),
             ctx.voltage(self.p2) - ctx.voltage(self.m2),
         ];
-        self.flux.push(ctx.time, self.l1 * self.i_prev[0] + self.mutual() * self.i_prev[1]);
+        self.flux.push(ctx.time, self.stored(ctx));
     }
 
     fn reset(&mut self) {
@@ -853,6 +886,14 @@ impl Element for Transformer {
 
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
         self.flux.suggested_step_for(ctx.integration)
+    }
+
+    fn trial_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.flux.suggested_step_after(ctx.time, self.stored(ctx), ctx.integration)
+    }
+
+    fn corner(&mut self) {
+        self.flux.restart();
     }
 
     fn ac_stamp(&self, sys: &mut ComplexSystem, ctx: &AcCtx) {

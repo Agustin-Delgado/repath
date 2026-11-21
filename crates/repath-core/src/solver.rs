@@ -541,6 +541,21 @@ enum Origin {
     Dac(usize),
 }
 
+/// A corner at the newest accepted timepoint: what it reaches takes its next
+/// steps damped, and forgets the error history from before it.
+fn corner_at_latest(circuit: &mut Circuit, run: &mut Running, origins: &[Origin]) {
+    let mut reached = vec![0; run.damp.len()];
+    run.coupling.damp(origins, CORNER_DAMPING, &mut reached);
+    for ((element, owed), now) in
+        circuit.elements_mut().iter_mut().zip(run.damp.iter_mut()).zip(reached)
+    {
+        if now > 0 {
+            element.corner();
+            *owed = (*owed).max(now);
+        }
+    }
+}
+
 /// The nodes an ideal voltage source holds against ground.
 fn rails(circuit: &Circuit) -> Vec<usize> {
     circuit
@@ -863,6 +878,11 @@ pub const MAX_AC_POINTS: usize = 10_000;
 fn step_floor(min_step: f64, t: f64) -> f64 {
     min_step.max(4.0 * f64::EPSILON * t.abs())
 }
+
+/// A solved step is thrown away when its own error estimate asks for less than
+/// this share of it. SPICE's figure: a step is not rejected for being a hair
+/// long, which the next one, sized from the new history, makes good on anyway.
+const STEP_REJECTION: f64 = 0.9;
 
 /// Damped steps taken after landing on a corner.
 ///
@@ -1773,7 +1793,7 @@ impl Simulator {
             let reached = self.reach_changes(circuit, &mut run.ledger.pacing, t);
             if !reached.is_empty() {
                 let origins: Vec<Origin> = reached.into_iter().map(Origin::Dac).collect();
-                run.coupling.damp(&origins, CORNER_DAMPING, &mut run.damp);
+                corner_at_latest(circuit, run, &origins);
             }
             if settled.halt == Halt::Budget && settled.time <= t {
                 // What ran out was the safety valve, not the frame's share: that
@@ -1899,7 +1919,25 @@ impl Simulator {
                     self.config.transient_max_iterations,
                     &mut stats,
                 ) {
-                    Ok(_) => break,
+                    Ok(_) => {
+                        // Solved is not yet accepted. The step was sized from the
+                        // history before it, which cannot see an onset that starts
+                        // inside it; its own point can. A step longer than the one
+                        // its error estimate now asks for is thrown away and taken
+                        // again at that length — SPICE's test, the same 0.9 — and
+                        // since nothing has been accepted, nothing has to be undone:
+                        // the devices record a timepoint only once it is final, and
+                        // the digital side has consumed nothing from this one.
+                        let allowed =
+                            self.trial_step_limit(circuit, t + attempt, attempt, integration);
+                        let floor = step_floor(min_step, t);
+                        if allowed < STEP_REJECTION * attempt && attempt > floor {
+                            stats.rejected_steps += 1;
+                            attempt = allowed.max(floor);
+                            continue;
+                        }
+                        break;
+                    }
                     // An iterate that overflowed is a step too long for the
                     // exponentials in it, as much as one that did not settle.
                     Err(failed @ (SimError::NoConvergence { .. } | SimError::NonFinite { .. })) => {
@@ -1981,7 +2019,7 @@ impl Simulator {
             // a clock beside a tank used to put the whole circuit on backward
             // Euler at every edge, and the tank gave up its energy to them.
             if on_corner && attempt >= step {
-                run.coupling.damp(&corner, CORNER_DAMPING, &mut run.damp);
+                corner_at_latest(circuit, run, &corner);
             }
 
             self.record(&mut result, circuit, t);
@@ -1996,7 +2034,7 @@ impl Simulator {
             // A bridge that started a ramp here is a corner where it is.
             if !reached.is_empty() {
                 let origins: Vec<Origin> = reached.into_iter().map(Origin::Dac).collect();
-                run.coupling.damp(&origins, CORNER_DAMPING, &mut run.damp);
+                corner_at_latest(circuit, run, &origins);
             }
             if let Err(e) = unsettled(circuit) {
                 restore(run, t, dt, euler_steps, stats);
@@ -2075,6 +2113,30 @@ impl Simulator {
             .map(|(k, e)| {
                 let sized = self.sized.get(k).copied().unwrap_or(false);
                 e.max_timestep(if sized { &euler } else { &ctx })
+            })
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    /// Tightest step any element asks for once the timepoint just solved at
+    /// `time` is counted as accepted — judged by the same rule each element's
+    /// step was sized by in [`Self::element_step_limit`], and recording nothing.
+    fn trial_step_limit(
+        &self,
+        circuit: &Circuit,
+        time: f64,
+        dt: f64,
+        integration: Integration,
+    ) -> f64 {
+        let ctx = AcceptCtx { mode: Mode::Transient, integration, time, dt, x: &self.x };
+        let trapezoidal = AcceptCtx { integration: Integration::Trapezoidal, ..ctx };
+        let euler = AcceptCtx { integration: Integration::BackwardEuler, ..ctx };
+        circuit
+            .elements()
+            .iter()
+            .enumerate()
+            .map(|(k, e)| {
+                let sized = self.sized.get(k).copied().unwrap_or(false);
+                e.trial_timestep(if sized { &euler } else { &trapezoidal })
             })
             .fold(f64::INFINITY, f64::min)
     }
@@ -2212,6 +2274,15 @@ impl Simulator {
         // pieces hands back one result per piece, and a chunk that starts empty
         // would take the first sample of an unchanged net as a transition.
         circuit.digital.swap_log(changes);
+        // Which package is driving a bridged net, for whose supply its current
+        // comes through: handed to the bridges to apply when the solve gets there.
+        let mut drivers = Vec::new();
+        circuit.digital.swap_driver_log(&mut drivers);
+        for change in &drivers {
+            for dac in circuit.dacs_mut() {
+                dac.queue_driver(change.time, change.driver, change.driving);
+            }
+        }
         for change in changes.iter() {
             if let (Some(trace), Some(previous), Some(tracing)) = (
                 result.digital.get_mut(change.net),
@@ -2295,6 +2366,7 @@ impl Simulator {
     ) -> Vec<usize> {
         let mut ramped = Vec::new();
         for (k, (dac, pace)) in circuit.dacs_mut().iter_mut().zip(pacing.iter_mut()).enumerate() {
+            dac.reach_drivers(t);
             let reached = pace.ahead.iter().take_while(|c| c.time <= t).count();
             for change in pace.ahead.drain(..reached) {
                 pace.level = change.state;
@@ -2398,6 +2470,24 @@ impl Simulator {
         for (dac, state) in circuit.dacs_mut().iter_mut().zip(levels) {
             dac.set_level(state, t);
         }
+        // And who is driving each, from where the digital side stands now.
+        let driving: Vec<Vec<(DriverId, bool)>> = circuit
+            .dacs()
+            .iter()
+            .map(|d| {
+                d.taps()
+                    .iter()
+                    .flat_map(|tap| tap.drivers.iter())
+                    .map(|&id| (id, circuit.digital.is_driving(id)))
+                    .collect()
+            })
+            .collect();
+        for (dac, drivers) in circuit.dacs_mut().iter_mut().zip(driving) {
+            dac.reach_drivers(t);
+            for (id, active) in drivers {
+                dac.set_driver(id, active);
+            }
+        }
     }
 
     fn record(&self, result: &mut TransientResult, circuit: &Circuit, t: f64) {
@@ -2405,7 +2495,7 @@ impl Simulator {
         result.solution.push(self.x.clone());
 
         let mut currents = Vec::new();
-        circuit.collect_currents(&self.x, &mut currents);
+        circuit.collect_currents(&self.x, t, &mut currents);
         result.currents.push(currents);
     }
 

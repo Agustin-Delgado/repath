@@ -276,13 +276,19 @@ impl ChargeBranch {
             let (g, ieq) = self.terms(c, ctx.integration, ctx.dt);
             self.i_prev = g * v - ieq;
             self.i_mean = c * (v - self.v_prev) / ctx.dt;
-            self.ring.push(self.i_mean);
+            self.ring.push(self.v_prev, v, ctx.scale());
         } else {
             self.i_mean = 0.0;
         }
-        self.q += c * (v - self.v_prev);
+        self.q = self.charge_at(v, c);
         self.v_prev = v;
         self.charge.push(ctx.time, self.q);
+    }
+
+    /// The charge this branch would hold at voltage `v` with capacitance `c`,
+    /// accumulated from the last accepted point.
+    fn charge_at(&self, v: f64, c: f64) -> f64 {
+        self.q + c * (v - self.v_prev)
     }
 
     /// Largest step this branch will take before its own truncation error is
@@ -291,8 +297,18 @@ impl ChargeBranch {
         self.charge.suggested_step_for(integration)
     }
 
+    /// The same, judged with the solved point `(v, c)` at `ctx.time` counted as
+    /// accepted, and nothing recorded.
+    fn trial_timestep(&self, v: f64, c: f64, ctx: &AcceptCtx) -> f64 {
+        self.charge.suggested_step_after(ctx.time, self.charge_at(v, c), ctx.integration)
+    }
+
     fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    fn corner(&mut self) {
+        self.charge.restart();
     }
 }
 
@@ -593,6 +609,13 @@ impl Diode {
         depletion_capacitance(m.cj0, m.vj, m.m, vd) + m.tt * gd
     }
 
+    /// The capacitance the junction's charge is rolled forward with at `vd`,
+    /// both when a timepoint is accepted and when a solved one is judged.
+    fn junction_capacitance(&self, vd: f64) -> f64 {
+        let (_, gd) = self.evaluate(vd);
+        self.capacitance(vd, gd + 1e-12)
+    }
+
     /// Damp a step in whichever direction it is heading.
     ///
     /// A junction has an exponential at each end — conduction one way, breakdown
@@ -837,8 +860,16 @@ impl Element for Diode {
         // ground its timestep down to nothing trying to reconcile the two.
         let vd = self.v_prev_iter;
         self.v_accepted = vd;
-        let (_, gd) = self.evaluate(vd);
-        self.charge.accept(vd, self.capacitance(vd, gd + 1e-12), ctx);
+        self.charge.accept(vd, self.junction_capacitance(vd), ctx);
+    }
+
+    fn corner(&mut self) {
+        self.charge.corner();
+    }
+
+    fn trial_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        let vd = self.v_prev_iter;
+        self.charge.trial_timestep(vd, self.junction_capacitance(vd), ctx)
     }
 
     fn rewind(&mut self) {
@@ -1365,6 +1396,24 @@ impl Element for Mosfet {
             .min(self.body.max_timestep(ctx))
     }
 
+    fn corner(&mut self) {
+        self.q_gs.corner();
+        self.q_gd.corner();
+        self.q_ds.corner();
+        self.body.corner();
+    }
+
+    fn trial_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        let branches = [&self.q_gs, &self.q_gd, &self.q_ds];
+        branches
+            .into_iter()
+            .zip(self.terminal_pairs())
+            .map(|(branch, (p, n, c))| {
+                branch.trial_timestep(ctx.voltage(p) - ctx.voltage(n), c, ctx)
+            })
+            .fold(self.body.trial_timestep(ctx), f64::min)
+    }
+
     fn terminal_names(&self) -> &'static [&'static str] {
         &["g", "s"]
     }
@@ -1876,6 +1925,18 @@ impl Element for Bjt {
     /// the part of a switching edge the device is characterised by.
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
         self.q_be.max_timestep(ctx.integration).min(self.q_bc.max_timestep(ctx.integration))
+    }
+
+    fn corner(&mut self) {
+        self.q_be.corner();
+        self.q_bc.corner();
+    }
+
+    fn trial_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        let (vbe, vbc) = self.junction_voltages(ctx);
+        let (gif, gir) = self.junction_conductances(vbe, vbc);
+        let (cbe, cbc) = self.capacitances(vbe, vbc, gif, gir);
+        self.q_be.trial_timestep(vbe, cbe, ctx).min(self.q_bc.trial_timestep(vbc, cbc, ctx))
     }
 
     fn terminal_names(&self) -> &'static [&'static str] {

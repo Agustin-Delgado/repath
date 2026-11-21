@@ -11,6 +11,95 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Serial on the chip's own baud clock
+
+**A byte goes out when the chip's baud clock says, not the instant it is
+written.** The ATmega328P's serial port runs off a baud-rate generator that
+ticks all the time, whether or not anything is being sent. A byte written to
+an idle port used to go out at once; now its start bit waits for the next edge
+of that clock, up to one bit later, as on the chip. Received bytes are sampled
+on the same clock's ticks, so where an incoming start bit falls between two
+ticks now shifts its samples the way it does on a real board. Bytes sent back
+to back still follow each other with no gap.
+
+[#94](https://github.com/Agustin-Delgado/repath/pull/94)
+
+---
+
+## 21 November 2026 — A step that turns out too long is taken again
+
+**A 555 blinks at the same rate every cycle.** Its capacitor now turns round
+within a millivolt of a third and two thirds of the supply, every time. Before,
+each comparator trip was crossed in one long step, so the capacitor overshot by
+up to 36 mV, and no two periods came out the same length. The same goes for
+anything that switches without a source edge or a logic edge to announce it:
+a comparator, a transistor coming out of cutoff, a diode starting to conduct.
+The solver used to size each step from the steps before it, so it could not
+see an onset that started inside the step. Now it checks every solved step
+against its own error estimate. When the step was too long, it takes it again
+shorter, before anything downstream (the logic, the chip, the screen) has used
+it.
+
+**And at the rate its parts give.** The blinker's period now comes out within
+a tenth of a percent of what its resistors and capacitor give. It is the same
+whatever the timebase and on whatever machine. Before, it ran 1.3 % slow at the
+editor's timebase. A capacitor sitting still on the chip's reference was
+mistaken for one ringing, and that switched the timing capacitor onto a less
+accurate integration rule. How slow it ran then depended on the timebase and on
+the computer's rounding.
+
+It costs little where nothing switches. On circuits that do, it pays for the
+accuracy. The 555 blinker takes 1.6 times as many steps, the Arduino blink
+1.2 times. The LED matrix takes fewer steps than before.
+
+[#95](https://github.com/Agustin-Delgado/repath/pull/95)
+
+---
+
+## 21 November 2026 — A chip's supply legs carry its current
+
+**The VCC wire of a chip now carries what the chip takes.** A 74HC04 lighting
+an LED draws the LED's current in at its VCC leg, and an output sinking a load
+sends it out by GND; an op-amp in a package does the same through V+ and V−,
+and its inputs' bias current returns through them too. On top of that, every
+package draws its own quiescent current off its datasheet: 3 mA for a 555,
+0.7 mA for an LM358, a couple of microamps for a 74HC gate, milliamps for 74LS,
+about 10 mA for an ATmega328P at 16 MHz. So a supply's reading is the sum of
+the parts on it, and the current overlay animates the supply wires with the
+engine's own figures instead of leaving them still.
+
+Nothing about the outputs changed: they reach the same levels as before. What
+one figure cannot say — CMOS switching current, a memory's draw while
+selected, a lit LED matrix, an LCD's backlight — is listed in the backlog.
+([#96](https://github.com/Agustin-Delgado/repath/pull/96))
+
+---
+
+## 21 November 2026 — One undo takes back everything an edit inside a block did
+
+**Undo reaches the levels underneath.** Leaving a block whose pins moved
+re-attaches the wires of its copies everywhere it is placed, the drawing
+underneath included. Undo used to take back only the level you were on, so those
+copies kept wires re-attached for an edit that, as far as that level knew, had
+never happened. Now leaving is one step on every level it changed, and Undo and
+Redo put all of them back exactly.
+
+**Ports changed from the inspector, inside another block.** Renaming a port or
+moving it to the other side or up the box, with another block open, now moves
+the wires of the copies on the levels underneath as well — they used to be left
+hanging until you came back down — and one Undo takes all of it back.
+
+**Probes come back with what they were on.** Undoing a port rename used to put
+the old name back on the pin but leave its probe on the new name, watching
+nothing. The probes are now part of every step, on every level: Undo and Redo
+put them back exactly, and picking or dropping a probe — by hand, or Run picking
+a few for an empty scope — is a step of its own, so undoing an earlier edit no
+longer takes it with it.
+
+[#93](https://github.com/Agustin-Delgado/repath/pull/93)
+
+---
+
 ## 21 November 2026 — The chip's timers, pins and serial port, closer to the datasheet
 
 **Phase-correct PWM changes frequency cleanly.** Raising TOP in a phase-correct
