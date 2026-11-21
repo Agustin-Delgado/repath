@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { TextInput } from '$lib/ui';
 	import { fieldBox, fieldInput, fieldLabel, problem as problemClass } from './styles';
 
 	/**
@@ -26,7 +27,7 @@
 <label class="flex min-w-0 flex-col gap-1">
 	{#if label}<span class={fieldLabel}>{label}</span>{/if}
 	<span class={prominent ? 'flex' : fieldBox} data-rejected={refusal ? '' : undefined}>
-		<input
+		<TextInput
 			{value}
 			aria-label={rest['aria-label']}
 			spellcheck="false"

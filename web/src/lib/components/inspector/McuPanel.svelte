@@ -11,7 +11,7 @@
 
 <script lang="ts">
 	import { FileUp, SendHorizontal, X } from '@lucide/svelte';
-	import { Button, Select } from '$lib/ui';
+	import { Button, Select, TextArea, TextInput } from '$lib/ui';
 	import { FLASH_BYTES, isUnsimulated, unsimulatedMessage } from '$lib/schematic/chips-mcu';
 	import { readFirmware } from '$lib/schematic/firmware';
 	import type { Instance } from '$lib/schematic/model';
@@ -147,8 +147,8 @@
 		}}
 	/>
 	{#if pasting}
-		<textarea
-			rows="4"
+		<TextArea
+			rows={4}
 			spellcheck="false"
 			placeholder={':100000000C9434000C943E000C943E000C943E0082\n…\n:00000001FF'}
 			value={text}
@@ -164,7 +164,7 @@
 			}}
 			aria-label="Program as Intel HEX"
 			class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none focus:border-accent/70"
-		></textarea>
+		/>
 	{/if}
 	<p class={hint}>
 		From the Arduino IDE: Sketch → Export Compiled Binary, then the <code>.hex</code> without
@@ -228,7 +228,7 @@
 			}}
 		>
 			<label class={fieldBox}>
-				<input
+				<TextInput
 					class={fieldInput}
 					bind:value={typed}
 					disabled={!live}

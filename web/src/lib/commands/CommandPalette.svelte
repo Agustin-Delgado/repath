@@ -7,6 +7,7 @@
 	import { recentParts } from '$lib/parts/recent.svelte';
 	import { fold, search } from '$lib/search';
 	import { app } from '$lib/state.svelte';
+	import { TextInput } from '$lib/ui';
 	import { buildCommands, keepHighlight, type Command, type CommandContext } from './commands';
 
 	/**
@@ -161,7 +162,7 @@
 			<Dialog.Title class="sr-only">Find a part or a command</Dialog.Title>
 			<label class="flex items-center gap-2 border-b border-border px-3">
 				<Search class="size-4 shrink-0 text-muted" />
-				<input
+				<TextInput
 					bind:value={query}
 					onkeydown={onKey}
 					placeholder="Find a part, a command, an example…"

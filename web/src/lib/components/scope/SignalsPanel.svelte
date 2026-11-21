@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ArrowDown, ArrowUp, Minus, Plus, Search, X } from '@lucide/svelte';
 	import type { Snippet } from 'svelte';
-	import { Button, Pressable } from '$lib/ui';
+	import { Button, Pressable, TextInput } from '$lib/ui';
 	import { netLabel } from '$lib/schematic/nets';
 	import { search } from '$lib/search';
 	import { app } from '$lib/state.svelte';
@@ -216,7 +216,7 @@
 				class="mx-1 flex h-6 items-center gap-1.5 rounded-control border border-border bg-control px-1.5 text-muted focus-within:border-accent/70"
 			>
 				<Search class="size-3 shrink-0" />
-				<input
+				<TextInput
 					bind:value={query}
 					placeholder="Add a signal…"
 					aria-label="Find a net to plot"

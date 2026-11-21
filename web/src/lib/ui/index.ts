@@ -13,6 +13,8 @@ export { default as MenuItem } from './menu/MenuItem.svelte';
 export { default as MenuLabel } from './menu/MenuLabel.svelte';
 export { default as MenuSeparator } from './menu/MenuSeparator.svelte';
 export { default as UnitField } from './field/UnitField.svelte';
+export { default as TextInput } from './field/TextInput.svelte';
+export { default as TextArea } from './field/TextArea.svelte';
 export { default as ToolbarSeparator } from './toolbar/ToolbarSeparator.svelte';
 export { floatingItem, floatingSurface } from './surface';
 export { default as Toaster } from './toast/Toaster.svelte';

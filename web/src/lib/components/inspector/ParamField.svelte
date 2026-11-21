@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Select } from '$lib/ui';
+	import { Select, TextInput } from '$lib/ui';
 	import type { ParamDef } from '$lib/schematic/model';
 	import { app } from '$lib/state.svelte';
 	import { onLeave, readEntry } from '$lib/entry';
@@ -200,7 +200,7 @@
 			how a probe called "drive" once came back as "P1".
 		-->
 		<span class={fieldBox}>
-			<input
+			<TextInput
 				value={String(value ?? '')}
 				aria-label={param.label}
 				spellcheck="false"
@@ -215,7 +215,7 @@
 		</span>
 	{:else}
 		<span class={fieldBox} data-rejected={refusal ? '' : undefined}>
-			<input
+			<TextInput
 				inputmode="decimal"
 				aria-label={param.label}
 				title="Arrow keys step the value — Shift for ten at a time, Alt for a tenth"

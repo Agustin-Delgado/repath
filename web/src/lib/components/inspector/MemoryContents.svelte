@@ -3,6 +3,7 @@
 	import { parseContents } from '$lib/schematic/memory';
 	import type { Instance } from '$lib/schematic/model';
 	import { app } from '$lib/state.svelte';
+	import { TextArea } from '$lib/ui';
 	import { hint, problem, sectionTitle } from './styles';
 
 	/**
@@ -37,8 +38,8 @@
 			? `Nothing written yet: every address reads ${erased}.`
 			: `${written} of ${count} words written; the rest read ${erased}.`}
 	</p>
-	<textarea
-		rows="5"
+	<TextArea
+		rows={5}
 		spellcheck="false"
 		placeholder={'3F 06 5B 4F 66 6D 7D 07 7F 6F\n@10 77 7C 39 5E 79 71 ; A to F'}
 		value={text}
@@ -54,7 +55,7 @@
 		}}
 		aria-label="Memory contents"
 		class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none focus:border-accent/70"
-	></textarea>
+	/>
 	{#each parsed.problems.slice(0, 3) as message (message)}
 		<p class={problem} role="alert">{message}</p>
 	{/each}

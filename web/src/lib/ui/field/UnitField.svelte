@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { draftChanged } from '$lib/entry';
+	import TextInput from './TextInput.svelte';
 
 	/**
 	 * A value typed the way an engineer writes it — `10m`, `4.7k`, `-40` — with
@@ -31,10 +32,10 @@
 	class="flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-[0.75rem] text-muted focus-within:border-accent/70"
 >
 	{#if prefix}<span>{prefix}</span>{/if}
-	<input
+	<TextInput
 		value={editing ? draft : value}
 		aria-label={rest['aria-label']}
-		style:width
+		style="width: {width}"
 		class="h-full min-w-0 border-0 bg-transparent p-0 font-mono text-ui text-fg outline-none"
 		onfocus={() => {
 			draft = value;

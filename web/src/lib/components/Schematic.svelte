@@ -38,7 +38,7 @@
 	import { CONTACTS, GRID, OPERABLE, SINGLE_CONTACTS } from '$lib/schematic/model';
 	import { groupLabelBox, groupLabelSize, placeGroups } from '$lib/schematic/groups';
 	import { routeWire } from '$lib/schematic/route';
-	import { Pressable } from '$lib/ui';
+	import { Pressable, TextInput } from '$lib/ui';
 	import { parseTrace } from '$lib/trace';
 	import { junctionDots } from '$lib/schematic/nets';
 	import { buildSceneItems, buildSnapTargets } from '$lib/schematic/scene';
@@ -923,12 +923,9 @@
 		</div>
 	{/if}
 	{#if labelBox}
-		<!-- svelte-ignore a11y_autofocus -->
-		<input
+		<TextInput
 			class="rename"
-			style:left="{labelBox.x - 4}px"
-			style:top="{labelBox.y - 3}px"
-			style:font-size="{Math.max(labelBox.size, 11)}px"
+			style="left: {labelBox.x - 4}px; top: {labelBox.y - 3}px; font-size: {Math.max(labelBox.size, 11)}px"
 			value={labelBox.text}
 			size={Math.max(4, labelBox.text.length + 2)}
 			aria-label={labelBox.slot === 'name' ? 'Part name' : 'Part value'}
@@ -947,12 +944,9 @@
 		/>
 	{/if}
 	{#if renameBox}
-		<!-- svelte-ignore a11y_autofocus -->
-		<input
+		<TextInput
 			class="rename"
-			style:left="{renameBox.x}px"
-			style:top="{renameBox.y}px"
-			style:font-size="{renameBox.size}px"
+			style="left: {renameBox.x}px; top: {renameBox.y}px; font-size: {renameBox.size}px"
 			value={renameBox.name}
 			size={Math.max(4, renameBox.name.length + 1)}
 			aria-label="Group name"
@@ -1022,7 +1016,7 @@
 		background: var(--hover);
 	}
 
-	.rename {
+	.stage :global(.rename) {
 		position: absolute;
 		padding: 2px 3px;
 		border: 1px solid var(--accent, #4ea8ff);
