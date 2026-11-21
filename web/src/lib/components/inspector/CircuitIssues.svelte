@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Pressable } from '$lib/ui';
 	import { CircleX, Cpu, Flame, Info, TriangleAlert } from '@lucide/svelte';
 	import { isUnsimulated, unsimulatedMessage } from '$lib/schematic/chips-mcu';
 	import { burnoutKey } from '$lib/schematic/led';
@@ -63,9 +64,9 @@
 		<ul class="m-0 flex list-none flex-col gap-1 p-0 text-[0.7rem] leading-snug text-strong">
 			{#each failure.parts as id, i (id)}
 				<li>
-					<button
+					<Pressable
 						class="cursor-pointer border-0 bg-transparent p-0 text-left font-semibold text-fg hover:underline"
-						onclick={() => (app.selection = [id])}>{failure.partNames[i]}</button
+						onclick={() => (app.selection = [id])}>{failure.partNames[i]}</Pressable
 					>
 				</li>
 			{/each}

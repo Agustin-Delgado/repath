@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Pressable } from '$lib/ui';
 	import type { Snippet } from 'svelte';
 
 	/**
@@ -22,7 +23,7 @@
 	let { label, title, active, onclick, oncontextmenu, icon, dim = false }: Props = $props();
 </script>
 
-<button
+<Pressable
 	type="button"
 	{title}
 	{onclick}
@@ -36,4 +37,4 @@
 >
 	{@render icon()}
 	<span class="line-clamp-2 break-words">{label}</span>
-</button>
+</Pressable>

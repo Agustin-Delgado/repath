@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ChevronRight, RotateCw, Trash2 } from '@lucide/svelte';
-	import { Button } from '$lib/ui';
+	import { Button, Disclosure } from '$lib/ui';
 	import { mcuBlock } from '$lib/schematic/chips';
 	import { ledRating } from '$lib/schematic/led';
 	import { BUZZER_KIND } from '$lib/schematic/buzzer';
@@ -138,27 +138,28 @@
 	{/if}
 
 	{#if advanced.length > 0}
-		<section class="flex flex-col gap-2.5">
-			<button
-				type="button"
-				aria-expanded={more}
-				onclick={toggleMore}
-				class="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-left text-2xs text-muted hover:text-fg"
+		<section>
+			<Disclosure
+				open={more}
+				onOpenChange={toggleMore}
+				class="flex flex-col gap-2.5"
+				triggerClass="flex w-full cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-left text-2xs text-muted hover:text-fg"
+				panelClass="flex flex-col gap-2.5"
 			>
-				<ChevronRight class="size-3 transition-transform {more ? 'rotate-90' : ''}" />
-				More settings
-				<span class="font-mono opacity-70">({advanced.length})</span>
-				{#if changed > 0 && !more}
-					<span class="ml-auto rounded bg-accent/15 px-1.5 text-3xs text-accent">
-						{changed} changed
-					</span>
-				{/if}
-			</button>
-			{#if more}
+				{#snippet trigger()}
+					<ChevronRight class="size-3 transition-transform {more ? 'rotate-90' : ''}" />
+					More settings
+					<span class="font-mono opacity-70">({advanced.length})</span>
+					{#if changed > 0 && !more}
+						<span class="ml-auto rounded bg-accent/15 px-1.5 text-3xs text-accent">
+							{changed} changed
+						</span>
+					{/if}
+				{/snippet}
 				{#each advanced as param (instance.id + ':' + param.key)}
 					<ParamField id={instance.id} {param} value={instance.params[param.key]} />
 				{/each}
-			{/if}
+			</Disclosure>
 		</section>
 	{/if}
 

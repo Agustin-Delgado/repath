@@ -6,7 +6,7 @@
 	import Scope from '$lib/components/Scope.svelte';
 	import Toolbar from '$lib/components/toolbar/Toolbar.svelte';
 	import CommandPalette from '$lib/commands/CommandPalette.svelte';
-	import { Button, Splitter, Toaster } from '$lib/ui';
+	import { Button, Pressable, Splitter, Toaster } from '$lib/ui';
 	import { untrack } from 'svelte';
 	import { ensureEngine } from '$lib/engine';
 	import {
@@ -390,7 +390,7 @@
 		<div class="banner warn" role="alert">
 			{app.notice}
 			{#if linkBehind}
-				<button
+				<Pressable
 					class="link-behind"
 					onclick={async () => {
 						const hash = linkBehind!;
@@ -399,15 +399,15 @@
 					}}
 				>
 					Open the link as sent
-				</button>
+				</Pressable>
 			{/if}
-			<button
+			<Pressable
 				class="dismiss"
 				onclick={() => {
 					app.notice = null;
 					linkBehind = null;
 				}}
-				aria-label="Dismiss">×</button
+				aria-label="Dismiss">×</Pressable
 			>
 		</div>
 	{:else if app.error}
@@ -432,7 +432,7 @@
 			{@render splitter('right', 'left', 'Resize the details panel')}
 		</aside>
 		{#if panel}
-			<button class="backdrop" aria-label="Close the panel" onclick={() => (panel = null)}></button>
+			<Pressable class="backdrop" aria-label="Close the panel" onclick={() => (panel = null)}></Pressable>
 		{/if}
 	</main>
 
@@ -545,7 +545,7 @@
 		border-bottom: 1px solid var(--border);
 	}
 
-	.dismiss {
+	.banner :global(.dismiss) {
 		margin-left: auto;
 		border: none;
 		background: none;
@@ -556,7 +556,7 @@
 		padding: 0 0.25rem;
 	}
 
-	.dismiss:hover {
+	.banner :global(.dismiss:hover) {
 		color: var(--text);
 	}
 
@@ -579,7 +579,7 @@
 
 	/* Phone-only, and folded away on anything wider. */
 	.phone-bar,
-	.backdrop {
+	main :global(.backdrop) {
 		display: none;
 	}
 
@@ -681,7 +681,7 @@
 			transform: none;
 		}
 
-		.backdrop {
+		main :global(.backdrop) {
 			display: block;
 			position: fixed;
 			inset: 0;

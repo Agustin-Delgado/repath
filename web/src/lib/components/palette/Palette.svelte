@@ -3,7 +3,7 @@
 	import { SECTIONS, searchParts, sectionLabel, type PartEntry, type SectionId } from '$lib/parts/library';
 	import { SUBCIRCUIT_PREFIX } from '$lib/schematic/model';
 	import { allParts, isArmed, pickPart, removeDrawingPart } from '$lib/parts/drawing';
-	import { toasts } from '$lib/ui';
+	import { Disclosure, Pressable, toasts } from '$lib/ui';
 	import { recentParts } from '$lib/parts/recent.svelte';
 	import { app } from '$lib/state.svelte';
 	import Symbol from '../Symbol.svelte';
@@ -162,16 +162,9 @@
 {/snippet}
 
 {#snippet shelfHeading(id: string, label: string, count: number)}
-	<button
-		type="button"
-		class="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left text-3xs font-semibold tracking-[0.08em] text-muted uppercase hover:text-fg"
-		aria-expanded={!folded.has(id)}
-		onclick={() => toggleShelf(id)}
-	>
-		<ChevronRight class="size-3 transition-transform {folded.has(id) ? '' : 'rotate-90'}" />
-		{label}
-		<span class="ml-auto font-mono text-3xs font-normal tracking-normal opacity-60">{count}</span>
-	</button>
+	<ChevronRight class="size-3 transition-transform {folded.has(id) ? '' : 'rotate-90'}" />
+	{label}
+	<span class="ml-auto font-mono text-3xs font-normal tracking-normal opacity-60">{count}</span>
 {/snippet}
 
 <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
@@ -195,7 +188,7 @@
 				class="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-ui text-fg outline-none [&::-webkit-search-cancel-button]:hidden"
 			/>
 			{#if query}
-				<button
+				<Pressable
 					type="button"
 					class="flex cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-fg"
 					aria-label="Clear the search"
@@ -205,7 +198,7 @@
 					}}
 				>
 					<X class="size-3.5" />
-				</button>
+				</Pressable>
 			{:else}
 				<kbd class="rounded border border-border px-1 font-mono text-3xs leading-4">/</kbd>
 			{/if}
@@ -317,46 +310,50 @@
 						always there, because it is also the way in.
 					-->
 					{#if shelf.length > 0 || section.id === 'imported'}
-						<section>
-							{@render shelfHeading(section.id, section.label, shelf.length)}
-							{#if !folded.has(section.id)}
-								<div class="grid grid-cols-[repeat(auto-fill,minmax(58px,1fr))] gap-1">
-									{#each shelf as part, i (part.kind + ':' + part.label + ':' + part.description)}
-										<!-- A long shelf is filed under headings of its own: chips by what they do. -->
-										{#if part.shelf && part.shelf !== shelf[i - 1]?.shelf}
-											<h4 class="col-span-full m-0 mt-1 px-0.5 text-3xs font-medium text-muted first:mt-0">
-												{part.shelf}
-											</h4>
-										{/if}
-										{@render tile(part)}
-									{/each}
-									{#if section.id === 'imported'}
-										<PartTile
-											label="Import"
-											title="Paste a SPICE .subckt"
-											active={importing}
-											dim
-											onclick={() => (importing = !importing)}
-										>
-											{#snippet icon()}
-												<Plus class="h-[34px] w-[46px] p-2" strokeWidth={1.5} />
-											{/snippet}
-										</PartTile>
+						<Disclosure
+							open={!folded.has(section.id)}
+							onOpenChange={() => toggleShelf(section.id)}
+							triggerClass="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left text-3xs font-semibold tracking-[0.08em] text-muted uppercase hover:text-fg"
+						>
+							{#snippet trigger()}
+								{@render shelfHeading(section.id, section.label, shelf.length)}
+							{/snippet}
+							<div class="grid grid-cols-[repeat(auto-fill,minmax(58px,1fr))] gap-1">
+								{#each shelf as part, i (part.kind + ':' + part.label + ':' + part.description)}
+									<!-- A long shelf is filed under headings of its own: chips by what they do. -->
+									{#if part.shelf && part.shelf !== shelf[i - 1]?.shelf}
+										<h4 class="col-span-full m-0 mt-1 px-0.5 text-3xs font-medium text-muted first:mt-0">
+											{part.shelf}
+										</h4>
 									{/if}
-								</div>
-								{#if section.id === 'imported' && importing}
-									<SubcircuitImport
-										onImported={(ids) => {
-											importing = false;
-											// Straight into placing it. Importing a part and then having to
-											// find it in the list is a step that exists only because the
-											// code was easier that way.
-											if (ids.length === 1) pick(SUBCIRCUIT_PREFIX + ids[0]);
-										}}
-									/>
+									{@render tile(part)}
+								{/each}
+								{#if section.id === 'imported'}
+									<PartTile
+										label="Import"
+										title="Paste a SPICE .subckt"
+										active={importing}
+										dim
+										onclick={() => (importing = !importing)}
+									>
+										{#snippet icon()}
+											<Plus class="h-[34px] w-[46px] p-2" strokeWidth={1.5} />
+										{/snippet}
+									</PartTile>
 								{/if}
+							</div>
+							{#if section.id === 'imported' && importing}
+								<SubcircuitImport
+									onImported={(ids) => {
+										importing = false;
+										// Straight into placing it. Importing a part and then having to
+										// find it in the list is a step that exists only because the
+										// code was easier that way.
+										if (ids.length === 1) pick(SUBCIRCUIT_PREFIX + ids[0]);
+									}}
+								/>
 							{/if}
-						</section>
+						</Disclosure>
 					{/if}
 				{/each}
 			</div>

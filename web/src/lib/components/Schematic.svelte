@@ -38,6 +38,7 @@
 	import { CONTACTS, GRID, OPERABLE, SINGLE_CONTACTS } from '$lib/schematic/model';
 	import { groupLabelBox, groupLabelSize, placeGroups } from '$lib/schematic/groups';
 	import { routeWire } from '$lib/schematic/route';
+	import { Pressable } from '$lib/ui';
 	import { parseTrace } from '$lib/trace';
 	import { junctionDots } from '$lib/schematic/nets';
 	import { buildSceneItems, buildSnapTargets } from '$lib/schematic/scene';
@@ -918,7 +919,7 @@
 				Inside <strong>{app.inside.name}</strong> — every copy of the block changes with it. Wire a
 				pin to a <em>Port</em> to give the box a pin.
 			</span>
-			<button onclick={() => app.leaveBlock()}>Back to the drawing</button>
+			<Pressable onclick={() => app.leaveBlock()}>Back to the drawing</Pressable>
 		</div>
 	{/if}
 	{#if labelBox}
@@ -1005,7 +1006,7 @@
 		pointer-events: none;
 	}
 
-	.inside button {
+	.inside :global(button) {
 		pointer-events: auto;
 		padding: 0.3rem 0.6rem;
 		font-size: 0.75rem;
@@ -1017,7 +1018,7 @@
 		white-space: nowrap;
 	}
 
-	.inside button:hover {
+	.inside :global(button:hover) {
 		background: var(--hover);
 	}
 

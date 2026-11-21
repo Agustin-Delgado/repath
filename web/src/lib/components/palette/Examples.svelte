@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Pressable } from '$lib/ui';
 	import { Search, X } from '@lucide/svelte';
 	import { EXAMPLES, exampleDomain, type Example, type ExampleDomain } from '$lib/examples';
 	import { search } from '$lib/search';
@@ -70,7 +71,7 @@
 				class="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-ui text-fg outline-none [&::-webkit-search-cancel-button]:hidden"
 			/>
 			{#if query}
-				<button
+				<Pressable
 					type="button"
 					class="flex cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-fg"
 					aria-label="Clear the search"
@@ -80,7 +81,7 @@
 					}}
 				>
 					<X class="size-3.5" />
-				</button>
+				</Pressable>
 			{/if}
 		</label>
 	</div>
@@ -99,7 +100,7 @@
 				<ul class="m-0 flex list-none flex-col gap-0.5 p-0">
 					{#each examples as example (example.id)}
 						<li>
-							<button
+							<Pressable
 								type="button"
 								onclick={() => open(example)}
 								title="Open {example.name}; it replaces the drawing, and Ctrl+Z brings the drawing back"
@@ -117,7 +118,7 @@
 								<span class="line-clamp-2 text-3xs leading-snug text-muted">
 									{example.description}
 								</span>
-							</button>
+							</Pressable>
 						</li>
 					{/each}
 				</ul>

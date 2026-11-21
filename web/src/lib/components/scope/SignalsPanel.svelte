@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ArrowDown, ArrowUp, Minus, Plus, Search, X } from '@lucide/svelte';
 	import type { Snippet } from 'svelte';
-	import { Button } from '$lib/ui';
+	import { Button, Pressable } from '$lib/ui';
 	import { netLabel } from '$lib/schematic/nets';
 	import { search } from '$lib/search';
 	import { app } from '$lib/state.svelte';
@@ -156,7 +156,7 @@
 					{#if c}
 						{@const placed = app.isPlacedProbe(probe.key)}
 						{@const what = placed ? `Remove probe ${probe.label} from the drawing` : `Stop plotting ${probe.label}`}
-						<button
+						<Pressable
 							type="button"
 							class="flex cursor-pointer border-0 bg-transparent p-0 text-muted opacity-60 group-hover:opacity-100 hover:text-fg"
 							title={what}
@@ -164,7 +164,7 @@
 							onclick={() => app.unplot(probe.key)}
 						>
 							<X class="size-3.5" />
-						</button>
+						</Pressable>
 					{/if}
 				</div>
 				<!--
@@ -196,11 +196,11 @@
 						<ArrowDown />
 					</Button>
 					{#if turned}
-						<button
+						<Pressable
 							type="button"
 							class="ml-auto cursor-pointer border-0 bg-transparent p-0 font-mono text-3xs text-accent hover:underline"
 							onclick={() => app.resetChannel(probe.key)}
-							title="Back to automatic">auto</button
+							title="Back to automatic">auto</Pressable
 						>
 					{/if}
 				</div>
@@ -233,7 +233,7 @@
 			<ul class="m-0 flex list-none flex-col p-0">
 				{#each listed as c (c.index)}
 					<li>
-						<button
+						<Pressable
 							type="button"
 							class="flex w-full cursor-pointer items-center gap-1.5 rounded-md border-0 px-1 py-0.5 text-left hover:bg-hover hover:text-fg {app.hoverNet ===
 							c.index
@@ -247,7 +247,7 @@
 							<Plus class="size-3 shrink-0 text-muted" />
 							<span class="min-w-0 flex-1 truncate font-mono">{c.label}</span>
 							{@render badge(c)}
-						</button>
+						</Pressable>
 					</li>
 				{:else}
 					<li class="px-1 py-0.5 text-muted">No net called “{query.trim()}”.</li>
@@ -276,7 +276,7 @@
 					<li class="group flex items-center gap-1.5 rounded-md px-1 py-1 hover:bg-hover">
 						<span class="size-2.5 shrink-0 rounded-sm" style:background={current.colour}></span>
 						<span class="min-w-0 flex-1 truncate font-mono text-fg">{current.label}</span>
-						<button
+						<Pressable
 							type="button"
 							class="flex cursor-pointer border-0 bg-transparent p-0 text-muted opacity-60 group-hover:opacity-100 hover:text-fg"
 							title="Stop plotting {current.label}"
@@ -284,12 +284,12 @@
 							onclick={() => app.toggleCurrent(current.name)}
 						>
 							<X class="size-3.5" />
-						</button>
+						</Pressable>
 					</li>
 				{/each}
 				{#each unplottedCurrents as part (part.id)}
 					<li>
-						<button
+						<Pressable
 							type="button"
 							class="flex w-full cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-strong hover:bg-hover hover:text-fg"
 							onclick={() => app.toggleCurrent(part.name)}
@@ -297,7 +297,7 @@
 						>
 							<Plus class="size-3 shrink-0 text-muted" />
 							<span class="min-w-0 flex-1 truncate font-mono">I({part.name})</span>
-						</button>
+						</Pressable>
 					</li>
 				{:else}
 					{#if app.plottedCurrents.length === 0}
