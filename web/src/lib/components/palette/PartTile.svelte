@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Pressable } from '$lib/ui';
 	import type { Snippet } from 'svelte';
 
 	/**
@@ -17,23 +18,27 @@
 		oncontextmenu?: (event: MouseEvent) => void;
 		icon: Snippet;
 		dim?: boolean;
+		/** Out of reach for now: a run locks the drawing. */
+		disabled?: boolean;
 	};
 
-	let { label, title, active, onclick, oncontextmenu, icon, dim = false }: Props = $props();
+	let { label, title, active, onclick, oncontextmenu, icon, dim = false, disabled = false }: Props = $props();
 </script>
 
-<button
+<Pressable
 	type="button"
 	{title}
 	{onclick}
+	{disabled}
 	{oncontextmenu}
 	aria-pressed={active}
 	class="flex cursor-pointer flex-col items-center gap-0.5 rounded-md border px-0.5 pt-1.5 pb-1 text-center text-3xs leading-tight outline-none [contain-intrinsic-size:auto_56px] [content-visibility:auto] transition-colors focus-visible:focus-ring
 		{active
 		? 'border-accent bg-accent/15 text-fg [--symbol-stroke:var(--accent)]'
 		: 'border-transparent bg-transparent text-muted [--symbol-stroke:var(--symbol)] hover:border-border hover:bg-hover hover:text-fg'}
-		{dim ? 'opacity-70' : ''}"
+		{dim ? 'opacity-70' : ''}
+		disabled:pointer-events-none disabled:opacity-40"
 >
 	{@render icon()}
 	<span class="line-clamp-2 break-words">{label}</span>
-</button>
+</Pressable>

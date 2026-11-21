@@ -46,8 +46,8 @@ pub enum NetlistError {
 impl std::fmt::Display for NetlistError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NetlistError::Empty => write!(f, "the netlist has no components"),
-            NetlistError::DuplicateName(n) => write!(f, "two components are both named '{n}'"),
+            NetlistError::Empty => write!(f, "the netlist has no parts"),
+            NetlistError::DuplicateName(n) => write!(f, "two parts are named '{n}'"),
             NetlistError::BadTerminals { component, reason }
             | NetlistError::BadValue { component, reason } => {
                 write!(f, "{component}: {reason}")
@@ -69,7 +69,7 @@ fn check_values(component: &Component) -> Result<(), NetlistError> {
         (!(v.is_finite() && v > 0.0)).then(|| format!("{what} must be a positive number, not {v}"))
     };
     let not_negative = |what: &str, v: f64| -> Option<String> {
-        (!(v.is_finite() && v >= 0.0)).then(|| format!("{what} cannot be negative, and is {v}"))
+        (!(v.is_finite() && v >= 0.0)).then(|| format!("{what} cannot be negative ({v})"))
     };
     let finite = |what: &str, v: f64| -> Option<String> {
         (!v.is_finite()).then(|| format!("{what} must be a finite number, not {v}"))
@@ -95,7 +95,7 @@ fn check_values(component: &Component) -> Result<(), NetlistError> {
             // that is always on.
             (!(model.vto.is_finite() && model.vto >= 0.0)).then(|| {
                 format!(
-                    "the threshold is a magnitude for either channel and cannot be negative,                      and is {} (a negative one is a depletion-mode device, which is not modelled)",
+                    "the threshold cannot be negative ({}): depletion-mode devices are not modelled",
                     model.vto
                 )
             }),
@@ -813,9 +813,7 @@ impl Netlist {
         let refuse =
             |reason: String| Err(NetlistError::BadTerminals { component: name.clone(), reason });
         if control.trim().is_empty() {
-            return refuse(
-                "no voltage source is named to read the controlling current through".into(),
-            );
+            return refuse("no voltage source is named as the controller".into());
         }
         if control == name {
             return refuse("it cannot be controlled by its own current".into());
@@ -823,12 +821,10 @@ impl Netlist {
         match self.components.iter().find(|c| c.name() == control) {
             Some(Component::VoltageSource { .. }) => Ok(()),
             Some(other) => refuse(format!(
-                "its controlling current is read through a voltage source, and {control} is {kind}; put a 0 V source in series with it and name that instead",
+                "{control} is {kind}, not a voltage source; put a 0 V source in series with it and name that source",
                 kind = other.kind_label()
             )),
-            None => refuse(format!(
-                "there is no voltage source called {control} to read the controlling current through"
-            )),
+            None => refuse(format!("there is no voltage source called {control}")),
         }
     }
 
@@ -1059,7 +1055,7 @@ impl Netlist {
                     return Err(NetlistError::BadTerminals {
                         component: name.clone(),
                         reason: format!(
-                            "{} address lines is more than the {} a memory takes",
+                            "{} address lines; the maximum is {}",
                             address.len(),
                             Memory::MAX_ADDRESS_BITS
                         ),
@@ -1116,7 +1112,7 @@ impl Netlist {
                     |reason: String| NetlistError::BadValue { component: name.clone(), reason };
                 if !model.eq_ignore_ascii_case("atmega328p") {
                     return Err(bad_value(format!(
-                        "'{model}' is not a microcontroller this simulates; atmega328p is"
+                        "'{model}' is not simulated; only atmega328p is"
                     )));
                 }
                 let optiboot = match bootloader.as_deref() {
@@ -1124,7 +1120,7 @@ impl Netlist {
                     Some(b) if b.eq_ignore_ascii_case("optiboot") => true,
                     Some(b) => {
                         return Err(bad_value(format!(
-                            "'{b}' is not a bootloader this simulates; optiboot is"
+                            "'{b}' is not a simulated bootloader; only optiboot is"
                         )));
                     }
                 };
@@ -1137,7 +1133,7 @@ impl Netlist {
                 // is refused on the line that does not fit.
                 let image = avr::hex::parse(firmware, avr::FLASH_BYTES).map_err(|e| {
                     bad_value(format!(
-                        "the firmware is not a program for its {} KB of flash: {e}",
+                        "not a valid program for {} KB of flash: {e}",
                         avr::FLASH_BYTES / 1024
                     ))
                 })?;
@@ -1758,7 +1754,7 @@ mod tests {
 
         let corrupt = good.replacen("FF", "FE", 1);
         let err = compile(mcu_json(&corrupt, "{}")).unwrap_err();
-        assert!(err.to_string().contains("line 1: the checksum"), "{err}");
+        assert!(err.to_string().contains("line 1: checksum"), "{err}");
 
         // One byte at 0x8000, just past 32 KB, behind an extended address of
         // zero so the line number has something to point past.

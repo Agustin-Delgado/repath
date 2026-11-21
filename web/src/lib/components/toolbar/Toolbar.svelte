@@ -10,7 +10,7 @@
 		Share2,
 		Undo2
 	} from '@lucide/svelte';
-	import { Button, Menu, MenuItem, MenuLabel, MenuSeparator, ToolbarSeparator } from '$lib/ui';
+	import { Button, Menu, MenuGroup, MenuItem, MenuSeparator, ToolbarSeparator } from '$lib/ui';
 	import { overflowHint } from '$lib/ui/overflow';
 	import { SYMBOL_STANDARDS } from '$lib/schematic/symbols';
 	import { clearAndReport, copyStepsAndReport, openFromFile, saveToFile, shareAndReport } from '$lib/document';
@@ -45,15 +45,15 @@
 		stroke (10.5 for 7): at this size the full weight thins to a hairline.
 		Sized and set as in the logo: 1.16 times as tall as the h, standing on
 		the baseline, which the box's margin under the stroke would lift. Its
-		two colours are the brand's Signal blue and Settled green, which are the
-		accent and the overlay's volts ink.
+		two colours are the brand's fixed Signal blue and Settled green for dark
+		grounds, not theme tokens, so a theme change cannot recolour the logo.
 	-->
 	<strong class="flex shrink-0 items-baseline text-md font-semibold tracking-[-0.035em]">
 		<svg class="size-[0.95em] translate-y-[0.065em]" viewBox="24 16 96 96" aria-hidden="true">
 			<defs>
 				<linearGradient id="toolbar-signal" x1="40" x2="104" gradientUnits="userSpaceOnUse">
-					<stop offset=".25" style:stop-color="var(--accent)" />
-					<stop offset="1" style:stop-color="var(--overlay-volts)" />
+					<stop offset=".25" stop-color="#4ea8ff" />
+					<stop offset="1" stop-color="#7fe3a0" />
 				</linearGradient>
 			</defs>
 			<path
@@ -79,10 +79,10 @@
 		<Button
 			class="w-52 justify-start font-normal text-muted max-[1200px]:w-auto narrow:hidden"
 			onclick={onFind}
-			title="Find a part or a command (Ctrl+K)"
+			title="Find part or command (Ctrl+K)"
 		>
 			<Search />
-			<span class="max-[1200px]:hidden">Find anything…</span>
+			<span class="max-[1200px]:hidden">Find…</span>
 			<kbd class="ml-auto font-mono text-3xs max-[1200px]:hidden">Ctrl K</kbd>
 		</Button>
 		<span class="contents narrow:hidden"><ToolbarSeparator /></span>
@@ -93,15 +93,15 @@
 	</div>
 
 	<div class="hidden shrink-0 items-center gap-1 narrow:flex">
-		<Button variant="ghost" size="icon" onclick={onFind} title="Find a part or a command" aria-label="Find a part or a command">
+		<Button variant="ghost" size="icon" onclick={onFind} title="Find part or command" aria-label="Find part or command">
 			<Search />
 		</Button>
 		{#snippet more()}<Ellipsis />{/snippet}
 		<Menu label={more} bare size="icon" variant="ghost" aria-label="File, share and edit" title="File, share and edit">
-			<MenuItem onAction={() => shareAndReport(app, share)}><Share2 /> Copy a link to this circuit</MenuItem>
-			<MenuItem onAction={() => saveToFile(app)}><FileDown /> Save to a file</MenuItem>
-			<MenuItem onAction={() => openFromFile(app)}><FolderOpen /> Open a file…</MenuItem>
-			<MenuItem onAction={() => copyStepsAndReport(app)}><ListOrdered /> Copy the steps taken</MenuItem>
+			<MenuItem onAction={() => shareAndReport(app, share)}><Share2 /> Copy link</MenuItem>
+			<MenuItem onAction={() => saveToFile(app)}><FileDown /> Save to file</MenuItem>
+			<MenuItem onAction={() => openFromFile(app)}><FolderOpen /> Open file…</MenuItem>
+			<MenuItem onAction={() => copyStepsAndReport(app)}><ListOrdered /> Copy edit steps</MenuItem>
 			<MenuSeparator />
 			<MenuItem onAction={() => app.undo()}><Undo2 /> Undo</MenuItem>
 			<MenuItem onAction={() => app.redo()}><Redo2 /> Redo</MenuItem>
@@ -109,16 +109,17 @@
 				disabled={app.schematic.instances.length === 0 && app.schematic.wires.length === 0}
 				onAction={() => clearAndReport(app)}
 			>
-				<Eraser /> Clear the drawing
+				<Eraser /> Clear circuit
 			</MenuItem>
 			<MenuSeparator />
-			<MenuLabel>Symbols</MenuLabel>
-			{#each SYMBOL_STANDARDS as standard (standard.value)}
-				<MenuItem onAction={() => app.setSymbolStandard(standard.value)}>
-					<span class="w-3 text-accent">{app.symbolStandard === standard.value ? '✓' : ''}</span>
-					{standard.label}
-				</MenuItem>
-			{/each}
+			<MenuGroup label="Symbols">
+				{#each SYMBOL_STANDARDS as standard (standard.value)}
+					<MenuItem onAction={() => app.setSymbolStandard(standard.value)}>
+						<span class="w-3 text-accent">{app.symbolStandard === standard.value ? '✓' : ''}</span>
+						{standard.label}
+					</MenuItem>
+				{/each}
+			</MenuGroup>
 		</Menu>
 	</div>
 </header>

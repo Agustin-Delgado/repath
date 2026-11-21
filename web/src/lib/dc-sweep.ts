@@ -41,13 +41,13 @@ export function dcSweepValues(
 	step: number
 ): { values: number[] } | { error: string } {
 	if (![start, stop, step].every(Number.isFinite)) {
-		return { error: 'The sweep needs a number for its start, its stop and its step.' };
+		return { error: 'Start, stop and step must be numbers.' };
 	}
 	if (start === stop) return { values: [start] };
-	if (step === 0) return { error: 'The sweep’s step cannot be zero.' };
+	if (step === 0) return { error: 'The step cannot be zero.' };
 	if (Math.sign(step) !== Math.sign(stop - start)) {
 		return {
-			error: `A step of ${step} goes away from ${stop}, not towards it. Give the step the sign of stop − start.`
+			error: `A step of ${step} moves away from ${stop}. Give the step the sign of stop − start.`
 		};
 	}
 	// The slack is for a span that is a whole number of steps in decimal and a
@@ -56,7 +56,7 @@ export function dcSweepValues(
 	const count = steps + 1;
 	if (count > MAX_DC_POINTS) {
 		return {
-			error: `That sweep is ${count} points; the most one sweep solves is ${MAX_DC_POINTS}. Take a longer step.`
+			error: `${count} points: the maximum is ${MAX_DC_POINTS}. Use a larger step.`
 		};
 	}
 	const values = new Array<number>(count);

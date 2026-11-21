@@ -42,7 +42,8 @@ pub enum Waveform {
         #[serde(default)]
         period: f64,
     },
-    /// Piecewise linear, held flat outside the given range.
+    /// Piecewise linear, held flat outside the given range. The times are in
+    /// order, soonest first, as in SPICE.
     Pwl {
         points: Vec<(f64, f64)>,
     },
@@ -95,14 +96,16 @@ impl Waveform {
                 if t <= points[0].0 {
                     return points[0].1;
                 }
-                for w in points.windows(2) {
-                    let ((t0, v0), (t1, v1)) = (w[0], w[1]);
-                    if t <= t1 {
-                        let span = t1 - t0;
-                        return if span <= 0.0 { v1 } else { lerp(v0, v1, (t - t0) / span) };
-                    }
-                }
-                points[points.len() - 1].1
+                // The first corner at or after `t`, found by bisection: a contact
+                // operated by hand gets a bounce train a press, and this is asked
+                // on every Newton iteration of every step.
+                let i = 1 + points[1..].partition_point(|(pt, _)| *pt < t);
+                let Some(&(t1, v1)) = points.get(i) else {
+                    return points[points.len() - 1].1;
+                };
+                let (t0, v0) = points[i - 1];
+                let span = t1 - t0;
+                if span <= 0.0 { v1 } else { lerp(v0, v1, (t - t0) / span) }
             }
         }
     }
@@ -133,7 +136,9 @@ impl Waveform {
                         .fold(None::<f64>, |acc, bp| Some(acc.map_or(bp, |a: f64| a.min(bp))))
                 }
             }
-            Waveform::Pwl { points } => points.iter().map(|(pt, _)| *pt).find(|pt| *pt > t + EPS),
+            Waveform::Pwl { points } => {
+                points.get(points.partition_point(|(pt, _)| *pt <= t + EPS)).map(|(pt, _)| *pt)
+            }
         }
     }
 
@@ -762,6 +767,40 @@ mod tests {
         // And small again on the way down. The fall starts at rise + width,
         // so the edge spans 1e-3 + 1e-12 to 1e-3 + 2e-12.
         assert!(w.max_timestep(1e-3 + 1.5e-12) <= 1e-12);
+    }
+
+    /// The bisection is the scan it replaced, on corners that repeat an instant
+    /// (a step) and on instants that land exactly on a corner.
+    #[test]
+    fn pwl_lookup_agrees_with_a_walk_through_the_corners() {
+        let points: Vec<(f64, f64)> = (0..400)
+            .map(|k| ((k / 2) as f64 * 1e-3, if (k / 2) % 2 == k % 2 { 0.0 } else { 1.0 }))
+            .chain([(0.25, 3.0), (0.3, -2.0)])
+            .collect();
+        let walked_value = |t: f64| {
+            if t <= points[0].0 {
+                return points[0].1;
+            }
+            for w in points.windows(2) {
+                let ((t0, v0), (t1, v1)) = (w[0], w[1]);
+                if t <= t1 {
+                    let span = t1 - t0;
+                    return if span <= 0.0 { v1 } else { lerp(v0, v1, (t - t0) / span) };
+                }
+            }
+            points[points.len() - 1].1
+        };
+        let walked_next = |t: f64| points.iter().map(|(pt, _)| *pt).find(|pt| *pt > t + 1e-15);
+        let w = Waveform::Pwl { points: points.clone() };
+        for k in 0..3_200 {
+            let t = k as f64 * 1e-4 - 0.01;
+            assert_eq!(w.value(t), walked_value(t), "value at {t}");
+            assert_eq!(w.next_breakpoint(t), walked_next(t), "breakpoint after {t}");
+        }
+        for &(t, _) in &points {
+            assert_eq!(w.value(t), walked_value(t), "value on the corner at {t}");
+            assert_eq!(w.next_breakpoint(t), walked_next(t), "breakpoint after the corner at {t}");
+        }
     }
 
     #[test]

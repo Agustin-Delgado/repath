@@ -2,6 +2,7 @@
 	import type { Instance } from '$lib/schematic/model';
 	import { bjtFromCard, cardFor, diodeFromCard, mosfetFromCard, parseModelCards } from '$lib/spice';
 	import { app } from '$lib/state.svelte';
+	import { TextArea } from '$lib/ui';
 	import { hint, problem, sectionTitle } from './styles';
 
 	/**
@@ -37,9 +38,9 @@
 	const cardProblem = $derived.by(() => {
 		if (card || !text.trim()) return null;
 		const cards = parseModelCards(text);
-		if (cards.length === 0) return 'No .model card found in that text.';
+		if (cards.length === 0) return 'No .model card found.';
 		const types = [...new Set(cards.map((c) => c.type))].join(', ');
-		return `That card is a ${types}, which does not fit a ${label}.`;
+		return `A ${types} card does not fit a ${label}.`;
 	});
 
 	/**
@@ -53,14 +54,14 @@
 	<h3 class={sectionTitle}>SPICE model</h3>
 	{#if card}
 		<p class={hint}>
-			Using <strong class="text-fg">{card.name}</strong>. Its values override the fields above.
+			Uses <strong class="text-fg">{card.name}</strong>. It overrides the fields above.
 		</p>
 		{#if card.ignored.length > 0}
-			<p class={hint}>Not modelled here: {card.ignored.join(', ')}.</p>
+			<p class={hint}>Not modelled: {card.ignored.join(', ')}.</p>
 		{/if}
 	{/if}
-	<textarea
-		rows="3"
+	<TextArea
+		rows={3}
 		spellcheck="false"
 		placeholder=".model 2N3904 NPN(IS=6.734f BF=416.4 VAF=74.03 …)"
 		value={text}
@@ -79,6 +80,6 @@
 		}}
 		aria-label="SPICE model card"
 		class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none field"
-	></textarea>
+	/>
 	{#if cardProblem}<p class={problem} role="alert">{cardProblem}</p>{/if}
 </section>

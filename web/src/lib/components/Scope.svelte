@@ -1167,18 +1167,18 @@
 				{app.running ? 'Simulating…' : 'Press Run to simulate.'}
 			</p>
 		{:else if app.activeProbes.length === 0}
-			<p class="empty">Tick a net on the right to plot it.</p>
+			<p class="empty">Tick a net to plot it.</p>
 		{/if}
 
 		{#if narrowed}
-			<p class="memory" title="The memory is a fixed number of samples, and this circuit uses them quickly. A shorter stop time is a window it can fill.">
+			<p class="memory" title="Sample memory is fixed. Use a shorter timebase to see the full window.">
 				memory holds {formatWithUnit(coverage, 's', 3)} of the {formatWithUnit(app.stopTime, 's', 3)} window
 			</p>
 		{/if}
 
 		{#if hiddenLanes > 0}
-			<p class="lanes-hidden" title="Each lane needs some height to tell its two levels apart. Drag the scope taller, or untick a net on the right.">
-				+{hiddenLanes} {hiddenLanes === 1 ? 'lane' : 'lanes'} not shown — make the scope taller
+			<p class="lanes-hidden" title="Make the scope taller, or untick a net.">
+				+{hiddenLanes} {hiddenLanes === 1 ? 'lane' : 'lanes'} hidden
 			</p>
 		{/if}
 
@@ -1205,7 +1205,7 @@
 					<span class="value" style:color={entry.colour}>{entry.label} = {entry.text}</span>
 				{/each}
 				{#if marker === null}
-					<span class="hint">shift-click to measure from a point</span>
+					<span class="hint">shift-click: measure Δ</span>
 				{/if}
 			</div>
 		{/if}
@@ -1233,7 +1233,7 @@
 					active={app.spectrum.on}
 					aria-pressed={app.spectrum.on}
 					onclick={() => app.setSpectrum({ on: !app.spectrum.on })}
-					title="The spectrum of a trace, under the scope: tones, levels and THD"
+					title="Spectrum (FFT): tones, levels, THD"
 				>
 					fft
 				</Button>
@@ -1284,7 +1284,7 @@
 							{/if}
 							{#if row.averaged}
 								<dt></dt>
-								<dd class="folded" title="This node hangs off a logic net switching faster than this timebase can show, so the engine drives it with the net's time average rather than every edge. The trace is that average; zoom the window in to see the edges.">
+								<dd class="folded" title="Driven by a logic net that switches faster than this timebase. The trace is the time average. Zoom in to see the edges.">
 									averaged
 								</dd>
 							{/if}
@@ -1304,16 +1304,16 @@
 								<dt>duty</dt>
 								<dd>{Math.round(m.duty * 100)}%</dd>
 								<dt>cycles</dt>
-								<dd title="Whole cycles the numbers are averaged over">{m.cycles}</dd>
+								<dd title="Whole cycles in the average">{m.cycles}</dd>
 								{#if m.folded}
 									<dt></dt>
-									<dd class="folded" title="Faster than this timebase can show: the numbers are averaged over the busy span, which the lane draws as a band. Zoom the window in to see the edges.">
+									<dd class="folded" title="Switches faster than this timebase. Values are averaged over the busy span (the band). Zoom in to see the edges.">
 										busy
 									</dd>
 								{/if}
 							</dl>
 						{:else}
-							<span class="waiting" title="A period is two rising edges, and this lane has not had them yet. Leave it running.">
+							<span class="waiting" title="Needs two rising edges">
 								no full cycle yet
 							</span>
 						{/if}
@@ -1343,7 +1343,7 @@
 			<footer>
 				<span>{app.result.stats.accepted_steps} steps</span> ·
 				<span>{app.result.stats.newton_iterations} iterations</span> ·
-				<span title="Time spent solving, on this machine">{app.result.elapsedMs.toFixed(0)} ms</span>
+				<span title="Solve time on this machine">{app.result.elapsedMs.toFixed(0)} ms</span>
 			</footer>
 		{/if}
 		{/snippet}

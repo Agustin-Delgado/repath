@@ -2,6 +2,7 @@
 	import Examples from './Examples.svelte';
 	import Palette from './Palette.svelte';
 	import { findsPart } from '$lib/shortcuts';
+	import { Tabs } from '$lib/ui';
 
 	/**
 	 * The left panel: parts to draw with, or whole circuits to start from.
@@ -49,36 +50,19 @@
 	}
 
 	const TABS: Array<{ id: Tab; label: string }> = [
-		{ id: 'parts', label: 'Components' },
+		{ id: 'parts', label: 'Parts' },
 		{ id: 'examples', label: 'Examples' }
 	];
 </script>
 
 <svelte:window onkeydown={onWindowKey} />
 
-<div class="flex h-full min-h-0 w-full min-w-0 flex-col">
-	<div role="tablist" aria-label="Sidebar" class="flex shrink-0 gap-1 border-b border-border px-2 pt-2">
-		{#each TABS as { id, label } (id)}
-			<button
-				type="button"
-				role="tab"
-				id="sidebar-tab-{id}"
-				aria-selected={tab === id}
-				aria-controls="sidebar-panel"
-				onclick={() => choose(id)}
-				class="-mb-px cursor-pointer border-0 border-b-2 bg-transparent px-2 pb-1.5 text-ui {tab === id
-					? 'border-accent text-fg'
-					: 'border-transparent text-muted hover:text-fg'}"
-			>
-				{label}
-			</button>
-		{/each}
-	</div>
-	<div id="sidebar-panel" role="tabpanel" aria-labelledby="sidebar-tab-{tab}" class="min-h-0 flex-1">
-		{#if tab === 'parts'}
+<Tabs items={TABS} value={tab} onChange={choose} aria-label="Sidebar" class="h-full w-full">
+	{#snippet panel(id)}
+		{#if id === 'parts'}
 			<Palette focusSearch={searching} />
 		{:else}
 			<Examples />
 		{/if}
-	</div>
-</div>
+	{/snippet}
+</Tabs>

@@ -32,17 +32,18 @@
 			label="Group"
 			value={app.selectedGroup.name}
 			commit={(raw) => (app.selectedGroup ? app.renameGroup(app.selectedGroup.id, raw) : null)}
+			disabled={app.locked}
 			aria-label="Group name"
 		/>
 		<p class={hint}>
-			{app.selectedGroup.members.length} components. Drag the name to move them together, or a part out
-			of the frame to take it out of the group.
+			{app.selectedGroup.members.length} parts. Drag the name to move the group. Drag a part out of the
+			frame to remove it from the group.
 		</p>
 		<div class="flex gap-1.5">
-			<Button class="flex-1" onclick={() => app.ungroupSelection()}>
+			<Button class="flex-1" disabled={app.locked} onclick={() => app.ungroupSelection()}>
 				<Ungroup /> Ungroup <kbd class="font-mono text-3xs text-muted">U</kbd>
 			</Button>
-			<Button class="flex-1" onclick={() => app.boxSelection()}>
+			<Button class="flex-1" disabled={app.locked} onclick={() => app.boxSelection()}>
 				<Boxes /> Box up <kbd class="font-mono text-3xs text-muted">B</kbd>
 			</Button>
 		</div>
@@ -51,19 +52,19 @@
 			<PartPanel {instance} />
 		{/key}
 	{:else if count > 1}
-		<h3 class={sectionTitle}>{count} components selected</h3>
+		<h3 class={sectionTitle}>{count} parts selected</h3>
 		<div class="flex gap-1.5">
-			<Button class="flex-1" onclick={() => app.groupSelection()}>
+			<Button class="flex-1" disabled={app.locked} onclick={() => app.groupSelection()}>
 				<Group /> Group <kbd class="font-mono text-3xs text-muted">G</kbd>
 			</Button>
-			<Button class="flex-1" onclick={() => app.boxSelection()}>
+			<Button class="flex-1" disabled={app.locked} onclick={() => app.boxSelection()}>
 				<Boxes /> Box up <kbd class="font-mono text-3xs text-muted">B</kbd>
 			</Button>
 		</div>
 		<!-- Keys are no help on a touch screen; the phone bar has Rotate and Delete. -->
 		<p class="{hint} [@media(pointer:coarse)]:hidden">
-			<kbd class={kbd}>R</kbd> rotates them together, <kbd class={kbd}>Del</kbd> removes them, and
-			<kbd class={kbd}>Ctrl</kbd>+<kbd class={kbd}>D</kbd> makes a copy.
+			<kbd class={kbd}>R</kbd> rotate · <kbd class={kbd}>Del</kbd> delete ·
+			<kbd class={kbd}>Ctrl</kbd>+<kbd class={kbd}>D</kbd> duplicate
 		</p>
 	{:else}
 		<!--
@@ -82,18 +83,17 @@
 					<div class="text-3xs text-muted">{wires === 1 ? 'wire' : 'wires'}</div>
 				</div>
 			</div>
-			<p class={hint}>Select a part to edit its values.</p>
 		</section>
 
 		<!-- Keys are no help on a touch screen. -->
 		<section class="flex flex-col gap-1.5 [@media(pointer:coarse)]:hidden">
-			<h3 class={sectionTitle}>Getting around</h3>
+			<h3 class={sectionTitle}>Keys</h3>
 			<ul class="m-0 flex list-none flex-col gap-1 p-0 text-3xs text-muted">
-				<li><kbd class={kbd}>/</kbd> find a part</li>
-				<li><kbd class={kbd}>Ctrl</kbd>+<kbd class={kbd}>K</kbd> find any part or command</li>
-				<li>Drag from a pin to draw a wire</li>
-				<li><kbd class={kbd}>R</kbd> rotate · <kbd class={kbd}>Shift</kbd>-click keeps placing</li>
-				<li><kbd class={kbd}>Space</kbd> run or pause · <kbd class={kbd}>F</kbd> fit on screen</li>
+				<li><kbd class={kbd}>/</kbd> find part</li>
+				<li><kbd class={kbd}>Ctrl</kbd>+<kbd class={kbd}>K</kbd> find part or command</li>
+				<li>Drag from a pin: draw wire</li>
+				<li><kbd class={kbd}>R</kbd> rotate · <kbd class={kbd}>Shift</kbd>-click: place again</li>
+				<li><kbd class={kbd}>Space</kbd> run/pause · <kbd class={kbd}>F</kbd> fit to screen</li>
 			</ul>
 		</section>
 	{/if}

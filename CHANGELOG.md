@@ -11,6 +11,69 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Shorter, plainer interface text
+
+**Every label, hint, toast and error now says what you need and stops.** Text
+that repeated what the screen already showed is gone; what is left keeps the
+units, limits, pin maps and file formats, uses one word for one thing (a part,
+the circuit, a program), and errors still name the part and the reason.
+
+[#108](https://github.com/Agustin-Delgado/repath/pull/108)
+
+---
+
+## 21 November 2026 — A run you can operate but not rearrange, and a knob for the pot
+
+**While a circuit runs, the drawing holds still.** A drag no longer moves a
+part, the palette greys out, and a note at the foot of the drawing reads
+"Running. Stop to edit." What still works is what you would touch on a
+powered bench: throw a switch, hold a button, turn a knob, set a value the
+running circuit takes in place, add a probe, pan, zoom and select a part to
+read it. Stop gives the drawing back.
+
+**A potentiometer turns with a knob.** In the inspector, drag it, scroll it,
+use the arrow keys, or double-click it to type a percentage. It shows the
+resistance on each side of the wiper. During a run, drag or scroll the pot
+on the drawing itself and the circuit follows. The symbol draws the wiper
+where it is set. A variable capacitor turns the same way.
+
+[#107](https://github.com/Agustin-Delgado/repath/pull/107)
+
+---
+
+## 21 November 2026 — A run stays smooth however often you press a button
+
+**Pressing a button again and again during a run no longer makes it lag.**
+On the Arduino Uno blink example, every press of the button made each later
+frame a little slower, until after a hundred or so frames took three times as
+long and the drawing stuttered, and it stayed that way after you stopped
+pressing. A run now keeps a steady frame rate through hundreds of presses,
+with no pauses. On a machine too busy to keep up, the run goes slightly slower
+than real time instead of freezing. The inspector says how many times a part
+was operated and lists only the last few, rather than every one. And the
+drawing no longer goes blank while you resize the window or drag a panel's
+edge.
+
+[#109](https://github.com/Agustin-Delgado/repath/pull/109)
+
+---
+
+## 21 November 2026 — Every control on the same component library
+
+**The buttons, boxes, tabs and folding headings are now all
+`@human-kit/ui`, at its first stable line, 1.5.3.** Nothing should look
+different. What changes is underfoot: the Parts and Examples tabs are
+one stop for Tab, with the arrow keys between them; the shelf headings and
+*More settings* say which panel they fold; the search boxes' cross is no
+longer a stop of its own, since Escape already empties the box; the
+*Symbols* heading in the phone menu names its group for a screen reader; and
+closing the Ctrl+K palette with Escape puts the focus back where it was,
+rather than at the top of the page.
+
+[#106](https://github.com/Agustin-Delgado/repath/pull/106)
+
+---
+
 ## 21 November 2026 — Large circuits run in a fraction of the time
 
 **A circuit of hundreds of parts no longer slows to a crawl.** The engine used

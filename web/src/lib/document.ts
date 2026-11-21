@@ -61,7 +61,7 @@ export function openFromFile(app: App): void {
 export async function copySteps(app: App): Promise<number | null> {
 	const text = app.trace.toText();
 	if (!text) {
-		app.notice = 'Nothing has been done yet, so there is nothing to hand over.';
+		app.notice = 'No edit steps to copy.';
 		return null;
 	}
 	try {
@@ -85,14 +85,14 @@ export async function shareAndReport(app: App, share: () => Promise<string>): Pr
 	try {
 		url = await share();
 	} catch (cause) {
-		app.notice = `The link could not be made. ${cause instanceof Error ? cause.message : String(cause)}`;
+		app.notice = `Could not make the link. ${cause instanceof Error ? cause.message : String(cause)}`;
 		return;
 	}
 	const warning = linkWarning(url);
 	try {
 		await navigator.clipboard.writeText(url);
 		if (warning) app.notice = `Link copied. ${warning}`;
-		else toasts.show('Link copied — it holds the whole circuit');
+		else toasts.show('Link copied');
 	} catch {
 		// Clipboard access can be refused. The link goes where it can be copied
 		// by hand, since it is no longer put in the address bar.
@@ -103,7 +103,7 @@ export async function shareAndReport(app: App, share: () => Promise<string>): Pr
 /** Empty the drawing, and say how to get it back. */
 export function clearAndReport(app: App): void {
 	app.clear();
-	toasts.show('Drawing cleared — Ctrl+Z brings it back');
+	toasts.show('Circuit cleared. Ctrl+Z to undo.');
 }
 
 export async function copyStepsAndReport(app: App): Promise<void> {

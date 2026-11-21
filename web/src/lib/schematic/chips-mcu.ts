@@ -55,14 +55,12 @@ export const PORT_PULL_UP_OHMS = 35e3;
  * nobody.
  */
 const UNSIMULATED: Readonly<Record<string, string>> = {
-	temperature:
-		'The temperature sensor is not simulated yet: a conversion of it reads as 0 V, not as the chip’s temperature.',
+	temperature: 'Temperature sensor not simulated: a conversion reads 0 V.',
 	'adc-trigger':
-		'Auto-triggering the converter from a timer, the comparator or an external interrupt is not simulated yet: only free running is, so no conversion it would start ever starts.',
-	i2c: 'Nothing answered on the I²C bus: the program sent an address no device on it has, so Wire.endTransmission() returns 2 and Wire.requestFrom() 0. Check the address in the sketch against the module’s (0x27 and 0x3F are the usual two), and that its SDA goes to A4 and its SCL to A5 — on an Uno, the SDA and SCL pins are the same two.',
-	spi: 'The SPI is in slave mode, which is not simulated: from here on no transfer moves SCK or MOSI, and SPI.transfer() waits for ever. Either the program made it a slave, or D10 (SS, PB2) was an input reading low while it was the master — which the chip takes as another master taking the bus, and drops to slave. SPI.begin() makes D10 an output; keep it one, or hold it high.',
-	comparator:
-		'The analog comparator is not simulated yet: its output reads 0 whatever is on its pins, and it never interrupts.'
+		'ADC auto-trigger not simulated: only free-running mode works. Triggered conversions never start.',
+	i2c: 'No device answered the I²C address. Wire.endTransmission() returns 2, Wire.requestFrom() returns 0. Check the address (usually 0x27 or 0x3F), SDA on A4 and SCL on A5.',
+	spi: 'SPI slave mode not simulated: SCK and MOSI stop, SPI.transfer() never returns. Cause: the program set slave mode, or D10 (SS, PB2) was a low input in master mode. SPI.begin() makes D10 an output: keep it an output, or hold it high.',
+	comparator: 'Analog comparator not simulated: its output reads 0 and it never interrupts.'
 };
 
 /**
@@ -79,7 +77,7 @@ export function isUnsimulated(peripheral: string): boolean {
 export function unsimulatedMessage(peripheral: string): string {
 	return (
 		UNSIMULATED[peripheral] ??
-		`The program used a part of the chip that is not simulated yet (${peripheral}).`
+		`Peripheral not simulated: ${peripheral}.`
 	);
 }
 
@@ -99,7 +97,7 @@ export const MCU_CHIPS: readonly ChipDef[] = [
 	{
 		id: 'ATmega328P',
 		role: 'microcontrollers',
-		description: "The Arduino Uno's microcontroller, running a compiled .hex",
+		description: 'Arduino Uno microcontroller; runs a compiled .hex',
 		aliases: [
 			'arduino', 'uno', 'nano', 'avr', 'atmega', 'atmega328', '328p', '328',
 			'mcu', 'microcontroller', 'micro', 'sketch'

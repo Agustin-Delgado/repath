@@ -373,7 +373,7 @@ export const EXAMPLES: Example[] = [
 	{
 		id: 'rc-lowpass',
 		name: 'RC low-pass',
-		description: 'A square wave through a first-order filter, and the exponential it charges along.',
+		description: 'A square wave through a first-order RC filter. The capacitor charges exponentially.',
 		stopTime: 5e-3,
 		build: () =>
 			build(
@@ -410,7 +410,7 @@ export const EXAMPLES: Example[] = [
 		id: 'rectifier',
 		name: 'Half-wave rectifier',
 		description:
-			'A diode and a smoothing capacitor turning AC into lumpy DC — a nonlinear circuit that has to converge on every step.',
+			'A diode and a smoothing capacitor turn AC into DC with ripple.',
 		stopTime: 60e-3,
 		build: () =>
 			build(
@@ -457,7 +457,7 @@ export const EXAMPLES: Example[] = [
 		id: 'led-driver',
 		name: 'LED driver',
 		description:
-			'Two LEDs across the same 5 V. One through 330 Ω lights and stays lit; one through 33 Ω — a decimal point in the wrong place — lights brighter and lasts about half a millisecond.',
+			'Two LEDs on 5 V. The LED with 330 Ω stays lit. The LED with 33 Ω is brighter and burns out after about 0.5 ms.',
 		stopTime: 2e-3,
 		build: () =>
 			build(
@@ -492,7 +492,7 @@ export const EXAMPLES: Example[] = [
 		id: 'common-emitter',
 		name: 'Common-emitter amplifier',
 		description:
-			'A BJT biased into its active region by RB, amplifying and inverting a 10 mV signal coupled in through C1.',
+			'A BJT biased by RB amplifies and inverts a 10 mV signal coupled through C1.',
 		stopTime: 5e-3,
 		build: () =>
 			build(
@@ -560,7 +560,7 @@ export const EXAMPLES: Example[] = [
 		id: 'mixed-signal',
 		name: 'Analog into logic',
 		description:
-			'A sine crosses the logic thresholds, drives a NOT gate, and comes back out into an RC load. The analog-digital bridges are inserted for you.',
+			'A sine drives a NOT gate into an RC load. The analog-digital bridges are automatic.',
 		stopTime: 400e-6,
 		build: () =>
 			build(
@@ -609,7 +609,7 @@ export const EXAMPLES: Example[] = [
 		id: 'rlc-bandpass',
 		name: 'RLC band-pass',
 		description:
-			'A series resonant circuit, meant to be looked at in the frequency domain. V1 carries the AC drive, so the sweep measures the response from it. The output is taken across R1, at the bottom of the chain: at 1.59 kHz the inductor and the capacitor cancel and all of the drive appears across it, and either side of that one of them is in the way. OUT is the band-pass; the node between L1 and C1 rises to a peak at resonance, where the two are swapping energy, and falls away to nothing above it.',
+			'Series RLC, for the frequency analysis. OUT, across R1, peaks at resonance, 1.59 kHz. The node between L1 and C1 peaks at resonance and falls to zero above it.',
 		stopTime: 2e-3,
 		analysis: 'frequency',
 		frequencyRange: { start: 10, stop: 1e6 },
@@ -652,7 +652,7 @@ export const EXAMPLES: Example[] = [
 		id: 'bcd-display',
 		name: 'BCD to a digit',
 		description:
-			'Four switches, a 4511 and a seven-segment digit: the chain every counter ends in. The switches spell a number in binary, the decoder turns four bits into seven bars, and the display is the bars. It arrives showing 5. The resistors are not optional even though the 4511 is called a driver — it drives, it does not limit — and the three control pins are held at the levels that mean "no latch, no blanking, no lamp test", because on a real board they cannot be left in the air.',
+			'Four switches set a BCD number. A 4511 decodes it to a seven-segment digit, which shows 5. Each segment needs its resistor: the 4511 does not limit current. LT, BI and LE are tied to their inactive levels.',
 		stopTime: 20e-6,
 		build: () => {
 			/** Where the decoder sits; its sixteen legs are 20 apart down each side. */
@@ -754,7 +754,7 @@ export const EXAMPLES: Example[] = [
 		id: 'cd4027',
 		name: 'CD4027 divider',
 		description:
-			'Half a CD4027 wired the way its datasheet says to make a divide-by-two: J and K both high, set and reset held down, and the output changes on every rising edge and on no other. The chip is the part rather than the gates inside it, so it has two legs it cannot do without — leave VDD or VSS unwired and the drawing tells you — and a whole second flip-flop nobody is using, whose inputs are tied to ground rather than left in the air. That is not tidiness: a CMOS input floating between the rails turns the stage into an amplifier and it draws current and oscillates. The buffer before the lamp is not decoration either, since Q feeds back into the flip-flop and a lamp hung straight on it stops the pair settling.',
+			'Half a CD4027 as a divide-by-two: J and K high, set and reset low. Q toggles on each rising clock edge. The unused flip-flop has its inputs tied to ground.',
 		stopTime: 20e-6,
 		build: () =>
 			build(
@@ -814,7 +814,7 @@ export const EXAMPLES: Example[] = [
 		id: 'ne555-blinker',
 		name: '555 blinker',
 		description:
-			'The most built circuit there is: a 555 wired astable, blinking an LED about twice a second. The capacitor charges through both resistors and discharges through the lower one only, between a third and two thirds of the supply — which is why the rate is 1.44 / ((R1 + 2·R2)·C) whatever the supply is, and why the LED is on a little longer than it is off. RESET is tied high because a 555 with RESET left floating is a 555 that does nothing, and CONT gets its 10 nF so that noise on the supply does not move the thresholds. Probe the capacitor to watch it swing between the two thresholds.',
+			'A 555 astable blinks an LED about twice a second. f = 1.44 / ((R1 + 2·R2)·C), at any supply voltage. RESET is tied high. CONT has 10 nF to ground.',
 		stopTime: 2,
 		build: () =>
 			build(
@@ -889,7 +889,7 @@ export const EXAMPLES: Example[] = [
 		id: 'eeprom-display',
 		name: 'EEPROM and a scanned display',
 		description:
-			'Four digits on twelve pins, lit one at a time. Two clocks count 0 to 3 over and over; the 74139 turns that count into which digit\'s common pin is pulled low, and the same count is the address of a 28C16 whose first four bytes are the segment patterns for 1, 2, 3 and 4 — the EEPROM is the lookup table a 7447 would otherwise be, and changing the digits is editing its contents in the inspector. Each digit is lit a quarter of the time and looks a quarter as bright. The decoder sinks a whole digit through one output, which is why the resistors are no smaller: at 100 Ω a digit with seven bars lit drops so much inside the 74139 that it goes dim beside a 1, and a board meant to be bright puts a transistor on each digit pin. Slow the playback right down and the digits take turns.',
+			'Four multiplexed digits. A 2-bit count selects the digit through a 74139 and addresses a 28C16. The EEPROM holds the segment patterns for 1 to 4: edit its contents in the inspector. Each digit is lit a quarter of the time.',
 		stopTime: 20e-3,
 		build: () => {
 			const parts: Placed[] = [
@@ -1038,7 +1038,7 @@ export const EXAMPLES: Example[] = [
 		id: 'atmega-blink',
 		name: 'Microcontroller blink',
 		description:
-			"An ATmega328P, the chip on an Arduino Uno, running a program. D13 blinks once a second and D12 lights while the button on D2 is held down — with no resistor on D2, because the program turns on the pin's own pull-up, the way INPUT_PULLUP does in a sketch. Each time D13 comes on the chip sends the next digit of a count over serial; select it to read them. The other button pulls RESET low, which starts the program, and the count, again. The program is a few dozen instructions assembled by hand; to run a sketch of your own, export its .hex from the Arduino IDE and load it from the chip's inspector.",
+			'A bare ATmega328P. D13 blinks at 1 Hz. D12 lights while the D2 button is held; D2 uses the internal pull-up. Each D13 blink sends the next count digit on serial. The other button resets the chip.',
 		stopTime: 4,
 		build: () =>
 			build(
@@ -1105,7 +1105,7 @@ export const EXAMPLES: Example[] = [
 		id: 'uno-blink',
 		name: 'Arduino Uno blink',
 		description:
-			"The same program as the microcontroller blink, on the board instead of the bare chip — so there is nothing to wire for it to run: the board is powered from USB, and its own L LED blinks on pin 13 once a second. The LED on pin 12 lights while the button on pin 2 is held down, with no resistor on pin 2 because the program turns on the pin's pull-up, the way INPUT_PULLUP does. The other button is a reset button: RESET has the board's pull-up on it, so pressing it starts the program, and the count it sends over serial, again. Select the board to read the count, or to load a .hex of your own from the Arduino IDE.",
+			'The microcontroller blink program on an Uno board, on USB power. The L LED blinks on pin 13. The pin 12 LED lights while the pin 2 button is held. The other button resets the board.',
 		stopTime: 4,
 		build: () =>
 			build(
@@ -1149,7 +1149,7 @@ export const EXAMPLES: Example[] = [
 		id: 'uno-led-matrix',
 		name: 'Arduino Uno and an SPI LED matrix',
 		description:
-			"An 8×8 LED matrix module on a MAX7219, driven from the Uno's SPI: DIN on pin 11 (MOSI), CLK on pin 13 (SCK) and CS on pin 10, the wiring of every LedControl tutorial. The program sets the driver up and then shows a smiley and a heart in turn, half a second each, sending each row as a two-byte word — the register, then its dots — between CS going low and coming back up. The probes are on the three wires: zoom the scope in to a few microseconds round a picture change to see SCK clock at 8 MHz, MOSI change on its falling edges, and CS rise after every sixteenth bit. The program is assembled by hand to do what the same sketch with SPI.h does; load a .hex of your own from the board's inspector to run yours.",
+			'A MAX7219 8×8 matrix on the Uno SPI: DIN on 11 (MOSI), CLK on 13 (SCK), CS on 10. It shows a smiley and a heart, 0.5 s each. Probes are on the three SPI wires.',
 		stopTime: 2,
 		build: () =>
 			build(
@@ -1198,7 +1198,7 @@ export const EXAMPLES: Example[] = [
 		id: 'uno-buzzer',
 		name: 'Arduino Uno melody',
 		description:
-			"A piezo buzzer on pin 11 playing the first line of Twinkle, Twinkle, Little Star, over and over. The program drives the pin straight from Timer2, toggling it on every compare match — what tone() does with an interrupt, done in hardware — so each note is a square wave at the frequency the timer's count gives: C 523 Hz up to A 880 Hz. The buzzer shows the pitch it is being driven at while it sounds; turn Sound on below the drawing to hear it. A 4-second window at 1× is real time, so the tune plays at its tempo; at 0.25× each note keeps its pitch and lasts four times as long. The probe on pin 11 shows the square wave on the scope.",
+			'A piezo on pin 11 plays Twinkle, Twinkle, Little Star. Timer2 toggles the pin in hardware: C 523 Hz to A 880 Hz. Turn Sound on to hear it. A 4 s window at 1× is real time.',
 		stopTime: 4,
 		build: () =>
 			build(
@@ -1227,7 +1227,7 @@ export const EXAMPLES: Example[] = [
 		id: 'uno-servo-knob',
 		name: 'Servo on a knob',
 		description:
-			"What the Servo library's Knob sketch does: an Uno reads the potentiometer on A0 and sends the servo on pin 9 to the matching angle, 0° with the wiper at ground and 180° at 5V. Timer1 makes the pulses in hardware, one every 20 ms, and the servo reads their width — 544 µs for 0°, 2400 µs for 180° — and its horn swings there at the motor's speed, a tenth of a second for 60°. It starts at 90°, so the first thing it does is turn to the quarter the knob is set at. Set the wiper somewhere else in the potentiometer's inspector while it runs and the horn follows it from that instant, the way it would follow a hand on the knob, with everything before the turn left as it was; select the servo to read its angle, the last pulse and the 10 mA it draws from the board's 5V. The program is a few dozen instructions assembled by hand; a sketch using the Servo library runs the same way, loaded as a .hex from the board's inspector.",
+			'The Servo library Knob sketch. The Uno reads the potentiometer on A0 and sets the servo on pin 9: 0° at 0 V, 180° at 5 V. Pulses are 544–2400 µs every 20 ms. The servo starts at 90°.',
 		stopTime: 2,
 		build: () =>
 			build(
@@ -1266,7 +1266,7 @@ export const EXAMPLES: Example[] = [
 		id: 'seven-segment',
 		name: 'Seven-segment digit',
 		description:
-			'Eight LEDs in the shape of a number, a switch each, and a resistor per segment because they are still LEDs. It arrives showing 4 — b, c, f and g — and every other digit is a matter of which switches are down. The common pin goes to ground, which is what common-cathode means: a segment lights when its own switch drives it high. One resistor on the common pin instead of eight would have been cheaper and wrong: the digit would dim as more bars came on.',
+			'A common-cathode digit with one switch and one resistor per segment. It shows 4 (b, c, f, g). One resistor on the common pin would make the digit dim as more segments light.',
 		stopTime: 20e-6,
 		build: () => {
 			// b, c, f and g lit is a 4.
@@ -1317,7 +1317,7 @@ export const EXAMPLES: Example[] = [
 		id: 'uno-count-digit',
 		name: 'Uno counting on a digit',
 		description:
-			"An Arduino Uno counting 0 to 9 on a seven-segment digit, a number every half second, through a 74HC595 — which is how a sketch drives eight segments from three pins. The program shifts each digit's pattern into the 595 a bit at a time on D8 and D12, then pulses D10, and the outputs take all eight bits at once, so the digit never shows the bits passing through. Each segment is still an LED with a resistor of its own: the 595 drives, it does not limit. OE is held low so the outputs are on, and SRCLR high so nothing clears them. The program is a few dozen instructions assembled by hand; select the board to load a sketch of your own.",
+			'An Uno counts 0 to 9 on a seven-segment digit through a 74HC595, one number every 0.5 s. The program shifts each pattern in on D8 and D12, then pulses D10 to latch it. Each segment has its own resistor. OE is low, SRCLR is high.',
 		stopTime: 5.25,
 		build: () => {
 			/** The 595's legs: 20 apart, pin 1 at the top left, pin 16 at the top right. */
@@ -1411,7 +1411,7 @@ export const EXAMPLES: Example[] = [
 		id: 'd-latch',
 		name: 'D latch, level-triggered',
 		description:
-			'Four NAND gates and no flip-flop part in sight, because a flip-flop is not a part — it is a pair of gates each holding the other up. While Enable is high the output follows D straight through, which is what level-triggered means. Drop Enable and it keeps whatever D was at that moment, however much D moves afterwards, and that keeping is the whole of the memory. Compare it with the edge-triggered one, which is two of these back to back.',
+			'A D latch from four NAND gates. While Enable is high, Q follows D. When Enable goes low, Q holds the last value of D.',
 		stopTime: 20e-6,
 		build: () =>
 			build(
@@ -1486,7 +1486,7 @@ export const EXAMPLES: Example[] = [
 		id: 'master-slave',
 		name: 'D flip-flop, edge-triggered',
 		description:
-			'Two of the level-triggered latches back to back on opposite halves of the clock, which is where the edge comes from. While the clock is low the first one follows D and the second holds; when the clock rises the first stops listening and the second copies what it caught. The two are never transparent at the same time, so a change on D can never run straight through to the output — and that, rather than any part called a flip-flop, is what edge-triggered means.',
+			'Two D latches on opposite clock phases. The first follows D while the clock is low. On the rising edge the second copies it. D never passes straight to the output.',
 		stopTime: 20e-6,
 		build: () => {
 			// Both latches sit at the same height, so the cascade is one straight wire
@@ -1605,7 +1605,7 @@ export const EXAMPLES: Example[] = [
 		id: 'flip-flop',
 		name: 'D flip-flop',
 		description:
-			'A latch that only listens on the edge of a clock. Flip the input while it is running and nothing happens until the next rising edge, which is the point of it: everything on the board changes at the same instant instead of whenever its own gates finish. The two lamps are Q and its opposite.',
+			'Q changes only on the rising clock edge. Flip D during a run: nothing happens until the next edge. The two lamps show Q and Q̅.',
 		stopTime: 20e-6,
 		build: () =>
 			build(
@@ -1646,7 +1646,7 @@ export const EXAMPLES: Example[] = [
 		id: 'divider',
 		name: 'Clock divider',
 		description:
-			'A toggle flip-flop halving a clock. Purely digital, so it runs on the event queue with no matrix at all.',
+			'A toggle flip-flop halves a clock. Digital only: it runs on the event queue, with no matrix.',
 		stopTime: 20e-6,
 		build: () =>
 			build(
@@ -1671,7 +1671,7 @@ export const EXAMPLES: Example[] = [
 		id: 'ripple-counter',
 		name: '4-bit ripple counter',
 		description:
-			'Four toggle flip-flops in a row, each clocked by the one above it, counting 0 to 15 in binary on the lamps. Ripple, because nothing here shares a clock: each stage waits for the one before it to fall, so the count arrives at the top a few gate delays after it arrives at the bottom and the number is briefly wrong on the way past.',
+			'Four toggle flip-flops, each clocked by the previous one, count 0 to 15 on the lamps. The count ripples: higher bits change a few gate delays later.',
 		stopTime: 40e-6,
 		build: () => {
 			// Bit 0 on top, halving the clock; each one below halves again.
@@ -1728,7 +1728,7 @@ export const EXAMPLES: Example[] = [
 		id: 'switch-bounce',
 		name: 'Switch and contact bounce',
 		description:
-			'A supply, a switch and an RC. The switch closes at two milliseconds and the contacts chatter for one more before they settle — which is why anything counting edges has to be debounced. The 100 kΩ is not decoration: without a path to ground the capacitor would charge through the open switch.',
+			'A switch closes at 2 ms into an RC load. The contacts bounce for 1 ms. The 100 kΩ gives the capacitor a path to ground.',
 		stopTime: 10e-3,
 		build: () =>
 			build(
@@ -1773,7 +1773,7 @@ export const EXAMPLES: Example[] = [
 		id: 'half-adder',
 		name: 'Half adder',
 		description:
-			'Two bits in, two bits out: the XOR is the sum and the AND is the carry. Half, because it has no way to accept a carry from the column to its right — that is the one thing the full adder adds. Both switches start high, so the sum is zero and the carry is one. Click either to flip it.',
+			'XOR gives the sum, AND gives the carry. No carry input. Both switches start high: sum 0, carry 1. Click a switch to flip it.',
 		stopTime: 20e-6,
 		build: () =>
 			build(
@@ -1824,7 +1824,7 @@ export const EXAMPLES: Example[] = [
 		id: 'full-adder',
 		name: 'Full adder',
 		description:
-			'The circuit inside every processor, three gates wide. Sum is the parity of the three inputs, so it is one XOR with three inputs rather than two in a row; the carry is the majority of them. All three switches arrive high — one and one and one is three, which is a one and a carry — and both lamps are lit. Click any of them to work through the other seven combinations.',
+			'Sum is the 3-input XOR (parity). Carry is the majority. All three switches start high: sum 1, carry 1. Click a switch to try the other combinations.',
 		stopTime: 20e-6,
 		build: () =>
 			build(
@@ -1899,7 +1899,7 @@ export const EXAMPLES: Example[] = [
 		id: 'adder-4bit',
 		name: '4-bit adder',
 		description:
-			'Four columns of an addition, each handing its carry down to the next. The first column has nothing carried into it, so it is a half adder; the other three are full adders written as propagate and generate. A and B start at 7 and 3, which makes the carry ripple through three stages before it dies — flip any switch on the left and watch where it stops.',
+			'Four adder columns with ripple carry. Column 0 is a half adder; the others are full adders built from propagate and generate. A = 7 and B = 3: the carry ripples through three stages.',
 		stopTime: 20e-6,
 		build: () => {
 			// Bit 0 on top, so the carry runs downwards and every stage looks the same.
@@ -2021,7 +2021,7 @@ export const EXAMPLES: Example[] = [
 		id: 'voltage-divider',
 		name: 'Voltage divider',
 		description:
-			'Two resistors and nothing else. 12 V across 2 kΩ and 1 kΩ puts exactly 4 V on the join — the simplest circuit whose answer you can check in your head.',
+			'12 V across 2 kΩ and 1 kΩ gives 4 V at the middle.',
 		stopTime: 1e-3,
 		build: () =>
 			build(
@@ -2053,7 +2053,7 @@ export const EXAMPLES: Example[] = [
 		id: 'rc-highpass',
 		name: 'RC high-pass',
 		description:
-			'The low-pass turned around: the capacitor is in the way, so an edge gets through and a steady level does not. The output jumps with each transition and decays over one RC.',
+			'A series capacitor blocks DC. The output jumps on each edge and decays with time constant RC.',
 		stopTime: 5e-3,
 		build: () =>
 			build(
@@ -2091,7 +2091,7 @@ export const EXAMPLES: Example[] = [
 		id: 'rl-step',
 		name: 'RL step',
 		description:
-			'Current through an inductor cannot change instantly. It climbs towards V/R along an exponential of time constant L/R — 100 µs here, against a 250 µs half-period, so it very nearly gets there.',
+			'Inductor current rises to V/R with time constant L/R: 100 µs, against a 250 µs half-period.',
 		stopTime: 1e-3,
 		build: () =>
 			build(
@@ -2129,7 +2129,7 @@ export const EXAMPLES: Example[] = [
 		id: 'diode-clipper',
 		name: 'Diode clipper',
 		description:
-			'Two diodes back to back across the output. Anything past a forward drop in either direction finds a path to ground, so a 5 V sine comes out flattened at about ±0.7 V.',
+			'Two anti-parallel diodes across the output clip a 5 V sine at about ±0.7 V.',
 		stopTime: 3e-3,
 		build: () =>
 			build(
@@ -2165,7 +2165,7 @@ export const EXAMPLES: Example[] = [
 		id: 'diode-iv',
 		name: 'Diode I-V curve',
 		description:
-			'A DC sweep rather than a run in time: V1 is walked from 0 to 1.2 V and the operating point solved at every 10 mV. The lower plot is the current through D1 against the drive. Almost nothing flows until about half a volt, then a decade more for every hundred millivolts or so, until the 10 Ω of R1 takes over and the curve straightens into a line. VD, the upper plot, is the diode’s own drop: it climbs with the drive at first, then hardly moves past 0.7 V however hard it is pushed.',
+			'DC sweep: V1 from 0 to 1.2 V in 10 mV steps. The lower plot is the D1 current. It rises exponentially above about 0.5 V, then the 10 Ω of R1 makes it linear. The upper plot, VD, stays near 0.7 V.',
 		stopTime: 1e-3,
 		analysis: 'dc',
 		dcSweep: { source: 'V1', start: 0, stop: 1.2, step: 0.01, currents: ['D1'] },
@@ -2199,7 +2199,7 @@ export const EXAMPLES: Example[] = [
 		id: 'zener-shunt',
 		name: 'Zener regulator',
 		description:
-			'A zener across the load, cathode to the positive side, fed through a resistor. Past its breakdown voltage it conducts backwards and pins the rail there, however the supply wanders above it.',
+			'A zener, cathode to the positive side, fed through a resistor. Above its breakdown voltage it holds the load voltage constant.',
 		stopTime: 2e-3,
 		build: () =>
 			build(
@@ -2237,7 +2237,7 @@ export const EXAMPLES: Example[] = [
 		id: 'opamp-inverting',
 		name: 'Inverting amplifier',
 		description:
-			'The feedback resistor over the input resistor sets the gain and nothing else does: 47 kΩ over 10 kΩ is −4.7, upside down. The op-amp only has to be good enough to hold its two inputs together.',
+			'Gain = −Rf/Rin = −47 kΩ / 10 kΩ = −4.7.',
 		stopTime: 3e-3,
 		build: () =>
 			build(
@@ -2274,7 +2274,7 @@ export const EXAMPLES: Example[] = [
 		id: 'emitter-follower',
 		name: 'Emitter follower',
 		description:
-			'No voltage gain at all — the emitter sits a diode drop below the base and copies whatever it does. What it buys is current: a stiff output from a source that could not have driven the load itself.',
+			'No voltage gain: the emitter follows the base, one diode drop lower. It gives current gain to drive the load.',
 		stopTime: 3e-3,
 		build: () =>
 			build(
@@ -2316,7 +2316,7 @@ export const EXAMPLES: Example[] = [
 		id: 'cmos-inverter',
 		name: 'CMOS inverter',
 		description:
-			'One MOSFET of each kind, gates tied together. Whichever way the input goes one device is on and the other is off, so the output reaches both rails and neither transistor passes any current once it has settled. Watch the spike on each edge: the gate is coupled to the drain through its own capacitance, and with nothing loading the output that charge pushes it past the supply until the body diodes catch it.',
+			'An NMOS and a PMOS with common gates. The output swings rail to rail with no static current. The spike on each edge is gate-drain capacitance; the body diodes clamp it.',
 		stopTime: 4e-4,
 		build: () =>
 			build(

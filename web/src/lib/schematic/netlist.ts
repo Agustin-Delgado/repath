@@ -189,7 +189,7 @@ function withCard(
 	const { model, ignored } = fold(card);
 	if (ignored.length > 0) {
 		report(
-			`${instance.name}: ${card.name} sets ${ignored.join(', ')}, which this simulator does not model.`
+			`${instance.name}: ${card.name} sets ${ignored.join(', ')}. These are not modelled.`
 		);
 	}
 	return { ...base, ...model };
@@ -474,12 +474,12 @@ function compileFresh(
 	}
 
 	for (const name of unfolded.cycles) {
-		errors.push(`${name} is placed inside itself, so it cannot be built. Delete the copy inside it.`);
+		errors.push(`${name} is placed inside itself. Delete the copy inside it.`);
 	}
 	if (schematic.instances.length === 0) {
-		errors.push('The schematic is empty. Pick a part or open an example from the parts panel to start.');
+		errors.push('The circuit is empty. Add a part or open an example.');
 	} else if (!grounded && connectivity.nets.some((n) => n.hasAnalog)) {
-		errors.push('No ground. Every analog circuit needs one ground symbol as a voltage reference.');
+		errors.push('No ground. Add a ground symbol as the 0 V reference.');
 	}
 
 	// The points the drawing's own wires pass through, for telling a box's pin
@@ -535,7 +535,7 @@ function compileFresh(
 			);
 			if (nets.size === 1 && !nets.has(undefined)) {
 				warnings.push(
-					`${instance.name} is shorted out: every pin is on the same net, so nothing flows through it. A wire probably runs straight past it.`
+					`${instance.name} is shorted out: all pins are on the same net. A wire probably crosses it.`
 				);
 			}
 		}
@@ -754,7 +754,7 @@ function compileFresh(
 			high = low + 5;
 			if (needsSupply && positive) {
 				warnings.push(
-					`${name}: what its ${positive} leg is at is only known once the circuit is solved, so its thresholds and output limits assume ${high} V. Wire ${positive} to a supply terminal or a source for them to follow it.`
+					`${name}: ${positive} is not on a supply or source, so thresholds and output limits assume ${high} V. Connect ${positive} to a supply or a source.`
 				);
 			}
 		}
@@ -997,7 +997,7 @@ function compileFresh(
 		const firmware = str(instance, 'firmware').trim();
 		if (!firmware) {
 			warnings.push(
-				`${name} has no program loaded, so it runs nothing and leaves its pins alone. Load a .hex file for it in the inspector.`
+				`${name} has no program loaded. Load a .hex file in the inspector.`
 			);
 			return;
 		}
@@ -1149,7 +1149,7 @@ function compileFresh(
 			if (unpowered) {
 				unpoweredChips++;
 				warnings.push(
-					`${name} is not powered: ${unpowered} Its outputs are left undetermined rather than given levels a chip with no supply could not produce.`
+					`${name} is not powered: ${unpowered} Its outputs are undetermined.`
 				);
 				continue;
 			}
@@ -1187,7 +1187,7 @@ function compileFresh(
 						const text = String(instance.params.contents ?? '');
 						const parsed = parseContents(text, 2 ** address.length, width);
 						if (parsed.problems.length > 0) {
-							warnings.push(`${name}'s contents: ${parsed.problems[0]} That word is left erased.`);
+							warnings.push(`${name} contents: ${parsed.problems[0]} That word stays erased.`);
 						}
 						contents = Array.from(parsed.words, (word) => word ?? erased);
 					}
@@ -1261,7 +1261,7 @@ function compileFresh(
 				const volts = num(instance, 'voltage', 5);
 				if (net?.isGround) {
 					errors.push(
-						`${name} sits on the ground net, which asks for ${volts} V and 0 V at the same point.`
+						`${name} is on the ground net: it cannot be ${volts} V and 0 V.`
 					);
 					break;
 				}
@@ -1632,16 +1632,16 @@ function compileFresh(
 				const control = String(instance.params.control ?? '').trim();
 				const source = schematic.instances.find((i) => i.name === control);
 				if (control === '') {
-					errors.push(`${name}: choose the voltage source whose current it follows.`);
+					errors.push(`${name}: choose the controlling voltage source.`);
 					break;
 				}
 				if (!source) {
-					errors.push(`${name} follows the current through ${control}, which is not on the drawing.`);
+					errors.push(`${name}: the controlling source ${control} is not in the circuit.`);
 					break;
 				}
 				if (!CONTROLLING_KINDS.has(source.kind)) {
 					errors.push(
-						`${name} follows the current through ${control}, which is not a voltage source or a battery. Put a 0 V voltage source in series with it and choose that.`
+						`${name}: ${control} is not a voltage source or a battery. Put a 0 V voltage source in series with it and choose that source.`
 					);
 					break;
 				}
@@ -1727,7 +1727,7 @@ function compileFresh(
 				if (unpowered) {
 					unpoweredChips++;
 					warnings.push(
-						`${name} is not powered: ${unpowered} Its screen stays dark and nothing on the bus finds it.`
+						`${name} is not powered: ${unpowered} The screen stays dark and it does not answer on the bus.`
 					);
 					break;
 				}
@@ -1778,8 +1778,8 @@ function compileFresh(
 				const swapped = masters.find((master) => wired(master, scl, sda));
 				warnings.push(
 					swapped
-						? `${name}'s SDA and SCL are swapped: SDA goes to ${swapped.part.name}'s A4 (PC4) and SCL to its A5 (PC5). As it is, nothing answers at its address.`
-						: `${name} is not on a microcontroller's I²C bus: its SDA has to go to A4 (PC4) and its SCL to A5 (PC5), or on an Uno to SDA and SCL. As it is, nothing talks to it.`
+						? `${name}: SDA and SCL are swapped. Connect SDA to ${swapped.part.name} A4 (PC4) and SCL to A5 (PC5).`
+						: `${name} is not on an I²C bus. Connect SDA to A4 (PC4) and SCL to A5 (PC5), or to SDA and SCL on an Uno.`
 				);
 				break;
 			}
@@ -1820,7 +1820,7 @@ function compileFresh(
 				const unpowered = chipUnpowered(instance, schematic, connectivity);
 				if (unpowered) {
 					unpoweredChips++;
-					warnings.push(`${name} is not powered: ${unpowered} Its horn stays where it is.`);
+					warnings.push(`${name} is not powered: ${unpowered} The horn does not move.`);
 					break;
 				}
 				components.push({
@@ -2140,13 +2140,13 @@ function compileFresh(
 				const sub = subcircuitOf(schematic, instance.kind);
 				if (!sub) {
 					errors.push(
-						`${name}: '${instance.kind}' is not something the engine knows how to build.`
+						`${name}: unknown part type '${instance.kind}'.`
 					);
 					break;
 				}
 				const parsed = parseSubcircuits(sub.source).find((s) => s.name === sub.name);
 				if (!parsed) {
-					errors.push(`${name}: the definition of ${sub.name} is no longer readable.`);
+					errors.push(`${name}: cannot read the definition of ${sub.name}.`);
 					break;
 				}
 				const { components: inner, skipped } = expandSubcircuit(
@@ -2158,7 +2158,7 @@ function compileFresh(
 				portFlow.set(instance.id, portInjections(parsed, name));
 				if (skipped.length > 0) {
 					warnings.push(
-						`${name}: ${sub.name} uses ${skipped.join(', ')}, which this simulator cannot build.`
+						`${name}: ${sub.name} uses ${skipped.join(', ')}. These are not supported.`
 					);
 				}
 				break;
@@ -2192,7 +2192,7 @@ function compileFresh(
 			.filter((pin) => pin.pin.domain === 'digital' && pin.pin.direction === 'in')
 			.map((pin) => pinLabel(pin.instance.name, pin.pin.name));
 		warnings.push(
-			`${instance.name} sits straight across ${who} and the rail with nothing to limit the current. The output is held at the LED's forward voltage, about 2 V — which is not a High to anything else on that net${readers.length ? ` (${readers.join(', ')} read${readers.length === 1 ? 's' : ''} it)` : ''} — and the current is whatever the output can give. A resistor in series, 330 Ω for about 10 mA from 5 V, is what makes it a lamp.`
+			`${instance.name} is across ${who} and the rail with no current limit. The output clamps at the LED forward voltage, about 2 V. That is not a High${readers.length ? ` for ${readers.join(', ')}` : ''}. Add a resistor in series: 330 Ω gives about 10 mA at 5 V.`
 		);
 	}
 
@@ -2214,13 +2214,13 @@ function compileFresh(
 	for (const { net, instance, pin, conditional } of inputs) {
 		if (conditional) {
 			warnings.push(
-				`${instance.name}.${pin} is held only while a switch is closed. With that switch open nothing decides what it reads, so it is left to leakage rather than to the circuit. A pull-down resistor to ground, or a pull-up to the supply, is what gives it a level either way.`
+				`${instance.name}.${pin} is held only while a switch is closed. When the switch is open, the input floats. Add a pull-down resistor to ground or a pull-up to the supply.`
 			);
 			continue;
 		}
 		undefinedNets.add(net);
 		warnings.push(
-			`${instance.name}.${pin} has no path to either rail, so nothing decides what it reads — it is left to leakage, which is not a logic level. The gate is given "unknown" rather than a level invented for it. A pull-down resistor to ground, or a pull-up to the supply, is what fixes it.`
+			`${instance.name}.${pin} has no path to either rail, so its level is unknown. Add a pull-down resistor to ground or a pull-up to the supply.`
 		);
 	}
 
@@ -2340,7 +2340,7 @@ function compileFresh(
 	// A chip set aside for want of a supply has been told why already, and is not
 	// a drawing with nothing on it.
 	if (components.length === 0 && devices.length === 0 && schematic.instances.length > 0 && !unpoweredChips) {
-		errors.push('Nothing to simulate: place at least one component.');
+		errors.push('Nothing to simulate. Add a part.');
 	}
 
 	return {

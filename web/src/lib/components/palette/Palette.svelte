@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { ChevronRight, Plus, Search, X } from '@lucide/svelte';
+	import { ChevronRight, Plus } from '@lucide/svelte';
 	import { SECTIONS, searchParts, sectionLabel, type PartEntry, type SectionId } from '$lib/parts/library';
 	import { SUBCIRCUIT_PREFIX } from '$lib/schematic/model';
 	import { allParts, isArmed, pickPart, removeDrawingPart } from '$lib/parts/drawing';
-	import { toasts } from '$lib/ui';
+	import { Disclosure, SearchField, toasts } from '$lib/ui';
 	import { recentParts } from '$lib/parts/recent.svelte';
 	import { app } from '$lib/state.svelte';
 	import Symbol from '../Symbol.svelte';
@@ -110,9 +110,9 @@
 		} else if (event.key === 'Enter') {
 			event.preventDefault();
 			pickResult(results[active]);
-		} else if (event.key === 'Escape') {
-			if (query) query = '';
-			else searchInput?.blur();
+		} else if (event.key === 'Escape' && !event.defaultPrevented) {
+			// The box has emptied itself on an Escape with text in it; this one had none.
+			searchInput?.blur();
 		}
 	}
 
@@ -140,7 +140,7 @@
 	}
 
 	const tip = (part: PartEntry) =>
-		[part.label, part.description, part.caveat, removable(part) ? 'Right-click to remove' : '']
+		[part.label, part.description, part.caveat, removable(part) ? 'Right-click to delete' : '']
 			.filter(Boolean)
 			.join(' — ');
 </script>
@@ -152,6 +152,7 @@
 		label={part.label}
 		title={tip(part)}
 		active={isArmed(app, part.kind)}
+		disabled={app.locked && part.kind !== 'probe'}
 		onclick={() => pick(part.kind)}
 		oncontextmenu={removable(part)}
 	>
@@ -162,54 +163,27 @@
 {/snippet}
 
 {#snippet shelfHeading(id: string, label: string, count: number)}
-	<button
-		type="button"
-		class="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left eyebrow hover:text-fg"
-		aria-expanded={!folded.has(id)}
-		onclick={() => toggleShelf(id)}
-	>
-		<ChevronRight class="size-3 transition-transform {folded.has(id) ? '' : 'rotate-90'}" />
-		{label}
-		<span class="ml-auto font-mono text-3xs font-normal tracking-normal opacity-60">{count}</span>
-	</button>
+	<ChevronRight class="size-3 transition-transform {folded.has(id) ? '' : 'rotate-90'}" />
+	{label}
+	<span class="ml-auto font-mono text-3xs font-normal tracking-normal opacity-60">{count}</span>
 {/snippet}
 
 <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
 	<!-- Search stays put while the shelves scroll under it. -->
 	<div class="border-b border-border p-2">
-		<label
-			class="flex h-7 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-muted field"
+		<SearchField
+			bind:element={searchInput}
+			bind:value={query}
+			onkeydown={onSearchKey}
+			placeholder="Find a part…"
+			aria-label="Find a part"
+			aria-controls="part-results"
+			aria-activedescendant={results.length ? `part-result-${active}` : undefined}
 		>
-			<Search class="size-3.5 shrink-0" />
-			<input
-				bind:this={searchInput}
-				bind:value={query}
-				onkeydown={onSearchKey}
-				type="search"
-				placeholder="Find a part…"
-				aria-label="Find a part"
-				aria-controls="part-results"
-				aria-activedescendant={results.length ? `part-result-${active}` : undefined}
-				autocomplete="off"
-				spellcheck="false"
-				class="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-ui text-fg outline-none [&::-webkit-search-cancel-button]:hidden"
-			/>
-			{#if query}
-				<button
-					type="button"
-					class="flex cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-fg"
-					aria-label="Clear the search"
-					onclick={() => {
-						query = '';
-						searchInput?.focus();
-					}}
-				>
-					<X class="size-3.5" />
-				</button>
-			{:else}
+			{#snippet hint()}
 				<kbd class="rounded border border-border px-1 font-mono text-3xs leading-4">/</kbd>
-			{/if}
-		</label>
+			{/snippet}
+		</SearchField>
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-y-auto p-2">
@@ -242,7 +216,7 @@
 					</div>
 				{:else}
 					<p class="m-0 px-1 py-4 text-center text-2xs text-muted">
-						No part matches “{query.trim()}”.
+						No match for “{query.trim()}”.
 					</p>
 				{/each}
 			</div>
@@ -256,8 +230,9 @@
 						-->
 						<PartTile
 							label="Wire"
-							title="Draw a wire between two pins, or off an existing wire (W)"
+							title="Draw a wire, or branch off a wire (W)"
 							active={app.tool.mode === 'wire'}
+							disabled={app.locked}
 							onclick={wire}
 						>
 							{#snippet icon()}
@@ -282,7 +257,7 @@
 						{#if app.inside}
 							<PartTile
 								label="Port"
-								title="A terminal of this block: wire a pin to it and the box gets a pin under its name"
+								title="Block terminal: each port is a pin on the box"
 								active={isArmed(app, 'port')}
 								onclick={() => pick('port')}
 							>
@@ -317,46 +292,50 @@
 						always there, because it is also the way in.
 					-->
 					{#if shelf.length > 0 || section.id === 'imported'}
-						<section>
-							{@render shelfHeading(section.id, section.label, shelf.length)}
-							{#if !folded.has(section.id)}
-								<div class="grid grid-cols-[repeat(auto-fill,minmax(58px,1fr))] gap-1">
-									{#each shelf as part, i (part.kind + ':' + part.label + ':' + part.description)}
-										<!-- A long shelf is filed under headings of its own: chips by what they do. -->
-										{#if part.shelf && part.shelf !== shelf[i - 1]?.shelf}
-											<h4 class="col-span-full m-0 mt-1 px-0.5 text-3xs font-medium text-muted first:mt-0">
-												{part.shelf}
-											</h4>
-										{/if}
-										{@render tile(part)}
-									{/each}
-									{#if section.id === 'imported'}
-										<PartTile
-											label="Import"
-											title="Paste a SPICE .subckt"
-											active={importing}
-											dim
-											onclick={() => (importing = !importing)}
-										>
-											{#snippet icon()}
-												<Plus class="h-[34px] w-[46px] p-2" strokeWidth={1.5} />
-											{/snippet}
-										</PartTile>
+						<Disclosure
+							open={!folded.has(section.id)}
+							onOpenChange={() => toggleShelf(section.id)}
+							triggerClass="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left eyebrow hover:text-fg"
+						>
+							{#snippet trigger()}
+								{@render shelfHeading(section.id, section.label, shelf.length)}
+							{/snippet}
+							<div class="grid grid-cols-[repeat(auto-fill,minmax(58px,1fr))] gap-1">
+								{#each shelf as part, i (part.kind + ':' + part.label + ':' + part.description)}
+									<!-- A long shelf is filed under headings of its own: chips by what they do. -->
+									{#if part.shelf && part.shelf !== shelf[i - 1]?.shelf}
+										<h4 class="col-span-full m-0 mt-1 px-0.5 text-3xs font-medium text-muted first:mt-0">
+											{part.shelf}
+										</h4>
 									{/if}
-								</div>
-								{#if section.id === 'imported' && importing}
-									<SubcircuitImport
-										onImported={(ids) => {
-											importing = false;
-											// Straight into placing it. Importing a part and then having to
-											// find it in the list is a step that exists only because the
-											// code was easier that way.
-											if (ids.length === 1) pick(SUBCIRCUIT_PREFIX + ids[0]);
-										}}
-									/>
+									{@render tile(part)}
+								{/each}
+								{#if section.id === 'imported'}
+									<PartTile
+										label="Import"
+										title="Paste a SPICE .subckt"
+										active={importing}
+										dim
+										onclick={() => (importing = !importing)}
+									>
+										{#snippet icon()}
+											<Plus class="h-[34px] w-[46px] p-2" strokeWidth={1.5} />
+										{/snippet}
+									</PartTile>
 								{/if}
+							</div>
+							{#if section.id === 'imported' && importing}
+								<SubcircuitImport
+									onImported={(ids) => {
+										importing = false;
+										// Straight into placing it. Importing a part and then having to
+										// find it in the list is a step that exists only because the
+										// code was easier that way.
+										if (ids.length === 1) pick(SUBCIRCUIT_PREFIX + ids[0]);
+									}}
+								/>
 							{/if}
-						</section>
+						</Disclosure>
 					{/if}
 				{/each}
 			</div>

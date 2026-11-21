@@ -32,7 +32,9 @@ export interface CommandContext {
 }
 
 export function buildCommands(app: App, context: CommandContext): Command[] {
-	const hasSelection = () => app.selection.length > 0;
+	// While a run locks the drawing, the edits are left out of the list.
+	const editing = () => !app.locked;
+	const hasSelection = () => editing() && app.selection.length > 0;
 
 	const commands: Command[] = [
 		// --- Simulation -------------------------------------------------------
@@ -60,7 +62,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'single',
-			label: 'Capture a single sweep',
+			label: 'Single sweep',
 			group: 'Simulation',
 			keywords: ['once', 'one shot', 'trigger'],
 			available: () => app.analysis === 'transient',
@@ -68,14 +70,14 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'reset',
-			label: 'Reset the run',
+			label: 'Reset run',
 			group: 'Simulation',
 			keywords: ['clear results', 'discard', 'rest'],
 			run: () => app.reset()
 		},
 		{
 			id: 'analysis-transient',
-			label: 'Analyse over time (transient)',
+			label: 'Transient analysis',
 			group: 'Simulation',
 			keywords: ['time domain', 'scope', 'waveform'],
 			available: () => app.analysis !== 'transient',
@@ -83,7 +85,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'analysis-frequency',
-			label: 'Analyse over frequency (Bode plot)',
+			label: 'Frequency analysis (Bode plot)',
 			group: 'Simulation',
 			keywords: ['ac', 'bode', 'frequency response', 'filter', 'gain', 'phase'],
 			available: () => app.analysis !== 'frequency',
@@ -91,7 +93,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'analysis-dc',
-			label: 'Sweep a source (DC sweep, I-V curve)',
+			label: 'DC sweep (I-V curve)',
 			group: 'Simulation',
 			keywords: ['dc', 'operating point', 'iv', 'i-v', 'curve', 'transfer', 'characteristic'],
 			available: () => app.analysis !== 'dc',
@@ -99,7 +101,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'sample',
-			label: 'Draw parts from their tolerance',
+			label: 'Sample part values from tolerance',
 			group: 'Simulation',
 			keywords: ['monte carlo', 'tolerance', 'random', 'sample'],
 			run: () => app.setSample(app.sample > 0 ? app.sample + 1 : 1)
@@ -114,7 +116,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'sweep',
-			label: 'Run many samples and shade the band',
+			label: 'Monte Carlo: run many samples',
 			group: 'Simulation',
 			keywords: ['monte carlo', 'tolerance', 'envelope', 'worst case'],
 			available: () => app.sweepCount === 0,
@@ -122,7 +124,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'sweep-off',
-			label: 'Stop sampling many parts',
+			label: 'Stop Monte Carlo',
 			group: 'Simulation',
 			keywords: ['monte carlo', 'envelope'],
 			available: () => app.sweepCount > 0,
@@ -130,11 +132,18 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 
 		// --- Edit -------------------------------------------------------------
-		{ id: 'undo', label: 'Undo', group: 'Edit', shortcut: 'Ctrl+Z', run: () => app.undo() },
-		{ id: 'redo', label: 'Redo', group: 'Edit', shortcut: 'Ctrl+Shift+Z', run: () => app.redo() },
+		{ id: 'undo', label: 'Undo', group: 'Edit', shortcut: 'Ctrl+Z', available: editing, run: () => app.undo() },
+		{
+			id: 'redo',
+			label: 'Redo',
+			group: 'Edit',
+			shortcut: 'Ctrl+Shift+Z',
+			available: editing,
+			run: () => app.redo()
+		},
 		{
 			id: 'rotate',
-			label: 'Rotate the selection',
+			label: 'Rotate selection',
 			group: 'Edit',
 			shortcut: 'R',
 			keywords: ['turn', 'orientation'],
@@ -143,7 +152,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'duplicate',
-			label: 'Duplicate the selection',
+			label: 'Duplicate selection',
 			group: 'Edit',
 			shortcut: 'Ctrl+D',
 			keywords: ['copy', 'clone'],
@@ -152,7 +161,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'delete',
-			label: 'Delete the selection',
+			label: 'Delete selection',
 			group: 'Edit',
 			shortcut: 'Del',
 			keywords: ['remove', 'erase'],
@@ -161,15 +170,15 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'group',
-			label: 'Group the selection',
+			label: 'Group selection',
 			group: 'Edit',
 			shortcut: 'Ctrl+G',
-			available: () => app.selection.length > 1,
+			available: () => editing() && app.selection.length > 1,
 			run: () => void app.groupSelection()
 		},
 		{
 			id: 'box',
-			label: 'Box the selection up as a block',
+			label: 'Box selection as a block',
 			group: 'Edit',
 			shortcut: 'B',
 			keywords: ['subcircuit', 'hierarchy', 'module', 'block'],
@@ -178,7 +187,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'leave-block',
-			label: 'Leave the block',
+			label: 'Leave block',
 			group: 'Edit',
 			keywords: ['up', 'parent', 'exit'],
 			available: () => !!app.inside,
@@ -186,7 +195,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'clear',
-			label: 'Clear the drawing',
+			label: 'Clear circuit',
 			group: 'Edit',
 			keywords: ['new', 'empty', 'blank', 'start over'],
 			available: () => app.schematic.instances.length > 0 || app.schematic.wires.length > 0,
@@ -194,7 +203,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'probe-all',
-			label: 'Probe the interesting nets',
+			label: 'Auto-probe nets',
 			group: 'Edit',
 			keywords: ['scope', 'measure', 'signals', 'auto'],
 			run: () => app.autoProbe()
@@ -206,13 +215,14 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 			group: 'Edit',
 			shortcut: 'W',
 			keywords: ['connect', 'net', 'branch'],
+			available: editing,
 			run: () => (app.tool = { mode: 'wire' })
 		},
 
 		// --- View -------------------------------------------------------------
 		{
 			id: 'fit',
-			label: 'Fit the drawing on screen',
+			label: 'Fit circuit to screen',
 			group: 'View',
 			shortcut: 'F',
 			keywords: ['zoom', 'center', 'frame'],
@@ -236,7 +246,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'current',
-			label: 'Show current flowing',
+			label: 'Show current flow',
 			group: 'View',
 			keywords: ['animation', 'dots', 'flow'],
 			available: () => !app.showCurrent,
@@ -244,7 +254,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'current-off',
-			label: 'Hide current flowing',
+			label: 'Hide current flow',
 			group: 'View',
 			keywords: ['animation', 'dots', 'flow'],
 			available: () => app.showCurrent,
@@ -260,7 +270,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		...SYMBOL_STANDARDS.map(
 			(standard): Command => ({
 				id: `standard-${standard.value}`,
-				label: `Draw symbols as ${standard.label}`,
+				label: `Symbols: ${standard.label}`,
 				group: 'View',
 				keywords: ['symbol', 'standard'],
 				description: standard.description,
@@ -272,7 +282,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		// --- File -------------------------------------------------------------
 		{
 			id: 'save',
-			label: 'Save to a file',
+			label: 'Save to file',
 			group: 'File',
 			shortcut: 'Ctrl+S',
 			keywords: ['download', 'export', 'json'],
@@ -280,7 +290,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'open',
-			label: 'Open a file…',
+			label: 'Open file…',
 			group: 'File',
 			shortcut: 'Ctrl+O',
 			keywords: ['load', 'import', 'json'],
@@ -288,14 +298,14 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 		{
 			id: 'share',
-			label: 'Copy a link to this circuit',
+			label: 'Copy link',
 			group: 'File',
 			keywords: ['share', 'url', 'send'],
 			run: () => void shareAndReport(app, context.share)
 		},
 		{
 			id: 'steps',
-			label: 'Copy the steps taken',
+			label: 'Copy edit steps',
 			group: 'File',
 			keywords: ['trace', 'bug report', 'replay'],
 			run: () => void copyStepsAndReport(app)

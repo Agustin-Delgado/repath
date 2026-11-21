@@ -114,6 +114,16 @@ export interface ParamDef {
 	 * source a current-controlled source reads its current through.
 	 */
 	pick?: 'voltage-source';
+	/**
+	 * A fraction from `min` to `max` set by turning a knob, in the inspector
+	 * and on the part itself while a run is going: a runtime control.
+	 */
+	knob?: boolean;
+}
+
+/** The parameter a part is turned by, if it has a knob. */
+export function knobOf(instance: Instance): ParamDef | undefined {
+	return definitionFor(instance).params.find((param) => param.knob);
 }
 
 /** Why a value was refused, or null when it is fine. */
@@ -717,7 +727,7 @@ const SOURCE_PARAMS: ParamDef[] = [
  * any other simulator.
  */
 const CONTROL_DESCRIPTION =
-	'The voltage source whose current it follows, read into its + terminal: a source delivering current reads negative. A 0 V source in series measures any branch.';
+	'Current into its + terminal; a source that delivers current reads negative. Put a 0 V source in series to measure any branch.';
 
 /** The parts whose name a current-controlled source can be set to read. */
 export const CONTROLLING_KINDS: ReadonlySet<string> = new Set(['vsource', 'battery']);
@@ -740,7 +750,7 @@ export function controllerChoices(
 		.map((i) => ({ value: i.name, label: i.name }));
 	if (current === '') items.unshift({ value: NO_CONTROLLER, label: 'Choose a source' });
 	else if (!items.some((item) => item.value === current)) {
-		items.unshift({ value: current, label: `${current} (not on the drawing)` });
+		items.unshift({ value: current, label: `${current} (not in the circuit)` });
 	}
 	return items;
 }
@@ -776,7 +786,7 @@ const SWITCH_PARAMS: ParamDef[] = [
 				{ value: 'open', label: 'Open' },
 				{ value: 'closed', label: 'Closed' }
 			],
-			description: 'Click it on the drawing while running to throw it.'
+			description: 'Click it on the canvas during a run to operate it.'
 		},
 		{
 			key: 'action',
@@ -814,7 +824,7 @@ const SWITCH_PARAMS: ParamDef[] = [
 			default: 1e-3,
 			min: 0,
 			visibleWhen: { key: 'action', values: ['toggle', 'momentary'] },
-			description: 'How long the contacts chatter before settling.'
+			description: 'Contact chatter time.'
 		},
 		{
 			key: 'r_on',
@@ -915,7 +925,8 @@ export const CATALOG: ComponentDef[] = [
 				max: 1,
 				plain: true,
 				step: 0.05,
-				description: '0 at the smallest value, 1 at the largest.'
+				knob: true,
+				description: '0 %: minimum. 100 %: maximum.'
 			}
 		]
 	},
@@ -967,7 +978,7 @@ export const CATALOG: ComponentDef[] = [
 				plain: true,
 				step: 0.001,
 				advanced: true,
-				description: 'Just under 1 on a shared core; the rest is leakage.'
+				description: 'Just below 1 on a shared core. The rest is leakage.'
 			},
 			{
 				key: 'r1',
@@ -1020,7 +1031,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 0.5,
 				min: 0,
 				nonZero: true,
-				description: 'Heat it takes to blow: about 0.5 A²s for a fast 1 A fuse.'
+				description: 'Energy to blow: about 0.5 A²s for a fast 1 A fuse.'
 			},
 			{
 				key: 'resistance',
@@ -1068,7 +1079,8 @@ export const CATALOG: ComponentDef[] = [
 				max: 1,
 				plain: true,
 				step: 0.05,
-				description: '0 at a, 1 at b.'
+				knob: true,
+				description: '0 %: wiper at a. 100 %: wiper at b.'
 			},
 			// Pots are sold at twenty percent. A divider that only works at the
 			// printed value is a divider that has to be trimmed on every board.
@@ -1211,7 +1223,7 @@ export const CATALOG: ComponentDef[] = [
 						{ value: 'open', label: 'Normally open' },
 						{ value: 'closed', label: 'Normally closed' }
 					],
-					description: 'Hold it down on the drawing while running to press it.'
+					description: 'Hold it on the canvas during a run to press it.'
 				};
 			}
 			if (param.key === 'action') {
@@ -1261,7 +1273,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 70,
 				min: 0,
 				nonZero: true,
-				description: '70 Ω is a typical 5 V coil.'
+				description: 'Typical 5 V coil: 70 Ω.'
 			},
 			{
 				key: 'coil_l',
@@ -1360,7 +1372,7 @@ export const CATALOG: ComponentDef[] = [
 				nonZero: true,
 				advanced: true,
 				description:
-					'Of the disc: 10 to 30 nF for the 12 mm ones in Arduino kits. Sets the current it draws, the average a disc this size takes at 1 kHz.'
+					'10 to 30 nF for a 12 mm kit disc. Sets the current it draws at 1 kHz.'
 			}
 		]
 	},
@@ -1386,8 +1398,8 @@ export const CATALOG: ComponentDef[] = [
 				unit: '',
 				default: 'in',
 				choices: [
-					{ value: 'in', label: 'Input — on the left of the box' },
-					{ value: 'out', label: 'Output — on the right of the box' }
+					{ value: 'in', label: 'Input (left of the box)' },
+					{ value: 'out', label: 'Output (right of the box)' }
 				]
 			}
 		]
@@ -1413,7 +1425,7 @@ export const CATALOG: ComponentDef[] = [
 				label: 'Name',
 				unit: '',
 				default: '',
-				description: 'Left empty, the designator is used.'
+				description: 'Empty: uses the designator.'
 			}
 		]
 	},
@@ -1503,7 +1515,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 1,
 				plain: true,
 				step: 0.1,
-				description: 'Negative turns the current round.'
+				description: 'Negative reverses the current.'
 			}
 		]
 	},
@@ -1529,7 +1541,7 @@ export const CATALOG: ComponentDef[] = [
 				label: 'Transresistance',
 				unit: 'Ω',
 				default: 1000,
-				description: 'Volts across + and − per ampere through the source it reads.'
+				description: 'Volts across + and − per ampere in the controlling source.'
 			}
 		]
 	},
@@ -1674,7 +1686,7 @@ export const CATALOG: ComponentDef[] = [
 				default: RATED,
 				min: 0,
 				nonZero: true,
-				description: 'Held above this, it burns out.'
+				description: 'Above this, it burns out.'
 			},
 			// The colour and the rating survive a pasted card: one is about light and
 			// the other about what destroys the part, and neither is something a
@@ -1718,8 +1730,7 @@ export const CATALOG: ComponentDef[] = [
 				choices: [
 					{ value: 'cathode', label: 'Cathode (lights on a high)' },
 					{ value: 'anode', label: 'Anode (lights on a low)' }
-				],
-				description: 'Common cathode lights on a high; common anode on a low.'
+				]
 			},
 			{
 				key: 'colour',
@@ -1857,7 +1868,7 @@ export const CATALOG: ComponentDef[] = [
 				default: DEFAULT_LCD_ADDRESS,
 				choices: [...LCD_ADDRESSES],
 				description:
-					'Set by the A0–A2 jumpers on the backpack. The sketch has to use the same one: 0x27 and 0x3F are the usual two.'
+					'Set by the A0–A2 jumpers. Must match the program; usually 0x27 or 0x3F.'
 			}
 		]
 	},
@@ -2094,7 +2105,7 @@ export const CATALOG: ComponentDef[] = [
 				default: 1.5,
 				min: 0,
 				nonZero: true,
-				description: 'What flows into a short.'
+				description: 'Short-circuit current.'
 			}
 		]
 	},
@@ -2122,8 +2133,7 @@ export const CATALOG: ComponentDef[] = [
 				unit: 'V/s',
 				default: 0.5e6,
 				min: 0,
-				nonZero: true,
-				description: 'The fastest the output can move.'
+				nonZero: true
 			},
 			{ key: 'v_max', label: 'Positive rail', unit: 'V', default: 15 },
 			{ key: 'v_min', label: 'Negative rail', unit: 'V', default: -15 },
@@ -2139,14 +2149,14 @@ export const CATALOG: ComponentDef[] = [
 				label: 'Input offset',
 				unit: 'V',
 				default: 1e-3,
-				description: 'Multiplied by the gain the circuit asks for.'
+				description: 'Multiplied by the closed-loop gain.'
 			},
 			{
 				key: 'i_bias',
 				label: 'Input bias current',
 				unit: 'A',
 				default: 80e-9,
-				description: 'Why an integrator drifts.'
+				description: 'Makes an integrator drift.'
 			}
 		]
 	},
@@ -2262,7 +2272,7 @@ export const CATALOG: ComponentDef[] = [
 					{ value: 'low', label: 'Low (0)' },
 					{ value: 'high', label: 'High (1)' }
 				],
-				description: 'Click it on the drawing while running to flip it.'
+				description: 'Click it on the canvas during a run to flip it.'
 			}
 		]
 	}
@@ -2451,7 +2461,7 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 							default: DEFAULT_CLOCK,
 							min: 1,
 							advanced: true,
-							description: 'What its crystal or oscillator runs at: 16 MHz on an Uno, 8 MHz on its own internal one.'
+							description: '16 MHz on an Uno. 8 MHz on the internal oscillator.'
 						}
 					]
 				: []
@@ -2503,7 +2513,7 @@ export function withKinds<T>(defs: readonly ComponentDef[], body: () => T): T {
 
 export function definitionOf(kind: string): ComponentDef {
 	const def = overlay?.get(kind) ?? BY_KIND.get(kind);
-	if (!def) throw new Error(`unknown component kind: ${kind}`);
+	if (!def) throw new Error(`unknown part type: ${kind}`);
 	return def;
 }
 

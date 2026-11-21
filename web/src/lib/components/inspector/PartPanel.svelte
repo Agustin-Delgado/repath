@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ChevronRight, RotateCw, Trash2 } from '@lucide/svelte';
-	import { Button } from '$lib/ui';
+	import { Button, Disclosure } from '$lib/ui';
 	import { mcuBlock } from '$lib/schematic/chips';
 	import { ledRating } from '$lib/schematic/led';
 	import { BUZZER_KIND } from '$lib/schematic/buzzer';
@@ -57,8 +57,15 @@
 		}
 	}
 
-	/** When this part was operated by hand during the run that is going. */
-	const operations = $derived(app.operationsOf(instance.id));
+	/** How many of the times a part was operated the inspector names. */
+	const LAST_OPERATIONS = 5;
+	/**
+	 * How many times this part was operated by hand during the run that is
+	 * going, and when the last few of those were. Only the last few: the whole
+	 * list grew by a line a press and was set out again on each one.
+	 */
+	const operated = $derived(app.operationCount(instance.id));
+	const lastOperations = $derived(app.operationsOf(instance.id).slice(-LAST_OPERATIONS));
 
 	/** Whether every pin lands on the same net. */
 	const shorted = $derived.by(() => {
@@ -115,6 +122,7 @@
 				prominent
 				value={instance.name}
 				commit={(raw) => app.rename(instance.id, raw)}
+				disabled={app.locked}
 				aria-label="Reference designator"
 			/>
 			<span class="truncate px-1 text-2xs text-muted">{def.label}</span>
@@ -138,27 +146,28 @@
 	{/if}
 
 	{#if advanced.length > 0}
-		<section class="flex flex-col gap-2.5">
-			<button
-				type="button"
-				aria-expanded={more}
-				onclick={toggleMore}
-				class="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-left text-2xs text-muted hover:text-fg"
+		<section>
+			<Disclosure
+				open={more}
+				onOpenChange={toggleMore}
+				class="flex flex-col gap-2.5"
+				triggerClass="flex w-full cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-left text-2xs text-muted hover:text-fg"
+				panelClass="flex flex-col gap-2.5"
 			>
-				<ChevronRight class="size-3 transition-transform {more ? 'rotate-90' : ''}" />
-				More settings
-				<span class="font-mono opacity-70">({advanced.length})</span>
-				{#if changed > 0 && !more}
-					<span class="ml-auto rounded bg-accent/15 px-1.5 text-3xs text-accent">
-						{changed} changed
-					</span>
-				{/if}
-			</button>
-			{#if more}
+				{#snippet trigger()}
+					<ChevronRight class="size-3 transition-transform {more ? 'rotate-90' : ''}" />
+					More settings
+					<span class="font-mono opacity-70">({advanced.length})</span>
+					{#if changed > 0 && !more}
+						<span class="ml-auto rounded bg-accent/15 px-1.5 text-3xs text-accent">
+							{changed} changed
+						</span>
+					{/if}
+				{/snippet}
 				{#each advanced as param (instance.id + ':' + param.key)}
 					<ParamField id={instance.id} {param} value={instance.params[param.key]} />
 				{/each}
-			{/if}
+			</Disclosure>
 		</section>
 	{/if}
 
@@ -167,11 +176,12 @@
 		above says where it *starts*, which reads as a contradiction against a
 		switch sitting closed on the drawing until the operations are named.
 	-->
-	{#if operations.length > 0}
+	{#if operated > 0}
 		<p class={hint}>
-			Operated {operations.length === 1 ? 'once' : `${operations.length} times`} during this run, at
-			{operations.map((t: number) => formatWithUnit(t, 's', 3)).join(', ')}. Running it again starts
-			from the position above.
+			Operated {operated === 1 ? 'once' : `${operated} times`} in this run,
+			{operated > lastOperations.length ? 'last at' : 'at'}
+			{lastOperations.map((t: number) => formatWithUnit(t, 's', 3)).join(', ')}. The next run starts from
+			the position above.
 		</p>
 	{/if}
 
@@ -182,14 +192,12 @@
 	-->
 	{#if lit}
 		<p class="{hint} rounded-md border border-border bg-canvas px-2 py-1.5">
-			Carrying <strong class="text-fg">{formatWithUnit(lit.current, 'A')}</strong>, {lit.percent}% of
-			its {formatWithUnit(lit.rated, 'A')} rating.
+			<strong class="text-fg">{formatWithUnit(lit.current, 'A')}</strong>, {lit.percent}% of the
+			{formatWithUnit(lit.rated, 'A')} rating.
 			{#if shorted}
-				Nothing can flow through it: a wire runs straight past it, joining both of its pins. Move the
-				wire so it ends on each pin instead of crossing them.
+				No current: a wire crosses both pins. End the wire on each pin.
 			{:else if lit.percent < 5}
-				Too little to light: check how much voltage is left over the series resistor once the LED has
-				taken its forward drop.
+				Too little current to light. Check the voltage across the series resistor.
 			{/if}
 		</p>
 	{/if}
@@ -197,19 +205,17 @@
 	{#if servo}
 		<p class="{hint} rounded-md border border-border bg-canvas px-2 py-1.5">
 			Horn at <strong class="text-fg">{servo.angle.toFixed(1)}°</strong>{#if Math.abs(servo.angle - servo.target) > 0.05},
-				turning to {servo.target.toFixed(1)}°{/if}.
+				moving to {servo.target.toFixed(1)}°{/if}.
 			{#if !servo.pulse}
-				No pulse on SIG yet, so it holds where it started. The Servo library sends one every 20 ms
-				once <code>attach()</code> has run.
+				No pulse on SIG. The Servo library sends one every 20 ms after <code>attach()</code>.
 			{:else if servo.pulse.taken}
-				Last pulse {formatWithUnit(servo.pulse.width, 's', 4)}, at {formatWithUnit(servo.pulse.at, 's', 4)}.
+				Last pulse {formatWithUnit(servo.pulse.width, 's', 4)} at {formatWithUnit(servo.pulse.at, 's', 4)}.
 			{:else}
-				The last pulse, {formatWithUnit(servo.pulse.width, 's', 4)} at {formatWithUnit(servo.pulse.at, 's', 4)},
-				was ignored: a position is a pulse of {MIN_PULSE_US}–{MAX_PULSE_US} µs at least 3 ms after the
-				last one, as the Servo library sends. The horn holds.
+				Pulse {formatWithUnit(servo.pulse.width, 's', 4)} at {formatWithUnit(servo.pulse.at, 's', 4)}
+				ignored. Valid: {MIN_PULSE_US}–{MAX_PULSE_US} µs, at least 3 ms after the previous pulse.
 			{/if}
 			{#if servo.current !== null}
-				Drawing {formatWithUnit(Math.max(servo.current, 0), 'A')} from VCC.
+				{formatWithUnit(Math.max(servo.current, 0), 'A')} from VCC.
 			{/if}
 		</p>
 	{/if}
@@ -237,10 +243,15 @@
 	{/if}
 
 	<div class="flex gap-1.5">
-		<Button class="flex-1" onclick={() => app.rotateSelection()} title="Turn a quarter turn; wires follow">
+		<Button
+			class="flex-1"
+			disabled={app.locked}
+			onclick={() => app.rotateSelection()}
+			title="Rotate 90°; wires follow"
+		>
 			<RotateCw /> Rotate <kbd class="font-mono text-3xs text-muted">R</kbd>
 		</Button>
-		<Button class="flex-1 text-danger" onclick={() => app.deleteSelection()} title="Remove it">
+		<Button class="flex-1 text-danger" disabled={app.locked} onclick={() => app.deleteSelection()}>
 			<Trash2 /> Delete <kbd class="font-mono text-3xs text-muted">Del</kbd>
 		</Button>
 	</div>

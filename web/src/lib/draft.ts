@@ -196,7 +196,7 @@ export async function heldDrafts(): Promise<Set<string>> {
  * store, or refused a write to it. A reload would lose it, and a file would not.
  */
 export const UNSAVED_NOTICE =
-	'Your work could not be saved in this browser, so a reload would lose it. Save it to a file to be safe.';
+	'This browser cannot save your work. A reload loses it. Save to file.';
 
 export const newDraftId = () =>
 	`d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;

@@ -329,10 +329,10 @@
 
 	{#if !app.acResult}
 		<p class="empty">
-			{app.running ? 'Sweeping…' : 'Press Run to sweep the frequency response.'}
+			{app.running ? 'Sweeping…' : 'Press Run to sweep.'}
 		</p>
 	{:else if traces.length === 0}
-		<p class="empty">Tick a net on the right to plot its response.</p>
+		<p class="empty">Tick a net to plot its response.</p>
 	{/if}
 
 	{#if readout && readout.values.length > 0}

@@ -3,6 +3,7 @@
 	import { parseContents } from '$lib/schematic/memory';
 	import type { Instance } from '$lib/schematic/model';
 	import { app } from '$lib/state.svelte';
+	import { TextArea } from '$lib/ui';
 	import { hint, problem, sectionTitle } from './styles';
 
 	/**
@@ -31,14 +32,14 @@
 <section class="flex flex-col gap-1.5">
 	<h3 class={sectionTitle}>Contents</h3>
 	<p class={hint}>
-		What it holds when a run starts, as hex words from address 0; <code>@7F0</code> jumps to an
-		address and <code>;</code> starts a comment. A write during the run does not change this.
+		Contents at run start: hex words from address 0. <code>@7F0</code> sets the address.
+		<code>;</code> starts a comment. Writes during a run do not change this text.
 		{written === 0
-			? `Nothing written yet: every address reads ${erased}.`
-			: `${written} of ${count} words written; the rest read ${erased}.`}
+			? `Empty: every address reads ${erased}.`
+			: `${written} of ${count} words written. The rest read ${erased}.`}
 	</p>
-	<textarea
-		rows="5"
+	<TextArea
+		rows={5}
 		spellcheck="false"
 		placeholder={'3F 06 5B 4F 66 6D 7D 07 7F 6F\n@10 77 7C 39 5E 79 71 ; A to F'}
 		value={text}
@@ -54,7 +55,7 @@
 		}}
 		aria-label="Memory contents"
 		class="w-full resize-y rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal text-fg outline-none field"
-	></textarea>
+	/>
 	{#each parsed.problems.slice(0, 3) as message (message)}
 		<p class={problem} role="alert">{message}</p>
 	{/each}

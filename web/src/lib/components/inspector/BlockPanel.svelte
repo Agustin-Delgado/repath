@@ -63,11 +63,11 @@
 					size="icon"
 					class="size-7"
 					title={port.side === 'left'
-						? `Put ${port.name} on the right, as an output`
-						: `Put ${port.name} on the left, as an input`}
+						? `Move ${port.name} to the right (output)`
+						: `Move ${port.name} to the left (input)`}
 					aria-label={port.side === 'left'
-						? `Put ${port.name} on the right`
-						: `Put ${port.name} on the left`}
+						? `Move ${port.name} to the right`
+						: `Move ${port.name} to the left`}
 					onclick={() =>
 						app.setPortSide(boxed.block.id, port.name, port.side === 'left' ? 'right' : 'left')}
 				>
@@ -78,13 +78,13 @@
 	</div>
 
 	<p class={hint}>
-		{inside} components inside.
+		{inside} parts inside.
 		{#if copies > 1}
-			This is one of {copies} copies of the block: rename it or edit it inside and every copy
-			follows. To change just this one, make it its own block first.
+			One of {copies} copies. A change to the name or the inside changes every copy. To change only
+			this copy, make it its own block.
 		{:else}
-			Edit them in there — every copy follows, and a port added or removed is a pin on the box — or
-			open the box up here into its parts. The block stays in the palette either way.
+			A change inside changes every copy. Each port is a pin on the box. The block stays in the
+			palette after Open up.
 		{/if}
 	</p>
 
@@ -95,7 +95,7 @@
 		</Button>
 		{#if copies > 1}
 			<Button
-				title="Copy the block for this box alone, so it can be renamed and edited without the other copies following"
+				title="Detach this copy from the other copies"
 				onclick={() => app.detachBlock(boxed.instance.id)}
 			>
 				Make its own block

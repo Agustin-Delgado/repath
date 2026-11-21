@@ -6,7 +6,7 @@
 	import Scope from '$lib/components/Scope.svelte';
 	import Toolbar from '$lib/components/toolbar/Toolbar.svelte';
 	import CommandPalette from '$lib/commands/CommandPalette.svelte';
-	import { Button, Splitter, Toaster } from '$lib/ui';
+	import { Button, Pressable, Splitter, Toaster } from '$lib/ui';
 	import { untrack } from 'svelte';
 	import { ensureEngine } from '$lib/engine';
 	import {
@@ -119,7 +119,7 @@
 			// A notice, not an error: someone who followed a link needs to be told
 			// that what they are looking at is not what they were sent.
 			const why = cause instanceof Error ? cause.message : String(cause);
-			app.notice = `That link could not be read, so this is not the circuit it holds. ${why}`;
+			app.notice = `Could not read the link. This is not the circuit from the link. ${why}`;
 			return false;
 		}
 	}
@@ -137,7 +137,7 @@
 				if (choice.over) {
 					linkBehind = choice.over;
 					app.notice =
-						'This is the circuit from the link with the changes you made since, which were kept. The link as it was sent is one click away.';
+						'This is the circuit from the link, with your later changes.';
 				}
 			} catch (cause) {
 				// A draft this build cannot read is left where it is, not deleted: a
@@ -196,14 +196,14 @@
 			.then(start)
 			.catch((cause) => {
 				const why = cause instanceof Error ? cause.message : String(cause);
-				app.notice = `Your saved work could not be opened. ${why}`;
+				app.notice = `Could not open your saved work. ${why}`;
 			});
 		ensureEngine().catch(
 			async (cause) => {
 				// After the start, which clears notices as it loads.
 				await started;
 				const why = cause instanceof Error ? cause.message : String(cause);
-				app.notice = `The simulation engine could not be loaded, so nothing can be run. Reloading the page usually fixes it. ${why}`;
+				app.notice = `Could not load the simulation engine. Reload the page. ${why}`;
 			}
 		);
 	});
@@ -370,7 +370,7 @@
 	onclick={(event) => {
 		event.preventDefault();
 		document.getElementById('drawing')?.focus();
-	}}>Skip to the drawing</a
+	}}>Skip to the canvas</a
 >
 
 
@@ -387,7 +387,7 @@
 		<div class="banner warn" role="alert">
 			{app.notice}
 			{#if linkBehind}
-				<button
+				<Pressable
 					class="link-behind"
 					onclick={async () => {
 						const hash = linkBehind!;
@@ -395,16 +395,16 @@
 						if (await openLink(hash)) app.notice = null;
 					}}
 				>
-					Open the link as sent
-				</button>
+					Open the original link
+				</Pressable>
 			{/if}
-			<button
+			<Pressable
 				class="dismiss"
 				onclick={() => {
 					app.notice = null;
 					linkBehind = null;
 				}}
-				aria-label="Dismiss">×</button
+				aria-label="Dismiss">×</Pressable
 			>
 		</div>
 	{:else if app.error}
@@ -421,7 +421,7 @@
 			<Sidebar />
 			{@render splitter('left', 'right', 'Resize the parts panel')}
 		</aside>
-		<section class="canvas" id="drawing" tabindex="-1" aria-label="Drawing">
+		<section class="canvas" id="drawing" tabindex="-1" aria-label="Canvas">
 			<Schematic bind:this={schematic} />
 		</section>
 		<aside class="right" class:open={panel === 'details'} inert={drawerClosed(narrow, panel, 'details')}>
@@ -429,7 +429,7 @@
 			{@render splitter('right', 'left', 'Resize the details panel')}
 		</aside>
 		{#if panel}
-			<button class="backdrop" aria-label="Close the panel" onclick={() => (panel = null)}></button>
+			<Pressable class="backdrop" aria-label="Close the panel" onclick={() => (panel = null)}></Pressable>
 		{/if}
 	</main>
 
@@ -452,27 +452,27 @@
 		<span class="flex-1"></span>
 		<Button
 			size="touch"
-			disabled={app.selection.length === 0}
+			disabled={app.selection.length === 0 || app.locked}
 			onclick={() => app.rotateSelection()}
-			title="Turn a quarter turn; wires follow"
+			title="Rotate 90°; wires follow"
 		>
 			Rotate
 		</Button>
 		<Button
 			size="touch"
 			class="text-danger"
-			disabled={app.selection.length === 0}
+			disabled={app.selection.length === 0 || app.locked}
 			onclick={() => app.deleteSelection()}
 		>
 			Delete
 		</Button>
 		<span class="flex-1"></span>
-		<Button size="touch" onclick={() => schematic?.fitToContent()} title="Fit the drawing on screen">Fit</Button>
+		<Button size="touch" onclick={() => schematic?.fitToContent()} title="Fit circuit to screen">Fit</Button>
 		<Button
 			size="touch"
 			active={layout.scopeOpen}
 			onclick={() => layout.toggleScope()}
-			title={layout.scopeOpen ? 'Put the scope away' : 'Bring the scope back'}
+			title={layout.scopeOpen ? 'Hide scope' : 'Show scope'}
 		>
 			Scope
 		</Button>
@@ -548,7 +548,7 @@
 		box-shadow: inset 3px 0 0 var(--tone);
 	}
 
-	.dismiss {
+	.banner :global(.dismiss) {
 		margin-left: auto;
 		border: none;
 		background: none;
@@ -561,7 +561,7 @@
 		transition: color var(--duration-fast) var(--ease-out-strong);
 	}
 
-	.dismiss:hover {
+	.banner :global(.dismiss:hover) {
 		color: var(--text);
 	}
 
@@ -591,7 +591,7 @@
 
 	/* Phone-only, and folded away on anything wider. */
 	.phone-bar,
-	.backdrop {
+	main :global(.backdrop) {
 		display: none;
 	}
 
@@ -693,7 +693,7 @@
 			transform: none;
 		}
 
-		.backdrop {
+		main :global(.backdrop) {
 			display: block;
 			position: fixed;
 			inset: 0;

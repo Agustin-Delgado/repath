@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { Search, X } from '@lucide/svelte';
 	import { EXAMPLES, exampleDomain, type Example, type ExampleDomain } from '$lib/examples';
 	import { search } from '$lib/search';
 	import { app } from '$lib/state.svelte';
+	import { Pressable, SearchField } from '$lib/ui';
 
 	/**
 	 * Circuits to open, filed the way the parts are: by what they are made of.
@@ -48,41 +48,17 @@
 
 <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
 	<div class="border-b border-border p-2">
-		<label
-			class="flex h-7 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-muted field"
-		>
-			<Search class="size-3.5 shrink-0" />
-			<input
-				bind:this={searchInput}
-				bind:value={query}
-				onkeydown={(event) => {
-					if (event.key === 'Enter' && found[0]) open(found[0]);
-					else if (event.key === 'Escape') {
-						if (query) query = '';
-						else searchInput?.blur();
-					}
-				}}
-				type="search"
-				placeholder="Find an example…"
-				aria-label="Find an example"
-				autocomplete="off"
-				spellcheck="false"
-				class="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-ui text-fg outline-none [&::-webkit-search-cancel-button]:hidden"
-			/>
-			{#if query}
-				<button
-					type="button"
-					class="flex cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-fg"
-					aria-label="Clear the search"
-					onclick={() => {
-						query = '';
-						searchInput?.focus();
-					}}
-				>
-					<X class="size-3.5" />
-				</button>
-			{/if}
-		</label>
+		<SearchField
+			bind:element={searchInput}
+			bind:value={query}
+			onkeydown={(event) => {
+				if (event.key === 'Enter' && found[0]) open(found[0]);
+				// An Escape that found the box already empty lets go of it.
+				else if (event.key === 'Escape' && !event.defaultPrevented) searchInput?.blur();
+			}}
+			placeholder="Find an example…"
+			aria-label="Find an example"
+		/>
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-y-auto p-2">
@@ -99,10 +75,10 @@
 				<ul class="m-0 flex list-none flex-col gap-0.5 p-0">
 					{#each examples as example (example.id)}
 						<li>
-							<button
+							<Pressable
 								type="button"
 								onclick={() => open(example)}
-								title="Open {example.name}; it replaces the drawing, and Ctrl+Z brings the drawing back"
+								title="Replaces the circuit. Ctrl+Z to undo."
 								class="flex w-full cursor-pointer flex-col gap-0.5 rounded-md border-0 bg-transparent px-1.5 py-1.5 text-left hover:bg-hover"
 							>
 								<span class="flex items-center gap-1.5 text-ui text-fg">
@@ -117,13 +93,13 @@
 								<span class="line-clamp-2 text-3xs leading-snug text-muted">
 									{example.description}
 								</span>
-							</button>
+							</Pressable>
 						</li>
 					{/each}
 				</ul>
 			</section>
 		{:else}
-			<p class="m-0 px-1 py-4 text-center text-2xs text-muted">No example matches “{query.trim()}”.</p>
+			<p class="m-0 px-1 py-4 text-center text-2xs text-muted">No match for “{query.trim()}”.</p>
 		{/each}
 	</div>
 </div>

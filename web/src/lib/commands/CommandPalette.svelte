@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { Dialog } from '@human-kit/ui';
 	import { CornerDownLeft, Search } from '@lucide/svelte';
 	import PartIcon from '$lib/components/palette/PartIcon.svelte';
 	import { allParts, pickPart } from '$lib/parts/drawing';
@@ -7,6 +6,7 @@
 	import { recentParts } from '$lib/parts/recent.svelte';
 	import { fold, search } from '$lib/search';
 	import { app } from '$lib/state.svelte';
+	import { Dialog, TextInput } from '$lib/ui';
 	import { buildCommands, keepHighlight, type Command, type CommandContext } from './commands';
 
 	/**
@@ -42,7 +42,8 @@
 	 * a command's name is what it does and a part is one of many.
 	 */
 	const rows = $derived.by((): Row[] => {
-		const parts = allParts(app);
+		// A run locks the drawing: only a probe can still go on it.
+		const parts = allParts(app).filter((part) => !app.locked || part.kind === 'probe');
 		const q = query.trim();
 		if (!q) {
 			const byKind = new Map(parts.map((part) => [part.kind, part]));
@@ -152,72 +153,68 @@
 
 <svelte:window onkeydown={onWindowKey} />
 
-<Dialog.Root bind:open>
-	<Dialog.Portal>
-		<Dialog.Overlay class="fixed inset-0 z-50 bg-(--scrim)" />
-		<Dialog.Content
-			class="fixed top-[12vh] left-1/2 z-50 flex max-h-[70vh] w-[min(560px,calc(100vw-2rem))] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-raised text-fg shadow-dialog outline-none"
-		>
-			<Dialog.Title class="sr-only">Find a part or a command</Dialog.Title>
-			<label class="flex items-center gap-2 border-b border-border px-3">
-				<Search class="size-4 shrink-0 text-muted" />
-				<input
-					bind:value={query}
-					onkeydown={onKey}
-					placeholder="Find a part, a command, an example…"
-					aria-label="Find a part or a command"
-					aria-controls="command-rows"
-					aria-activedescendant={rows.length ? `command-row-${active}` : undefined}
-					autocomplete="off"
-					spellcheck="false"
-					class="h-11 min-w-0 flex-1 border-0 bg-transparent p-0 text-md text-fg outline-none placeholder:text-muted"
-				/>
-				<kbd class="rounded border border-border px-1.5 font-mono text-3xs leading-4 text-muted">Esc</kbd>
-			</label>
+<Dialog
+	bind:open
+	title="Find part or command"
+	class="top-[12vh] left-1/2 max-h-[70vh] w-[min(560px,calc(100vw-2rem))] -translate-x-1/2"
+>
+	<label class="flex items-center gap-2 border-b border-border px-3">
+		<Search class="size-4 shrink-0 text-muted" />
+		<TextInput
+			bind:value={query}
+			onkeydown={onKey}
+			placeholder="Part, command or example…"
+			aria-label="Find part or command"
+			aria-controls="command-rows"
+			aria-activedescendant={rows.length ? `command-row-${active}` : undefined}
+			autocomplete="off"
+			spellcheck="false"
+			class="h-11 min-w-0 flex-1 border-0 bg-transparent p-0 text-md text-fg outline-none placeholder:text-muted"
+		/>
+		<kbd class="rounded border border-border px-1.5 font-mono text-3xs leading-4 text-muted">Esc</kbd>
+	</label>
 
-			<div id="command-rows" role="listbox" aria-label="Results" class="min-h-0 flex-1 overflow-y-auto p-1.5">
-				{#each rows as row, i (row.key)}
-					{#if i === 0 || heading(rows[i - 1]) !== heading(row)}
-						<div class="px-2 pt-2 pb-1 eyebrow">
-							{heading(row)}
-						</div>
-					{/if}
-					<!-- svelte-ignore a11y_click_events_have_key_events -->
-					<div
-						id="command-row-{i}"
-						role="option"
-						tabindex="-1"
-						aria-selected={i === active}
-						onclick={() => choose(row)}
-						onpointermove={() => highlight(i)}
-						class="flex min-h-8 cursor-pointer items-center gap-2.5 rounded-md px-2 py-1 [--symbol-stroke:var(--symbol)]
-							{i === active ? 'bg-hover [--symbol-stroke:var(--text)]' : ''}"
-					>
-						{#if row.type === 'part'}
-							<PartIcon kind={row.part.kind} class="h-[22px] w-[30px]" />
-							<div class="flex min-w-0 flex-1 flex-col">
-								<span class="truncate text-ui">Place {row.part.label}</span>
-								<span class="truncate text-3xs text-muted">
-									{sectionLabel(row.part.section)}{row.part.description ? ` · ${row.part.description}` : ''}
-								</span>
-							</div>
-						{:else}
-							<div class="flex min-w-0 flex-1 flex-col">
-								<span class="truncate text-ui">{row.command.label}</span>
-								{#if row.command.description}
-									<span class="truncate text-3xs text-muted">{row.command.description}</span>
-								{/if}
-							</div>
-							{#if row.command.shortcut}
-								<kbd class="shrink-0 font-mono text-3xs text-muted">{row.command.shortcut}</kbd>
-							{/if}
-						{/if}
-						{#if i === active}<CornerDownLeft class="size-3.5 shrink-0 text-muted" />{/if}
+	<div id="command-rows" role="listbox" aria-label="Results" class="min-h-0 flex-1 overflow-y-auto p-1.5">
+		{#each rows as row, i (row.key)}
+			{#if i === 0 || heading(rows[i - 1]) !== heading(row)}
+				<div class="px-2 pt-2 pb-1 eyebrow">
+					{heading(row)}
+				</div>
+			{/if}
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<div
+				id="command-row-{i}"
+				role="option"
+				tabindex="-1"
+				aria-selected={i === active}
+				onclick={() => choose(row)}
+				onpointermove={() => highlight(i)}
+				class="flex min-h-8 cursor-pointer items-center gap-2.5 rounded-md px-2 py-1 [--symbol-stroke:var(--symbol)]
+					{i === active ? 'bg-hover [--symbol-stroke:var(--text)]' : ''}"
+			>
+				{#if row.type === 'part'}
+					<PartIcon kind={row.part.kind} class="h-[22px] w-[30px]" />
+					<div class="flex min-w-0 flex-1 flex-col">
+						<span class="truncate text-ui">Place {row.part.label}</span>
+						<span class="truncate text-3xs text-muted">
+							{sectionLabel(row.part.section)}{row.part.description ? ` · ${row.part.description}` : ''}
+						</span>
 					</div>
 				{:else}
-					<p class="m-0 px-2 py-6 text-center text-ui text-muted">Nothing called “{query.trim()}”.</p>
-				{/each}
+					<div class="flex min-w-0 flex-1 flex-col">
+						<span class="truncate text-ui">{row.command.label}</span>
+						{#if row.command.description}
+							<span class="truncate text-3xs text-muted">{row.command.description}</span>
+						{/if}
+					</div>
+					{#if row.command.shortcut}
+						<kbd class="shrink-0 font-mono text-3xs text-muted">{row.command.shortcut}</kbd>
+					{/if}
+				{/if}
+				{#if i === active}<CornerDownLeft class="size-3.5 shrink-0 text-muted" />{/if}
 			</div>
-		</Dialog.Content>
-	</Dialog.Portal>
-</Dialog.Root>
+		{:else}
+			<p class="m-0 px-2 py-6 text-center text-ui text-muted">No match for “{query.trim()}”.</p>
+		{/each}
+	</div>
+</Dialog>

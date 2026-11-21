@@ -38,6 +38,7 @@
 	import { CONTACTS, GRID, OPERABLE, SINGLE_CONTACTS } from '$lib/schematic/model';
 	import { groupLabelBox, groupLabelSize, placeGroups } from '$lib/schematic/groups';
 	import { routeWire } from '$lib/schematic/route';
+	import { Pressable, TextInput } from '$lib/ui';
 	import { parseTrace } from '$lib/trace';
 	import { junctionDots } from '$lib/schematic/nets';
 	import { buildSceneItems, buildSnapTargets } from '$lib/schematic/scene';
@@ -348,7 +349,7 @@
 			const parsed = parseQuantity(raw, value.unit);
 			refusal =
 				parsed === null
-					? `"${raw.trim()}" is not a value in ${value.unit}. Try 330, 4k7 or 4.7 k${value.unit}.`
+					? `"${raw.trim()}" is not a value in ${value.unit}. Examples: 330, 4k7, 4.7 k${value.unit}.`
 					: app.setParam(box.id, value.key, parsed);
 		}
 		if (refusal) app.notice = refusal;
@@ -755,6 +756,21 @@
 		};
 	});
 
+	/**
+	 * Whether the run-mode note is drawing the eye: for a moment after an edit
+	 * was refused, so a blocked click is answered without a toast for each.
+	 */
+	let nudged = $state(false);
+	let refusalsSeen = 0;
+	$effect(() => {
+		const count = app.refusals;
+		if (count === refusalsSeen) return;
+		refusalsSeen = count;
+		nudged = true;
+		const settle = setTimeout(() => (nudged = false), 900);
+		return () => clearTimeout(settle);
+	});
+
 	export function fitToContent() {
 		editor?.fit();
 	}
@@ -833,6 +849,11 @@
 					return;
 				case 'x':
 					if (textSelected()) return;
+					// A cut is a delete: refused whole while a run locks the drawing.
+					if (app.refuse()) {
+						event.preventDefault();
+						return;
+					}
 					if (app.copySelection()) {
 						app.deleteSelection();
 						event.preventDefault();
@@ -915,19 +936,19 @@
 	{#if app.inside}
 		<div class="inside">
 			<span>
-				Inside <strong>{app.inside.name}</strong> — every copy of the block changes with it. Wire a
-				pin to a <em>Port</em> to give the box a pin.
+				Inside <strong>{app.inside.name}</strong>. Edits change every copy. Wire a pin to a
+				<em>Port</em> to add a pin to the box.
 			</span>
-			<button onclick={() => app.leaveBlock()}>Back to the drawing</button>
+			<Pressable onclick={() => app.leaveBlock()}>Leave block</Pressable>
 		</div>
 	{/if}
+	{#if app.locked}
+		<p class="run-note" role="status" data-nudged={nudged ? '' : undefined}>Running. Stop to edit.</p>
+	{/if}
 	{#if labelBox}
-		<!-- svelte-ignore a11y_autofocus -->
-		<input
+		<TextInput
 			class="rename"
-			style:left="{labelBox.x - 4}px"
-			style:top="{labelBox.y - 3}px"
-			style:font-size="{Math.max(labelBox.size, 11)}px"
+			style="left: {labelBox.x - 4}px; top: {labelBox.y - 3}px; font-size: {Math.max(labelBox.size, 11)}px"
 			value={labelBox.text}
 			size={Math.max(4, labelBox.text.length + 2)}
 			aria-label={labelBox.slot === 'name' ? 'Part name' : 'Part value'}
@@ -946,12 +967,9 @@
 		/>
 	{/if}
 	{#if renameBox}
-		<!-- svelte-ignore a11y_autofocus -->
-		<input
+		<TextInput
 			class="rename"
-			style:left="{renameBox.x}px"
-			style:top="{renameBox.y}px"
-			style:font-size="{renameBox.size}px"
+			style="left: {renameBox.x}px; top: {renameBox.y}px; font-size: {renameBox.size}px"
 			value={renameBox.name}
 			size={Math.max(4, renameBox.name.length + 1)}
 			aria-label="Group name"
@@ -1005,7 +1023,7 @@
 		pointer-events: none;
 	}
 
-	.inside button {
+	.inside :global(button) {
 		pointer-events: auto;
 		padding: 0.3rem 0.6rem;
 		font-size: var(--text-2xs);
@@ -1019,11 +1037,36 @@
 		transition: background-color var(--duration-fast) var(--ease-out-strong);
 	}
 
-	.inside button:hover {
+	.inside :global(button:hover) {
 		background: var(--hover);
 	}
 
-	.rename {
+	/* Says the drawing is locked, at the foot of it, out of the way of the parts. */
+	.run-note {
+		position: absolute;
+		left: 50%;
+		bottom: 0.75rem;
+		transform: translateX(-50%);
+		margin: 0;
+		padding: 0.2rem 0.6rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: var(--raised);
+		color: var(--label-dim);
+		font-size: var(--text-2xs);
+		white-space: nowrap;
+		pointer-events: none;
+		transition-property: color, border-color;
+		transition-duration: var(--duration-base);
+		transition-timing-function: var(--ease-out-strong);
+	}
+
+	.run-note[data-nudged] {
+		border-color: var(--accent);
+		color: var(--text);
+	}
+
+	.stage :global(.rename) {
 		position: absolute;
 		padding: 2px 3px;
 		border: 1px solid var(--accent);

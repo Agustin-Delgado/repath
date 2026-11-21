@@ -32,25 +32,25 @@ export function readFirmware(text: string, capacity: number): FirmwareSummary {
 		const line = index + 1;
 		const record = raw.trim();
 		if (record === '') continue;
-		if (!record.startsWith(':')) return fail(line, "a record has to start with ':'");
+		if (!record.startsWith(':')) return fail(line, "a record must start with ':'");
 		const digits = record.slice(1);
 		if (!/^[0-9A-Fa-f]*$/.test(digits)) {
-			return fail(line, "a record is hexadecimal digits after the ':'");
+			return fail(line, "a record must be hex digits after the ':'");
 		}
 		if (digits.length % 2 !== 0 || digits.length < 10) {
-			return fail(line, 'the record is too short or has half a byte');
+			return fail(line, 'the record is too short or has an odd number of digits');
 		}
 		const data: number[] = [];
 		for (let i = 0; i < digits.length; i += 2) data.push(parseInt(digits.slice(i, i + 2), 16));
 		const count = data[0];
 		if (data.length !== count + 5) {
-			return fail(line, `the record says it carries ${count} bytes but has ${data.length - 5}`);
+			return fail(line, `the record declares ${count} bytes but has ${data.length - 5}`);
 		}
 		const sum = data.reduce((a, b) => (a + b) & 0xff, 0);
 		if (sum !== 0) {
 			const given = data[data.length - 1];
 			const expected = (given - sum) & 0xff;
-			return fail(line, `the checksum is ${hex2(given)} where the record needs ${hex2(expected)}`);
+			return fail(line, `checksum ${hex2(given)}, expected ${hex2(expected)}`);
 		}
 		const address = (data[1] << 8) | data[2];
 		switch (data[3]) {
@@ -70,7 +70,7 @@ export function readFirmware(text: string, capacity: number): FirmwareSummary {
 				return { bytes, problem: null };
 			case 0x02:
 			case 0x04: {
-				if (count !== 2) return fail(line, 'an extended address record carries two bytes');
+				if (count !== 2) return fail(line, 'an extended address record must have two bytes');
 				const value = (data[4] << 8) | data[5];
 				base = data[3] === 0x02 ? value << 4 : value * 0x10000;
 				break;
@@ -79,12 +79,12 @@ export function readFirmware(text: string, capacity: number): FirmwareSummary {
 			case 0x05:
 				break;
 			default:
-				return fail(line, `record type ${hex2(data[3])} is not one Intel HEX has`);
+				return fail(line, `record type ${hex2(data[3])} is not valid Intel HEX`);
 		}
 	}
 	return {
 		bytes,
-		problem: `line ${Math.max(lines.length, 1)}: there is no end-of-file record; the file may have been cut short`
+		problem: `line ${Math.max(lines.length, 1)}: no end-of-file record; the file may be truncated`
 	};
 }
 

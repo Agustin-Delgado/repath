@@ -13,7 +13,7 @@
 	 * away: the overlays and the transport are what a folded scope still needs.
 	 */
 	import { ChevronDown, Play, RotateCcw, StepForward, Volume2, VolumeX } from '@lucide/svelte';
-	import { Button } from '$lib/ui';
+	import { Button, ToolbarSeparator } from '$lib/ui';
 	import { overflowHint } from '$lib/ui/overflow';
 	import { VOLTAGE_SCALE } from '$lib/schematic/animate';
 	import { BUZZER_KIND } from '$lib/schematic/buzzer';
@@ -33,8 +33,8 @@
 	}
 
 	function describe(speed: number | 'real'): string {
-		if (speed === 'real') return 'A simulated second per real second, whatever the window';
-		return `${speed}× — a window every ${formatValue(4 / speed, 2)} seconds, which here is ${against(speed)}`;
+		if (speed === 'real') return 'Real time: 1 s simulated per 1 s';
+		return `${speed}×: one window per ${formatValue(4 / speed, 2)} s (${against(speed)})`;
 	}
 
 	const started = $derived(app.acquiring !== null);
@@ -57,13 +57,13 @@
 
 	const LAYERS = [
 		{ key: 'showVoltage', label: 'Voltage', title: 'Colour wires by voltage' },
-		{ key: 'showCurrent', label: 'Current', title: 'Animate current along the wires' },
+		{ key: 'showCurrent', label: 'Current', title: 'Animate current in wires' },
 		{
 			key: 'showValues',
 			label: 'Values',
-			title: 'Print the voltage on each net and the current through each part'
+			title: 'Show net voltages and part currents'
 		},
-		{ key: 'showLight', label: 'Light', title: 'Light the LEDs from the current through them' }
+		{ key: 'showLight', label: 'Light', title: 'Light LEDs by their current' }
 	] as const;
 </script>
 
@@ -82,7 +82,7 @@
 		<span class="flex-1"></span>
 	{:else}
 		{#if started && !app.playing}
-			<Button size="sm" class="h-6.5" onclick={() => app.togglePlay()} title="Carry on from where the sweep stopped (Space)">
+			<Button size="sm" class="h-6.5" onclick={() => app.togglePlay()} title="Continue (Space)">
 				<Play class="fill-current" /> Resume
 			</Button>
 		{/if}
@@ -91,7 +91,7 @@
 			class="h-6.5"
 			onclick={() => app.single()}
 			disabled={app.playing}
-			title="Sweep one window and stop there"
+			title="Run one window, then stop"
 		>
 			<StepForward /> Single
 		</Button>
@@ -105,7 +105,7 @@
 			class="h-6.5"
 			onclick={() => app.reset()}
 			disabled={!started}
-			title="Throw the run away and go back to the drawing at rest"
+			title="Discard the run and go back to t = 0"
 		>
 			<RotateCcw /> Reset
 		</Button>
@@ -114,18 +114,16 @@
 		<span class="min-w-[4.5rem] text-right font-mono {app.playing ? 'text-fg' : 'text-muted'}">
 			{formatWithUnit(app.playbackTime, 's', 3)}
 		</span>
-		{#if !started}
-			<span class="whitespace-nowrap text-muted narrow:hidden">nothing running — press Run</span>
-		{:else if lagging}
+		{#if lagging}
 			<span
 				class="whitespace-nowrap text-(--warn-text) narrow:hidden"
-				title="The circuit is being solved slower than the timebase asks for"
+				title="The solver is slower than the selected speed"
 			>
-				{Math.round(keeping * 100)}% of the timebase
+				{Math.round(keeping * 100)}% speed
 			</span>
-		{:else if !app.playing}
+		{:else if started && !app.playing}
 			<span class="whitespace-nowrap text-muted narrow:hidden">
-				stopped · drag the scope to look around
+				stopped · drag the scope to pan
 			</span>
 		{/if}
 
@@ -142,9 +140,7 @@
 				active={app.soundOn}
 				aria-pressed={app.soundOn}
 				onclick={() => void app.setSound(!app.soundOn)}
-				title={app.soundOn
-					? 'Stop playing the buzzers'
-					: 'Play the buzzers through the speakers, at the pitch the circuit drives them at'}
+				title={app.soundOn ? 'Mute buzzers' : 'Play buzzers'}
 			>
 				{#if app.soundOn}<Volume2 /> Sound{:else}<VolumeX /> Sound{/if}
 			</Button>
@@ -157,7 +153,7 @@
 		-->
 		<span
 			class="font-mono text-3xs whitespace-nowrap text-muted"
-			title="Simulated time against real time at this speed and window"
+			title="Simulated time vs real time"
 		>
 			{against(app.playbackSpeed)}
 		</span>
@@ -180,7 +176,7 @@
 			{/each}
 		</div>
 
-		<span class="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
+		<ToolbarSeparator />
 
 		<div class="flex gap-1" role="group" aria-label="Live overlay">
 			{#each LAYERS as layer (layer.key)}
@@ -210,7 +206,7 @@
 		</div>
 	{/if}
 
-	<span class="mx-0.5 h-5 w-px shrink-0 bg-border narrow:hidden" aria-hidden="true"></span>
+	<ToolbarSeparator class="narrow:hidden" />
 	<!-- The phone bar has its own Scope button, and the scope its own row there. -->
 	<Button
 		variant="ghost"
@@ -218,8 +214,8 @@
 		class="size-6.5 narrow:hidden"
 		aria-expanded={layout.scopeOpen}
 		onclick={() => layout.toggleScope()}
-		title={layout.scopeOpen ? 'Fold the scope away' : 'Bring the scope back'}
-		aria-label={layout.scopeOpen ? 'Fold the scope away' : 'Bring the scope back'}
+		title={layout.scopeOpen ? 'Hide scope' : 'Show scope'}
+		aria-label={layout.scopeOpen ? 'Hide scope' : 'Show scope'}
 	>
 		<ChevronDown class="transition-transform {layout.scopeOpen ? '' : 'rotate-180'}" />
 	</Button>

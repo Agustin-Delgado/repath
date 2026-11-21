@@ -161,7 +161,7 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 			{ kind: 'switch', a: 'DIS', b: 'GND', control: 'down', reference: EARTH, on: 2.4, off: 1, ron: 10 }
 		],
 		caveat:
-			'The output swings all the way to the supply through 10 Ω; a bipolar 555 stops about 1.7 V short of it.'
+			'The output swings to the supply through 10 Ω. A bipolar 555 stops about 1.7 V below it.'
 	},
 
 	// Op-amps. The pin names are the datasheets', and so is the shape: one
@@ -225,7 +225,7 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 		layout: DUAL,
 		blocks: [],
 		analog: [...openCollector(1), ...openCollector(2)],
-		caveat: 'Each output only pulls down: it needs a pull-up resistor to read high.'
+		caveat: 'Open collector: each output needs a pull-up resistor.'
 	},
 	{
 		id: 'LM339',
@@ -240,7 +240,7 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 		],
 		blocks: [],
 		analog: [1, 2, 3, 4].flatMap(openCollector),
-		caveat: 'Each output only pulls down: it needs a pull-up resistor to read high.'
+		caveat: 'Open collector: each output needs a pull-up resistor.'
 	},
 
 	// Schmitt-trigger gates. Each input is read against two thresholds, rising
@@ -257,7 +257,7 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 		),
 		analog: [1, 2, 3, 4, 5, 6].map((n) => schmitt(`${n}A`, `${n}in`, 0.55, 0.36)),
 		caveat:
-			'The thresholds are those of the 74HC14, as fractions of the supply; the TTL part switches lower, at about 1.6 V and 0.8 V.'
+			'Thresholds of the 74HC14, as fractions of the supply. The TTL part switches lower, at about 1.6 V and 0.8 V.'
 	},
 	{
 		id: '74132',
@@ -272,7 +272,7 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 			schmitt(`${n}A`, `${n}a`, 0.55, 0.36),
 			schmitt(`${n}B`, `${n}b`, 0.55, 0.36)
 		]),
-		caveat: 'The thresholds are those of the 74HC132, as fractions of the supply.'
+		caveat: 'Thresholds of the 74HC132, as fractions of the supply.'
 	},
 	{
 		id: '40106',
@@ -323,7 +323,7 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 			})
 		),
 		caveat:
-			'The on-resistance is a fixed 125 Ω; on the real part it rises as the signal nears either supply, and more so at low supply voltages. The control thresholds are read off the supply once, when the run starts.'
+			'Fixed 125 Ω on-resistance. On the real part it rises near either supply, more at a low supply voltage. The control thresholds come from the supply at the start of the run.'
 	},
 	{
 		id: 'L293D',
@@ -362,7 +362,7 @@ export const ANALOG_CHIPS: readonly ChipDef[] = [
 			])
 		],
 		caveat:
-			'Each output switches through 1.5 Ω; the real part drops about 1.4 V on the high side and 1.2 V on the low at an amp, so a motor gets rather less than VCC2.'
+			'Each output switches through 1.5 Ω. At 1 A the real part drops about 1.4 V high side and 1.2 V low side, so a motor gets less than VCC2.'
 	},
 	{
 		id: 'ULN2003',

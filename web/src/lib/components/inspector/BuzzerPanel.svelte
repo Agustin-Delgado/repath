@@ -36,14 +36,13 @@
 	<h3 class={sectionTitle}>Sound</h3>
 	<p class="{hint} rounded-md border border-border bg-canvas px-2 py-1.5">
 		{#if !ran}
-			Run the circuit to hear what drives it: a sketch's <code>tone()</code>, a pin toggled by hand, a
-			PWM output.
+			Sounds on <code>tone()</code>, a toggled pin or PWM.
 		{:else if tone}
-			Sounding at <strong class="text-fg">{formatWithUnit(tone.frequency, 'Hz', 4)}</strong
+			<strong class="text-fg">{formatWithUnit(tone.frequency, 'Hz', 4)}</strong
 			>{#if note}, {note}{/if}.
-			{#if !audible(tone.frequency)}Outside hearing, so not played.{/if}
+			{#if !audible(tone.frequency)}Inaudible: not played.{/if}
 		{:else}
-			Silent: nothing is driving it at a pitch at this instant.
+			Silent.
 		{/if}
 	</p>
 	<Button
@@ -51,20 +50,17 @@
 		active={app.soundOn}
 		aria-pressed={app.soundOn}
 		onclick={toggle}
-		title={app.soundOn ? 'Stop playing the buzzers' : 'Play the buzzers through the speakers'}
+		title={app.soundOn ? 'Mute buzzers' : 'Play buzzers'}
 	>
 		{#if app.soundOn}<Volume2 /> Sound on{:else}<VolumeX /> Sound off{/if}
 	</Button>
 	{#if unavailable}
-		<p class={hint}>This browser cannot play sound from a page.</p>
+		<p class={hint}>This browser cannot play sound.</p>
 	{:else if app.soundOn && stretch !== null}
 		<p class={hint}>
-			Each note keeps its pitch and lasts {stretch > 1
-				? `${formatValue(stretch, 3)}× as long`
-				: `1/${formatValue(1 / stretch, 3)} as long`} as in the sketch, at this speed. Pick 1:1
-			to hear it at its tempo.
+			At this speed each note lasts {stretch > 1
+				? `${formatValue(stretch, 3)}×`
+				: `1/${formatValue(1 / stretch, 3)}`} as long, at the same pitch. Set 1:1 for the real tempo.
 		</p>
-	{:else if !app.soundOn}
-		<p class={hint}>Off until you turn it on: a page may only make sound after a click.</p>
 	{/if}
 </section>

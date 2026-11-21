@@ -17,6 +17,7 @@ import {
 	rectFromPoints,
 	snapPoint,
 	type EditorPointer,
+	type EditorWheel,
 	type Painter,
 	type Rect,
 	type SnapTarget,
@@ -26,14 +27,28 @@ import {
 } from '$lib/canvas';
 import { app } from '$lib/state.svelte';
 import { currentTheme, editableValue, labelAt } from '../draw';
-import { OPERABLE, wireSegments, type LabelSlot, type Point } from '../model';
+import { knobOf, OPERABLE, wireSegments, type Instance, type LabelSlot, type Point } from '../model';
+import { dragTo, rangeOf, wheelTo } from '$lib/ui/knob/knob';
 import { elbow, fallback, lastResort, previewRouter, routeWire } from '../route';
 import { groupLabelAt } from '../groups';
 import { blockOf } from '../model';
 import type { SchematicItem } from '../scene';
 import { connectsAt, drawSnapHint, netAt } from './shared';
 
-type Mode = 'idle' | 'move' | 'marquee' | 'wire' | 'label' | 'operate';
+/**
+ * `turn` is a knob being dragged during a run, and `still` a press on a part
+ * a run does not let move: it selects, and a drag from it goes nowhere.
+ */
+type Mode = 'idle' | 'move' | 'marquee' | 'wire' | 'label' | 'operate' | 'turn' | 'still';
+
+/** The knob of a part, as a key and a range, or null for a part with none. */
+function knobFor(part: Instance | undefined): { key: string; range: ReturnType<typeof rangeOf> } | null {
+	const param = part && knobOf(part);
+	return param ? { key: param.key, range: rangeOf(param.min, param.max) } : null;
+}
+
+/** Milliseconds of stillness after which a roll of the wheel is a new turn, and a new undo step. */
+const NEW_TURN_MS = 400;
 
 /** How close to a pin the cursor has to be for a drag to mean "start a wire". */
 const PIN_REACH = 1.1;
@@ -102,6 +117,67 @@ export function createSelectTool(): Tool {
 	let wireTo: SnapTarget | null = null;
 	/** The label being dragged, and where it had been dragged to before this drag. */
 	let draggedLabel: { id: string; slot: LabelSlot; from: Point } | null = null;
+	/** The knob being turned by a drag: where it was and where the press was, in screen pixels. */
+	let turning: {
+		id: string;
+		key: string;
+		range: ReturnType<typeof rangeOf>;
+		from: number;
+		y: number;
+		first: boolean;
+	} | null = null;
+	/** When the wheel last turned a knob, and which. */
+	let rolled: { id: string; at: number } | null = null;
+
+	/**
+	 * A press while a run locks the drawing. A knob is turned, a switch or a
+	 * button worked, anything else only selected; a press on nothing still
+	 * draws a marquee, since choosing what to read is not an edit.
+	 */
+	function runPress(pointer: EditorPointer, ctx: ToolContext): void {
+		const item = ctx.scene.top(pointer.world, ctx.tolerance);
+		if (!item) {
+			pressedId = null;
+			if (!extending(pointer)) app.selection = [];
+			mode = 'marquee';
+			marquee = rectFromPoints(pointer.world, pointer.world);
+			ctx.invalidate('schematic', 'overlay');
+			return;
+		}
+		pressedId = item.id;
+		if (extending(pointer)) {
+			app.selection = app.selection.includes(item.id)
+				? app.selection.filter((id) => id !== item.id)
+				: [...app.selection, item.id];
+			mode = 'still';
+			ctx.invalidate('schematic', 'overlay');
+			return;
+		}
+		app.selection = [item.id];
+		const part = app.schematic.instances.find((i) => i.id === item.id);
+		const knob = knobFor(part);
+		if (part && knob) {
+			const from = Number(part.params[knob.key]);
+			turning = { id: part.id, ...knob, from, y: pointer.screen.y, first: true };
+			mode = 'turn';
+			ctx.setCursor('ns-resize');
+		} else if (part && OPERABLE.has(part.kind)) {
+			if (part.kind === 'pushbutton') app.pressButton(item.id);
+			mode = 'operate';
+		} else {
+			mode = 'still';
+		}
+		ctx.invalidate('schematic', 'overlay');
+	}
+
+	/** What the cursor says over the drawing while a run locks it. */
+	function runCursor(pointer: EditorPointer, ctx: ToolContext): string {
+		const item = ctx.scene.top(pointer.world, ctx.tolerance);
+		if (!item) return 'default';
+		const part = app.schematic.instances.find((i) => i.id === item.id);
+		if (knobFor(part)) return 'ns-resize';
+		return part && OPERABLE.has(part.kind) ? 'pointer' : 'default';
+	}
 
 	/**
 	 * The leg of a wire nearest the cursor.
@@ -240,6 +316,7 @@ export function createSelectTool(): Tool {
 			app.moveLabel(draggedLabel.id, draggedLabel.slot, draggedLabel.from, false);
 		}
 		draggedLabel = null;
+		turning = null;
 		mode = 'idle';
 		marquee = null;
 		wireFrom = null;
@@ -298,6 +375,11 @@ export function createSelectTool(): Tool {
 				return;
 			}
 			if (pointer.button !== 0) return;
+
+			if (app.locked) {
+				runPress(pointer, ctx);
+				return;
+			}
 
 			// A pin under the cursor means the gesture is a connection, not a move.
 			const pin = pinUnder(pointer, ctx);
@@ -447,6 +529,23 @@ export function createSelectTool(): Tool {
 		},
 
 		pointerMove(pointer, ctx) {
+			if (mode === 'turn' && turning) {
+				const value = dragTo(turning.from, pointer.screen.y - turning.y, turning.range, pointer.shift);
+				if (app.turn(turning.id, turning.key, value, turning.first) === null) turning.first = false;
+				ctx.invalidate('schematic');
+				return;
+			}
+
+			if (mode === 'still') {
+				// Dragging a part the run holds in place: it stays, and says so once.
+				if (pointer.dragging && !moved) {
+					moved = true;
+					app.refuse();
+					ctx.setCursor('not-allowed');
+				}
+				return;
+			}
+
 			if (mode === 'wire') {
 				handRouted = pointer.shift;
 				wireTo = ctx.snap.resolve(pointer.world, ctx.tolerance * 1.4, ctx.gridSize);
@@ -489,6 +588,19 @@ export function createSelectTool(): Tool {
 			if (mode === 'marquee') {
 				marquee = rectFromPoints(pointer.origin, pointer.world);
 				ctx.invalidate('overlay');
+				return;
+			}
+
+			// Idle while a run locks the drawing: nothing to wire from, nothing to grab.
+			if (app.locked) {
+				if (hoveredPin) ctx.invalidate('overlay');
+				hoveredPin = null;
+				const net = netAt(pointer.world, ctx);
+				if (net !== app.hoverNet) {
+					app.hoverNet = net;
+					ctx.invalidate('schematic');
+				}
+				ctx.setCursor(runCursor(pointer, ctx));
 				return;
 			}
 
@@ -544,6 +656,8 @@ export function createSelectTool(): Tool {
 			} else if (mode === 'operate') {
 				const part = app.schematic.instances.find((i) => i.id === pressedId);
 				if (part && part.kind !== 'pushbutton') app.toggleSwitch(part.id);
+			} else if (mode === 'turn') {
+				turning = null;
 			} else if (mode === 'label') {
 				draggedLabel = null;
 			} else if (mode === 'marquee' && marquee) {
@@ -557,8 +671,25 @@ export function createSelectTool(): Tool {
 			marquee = null;
 			pressedId = null;
 			pressedSegment = null;
-			ctx.setCursor('default');
+			moved = false;
+			ctx.setCursor(app.locked ? runCursor(pointer, ctx) : 'default');
 			ctx.invalidate('schematic', 'overlay');
+		},
+
+		wheel(wheel: EditorWheel, ctx: ToolContext) {
+			// A knob under the pointer during a run turns, a notch a step.
+			if (!app.locked || wheel.ctrl || mode !== 'idle') return false;
+			const item = ctx.scene.top(wheel.world, ctx.tolerance);
+			const part = item && app.schematic.instances.find((i) => i.id === item.id);
+			const knob = knobFor(part);
+			if (!part || !knob) return false;
+			const now = performance.now();
+			const first = !rolled || rolled.id !== part.id || now - rolled.at > NEW_TURN_MS;
+			rolled = { id: part.id, at: now };
+			const value = wheelTo(Number(part.params[knob.key]), wheel.deltaY, knob.range, wheel.shift);
+			app.turn(part.id, knob.key, value, first);
+			ctx.invalidate('schematic');
+			return true;
 		},
 
 		pointerLeave(ctx) {

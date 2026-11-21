@@ -22,7 +22,7 @@ import {
 import { locateFailure, type LocatedFailure } from './schematic/culprits';
 import { EXAMPLES, exampleById } from './examples';
 import { sampleIndexAt } from './schematic/flow';
-import { contactControl, isHighAt } from './schematic/contacts';
+import { contactControlFrom, isHighAt, keptOperations } from './schematic/contacts';
 import { Acquisition } from './acquire';
 import { liveChanges, type RetuneAt } from './retune';
 import { nameRefusal } from './entry';
@@ -153,6 +153,15 @@ import {
  * mode whose whole job was drawing freely had nothing left to do.
  */
 export type Tool = { mode: 'select' } | { mode: 'place'; kind: string } | { mode: 'wire' };
+
+const SELECT_TOOL: Tool = { mode: 'select' };
+
+/** Tools that still work while a run locks the drawing: they add no part to the circuit. */
+const runTool = (tool: Tool): boolean =>
+	tool.mode === 'select' || (tool.mode === 'place' && tool.kind === 'probe');
+
+/** What a refused edit says while a run is going. */
+export const LOCKED_NOTE = 'Stop to edit.';
 
 export interface ProbeInfo {
 	/** Stable handle: a grid point the net passes through. */
@@ -351,6 +360,12 @@ const PASTE_TRIES = 8;
  */
 const DEFAULT_STOP_TIME = 5e-3;
 
+/**
+ * What a part nobody has operated answers with: one list, not a new one per
+ * question, so what is worked out from it can be kept against it.
+ */
+const NO_OPERATIONS: readonly number[] = Object.freeze([]);
+
 /** Degrees Celsius: the temperature every datasheet quotes at. */
 const DEFAULT_TEMPERATURE = 27;
 /** The frequency sweep a circuit gets until somebody chooses one: 1 Hz to 1 MHz. */
@@ -455,7 +470,19 @@ class AppState {
 	 * menu away and the palette is already open, which is invitation enough.
 	 */
 	schematic = $state<Schematic>({ instances: [], wires: [] });
-	tool = $state<Tool>({ mode: 'select' });
+	#tool = $state<Tool>({ mode: 'select' });
+	/**
+	 * What a press on the drawing does. While the run locks the drawing only
+	 * the select tool, or a probe in the hand, is offered: the others build.
+	 */
+	get tool(): Tool {
+		const tool = this.#tool;
+		return this.locked && !runTool(tool) ? SELECT_TOOL : tool;
+	}
+	set tool(tool: Tool) {
+		if (!runTool(tool) && this.refuse()) return;
+		this.#tool = tool;
+	}
 	selection = $state<string[]>([]);
 	probes = $state<string[]>([]);
 	/**
@@ -617,8 +644,13 @@ class AppState {
 	 *
 	 * Replaced on every acquired chunk rather than at the end of a run, because
 	 * there is no end: this is a window onto a sweep that is still going.
+	 *
+	 * Raw, not deep: it is replaced whole and never written into. A deep proxy
+	 * put a signal read in front of every sample the drawing touched, and made
+	 * fresh proxies for the edge lists on every frame — the colour ramp's scan
+	 * of the window alone was a fifth of the main thread.
 	 */
-	result = $state<TransientRun | null>(null);
+	result = $state.raw<TransientRun | null>(null);
 	/** The rolling memory behind `result`. */
 	capture = $state<Capture | null>(null);
 	/** The sweep itself, or null when nothing has been started. */
@@ -632,6 +664,13 @@ class AppState {
 	 * with it.
 	 */
 	operations = $state<Map<string, number[]>>(new Map());
+	/**
+	 * How many operations of each part `operations` no longer lists: the ones
+	 * from before what the run still remembers, let go so that a part worked a
+	 * thousand times costs what one worked a dozen times does. Counted so the
+	 * inspector can still say how many there were.
+	 */
+	private forgotten = new Map<string, number>();
 	/**
 	 * Every value changed while this run was going, and the instant of the run
 	 * it changed at, oldest first.
@@ -803,6 +842,76 @@ class AppState {
 	get operating(): boolean {
 		return this.playing && this.acquiring !== null && this.analysis === 'transient';
 	}
+
+	/**
+	 * Whether the drawing is locked against edits: while a sweep is moving.
+	 *
+	 * A run is a bench with the circuit powered. Hands go on the controls —
+	 * switches, buttons, a knob, a value the running circuit takes in place —
+	 * and not on the layout. A stopped sweep is not locked: Stop is how
+	 * editing comes back, and an edit then puts the stopped run away.
+	 */
+	get locked(): boolean {
+		return this.operating;
+	}
+
+	/** A part or a wire in the hand is put down when a run starts: it could not be used. */
+	private putDownTool(): void {
+		if (!runTool(this.#tool)) this.#tool = SELECT_TOOL;
+	}
+
+	/** Edits refused while locked, counted so the run-mode note can draw the eye. */
+	refusals = $state(0);
+
+	/** True, and counted, when the drawing is locked and the edit must not go in. */
+	refuse(): boolean {
+		if (!this.locked) return false;
+		this.refusals++;
+		return true;
+	}
+
+	/**
+	 * Whether `value` for `key` goes into the running circuit in place: the
+	 * netlist with it differs from the one now only in values a run can take.
+	 * Compiled on a copy, so asking changes nothing.
+	 */
+	private takesLive(instance: Instance, key: string, value: number | string): boolean {
+		const now = this.compiled.netlist;
+		if (!now) return false;
+		const params = { ...instance.params, [key]: value };
+		const schematic = {
+			...this.schematic,
+			instances: this.schematic.instances.map((i) => (i.id === instance.id ? { ...i, params } : i))
+		};
+		const next = compileSchematic(schematic, this.temperature + 273.15, this.sample, this.logicFamily);
+		return next.netlist !== null && liveChanges(now, next.netlist) !== null;
+	}
+
+	/**
+	 * The selected part's values that a running circuit takes in place, by
+	 * key. Null while nothing is locked. Each is tried on a copy with the value
+	 * moved, which is a compile per field: only for the one part on show.
+	 */
+	private liveKeys = $derived.by((): { id: string; keys: Set<string> } | null => {
+		if (!this.locked || this.selectedInstances.length !== 1) return null;
+		const instance = this.selectedInstances[0];
+		const keys = new Set<string>();
+		for (const param of definitionFor(instance).params) {
+			if (param.hidden || typeof param.default === 'string') continue;
+			const value = Number(instance.params[param.key] ?? param.default);
+			const tries = [value * 1.5, value * 0.5, ((param.min ?? 0) + (param.max ?? 1)) / 2];
+			const moved = tries.find((v) => v !== value && validateParam(param, v) === null);
+			if (moved !== undefined && this.takesLive(instance, param.key, moved)) keys.add(param.key);
+		}
+		return { id: instance.id, keys };
+	});
+
+	/** Whether a value of a part can be edited now: always, unless a run locks it out. */
+	editable(id: string, key: string): boolean {
+		if (!this.locked) return true;
+		const live = this.liveKeys;
+		return live !== null && live.id === id && live.keys.has(key);
+	}
 	/**
 	 * The instant the drawing is showing.
 	 *
@@ -936,6 +1045,7 @@ class AppState {
 			return;
 		}
 		this.playing = true;
+		this.putDownTool();
 		// Edits follow a resumed sweep again, whatever stopped following them.
 		this.live = true;
 		this.acquiring.start();
@@ -1134,11 +1244,13 @@ class AppState {
 	/** Whether Undo would do anything, for a button to say so. */
 	canUndo = $derived.by(() => {
 		void this.historyTick;
+		if (this.locked) return false;
 		return this.undoStack.length > 0;
 	});
 	/** Whether Redo would do anything. */
 	canRedo = $derived.by(() => {
 		void this.historyTick;
+		if (this.locked) return false;
 		return this.redoStack.length > 0;
 	});
 
@@ -1288,6 +1400,7 @@ class AppState {
 
 	undo(): void {
 		if (this.dragging) return;
+		if (this.refuse()) return;
 		this.trace.record({ op: 'undo' });
 		const previous = this.past.pop();
 		if (!previous) return;
@@ -1306,6 +1419,7 @@ class AppState {
 
 	redo(): void {
 		if (this.dragging) return;
+		if (this.refuse()) return;
 		this.trace.record({ op: 'redo' });
 		const next = this.future.pop();
 		if (!next) return;
@@ -1323,11 +1437,13 @@ class AppState {
 	// -- editing ----------------------------------------------------------
 
 	place(kind: string, x: number, y: number, rotation: Rotation = 0): Instance | null {
+		// A probe measures and adds nothing to the circuit, so it goes in mid-run.
+		if (kind !== 'probe' && this.refuse()) return null;
 		// The palette keeps such a block out of reach; this is for every other
 		// way of asking — a replayed step, a part still in the hand from before.
 		const block = blockOf(this.whole, kind);
 		if (block && this.wouldContainItself(block.id)) {
-			this.notice = `${block.name} cannot go in here: it would end up inside itself.`;
+			this.notice = `Cannot put ${block.name} here: it would be inside itself.`;
 			return null;
 		}
 		this.checkpoint();
@@ -1377,6 +1493,7 @@ class AppState {
 	 * disagree.
 	 */
 	addWirePath(points: ReadonlyArray<Point>): void {
+		if (this.refuse()) return;
 		const path = simplifyPath(points);
 		if (path.length < 2) return;
 		this.trace.record({ op: 'wire', points: path.map((q) => ({ x: q.x, y: q.y })) });
@@ -1406,8 +1523,16 @@ class AppState {
 	 * three or more pins is left alone: there is no one right answer for which of
 	 * them should be joined to which.
 	 */
+	/** Whether every id names a placed probe, which a run lets come and go. */
+	private onlyProbes(ids: readonly string[]): boolean {
+		const chosen = new Set(ids);
+		const parts = this.schematic.instances.filter((i) => chosen.has(i.id));
+		return parts.length === chosen.size && parts.every((i) => i.kind === 'probe');
+	}
+
 	deleteSelection(route: RouteBetween = this.router()): void {
 		if (this.selection.length === 0 || this.dragging) return;
+		if (!this.onlyProbes(this.selection) && this.refuse()) return;
 		this.trace.record({ op: 'delete', ...this.selectionRef() });
 		this.checkpoint();
 		const doomed = new Set(this.selection);
@@ -1519,6 +1644,7 @@ class AppState {
 	 */
 	rotateSelection(route: RouteBetween = this.router()): void {
 		if (this.selection.length === 0 || this.dragging) return;
+		if (this.refuse()) return;
 		const chosen = new Set(this.selection);
 		const rotating = this.schematic.instances.filter((i) => chosen.has(i.id));
 		const turning = this.schematic.wires.filter((w) => chosen.has(w.id));
@@ -1640,8 +1766,8 @@ class AppState {
 			this.withdrawCheckpoint(was);
 			const names = rotating.map((i) => i.name).join(', ');
 			this.notice = joined
-				? `Turning ${names} would put ${joined[0]} on the same net as ${joined[1]}. Move it clear first.`
-				: `Turning ${names} would change what is connected. Move it clear first.`;
+				? `Rotating ${names} would put ${joined[0]} on the same net as ${joined[1]}. Move it clear first.`
+				: `Rotating ${names} would change the connections. Move it clear first.`;
 			return;
 		}
 
@@ -1657,6 +1783,7 @@ class AppState {
 	 * the shape under the cursor is the shape that lands.
 	 */
 	beginMove(): void {
+		if (this.refuse()) return;
 		const chosen = new Set(this.selection);
 
 		// Pins are what hold a wire end in place. Kept apart from wire ends on
@@ -1981,6 +2108,7 @@ class AppState {
 	 * the router's — and replays and undoes as one more move.
 	 */
 	nudgeSelection(dx: number, dy: number, route: RouteBetween): void {
+		if (this.refuse()) return;
 		if (this.selection.length === 0 || this.moveOrigin) return;
 		this.beginMove();
 		this.applyMove(dx, dy, route);
@@ -2035,7 +2163,7 @@ class AppState {
 			);
 			if (joined) {
 				this.cancelMove();
-				this.notice = `That would put ${joined[0]} on the same net as ${joined[1]}, so nothing moved. Drop it somewhere clear.`;
+				this.notice = `Not moved: ${joined[0]} would be on the same net as ${joined[1]}. Drop it in a clear area.`;
 				return;
 			}
 		}
@@ -2087,6 +2215,12 @@ class AppState {
 		if (refusal) return refusal;
 
 		if (instance.params[key] === value) return null;
+		// A running circuit takes a new value in place, which is live tuning.
+		// Anything that would make it another circuit waits for Stop.
+		if (this.locked && !this.takesLive(instance, key, value)) {
+			this.refuse();
+			return LOCKED_NOTE;
+		}
 		this.trace.record({ op: 'param', part: instance.name, key, value });
 		this.checkpoint();
 		instance.params[key] = value;
@@ -2101,6 +2235,33 @@ class AppState {
 			const preset = REGULATOR_PRESETS[String(value)];
 			if (preset) for (const [k, v] of Object.entries(preset)) instance.params[k] = v;
 		}
+		return null;
+	}
+
+	/**
+	 * Turn a knob: set `key` on every frame of a drag, a wheel or a key.
+	 * `first` starts the turn, and only it costs an undo step; the trace keeps
+	 * where the turn ended. Returns why it was refused, or null.
+	 */
+	turn(id: string, key: string, value: number, first: boolean): string | null {
+		const instance = this.schematic.instances.find((i) => i.id === id);
+		if (!instance) return null;
+		const param = definitionFor(instance).params.find((p) => p.key === key);
+		const refusal = param ? validateParam(param, value) : null;
+		if (refusal) return refusal;
+		if (instance.params[key] === value) return null;
+		if (this.locked && !this.takesLive(instance, key, value)) {
+			this.refuse();
+			return LOCKED_NOTE;
+		}
+		const step: Step = { op: 'param', part: instance.name, key, value };
+		if (first) {
+			this.trace.record(step);
+			this.checkpoint();
+		} else {
+			this.trace.amend(step);
+		}
+		instance.params[key] = value;
 		return null;
 	}
 
@@ -2145,12 +2306,18 @@ class AppState {
 	private operateAt(instance: Instance, at: number): boolean {
 		const acquiring = this.acquiring;
 		if (!acquiring || this.analysis !== 'transient') return false;
-		const flips = [...(this.operations.get(instance.id) ?? []), at];
+		const all = [...(this.operations.get(instance.id) ?? []), at];
+		const flips = keptOperations(instance, all, this.capture?.earliest ?? 0);
+		if (flips.length < all.length) {
+			this.forgotten.set(instance.id, this.operationCount(instance.id) + 1 - flips.length);
+		}
 		this.operations = new Map(this.operations).set(instance.id, flips);
 		if (CONTACTS.has(instance.kind)) {
+			// Only from the instant the run has reached: it never goes back for
+			// the rest, and the whole history grew with every press.
 			acquiring.setWaveform(`${instance.name}__actuator`, {
 				type: 'pwl',
-				points: contactControl(instance, flips)
+				points: contactControlFrom(instance, flips, acquiring.time)
 			});
 		} else {
 			acquiring.setLogic(instance.name, isHighAt(instance, at, flips) ? 'high' : 'low');
@@ -2197,8 +2364,13 @@ class AppState {
 	}
 
 	/** When a part was operated by hand during this run. */
-	operationsOf(id: string): number[] {
-		return this.operations.get(id) ?? [];
+	operationsOf(id: string): readonly number[] {
+		return this.operations.get(id) ?? NO_OPERATIONS;
+	}
+
+	/** How many times a part was operated by hand during this run, counting the ones let go. */
+	operationCount(id: string): number {
+		return (this.operations.get(id)?.length ?? 0) + (this.forgotten.get(id) ?? 0);
 	}
 
 	/**
@@ -2236,10 +2408,11 @@ class AppState {
 
 	/** Rename a component. Returns why it was refused, or null on success. */
 	rename(id: string, name: string): string | null {
+		if (this.refuse()) return LOCKED_NOTE;
 		const trimmed = name.trim();
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return null;
-		if (!trimmed) return 'A component needs a name.';
+		if (!trimmed) return 'A part needs a name.';
 		// A port's name is a pin name on the box, and pin names are one word
 		// that fits inside its edge.
 		if (instance.kind === 'port' && /\s/.test(trimmed)) return 'A port name cannot have spaces in it.';
@@ -2265,6 +2438,7 @@ class AppState {
 	 * which is the one that costs an undo step.
 	 */
 	moveLabel(id: string, slot: LabelSlot, offset: Point, first: boolean): void {
+		if (this.refuse()) return;
 		const instance = this.schematic.instances.find((i) => i.id === id);
 		if (!instance) return;
 		const was = instance.labels?.[slot];
@@ -2332,6 +2506,7 @@ class AppState {
 	 * is odd but it is what was asked for, and it can still be named.
 	 */
 	groupSelection(): PartGroup | null {
+		if (this.refuse()) return null;
 		const parts = this.selectedInstances.map((i) => i.id);
 		if (parts.length === 0 || this.dragging) return null;
 		if (this.selectedGroup) return this.selectedGroup;
@@ -2348,6 +2523,7 @@ class AppState {
 
 	/** Dissolve every group that has a selected part in it. The parts stay selected. */
 	ungroupSelection(): void {
+		if (this.refuse()) return;
 		if (this.dragging) return;
 		const parts = this.selectedInstances.map((i) => i.id);
 		const doomed = new Set(parts.map((id) => this.groupOf(id)?.id).filter((id) => id !== undefined));
@@ -2359,6 +2535,7 @@ class AppState {
 
 	/** Rename a group. Returns why it was refused, or null on success. */
 	renameGroup(id: string, name: string): string | null {
+		if (this.refuse()) return LOCKED_NOTE;
 		const trimmed = name.trim();
 		const group = (this.schematic.groups ?? []).find((g) => g.id === id);
 		if (!group) return null;
@@ -2533,6 +2710,7 @@ class AppState {
 	 * second copy is a click away.
 	 */
 	boxSelection(route: RouteBetween = this.router()): BlockDef | null {
+		if (this.refuse()) return null;
 		const members = this.selectedInstances;
 		if (members.length === 0 || this.dragging) return null;
 		const memberIds = new Set(members.map((i) => i.id));
@@ -2643,6 +2821,7 @@ class AppState {
 	 * palette. Every selected block is opened.
 	 */
 	unboxSelection(route: RouteBetween = this.router()): void {
+		if (this.refuse()) return;
 		const boxes = this.selectedInstances.filter((i) => blockOf(this.schematic, i.kind));
 		if (boxes.length === 0 || this.dragging) return;
 		this.trace.record({ op: 'unbox', parts: boxes.map((i) => i.name) });
@@ -2916,13 +3095,14 @@ class AppState {
 
 	/** Rename a block. Returns why it was refused, or null on success. */
 	renameBlock(id: string, name: string): string | null {
+		if (this.refuse()) return LOCKED_NOTE;
 		const trimmed = name.trim();
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		if (!block) return null;
 		if (!trimmed) return 'A block needs a name.';
 		if (block.name === trimmed) return null;
 		if ((this.schematic.blocks ?? []).some((b) => b.id !== id && b.name === trimmed)) {
-			return `There is already a block called ${trimmed}.`;
+			return `A block called ${trimmed} already exists.`;
 		}
 		this.trace.record({ op: 'reblock', from: block.name, to: trimmed });
 		this.checkpoint();
@@ -2945,6 +3125,7 @@ class AppState {
 	 * box is the only copy there is and is already its own.
 	 */
 	detachBlock(instanceId: string): BlockDef | null {
+		if (this.refuse()) return null;
 		const instance = this.schematic.instances.find((i) => i.id === instanceId);
 		const block = instance ? blockOf(this.schematic, instance.kind) : null;
 		if (!instance || !block) return null;
@@ -3082,6 +3263,7 @@ class AppState {
 	 * on success.
 	 */
 	renamePort(id: string, port: string, name: string): string | null {
+		if (this.refuse()) return LOCKED_NOTE;
 		const trimmed = name.trim();
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		const entry = block?.instances.find((i) => i.kind === 'port' && i.name === port);
@@ -3091,7 +3273,7 @@ class AppState {
 		if (trimmed.length > BLOCK_PORT_WIDTH) return PORT_TOO_LONG;
 		if (entry.name === trimmed) return null;
 		if (block.instances.some((i) => i.name === trimmed)) {
-			return `${block.name} already has something called ${trimmed}.`;
+			return `${block.name} already has a port or part called ${trimmed}.`;
 		}
 		this.trace.record({ op: 'port', block: block.name, from: port, to: trimmed });
 		this.checkpoint();
@@ -3131,6 +3313,7 @@ class AppState {
 	 * wires. Nothing happens at the top or bottom of the column.
 	 */
 	movePort(id: string, port: string, by: 'up' | 'down'): void {
+		if (this.refuse()) return;
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		if (!block) return;
 		const ports = blockPorts(block);
@@ -3159,6 +3342,7 @@ class AppState {
 	 * to match. Every placed copy follows, with its wires.
 	 */
 	setPortSide(id: string, port: string, side: 'left' | 'right'): void {
+		if (this.refuse()) return;
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		const entry = block?.instances.find((i) => i.kind === 'port' && i.name === port);
 		if (!block || !entry) return;
@@ -3176,6 +3360,7 @@ class AppState {
 	 * block is built out of it: that one would be left with a hole in it.
 	 */
 	removeBlock(id: string): boolean {
+		if (this.refuse()) return false;
 		const kind = BLOCK_PREFIX + id;
 		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
 		if (!block) return false;
@@ -3184,15 +3369,15 @@ class AppState {
 		// them still places left a box that nothing could build — a link that
 		// would not open and a file that would not load.
 		if (this.openBlocks.includes(id)) {
-			this.notice = `${block.name} is open for editing, so it stays.`;
+			this.notice = `Cannot delete ${block.name}: it is open for editing.`;
 			return false;
 		}
 		if (this.usesElsewhere(kind) > 0) {
 			const why =
 				this.outside.length > 0 && this.whole.instances.some((i) => i.kind === kind)
-					? 'is placed on the drawing outside this block'
-					: 'is used inside another block';
-			this.notice = `${block.name} ${why}, so it stays.`;
+					? 'it is in the circuit outside this block'
+					: 'another block uses it';
+			this.notice = `Cannot delete ${block.name}: ${why}.`;
 			return false;
 		}
 		this.trace.record({ op: 'unblock', name: block.name });
@@ -3268,7 +3453,7 @@ class AppState {
 	importSubcircuits(source: string): { added: string[]; ids: string[]; error?: string } {
 		const found = parseSubcircuits(source);
 		if (found.length === 0) {
-			return { added: [], ids: [], error: 'No .subckt definition found in that text.' };
+			return { added: [], ids: [], error: 'No .subckt definition found.' };
 		}
 
 		const existing = this.schematic.subcircuits ?? [];
@@ -3323,6 +3508,7 @@ class AppState {
 
 	/** Forget an imported part, and delete anything placed from it. */
 	removeSubcircuit(id: string): boolean {
+		if (this.refuse()) return false;
 		const kind = SUBCIRCUIT_PREFIX + id;
 		const sub = (this.schematic.subcircuits ?? []).find((s) => s.id === id);
 		if (!sub) return false;
@@ -3332,9 +3518,9 @@ class AppState {
 		if (this.usesElsewhere(kind) > 0) {
 			const why =
 				this.outside.length > 0 && this.whole.instances.some((i) => i.kind === kind)
-					? 'is placed on the drawing outside this block'
-					: 'is used inside a block';
-			this.notice = `${sub.name} ${why}, so it stays.`;
+					? 'it is in the circuit outside this block'
+					: 'a block uses it';
+			this.notice = `Cannot delete ${sub.name}: ${why}.`;
 			return false;
 		}
 		this.trace.record({ op: 'unimport', name: sub.name });
@@ -3393,6 +3579,7 @@ class AppState {
 	 * of its own; the palette is where a block is placed twice on purpose.
 	 */
 	paste(at?: { x: number; y: number }): void {
+		if (this.refuse()) return;
 		if (!this.clipboard || this.dragging) return;
 		const clipboard = this.clipboard;
 		const { instances, wires } = clipboard;
@@ -3416,7 +3603,7 @@ class AppState {
 		for (const id of reached.blocks) {
 			if (!this.wouldContainItself(id, clipboard.blocks ?? [])) continue;
 			const name = lookup.blocks?.find((b) => b.id === id)?.name ?? 'a block in it';
-			this.notice = `That cannot be pasted in here: ${name} would end up inside itself.`;
+			this.notice = `Cannot paste here: ${name} would be inside itself.`;
 			return;
 		}
 
@@ -3451,7 +3638,7 @@ class AppState {
 		this.selection = this.stillPresent(was.selection);
 		this.withdrawCheckpoint(was);
 		if (joined) {
-			this.notice = `Pasting there would put ${joined[0]} on the same net as ${joined[1]}, so nothing was pasted. Paste it somewhere clear.`;
+			this.notice = `Not pasted: ${joined[0]} would be on the same net as ${joined[1]}. Paste in a clear area.`;
 		}
 	}
 
@@ -3575,6 +3762,7 @@ class AppState {
 	}
 
 	duplicateSelection(): void {
+		if (this.refuse()) return;
 		if (this.dragging || !this.copySelection()) return;
 		this.paste();
 	}
@@ -3995,7 +4183,7 @@ class AppState {
 			groups: block.groups
 		}));
 		const looped = selfContained({ instances: [], wires: [], blocks });
-		if (looped) throw new Error(`That file has ${looped} placed inside itself, so it cannot be opened.`);
+		if (looped) throw new Error(`Cannot open the file: ${looped} is placed inside itself.`);
 		registerBlocks({ instances: [], wires: [], blocks });
 		// The parts inside a block are asked of the catalog as well as the drawing's:
 		// one it does not know would otherwise surface later, on every compile.
@@ -4270,7 +4458,7 @@ class AppState {
 					try {
 						definitionOf(step.kind);
 					} catch {
-						return stop(`no component called ${step.kind}`);
+						return stop(`no part type ${step.kind}`);
 					}
 					if (!this.place(step.kind, step.x, step.y, step.rotation)) {
 						return stop(this.notice ?? `${step.kind} cannot be placed here`);
@@ -4313,7 +4501,7 @@ class AppState {
 					break;
 				case 'rename': {
 					const id = partId(step.part);
-					if (!id) return stop(`no component named ${step.part}`);
+					if (!id) return stop(`no part named ${step.part}`);
 					this.rename(id, step.to);
 					break;
 				}
@@ -4322,7 +4510,7 @@ class AppState {
 					const ids: string[] = [];
 					for (const name of step.parts) {
 						const id = partId(name);
-						if (!id) return stop(`no component named ${name}`);
+						if (!id) return stop(`no part named ${name}`);
 						ids.push(id);
 					}
 					this.selection = ids;
@@ -4357,7 +4545,7 @@ class AppState {
 					const ids: string[] = [];
 					for (const name of step.parts) {
 						const id = partId(name);
-						if (!id) return stop(`no component named ${name}`);
+						if (!id) return stop(`no part named ${name}`);
 						ids.push(id);
 					}
 					this.selection = ids;
@@ -4370,7 +4558,7 @@ class AppState {
 				}
 				case 'regroup': {
 					const id = partId(step.part);
-					if (!id) return stop(`no component named ${step.part}`);
+					if (!id) return stop(`no part named ${step.part}`);
 					const group = this.groupOf(id);
 					if (!group) return stop(`${step.part} is not in a group`);
 					this.renameGroup(group.id, step.name);
@@ -4378,13 +4566,13 @@ class AppState {
 				}
 				case 'detach': {
 					const id = partId(step.part);
-					if (!id) return stop(`no component named ${step.part}`);
+					if (!id) return stop(`no part named ${step.part}`);
 					if (!this.detachBlock(id)) return stop(`${step.part} is not a copy of a block`);
 					break;
 				}
 				case 'param': {
 					const id = partId(step.part);
-					if (!id) return stop(`no component named ${step.part}`);
+					if (!id) return stop(`no part named ${step.part}`);
 					this.setParam(id, step.key, step.value);
 					break;
 				}
@@ -4403,7 +4591,7 @@ class AppState {
 					const ids: string[] = [];
 					for (const name of step.parts) {
 						const id = partId(name);
-						if (!id) return stop(`no component named ${name}`);
+						if (!id) return stop(`no part named ${name}`);
 						ids.push(id);
 					}
 					for (const ref of step.wires) {
@@ -4546,7 +4734,7 @@ class AppState {
 		// the inside alone — which has no ground — and failing for it.
 		if (this.depth > 0) {
 			this.discardRun();
-			this.notice = 'Leave the block to run the circuit. A block’s inside is shared by every copy of it, so it has no voltages of its own to show.';
+			this.notice = 'Leave the block to run the circuit. A block inside has no voltages: all copies share it.';
 			return;
 		}
 		if (!this.compiled.netlist) {
@@ -4572,7 +4760,7 @@ class AppState {
 				this.discardRun();
 				if (!this.hasAcDrive) {
 					throw new Error(
-						'No source is driving the sweep. Set a voltage source’s AC drive to 1 to make it the input.'
+						'No source drives the sweep. Set the AC drive of a voltage source to 1.'
 					);
 				}
 				this.acResult = await runFrequencySweep(compiled.netlist, this.acStart, this.acStop);
@@ -4582,7 +4770,7 @@ class AppState {
 				const source = this.dcSwept;
 				if (!source) {
 					throw new Error(
-						'There is no source to sweep. Place a voltage source, a current source, a battery or a supply.'
+						'There is no source to sweep. Add a voltage source, current source, battery or supply.'
 					);
 				}
 				const plan = this.dcPlan;
@@ -4604,6 +4792,7 @@ class AppState {
 				this.acquiring = acquiring;
 				this.capture = acquiring.capture;
 				this.operations = new Map();
+				this.forgotten = new Map();
 				this.retunes = [];
 				this.liveNetlist = compiled.netlist;
 				this.mcuNames = devicesOfType(compiled.netlist, 'mcu');
@@ -4621,6 +4810,7 @@ class AppState {
 				this.absorb();
 				if (this.probes.length === 0) this.autoProbe();
 				this.playing = true;
+				this.putDownTool();
 				if (options.single) acquiring.startSingle(this.stopTime);
 				else acquiring.start();
 			}
@@ -4808,6 +4998,7 @@ class AppState {
 		this.capture = null;
 		this.result = null;
 		this.operations = new Map();
+		this.forgotten = new Map();
 		this.retunes = [];
 		this.liveNetlist = null;
 		this.mcuLogs = {};

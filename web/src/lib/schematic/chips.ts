@@ -683,7 +683,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 		// 4 and 10 with 11, the way the 4000 family lays a quad out.
 		...quad2('xnor', ['1A', '1B', '1Y', '2Y', '2A', '2B', 'GND', '3A', '3B', '3Y', '4Y', '4A', '4B', 'VCC']),
 		caveat:
-			'The real part has open-drain outputs and wants a pull-up on each one; here they drive like any other gate.'
+			'The real part has open-drain outputs that need pull-ups. Here they drive like any other gate.'
 	},
 
 	// The 4000 family. Same gates, different legs — and the legs are the reason
@@ -792,7 +792,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 			...jk(n, { preset: `${n}pre_i`, reset: `${n}clr_i` })
 		]),
 		caveat:
-			'The real part is master-slave and takes its inputs while the clock is high; this one is edge-triggered.'
+			'The real part is master-slave and samples while the clock is high. This model is edge-triggered.'
 	},
 	{
 		id: '74138',
@@ -897,7 +897,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 			])
 		],
 		caveat:
-			'Pin 4 is blanking in only. On the real part it is also the ripple-blanking output that drives the next decoder, which needs an open-collector pin, and those are not modelled — so is the rest of the outputs pulling down rather than driving both ways.'
+			'Pin 4 is a blanking input only. Not modelled: the ripple-blanking output and open-collector outputs. Outputs drive both ways.'
 	},
 	{
 		id: '74151',
@@ -964,7 +964,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 			{ kind: 'and', inputs: ['fifteen', 'ENT'], output: 'RCO' }
 		],
 		caveat:
-			'Clear is asynchronous here, as on the 74161 proper. The 74163 is the same part with a synchronous one.'
+			'Clear is asynchronous, as on the 74161. The 74163 has a synchronous clear.'
 	},
 	{
 		id: '7490',
@@ -1077,7 +1077,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 			output: `${n}Y`
 		})),
 		caveat:
-			'The real part can sink far more current than an ordinary gate, which is what it is bought for; here it drives like any other.'
+			'The real part sinks much more current than a normal gate. Here it drives like any other gate.'
 	},
 	{
 		id: '4050',
@@ -1094,7 +1094,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 			output: `${n}Y`
 		})),
 		caveat:
-			'On the real part the inputs take up to 15 V whatever the supply, which is what makes it a level shifter; that is not modelled.'
+			'Not modelled: inputs up to 15 V at any supply (level shifting).'
 	},
 
 	// Arithmetic.
@@ -1119,7 +1119,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 			];
 		}),
 		caveat:
-			'The carry ripples through the four bits here; the real part looks ahead, so its carry out arrives sooner.'
+			'The carry ripples here. The real part has look-ahead carry, so its carry out is faster.'
 	},
 	{
 		id: '7485',
@@ -1405,7 +1405,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 			{ kind: 'buffer', inputs: ['j4n'], output: 'CO' }
 		],
 		caveat:
-			'The real part steers itself back into the ten-state sequence from any state it wakes up in; this one starts at zero and never leaves the sequence, so there is nothing to steer.'
+			'The real part returns to the ten-state sequence from any start state. This model starts at zero and stays in the sequence.'
 	},
 	{
 		id: '4040',
@@ -1588,7 +1588,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 		],
 		blocks: [1, 2].flatMap((n) => fallingJk(n, { clear: `${n}CLR` })),
 		caveat:
-			'Modelled as the LS part, which acts on the falling edge. The original is master-slave and takes J and K while the clock is high.'
+			'Modelled as the LS part: it acts on the falling edge. The original is master-slave and samples J and K while the clock is high.'
 	},
 	{
 		id: '74107',
@@ -1601,7 +1601,7 @@ const LOGIC_CHIPS: readonly ChipDef[] = [
 		],
 		blocks: [1, 2].flatMap((n) => fallingJk(n, { clear: `${n}CLR` })),
 		caveat:
-			'Modelled as the LS part, which acts on the falling edge. The original is master-slave and takes J and K while the clock is high.'
+			'Modelled as the LS part: it acts on the falling edge. The original is master-slave and samples J and K while the clock is high.'
 	},
 	{
 		id: '74112',

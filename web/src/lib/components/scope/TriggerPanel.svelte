@@ -26,10 +26,10 @@
 	let { sources, status, resolved, arm }: Props = $props();
 
 	const MODES: Array<{ value: TriggerMode; label: string; description: string }> = [
-		{ value: 'off', label: 'Off', description: 'No trigger: the screen rolls with the run' },
-		{ value: 'auto', label: 'Auto', description: 'Hold still on a trigger, and roll when there has not been one for a screen' },
-		{ value: 'normal', label: 'Normal', description: 'Show only what a trigger caught, and hold the last one' },
-		{ value: 'single', label: 'Single', description: 'Catch one trigger and stop the run' }
+		{ value: 'off', label: 'Off', description: 'The screen rolls' },
+		{ value: 'auto', label: 'Auto', description: 'Holds on a trigger. Rolls if there is none for one screen.' },
+		{ value: 'normal', label: 'Normal', description: 'Shows only triggered screens. Holds the last one.' },
+		{ value: 'single', label: 'Single', description: 'Stops the run on the first trigger' }
 	];
 
 	const STATUS: Record<TriggerStatus, string> = {
@@ -60,7 +60,6 @@
 			value={app.trigger.mode}
 			onChange={(value) => app.setTrigger({ mode: value as TriggerMode })}
 			aria-label="Trigger mode"
-			title="How the trigger holds the screen"
 		/>
 		{#if on}
 			<Button
@@ -73,7 +72,7 @@
 				{#if app.trigger.edge === 'rising'}<ArrowUpRight />{:else}<ArrowDownRight />{/if}
 			</Button>
 			{#if app.trigger.mode === 'single'}
-				<Button size="sm" class="h-6 px-1.5" onclick={arm} title="Wait for the next trigger, running on if stopped">
+				<Button size="sm" class="h-6 px-1.5" onclick={arm} title="Wait for the next trigger. Resumes a stopped run.">
 					arm
 				</Button>
 			{/if}
@@ -89,7 +88,6 @@
 					value={String(Math.min(app.trigger.source, sources.length - 1))}
 					onChange={(value) => app.setTrigger({ source: Number(value) })}
 					aria-label="Trigger source"
-					title="Which trace the trigger watches"
 				/>
 			</div>
 		{/if}
@@ -106,7 +104,7 @@
 					const parsed = parseValue(text);
 					if (parsed !== null) app.setTrigger({ level: parsed });
 				}}
-				title="Volts the source crosses to trigger. Empty or auto: halfway between its extremes"
+				title="Empty or auto: midpoint of the source swing"
 				aria-label="Trigger level"
 			/>
 			<UnitField
@@ -121,7 +119,7 @@
 					const parsed = parseValue(text);
 					if (parsed !== null && parsed >= 0) app.setTrigger({ hysteresis: parsed });
 				}}
-				title="How far past the level the other way the source must go before the next trigger: noise smaller than this does not fire it. Empty or auto: 2% of its swing"
+				title="Noise smaller than this does not trigger. Empty or auto: 2% of the swing."
 				aria-label="Trigger hysteresis"
 			/>
 			<UnitField
@@ -133,7 +131,7 @@
 					const parsed = parseValue(text);
 					if (parsed !== null && parsed >= 0) app.setTrigger({ holdoff: parsed });
 				}}
-				title="After a trigger, ignore the source for this long: set it past a burst to trigger on its first pulse"
+				title="Time to ignore the source after a trigger. Set it longer than a burst to trigger on its first pulse."
 				aria-label="Trigger holdoff"
 			/>
 			<UnitField
@@ -145,8 +143,8 @@
 					const parsed = Number(text);
 					if (text.trim() !== '' && Number.isFinite(parsed)) app.setTrigger({ position: parsed / 100 });
 				}}
-				title="How much of the screen comes before the trigger"
-				aria-label="Trigger position, percent of the screen before the trigger"
+				title="Part of the screen before the trigger"
+				aria-label="Pre-trigger, percent of screen"
 			/>
 		</div>
 	{/if}
