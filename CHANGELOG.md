@@ -11,6 +11,22 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Every control on the same component library
+
+**The buttons, boxes, tabs and folding headings are now all
+`@human-kit/ui`, at its first stable line, 1.5.3.** Nothing should look
+different. What changes is underfoot: the Components and Examples tabs are
+one stop for Tab, with the arrow keys between them; the shelf headings and
+*More settings* say which panel they fold; the search boxes' cross is no
+longer a stop of its own, since Escape already empties the box; the
+*Symbols* heading in the phone menu names its group for a screen reader; and
+closing the Ctrl+K palette with Escape puts the focus back where it was,
+rather than at the top of the page.
+
+[#106](https://github.com/Agustin-Delgado/repath/pull/106)
+
+---
+
 ## 21 November 2026 — A DC sweep, for I-V curves
 
 **Run can now sweep a source instead of running in time.** Pick *DC sweep* as
