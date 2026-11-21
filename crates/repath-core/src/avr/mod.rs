@@ -97,6 +97,11 @@ const HORIZON: f64 = 1e-3;
 /// it costs to follow.
 const MIN_CHUNK: u64 = 256;
 
+/// How many instructions cost about as much as one digital event, for the
+/// frame's budget: see [`crate::digital::EvalCtx::spend`]. An instruction is
+/// some forty nanoseconds in the browser, an event about ninety.
+const INSTRUCTIONS_PER_EVENT: u64 = 2;
+
 /// A wake-up pulse's width. Anything shorter than a clock cycle will do.
 const WAKE_PULSE: f64 = 1e-12;
 
@@ -581,7 +586,11 @@ impl Mcu {
             machine.begin_speculation();
             let before = machine.progress();
             let limit = machine.cycle.max(now) + self.chunk;
-            let (stop, horizon) = match self.samples.run(&mut machine, limit, &self.watch, now) {
+            let stop = self.samples.run(&mut machine, limit, &self.watch, now);
+            ctx.spend(
+                (machine.progress().saturating_sub(before) / INSTRUCTIONS_PER_EVENT) as usize,
+            );
+            let (stop, horizon) = match stop {
                 // Waiting for a sample is woken where the conversion ends,
                 // by when the sample has been taken.
                 Stop::Changed(at) | Stop::Fault(at) | Stop::Sample(at) => (at, false),
@@ -609,6 +618,7 @@ impl Mcu {
     /// changes on the way — which can only be an instruction that began
     /// before `until` and ends after it.
     fn run_committed(&mut self, ctx: &mut EvalCtx, until: u64) {
+        let before = self.committed.progress();
         loop {
             match self.samples.run(&mut self.committed, until, &self.watch, until) {
                 Stop::Changed(at) => self.publish(ctx, at),
@@ -621,6 +631,9 @@ impl Mcu {
                 }
             }
         }
+        ctx.spend(
+            (self.committed.progress().saturating_sub(before) / INSTRUCTIONS_PER_EVENT) as usize,
+        );
         self.absorb();
     }
 

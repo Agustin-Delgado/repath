@@ -250,6 +250,22 @@ struct Lu<T> {
     /// The forward substitution's intermediate, by step.
     y: Vec<T>,
     failed: Option<Failure>,
+    counts: Factorizations,
+}
+
+/// How often each part of a solve has had to be done, since the system was made.
+///
+/// Counted rather than timed, so a test can say what a change of numbers is
+/// allowed to cost without depending on how fast the machine is: a switch
+/// thrown should be a refactorization at most, never a new ordering.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Factorizations {
+    /// Orderings of the pattern, redone only when a stamp lands somewhere new.
+    pub orderings: usize,
+    /// Factorizations from scratch, choosing every pivot.
+    pub pivoted: usize,
+    /// Factorizations that reused the last one's pivots and patterns.
+    pub reused: usize,
 }
 
 impl<T: Scalar> Lu<T> {
@@ -279,6 +295,7 @@ impl<T: Scalar> Lu<T> {
             reach: vec![0; n],
             y: vec![T::ZERO; n],
             failed: None,
+            counts: Factorizations::default(),
         }
     }
 }
@@ -322,6 +339,11 @@ impl<T: Scalar> System<T> {
     #[inline]
     pub fn size(&self) -> usize {
         self.n
+    }
+
+    /// How many orderings and factorizations the solves so far have cost.
+    pub fn factorizations(&self) -> Factorizations {
+        self.lu.counts
     }
 
     /// Zero the matrix and right-hand side, keeping the pattern and the factors'
@@ -476,8 +498,12 @@ impl<T: Scalar> System<T> {
 
         if self.lu.ordered_slots != self.at.len() {
             self.analyze();
+            self.lu.counts.orderings += 1;
         }
-        if !(self.lu.factored && self.refactor()) {
+        if self.lu.factored && self.refactor() {
+            self.lu.counts.reused += 1;
+        } else {
+            self.lu.counts.pivoted += 1;
             self.factor()?;
         }
         self.substitute(x);

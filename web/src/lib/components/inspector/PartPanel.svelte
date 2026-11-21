@@ -57,8 +57,15 @@
 		}
 	}
 
-	/** When this part was operated by hand during the run that is going. */
-	const operations = $derived(app.operationsOf(instance.id));
+	/** How many of the times a part was operated the inspector names. */
+	const LAST_OPERATIONS = 5;
+	/**
+	 * How many times this part was operated by hand during the run that is
+	 * going, and when the last few of those were. Only the last few: the whole
+	 * list grew by a line a press and was set out again on each one.
+	 */
+	const operated = $derived(app.operationCount(instance.id));
+	const lastOperations = $derived(app.operationsOf(instance.id).slice(-LAST_OPERATIONS));
 
 	/** Whether every pin lands on the same net. */
 	const shorted = $derived.by(() => {
@@ -168,10 +175,11 @@
 		above says where it *starts*, which reads as a contradiction against a
 		switch sitting closed on the drawing until the operations are named.
 	-->
-	{#if operations.length > 0}
+	{#if operated > 0}
 		<p class={hint}>
-			Operated {operations.length === 1 ? 'once' : `${operations.length} times`} during this run, at
-			{operations.map((t: number) => formatWithUnit(t, 's', 3)).join(', ')}. Running it again starts
+			Operated {operated === 1 ? 'once' : `${operated} times`} during this run,
+			{operated > lastOperations.length ? 'most recently at' : 'at'}
+			{lastOperations.map((t: number) => formatWithUnit(t, 's', 3)).join(', ')}. Running it again starts
 			from the position above.
 		</p>
 	{/if}

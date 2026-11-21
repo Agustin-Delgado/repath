@@ -22,7 +22,7 @@ import {
 import { locateFailure, type LocatedFailure } from './schematic/culprits';
 import { EXAMPLES, exampleById } from './examples';
 import { sampleIndexAt } from './schematic/flow';
-import { contactControl, isHighAt } from './schematic/contacts';
+import { contactControlFrom, isHighAt, keptOperations } from './schematic/contacts';
 import { Acquisition } from './acquire';
 import { liveChanges, type RetuneAt } from './retune';
 import { nameRefusal } from './entry';
@@ -351,6 +351,12 @@ const PASTE_TRIES = 8;
  */
 const DEFAULT_STOP_TIME = 5e-3;
 
+/**
+ * What a part nobody has operated answers with: one list, not a new one per
+ * question, so what is worked out from it can be kept against it.
+ */
+const NO_OPERATIONS: readonly number[] = Object.freeze([]);
+
 /** Degrees Celsius: the temperature every datasheet quotes at. */
 const DEFAULT_TEMPERATURE = 27;
 /** The frequency sweep a circuit gets until somebody chooses one: 1 Hz to 1 MHz. */
@@ -617,8 +623,13 @@ class AppState {
 	 *
 	 * Replaced on every acquired chunk rather than at the end of a run, because
 	 * there is no end: this is a window onto a sweep that is still going.
+	 *
+	 * Raw, not deep: it is replaced whole and never written into. A deep proxy
+	 * put a signal read in front of every sample the drawing touched, and made
+	 * fresh proxies for the edge lists on every frame — the colour ramp's scan
+	 * of the window alone was a fifth of the main thread.
 	 */
-	result = $state<TransientRun | null>(null);
+	result = $state.raw<TransientRun | null>(null);
 	/** The rolling memory behind `result`. */
 	capture = $state<Capture | null>(null);
 	/** The sweep itself, or null when nothing has been started. */
@@ -632,6 +643,13 @@ class AppState {
 	 * with it.
 	 */
 	operations = $state<Map<string, number[]>>(new Map());
+	/**
+	 * How many operations of each part `operations` no longer lists: the ones
+	 * from before what the run still remembers, let go so that a part worked a
+	 * thousand times costs what one worked a dozen times does. Counted so the
+	 * inspector can still say how many there were.
+	 */
+	private forgotten = new Map<string, number>();
 	/**
 	 * Every value changed while this run was going, and the instant of the run
 	 * it changed at, oldest first.
@@ -2145,12 +2163,18 @@ class AppState {
 	private operateAt(instance: Instance, at: number): boolean {
 		const acquiring = this.acquiring;
 		if (!acquiring || this.analysis !== 'transient') return false;
-		const flips = [...(this.operations.get(instance.id) ?? []), at];
+		const all = [...(this.operations.get(instance.id) ?? []), at];
+		const flips = keptOperations(instance, all, this.capture?.earliest ?? 0);
+		if (flips.length < all.length) {
+			this.forgotten.set(instance.id, this.operationCount(instance.id) + 1 - flips.length);
+		}
 		this.operations = new Map(this.operations).set(instance.id, flips);
 		if (CONTACTS.has(instance.kind)) {
+			// Only from the instant the run has reached: it never goes back for
+			// the rest, and the whole history grew with every press.
 			acquiring.setWaveform(`${instance.name}__actuator`, {
 				type: 'pwl',
-				points: contactControl(instance, flips)
+				points: contactControlFrom(instance, flips, acquiring.time)
 			});
 		} else {
 			acquiring.setLogic(instance.name, isHighAt(instance, at, flips) ? 'high' : 'low');
@@ -2197,8 +2221,13 @@ class AppState {
 	}
 
 	/** When a part was operated by hand during this run. */
-	operationsOf(id: string): number[] {
-		return this.operations.get(id) ?? [];
+	operationsOf(id: string): readonly number[] {
+		return this.operations.get(id) ?? NO_OPERATIONS;
+	}
+
+	/** How many times a part was operated by hand during this run, counting the ones let go. */
+	operationCount(id: string): number {
+		return (this.operations.get(id)?.length ?? 0) + (this.forgotten.get(id) ?? 0);
 	}
 
 	/**
@@ -4604,6 +4633,7 @@ class AppState {
 				this.acquiring = acquiring;
 				this.capture = acquiring.capture;
 				this.operations = new Map();
+				this.forgotten = new Map();
 				this.retunes = [];
 				this.liveNetlist = compiled.netlist;
 				this.mcuNames = devicesOfType(compiled.netlist, 'mcu');
@@ -4808,6 +4838,7 @@ class AppState {
 		this.capture = null;
 		this.result = null;
 		this.operations = new Map();
+		this.forgotten = new Map();
 		this.retunes = [];
 		this.liveNetlist = null;
 		this.mcuLogs = {};

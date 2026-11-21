@@ -181,9 +181,22 @@ pub struct EvalCtx<'a> {
     queue: &'a mut EventQueue,
     /// First driver id owned by the device being evaluated.
     driver_base: usize,
+    /// Work the device reported beyond the evaluation itself, in events.
+    effort: usize,
 }
 
 impl EvalCtx<'_> {
+    /// Count work done during this evaluation as `events` events' worth.
+    ///
+    /// For a device that does far more than react between events: a
+    /// microcontroller runs its program here, a millisecond of it at a time,
+    /// and counted as the one event that woke it that was tens of thousands of
+    /// instructions the frame's budget never saw. The run went on solving
+    /// until the program had caught up, however long the frame took.
+    pub fn spend(&mut self, events: usize) {
+        self.effort += events;
+    }
+
     /// Resolved state of a net.
     #[inline]
     pub fn read(&self, net: NetId) -> Logic {
@@ -1198,6 +1211,7 @@ impl DigitalDomain {
             resolved: &self.resolved,
             queue: &mut self.queue,
             driver_base: self.driver_base[index],
+            effort: 0,
         };
         Some(act(device, &mut ctx))
     }
@@ -1226,6 +1240,7 @@ impl DigitalDomain {
                 resolved: &self.resolved,
                 queue: &mut self.queue,
                 driver_base: self.driver_base[index],
+                effort: 0,
             };
             device.initialize(&mut ctx);
             self.devices[index] = device;
@@ -1426,8 +1441,10 @@ impl DigitalDomain {
                     resolved: &self.resolved,
                     queue: &mut self.queue,
                     driver_base: self.driver_base[index],
+                    effort: 0,
                 };
                 device.evaluate(&mut ctx);
+                events += ctx.effort;
                 self.devices[index] = device;
             }
             self.touched = touched;

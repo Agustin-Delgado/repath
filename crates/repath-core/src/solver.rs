@@ -54,7 +54,7 @@ use crate::complex::ComplexSystem;
 use crate::digital::{DriverId, Halt, Logic, NetId, Transition};
 use crate::element::{AcCtx, AcceptCtx, Element, Integration, Mode, StampCtx, node_index};
 use crate::elements::{Failure, VoltageSource, Waveform};
-use crate::linalg::{LinearSystem, SolveError, coupled_entries};
+use crate::linalg::{Factorizations, LinearSystem, SolveError, coupled_entries};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolverConfig {
@@ -2641,6 +2641,12 @@ impl Simulator {
     /// Convenience: the last solved unknown vector.
     pub fn solution(&self) -> &[f64] {
         &self.x
+    }
+
+    /// What the operating point and transient solves have cost in orderings and
+    /// factorizations, since the circuit's size last changed.
+    pub fn factorizations(&self) -> Factorizations {
+        self.sys.factorizations()
     }
 }
 
