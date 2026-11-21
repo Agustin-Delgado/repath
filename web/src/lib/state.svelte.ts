@@ -2525,10 +2525,16 @@ class AppState {
 	 * its wire hanging, which is the truth of it.
 	 */
 	leaveBlock(): void {
-		const frame = this.outside.pop();
-		if (!frame) return;
+		if (this.outside.length === 0) return;
 		this.trace.record({ op: 'leave' });
 		this.discardRun();
+		this.ascend();
+	}
+
+	/** Write the open level back into the one under it and go there: `leaveBlock` without the bookkeeping of a step taken. */
+	private ascend(): void {
+		const frame = this.outside.pop();
+		if (!frame) return;
 		const edited = this.schematic;
 		const block = frame.editing;
 		const outer = frame.schematic;
@@ -3315,14 +3321,80 @@ class AppState {
 
 	// -- persistence ------------------------------------------------------
 
-	/** The circuit as a document: what a saved file holds. */
+	/**
+	 * The circuit as a document: what a saved file and a share link hold.
+	 *
+	 * The whole circuit, wherever the editor stands. With a block open, the
+	 * drawing on screen is only that block's inside, and its edits reach the
+	 * drawing on the way out; so the document is the drawing as leaving every
+	 * open block would leave it, without leaving any. Which block was open is
+	 * not kept: a file or a link is the circuit, and opens on the drawing, as
+	 * a file saved after leaving would. Coming back into the block is the
+	 * draft's business.
+	 */
 	toDocument(): RepathDocument {
+		const { schematic, probes } = this.outside.length > 0 ? this.committed() : this;
 		return toDocument({
-			schematic: this.schematic,
+			schematic,
 			stopTime: this.stopTime,
-			probes: this.probes,
+			probes,
 			settings: this.settings()
 		});
+	}
+
+	/**
+	 * The drawing with every open block written back into it, the editor left as it was.
+	 *
+	 * The way out is walked for real — the same `ascend` that leaving takes, so
+	 * the pins of every placed copy are followed exactly as they would be — but
+	 * on copies of every level, and everything it touched is put back after.
+	 * The catalog is the one thing shared: the definitions the walk registered
+	 * are registered again as the open level has them.
+	 */
+	private committed(): { schematic: Schematic; probes: string[] } {
+		const live = {
+			schematic: this.schematic,
+			probes: this.probes,
+			selection: this.selection,
+			past: this.past,
+			future: this.future,
+			clearedFuture: this.clearedFuture,
+			historyBytes: this.historyBytes,
+			outside: this.outside,
+			inside: this.inside,
+			depth: this.depth,
+			error: this.error,
+			notice: this.notice
+		};
+		const copy = (schematic: Schematic) => structuredClone($state.snapshot(schematic)) as Schematic;
+		try {
+			this.outside = live.outside.map((frame) => ({
+				...frame,
+				schematic: copy(frame.schematic),
+				past: [...frame.past]
+			}));
+			this.schematic = copy(live.schematic);
+			this.past = [...live.past];
+			while (this.outside.length > 0) this.ascend();
+			return $state.snapshot({ schematic: this.schematic, probes: this.probes }) as {
+				schematic: Schematic;
+				probes: string[];
+			};
+		} finally {
+			this.schematic = live.schematic;
+			this.probes = live.probes;
+			this.selection = live.selection;
+			this.past = live.past;
+			this.future = live.future;
+			this.clearedFuture = live.clearedFuture;
+			this.historyBytes = live.historyBytes;
+			this.outside = live.outside;
+			this.inside = live.inside;
+			this.depth = live.depth;
+			this.error = live.error;
+			this.notice = live.notice;
+			registerBlocks(this.schematic);
+		}
 	}
 
 	toJSON(): string {
