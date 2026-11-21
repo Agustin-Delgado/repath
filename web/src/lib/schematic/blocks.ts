@@ -49,7 +49,7 @@ import {
 	type Schematic,
 	type Wire
 } from './model';
-import { buildConnectivity, liesWithin, pinKey, tidiedWires, type Connectivity } from './nets';
+import { buildConnectivity, liesWithin, pinKey, probePin, tidiedWires, type Connectivity } from './nets';
 import { rerouteMoved, routeWire } from './route';
 import type { PortInjection } from '../spice';
 
@@ -180,57 +180,118 @@ export function writeBack(
 	const outer = structuredClone(frame.schematic);
 	const inside = structuredClone(edited);
 	// Boxing something up inside made a definition; it belongs to the
-	// document as a whole.
+	// document as a whole, and so does a part imported in there.
 	outer.blocks = inside.blocks ?? outer.blocks;
+	outer.subcircuits = inside.subcircuits ?? outer.subcircuits;
 	const target =
 		(outer.blocks ?? []).find((b) => b.id === frame.editing.id) ?? structuredClone(frame.editing);
-	const copies = outer.instances.filter((i) => i.kind === BLOCK_PREFIX + target.id);
-	// Pins are followed by the port they are, not by name: a port renamed
-	// inside is the same terminal, and the wire on it stays on it.
-	const wasPort = new Map(blockPorts(target).map((p) => [p.name, p.instance]));
-	const before = new Map<string, Point>();
-	for (const placed of copies) {
-		for (const pin of definitionFor(placed).pins) {
-			const port = wasPort.get(pin.name);
-			if (port) before.set(`${placed.id}:${port}`, pinPosition(placed, pin));
-		}
-	}
+	const was = structuredClone(target);
 	target.instances = inside.instances;
 	target.wires = inside.wires;
 	target.groups = inside.groups;
 	const definitions = blockDefinitions(outer);
+	// Every copy follows: the ones on the drawing being returned to, and the
+	// ones placed inside the other blocks of the document, whose wires are as
+	// much the circuit as the drawing's.
+	reattachCopies(outer, target.id, was, target, definitions, nextId);
+	for (const block of outer.blocks ?? []) {
+		if (block.id === target.id) continue;
+		const drawing = interior(block, outer);
+		if (reattachCopies(drawing, target.id, was, target, definitions, nextId)) block.wires = drawing.wires;
+	}
+	return { schematic: outer, probes: followPorts(frame.probes, outer, target.id, was, target), definitions };
+}
+
+/**
+ * Probes on the pins of block `id`'s copies in `drawing`, after its
+ * definition went from `before` to `after`: a probe stays on the port it was
+ * on when the port is renamed, and goes with a port that is gone.
+ */
+export function followPorts(
+	probes: readonly string[],
+	drawing: Schematic,
+	id: string,
+	before: BlockDef,
+	after: BlockDef
+): string[] {
+	const now = new Map(blockPorts(after).map((p) => [p.instance, p.name]));
+	const renamed = new Map<string, string | null>();
+	for (const port of blockPorts(before)) renamed.set(port.name, now.get(port.instance) ?? null);
+	const copies = new Set(drawing.instances.filter((i) => i.kind === BLOCK_PREFIX + id).map((i) => i.id));
+	return probes.flatMap((handle) => {
+		if (!handle.startsWith(PROBE_PIN)) return [handle];
+		const rest = handle.slice(PROBE_PIN.length);
+		const cut = rest.indexOf(':');
+		const owner = rest.slice(0, cut);
+		if (cut < 0 || !copies.has(owner)) return [handle];
+		const to = renamed.get(rest.slice(cut + 1));
+		if (to === undefined) return [handle];
+		return to === null ? [] : [probePin(owner, to)];
+	});
+}
+
+const PROBE_PIN = 'pin:';
+
+/**
+ * Re-attach the wires on every copy of block `id` placed in `drawing`, after
+ * its definition went from `before` to `after`.
+ *
+ * Pins are followed by the port they are, not by name: a port renamed inside
+ * is the same terminal, and the wire on it stays on it. Where each pin was is
+ * read from the catalog as it stands; where it is now, from `definitions`.
+ * `drawing.wires` is replaced, never edited in place. Returns whether there
+ * was a copy to re-attach.
+ */
+export function reattachCopies(
+	drawing: Schematic,
+	id: string,
+	before: BlockDef,
+	after: BlockDef,
+	definitions: readonly ComponentDef[],
+	nextId: () => string
+): boolean {
+	const copies = drawing.instances.filter((i) => i.kind === BLOCK_PREFIX + id);
+	if (copies.length === 0) return false;
+	const wasPort = new Map(blockPorts(before).map((p) => [p.name, p.instance]));
+	const was = new Map<string, Point>();
+	for (const placed of copies) {
+		for (const pin of definitionFor(placed).pins) {
+			const port = wasPort.get(pin.name);
+			if (port) was.set(`${placed.id}:${port}`, pinPosition(placed, pin));
+		}
+	}
 	withKinds(definitions, () => {
 		const moved = new Map<string, Point>();
 		for (const placed of copies) {
 			const pins = definitionFor(placed).pins;
 			const still = new Set<string>();
-			for (const port of blockPorts(target)) {
+			for (const port of blockPorts(after)) {
 				const pin = pins.find((p) => p.name === port.name);
-				const was = before.get(`${placed.id}:${port.instance}`);
-				if (!pin || !was) continue;
+				const from = was.get(`${placed.id}:${port.instance}`);
+				if (!pin || !from) continue;
 				still.add(`${placed.id}:${port.instance}`);
 				const now = pinPosition(placed, pin);
-				if (was.x !== now.x || was.y !== now.y) moved.set(pointKey(was.x, was.y), now);
+				if (from.x !== now.x || from.y !== now.y) moved.set(pointKey(from.x, from.y), now);
 			}
 			// A wire on a pin that is gone goes with it. Left hanging where the
 			// pin was, it sat exactly where the pins that remain close up to,
 			// and one of them landing on the loose end was a connection nobody
 			// drew. The part at its far end is then unconnected, and says so.
-			for (const [key, was] of before) {
+			for (const [key, from] of was) {
 				if (!key.startsWith(`${placed.id}:`) || still.has(key)) continue;
-				const at = pointKey(was.x, was.y);
-				outer.wires = outer.wires.filter((w) => {
+				const at = pointKey(from.x, from.y);
+				drawing.wires = drawing.wires.filter((w) => {
 					const ends = [w.points[0], w.points[w.points.length - 1]];
 					return !ends.some((p) => pointKey(p.x, p.y) === at);
 				});
 			}
 		}
-		rerouteMoved(outer, moved, (from, to, settling, prefer) =>
-			routeWire(outer, from, to, { grid: GRID, ignoreWires: settling, prefer })
+		rerouteMoved(drawing, moved, (from, to, settling, prefer) =>
+			routeWire(drawing, from, to, { grid: GRID, ignoreWires: settling, prefer })
 		);
-		if (moved.size > 0) outer.wires = tidiedWires(outer, nextId);
+		if (moved.size > 0) drawing.wires = tidiedWires(drawing, nextId);
 	});
-	return { schematic: outer, probes: [...frame.probes], definitions };
+	return true;
 }
 
 /**
@@ -276,16 +337,38 @@ export function blockInUse(schematic: Schematic, id: string): boolean {
 }
 
 /**
+ * A block of the drawing that is placed inside itself, directly or further
+ * down, by name; or null when none is. Such a drawing cannot be unfolded, so
+ * it is refused at the door rather than discovered on the first compile.
+ */
+export function selfContained(schematic: Schematic): string | null {
+	for (const block of schematic.blocks ?? []) {
+		const inner = block.instances.map((i) => blockOf(schematic, i.kind)).filter((b) => b !== null);
+		if (inner.some((child) => contains(schematic, child.id, block.id))) return block.name;
+	}
+	return null;
+}
+
+/**
  * Whether block `id` is `inside`, or is built out of something that is: the
  * blocks that must not be placed in `inside`, or it would contain itself.
  */
-export function contains(schematic: Schematic, id: string, inside: string): boolean {
+export function contains(
+	schematic: Schematic,
+	id: string,
+	inside: string,
+	seen: Set<string> = new Set()
+): boolean {
 	if (id === inside) return true;
+	// A block met twice on the way down is a loop that does not lead to
+	// `inside` — or it would have been found the first time.
+	if (seen.has(id)) return false;
+	seen.add(id);
 	const block = schematic.blocks?.find((b) => b.id === id);
 	if (!block) return false;
 	return block.instances.some((i) => {
 		const child = blockOf(schematic, i.kind);
-		return child !== null && contains(schematic, child.id, inside);
+		return child !== null && contains(schematic, child.id, inside, seen);
 	});
 }
 
@@ -312,6 +395,8 @@ export interface Unfolded {
 	 * unfolded as.
 	 */
 	portFlow: Map<string, PortInjection[]>;
+	/** The blocks found placed inside themselves, by name. Each was left closed. */
+	cycles: string[];
 }
 
 /** The name an inner part is built under: `B1.R1`, and `B1.B2.R1` further in. */
@@ -325,6 +410,11 @@ export function unfoldBlocks(schematic: Schematic): Unfolded {
 	const wires: Wire[] = [];
 	const ties: Tie[] = [];
 	const portFlow = new Map<string, PortInjection[]>();
+	const cycles = new Set<string>();
+	// The blocks being unfolded on the way down to the one at hand. A block
+	// met again on its own way down contains itself, and unfolding it would
+	// never end; it is left as a closed box and reported instead.
+	const opening = new Set<string>();
 	let parked = 0;
 	// What each definition's inside is wired as, worked out once however many
 	// times it is placed.
@@ -388,7 +478,14 @@ export function unfoldBlocks(schematic: Schematic): Unfolded {
 	const take = (instance: Instance): void => {
 		instances.push(instance);
 		const block = blockOf(schematic, instance.kind);
-		if (block) unfold(instance, block);
+		if (!block) return;
+		if (opening.has(block.id)) {
+			cycles.add(block.name);
+			return;
+		}
+		opening.add(block.id);
+		unfold(instance, block);
+		opening.delete(block.id);
 	};
 
 	for (const instance of schematic.instances) take(instance);
@@ -397,7 +494,8 @@ export function unfoldBlocks(schematic: Schematic): Unfolded {
 	return {
 		schematic: { ...schematic, instances, wires },
 		ties,
-		portFlow
+		portFlow,
+		cycles: [...cycles]
 	};
 }
 

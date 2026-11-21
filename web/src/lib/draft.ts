@@ -167,6 +167,37 @@ export function staleDrafts(
 		.map((r) => r.id);
 }
 
+/** The name of the lock a tab holds its draft under. */
+export const draftLock = (id: string) => `repath.draft.${id}`;
+
+/**
+ * The drafts some open tab holds, as far as the browser can say.
+ *
+ * Pruning keeps the newest few, and a tab that has been open a long while
+ * without a change has an old draft — the one it will write its next change
+ * into. Deleting it from under the tab lost the work if it was closed before
+ * that change came. Empty where the browser has no locks to ask.
+ */
+export async function heldDrafts(): Promise<Set<string>> {
+	try {
+		if (typeof navigator === 'undefined' || !navigator.locks) return new Set();
+		const { held = [] } = await navigator.locks.query();
+		const prefix = draftLock('');
+		return new Set(
+			held.flatMap((lock) => (lock.name?.startsWith(prefix) ? [lock.name.slice(prefix.length)] : []))
+		);
+	} catch {
+		return new Set();
+	}
+}
+
+/**
+ * What to tell someone whose work is not being kept: the browser refused the
+ * store, or refused a write to it. A reload would lose it, and a file would not.
+ */
+export const UNSAVED_NOTICE =
+	'Your work could not be saved in this browser, so a reload would lose it. Save it to a file to be safe.';
+
 export const newDraftId = () =>
 	`d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 

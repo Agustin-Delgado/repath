@@ -11,6 +11,48 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Blocks, pastes and drafts that hold together
+
+**A block can no longer end up inside itself.** Pasting a box into its own
+inside, or placing a block inside one you came in through, used to be allowed
+and then crashed the editor on every redraw — and the saved draft brought the
+crash back on every start. Both are refused now, with a note saying why.
+
+**Nothing you use is deleted from under you.** Inside a block, removing a block
+from the palette, or boxing up a group with the same name as one on the
+drawing, could delete a definition the drawing underneath still used; an
+imported part could be removed while a block was still built from it. The
+editor carried on, but the link you then copied would not open for anyone
+else, and the file would not load after a reload. Those removals are refused
+now, and the ones that go ahead say so, with Ctrl+Z to bring them back — which
+matters most on a phone, where a long press on a palette tile is a right-click.
+
+**Copying carries everything the parts need.** An imported part copied into
+another circuit brings its definition along, and a paste brings only the blocks
+the pasted parts use, instead of every block of the circuit it came from.
+
+**A paste does not join nets by accident.** Pasting a circuit next to itself
+used to wire its pins straight onto whatever they landed on. A paste with no
+place picked now steps further away until it lands clear; one at the cursor
+that would join two nets is refused, the way a move is. A single part dropped
+on a wire still goes in series.
+
+**Every copy of a block keeps its wires.** Editing a block, renaming it or
+moving its ports re-attaches the wires on every copy — including the copies
+inside other blocks and on the drawing underneath, which used to be left with
+wires hanging. A probe on a port you renamed stays on it.
+
+**Also:** groups drawn inside a block survive a share link; undoing an opened
+example or a cleared drawing brings back the probes and settings with it; a
+saved draft that cannot be built is left alone instead of breaking the app on
+every start; the app starts in a browser that blocks site data, and says so
+when it cannot keep your work; an old draft of a tab still open is no longer
+pruned; and coming back up from a draft restored several blocks deep shows
+each level whole.
+[#84](https://github.com/Agustin-Delgado/repath/pull/84)
+
+---
+
 ## 20 November 2026 — Saving from inside a block keeps the whole circuit
 
 **Save and Share work wherever you are.** With a block open for editing, File

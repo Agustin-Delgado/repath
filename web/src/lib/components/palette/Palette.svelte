@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { ChevronRight, Plus, Search, X } from '@lucide/svelte';
-	import { BLOCK_PREFIX, SUBCIRCUIT_PREFIX } from '$lib/schematic/model';
 	import { SECTIONS, searchParts, sectionLabel, type PartEntry, type SectionId } from '$lib/parts/library';
-	import { allParts, isArmed, pickPart } from '$lib/parts/drawing';
+	import { SUBCIRCUIT_PREFIX } from '$lib/schematic/model';
+	import { allParts, isArmed, pickPart, removeDrawingPart } from '$lib/parts/drawing';
+	import { toasts } from '$lib/ui';
 	import { recentParts } from '$lib/parts/recent.svelte';
 	import { app } from '$lib/state.svelte';
 	import Symbol from '../Symbol.svelte';
@@ -115,21 +116,18 @@
 		searchInput.focus();
 	}
 
-	/** Blocks and imported parts go with the drawing, and right-click is how they go. */
+	/**
+	 * Blocks and imported parts go with the drawing, and right-click is how they
+	 * go. A long press on a phone is a right-click too, so it says what it did
+	 * and that undo brings it back.
+	 */
 	function removable(part: PartEntry): ((event: MouseEvent) => void) | undefined {
-		if (part.section === 'blocks') {
-			return (event) => {
-				event.preventDefault();
-				app.removeBlock(part.kind.slice(BLOCK_PREFIX.length));
-			};
-		}
-		if (part.section === 'imported') {
-			return (event) => {
-				event.preventDefault();
-				app.removeSubcircuit(part.kind.slice(SUBCIRCUIT_PREFIX.length));
-			};
-		}
-		return undefined;
+		if (part.section !== 'blocks' && part.section !== 'imported') return undefined;
+		return (event) => {
+			event.preventDefault();
+			const said = removeDrawingPart(app, part);
+			if (said) toasts.show(said);
+		};
 	}
 
 	const tip = (part: PartEntry) =>

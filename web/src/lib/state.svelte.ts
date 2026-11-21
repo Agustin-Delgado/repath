@@ -50,14 +50,19 @@ import { recordServo, servoAt, servoDeviceName, type ServoFrame } from './schema
 import { DEFAULT_FAMILY, isLogicFamily } from './schematic/logic';
 import { groupFrame, outside } from './schematic/groups';
 import {
+	blockDefinitions,
 	blockInUse,
 	blockPorts,
+	contains,
 	flatConnectivity,
+	followPorts,
 	interior,
 	joinedByBoxing,
 	outgrownPins,
 	planBlock,
+	reattachCopies,
 	registerBlocks,
+	selfContained,
 	writeBack,
 	type OpenedFrom
 } from './schematic/blocks';
@@ -108,6 +113,7 @@ import {
 import { elbow, rerouteMoved, routeWire, type RouteBetween } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
 import { serialBytes, usbSerialName, type LineEnding } from './schematic/serial';
+import { joinedByPaste, mergeSubcircuits, reachedDefinitions, renameSubcircuitKinds } from './schematic/paste';
 import {
 	buildConnectivity,
 	netLabel,
@@ -246,6 +252,21 @@ interface Bond {
 interface HistoryEntry {
 	document: string;
 	selection: string[];
+	/**
+	 * What else the step replaced, for one that replaced the whole document —
+	 * an example opened, the drawing cleared. Undoing one of those brought the
+	 * drawing back under the example's settings, with the example's probes
+	 * pointing at parts that were no longer there.
+	 */
+	around?: DocumentAround;
+}
+
+/** What goes with a drawing besides its parts: what is watched and how it is run. */
+interface DocumentAround {
+	probes: string[];
+	stopTime: number;
+	exampleId: string;
+	settings: CircuitSettings;
 }
 
 /**
@@ -264,6 +285,12 @@ const HISTORY_LIMIT = 100;
  * ones least likely to be wanted.
  */
 const HISTORY_BYTES = 8 * 1024 * 1024;
+
+/**
+ * How many places a paste with nowhere to land tries, a few grid steps further
+ * from the original each time, before saying it found nowhere clear.
+ */
+const PASTE_TRIES = 8;
 
 /**
  * How long a run lasts before anybody has said otherwise.
@@ -831,8 +858,36 @@ class AppState {
 		this.playbackTime = Math.min(Math.max(time, this.capture.earliest), this.capture.now);
 	}
 
-	private past: HistoryEntry[] = [];
-	private future: HistoryEntry[] = [];
+	private undoStack: HistoryEntry[] = [];
+	private redoStack: HistoryEntry[] = [];
+	/**
+	 * Bumped whenever either stack changes, so whether there is anything to undo
+	 * can be shown. The stacks themselves are plain arrays of large strings,
+	 * which there is no point in having Svelte watch entry by entry.
+	 */
+	private historyTick = $state(0);
+	private historyCount = 0;
+	/**
+	 * Count a change to the history. Written without being read, so an effect
+	 * that edits the drawing does not come to depend on the history it grows.
+	 */
+	private historyChanged(): void {
+		this.historyTick = ++this.historyCount;
+	}
+	private get past(): HistoryEntry[] {
+		return this.undoStack;
+	}
+	private set past(entries: HistoryEntry[]) {
+		this.undoStack = entries;
+		this.historyChanged();
+	}
+	private get future(): HistoryEntry[] {
+		return this.redoStack;
+	}
+	private set future(entries: HistoryEntry[]) {
+		this.redoStack = entries;
+		this.historyChanged();
+	}
 	/** Running total of the serialized history, so it can be capped by size. */
 	private historyBytes = 0;
 	private clipboard: {
@@ -840,6 +895,7 @@ class AppState {
 		wires: Wire[];
 		groups?: PartGroup[];
 		blocks?: BlockDef[];
+		subcircuits?: SubcircuitDef[];
 	} | null = null;
 	/** Snapshot taken at the start of a drag; null when nothing is being dragged. */
 	private moveOrigin: MoveOrigin | null = null;
@@ -913,20 +969,51 @@ class AppState {
 		return null;
 	});
 
-	canUndo = $derived(this.past.length > 0);
+	/** Whether Undo would do anything, for a button to say so. */
+	canUndo = $derived.by(() => {
+		void this.historyTick;
+		return this.undoStack.length > 0;
+	});
+	/** Whether Redo would do anything. */
+	canRedo = $derived.by(() => {
+		void this.historyTick;
+		return this.redoStack.length > 0;
+	});
 
 	// -- history ----------------------------------------------------------
 
-	private snapshot(): HistoryEntry {
+	private snapshot(around = false): HistoryEntry {
 		return {
 			document: JSON.stringify($state.snapshot(this.schematic)),
-			selection: [...this.selection]
+			selection: [...this.selection],
+			...(around
+				? {
+						around: {
+							probes: [...this.probes],
+							stopTime: this.stopTime,
+							exampleId: this.exampleId,
+							settings: this.settings()
+						}
+					}
+				: {})
 		};
 	}
 
-	/** Call immediately *before* mutating the schematic. */
-	private checkpoint(): void {
-		const entry = this.snapshot();
+	/** Put back what went with a drawing that a step replaced whole. */
+	private restoreAround(around: DocumentAround): void {
+		this.probes = [...around.probes];
+		this.stopTime = around.stopTime;
+		this.exampleId = around.exampleId;
+		this.applySettings(around.settings);
+	}
+
+	/**
+	 * Call immediately *before* mutating the schematic. `around` for a step that
+	 * replaces the whole document, so undoing it brings back the probes and the
+	 * settings along with the drawing.
+	 */
+	private checkpoint(around = false): void {
+		const entry = this.snapshot(around);
 		// An operation that changed nothing should not cost an undo press.
 		if (this.past[this.past.length - 1]?.document === entry.document) return;
 		this.remember(entry);
@@ -935,6 +1022,7 @@ class AppState {
 	/** Put a step on the undo stack, keeping the stack within its bounds. */
 	private remember(entry: HistoryEntry): void {
 		this.past.push(entry);
+		this.historyChanged();
 		this.historyBytes += entry.document.length;
 		// Capped by size as well as by count: a hundred snapshots of a large
 		// schematic is megabytes, and the oldest of them are worth the least.
@@ -962,6 +1050,7 @@ class AppState {
 	private withdrawCheckpoint(was: HistoryEntry): void {
 		if (this.past[this.past.length - 1]?.document !== was.document) return;
 		const dropped = this.past.pop();
+		this.historyChanged();
 		if (dropped) this.historyBytes -= dropped.document.length;
 		this.future = this.clearedFuture;
 	}
@@ -992,8 +1081,10 @@ class AppState {
 		const previous = this.past.pop();
 		if (!previous) return;
 		this.historyBytes -= previous.document.length;
-		this.future.push(this.snapshot());
+		this.future.push(this.snapshot(previous.around !== undefined));
+		this.historyChanged();
 		this.schematic = adopt(JSON.parse(previous.document) as Schematic);
+		if (previous.around) this.restoreAround(previous.around);
 		// Put the selection back too: undoing a nudge and finding nothing selected
 		// means re-picking the thing you were working on every single time.
 		this.selection = this.stillPresent(previous.selection);
@@ -1004,15 +1095,24 @@ class AppState {
 		this.trace.record({ op: 'redo' });
 		const next = this.future.pop();
 		if (!next) return;
-		this.past.push(this.snapshot());
+		this.past.push(this.snapshot(next.around !== undefined));
+		this.historyChanged();
 		this.historyBytes += this.past[this.past.length - 1].document.length;
 		this.schematic = adopt(JSON.parse(next.document) as Schematic);
+		if (next.around) this.restoreAround(next.around);
 		this.selection = this.stillPresent(next.selection);
 	}
 
 	// -- editing ----------------------------------------------------------
 
-	place(kind: string, x: number, y: number, rotation: Rotation = 0): Instance {
+	place(kind: string, x: number, y: number, rotation: Rotation = 0): Instance | null {
+		// The palette keeps such a block out of reach; this is for every other
+		// way of asking — a replayed step, a part still in the hand from before.
+		const block = blockOf(this.whole, kind);
+		if (block && this.wouldContainItself(block.id)) {
+			this.notice = `${block.name} cannot go in here: it would end up inside itself.`;
+			return null;
+		}
 		this.checkpoint();
 		const instance: Instance = {
 			id: freshId(),
@@ -1648,6 +1748,7 @@ class AppState {
 			const dropped = this.past.pop();
 			if (dropped) this.historyBytes -= dropped.document.length;
 			this.future = origin.future;
+			this.historyChanged();
 		}
 
 		this.moveOrigin = null;
@@ -2129,6 +2230,71 @@ class AppState {
 	}> = [];
 
 	/**
+	 * The whole document as it stands, without writing anything back: the
+	 * drawing at the bottom, and every block — the ones open for editing with
+	 * the inside as it is being edited, not as it was on the way in.
+	 *
+	 * Inside a block the open level is only part of the document. A question
+	 * about the document — is this block used anywhere, would placing it here
+	 * put it inside itself — asked of the open level alone was answered for a
+	 * fraction of it, and a definition placed on the drawing underneath was
+	 * deleted as unused. Read, never written: it shares its parts with the
+	 * levels it is made of.
+	 */
+	private get whole(): Schematic {
+		if (this.outside.length === 0) return this.schematic;
+		const live = new Map<string, Schematic>();
+		this.outside.forEach((frame, k) => {
+			live.set(frame.editing.id, this.outside[k + 1]?.schematic ?? this.schematic);
+		});
+		// The innermost level holds the newest list of definitions: anything
+		// boxed up or imported on the way down is only there.
+		const blocks = (this.schematic.blocks ?? []).map((block) => {
+			const level = live.get(block.id);
+			return level ? { ...block, instances: level.instances, wires: level.wires, groups: level.groups } : block;
+		});
+		return { ...this.outside[0].schematic, blocks, subcircuits: this.schematic.subcircuits };
+	}
+
+	/** The blocks open for editing, outermost first. */
+	private get openBlocks(): string[] {
+		return this.outside.map((frame) => frame.editing.id);
+	}
+
+	/**
+	 * Whether placing block `id` here would put a block inside itself: it is
+	 * one of the blocks open around this level, or is built out of one. Asked
+	 * of the whole document, so a block placed inside another on the way down
+	 * is seen, which its stored definition does not yet say. `among` adds
+	 * definitions the document does not hold yet, for a paste from elsewhere.
+	 */
+	wouldContainItself(id: string, among: readonly BlockDef[] = []): boolean {
+		const open = this.openBlocks;
+		if (open.length === 0) return false;
+		const whole = this.whole;
+		const known = new Set((whole.blocks ?? []).map((b) => b.id));
+		const lookup: Schematic = {
+			...whole,
+			blocks: [...(whole.blocks ?? []), ...among.filter((b) => !known.has(b.id))]
+		};
+		return open.some((inside) => contains(lookup, id, inside));
+	}
+
+	/** How many parts of `kind` there are outside the open level: on the levels under it, and inside every block. */
+	private usesElsewhere(kind: string): number {
+		const whole = this.whole;
+		const placed = (instances: readonly Instance[]) => instances.filter((i) => i.kind === kind).length;
+		// The innermost open block's live inside is the open level itself.
+		const innermost = this.outside.at(-1)?.editing.id;
+		let count = this.outside.length > 0 ? placed(whole.instances) : 0;
+		for (const block of whole.blocks ?? []) {
+			if (block.id === innermost) continue;
+			count += placed(block.instances);
+		}
+		return count;
+	}
+
+	/**
 	 * Box the selected parts up as a block.
 	 *
 	 * The parts and the wires between them leave the drawing for the
@@ -2461,6 +2627,15 @@ class AppState {
 		const frame = this.outside.pop();
 		if (!frame) return;
 		const back = writeBack(this.plainFrame(frame), $state.snapshot(this.schematic) as Schematic, freshId);
+		// Copies on the levels further down are drawn from the same catalog, so
+		// their wires follow the pins too, before the catalog moves them.
+		const edited = (back.schematic.blocks ?? []).find((b) => b.id === frame.editing.id);
+		if (edited) {
+			for (const below of this.outside) {
+				reattachCopies(below.schematic, edited.id, frame.editing, edited, back.definitions, freshId);
+				below.probes = followPorts(below.probes, below.schematic, edited.id, frame.editing, edited);
+			}
+		}
 		// The editor's own drawing is the one written back, so the catalog
 		// follows it: the copies of the block are drawn with their new pins.
 		for (const def of back.definitions) registerKind(def);
@@ -2477,7 +2652,7 @@ class AppState {
 			this.remember(frame.entered);
 		}
 		this.selection = this.stillPresent(frame.selection);
-		this.probes = frame.probes;
+		this.probes = back.probes;
 		// The block still open around this level is its definition in the drawing
 		// just written back, not the one from before: a rename from here on has to
 		// reach what the editor says it is inside.
@@ -2562,14 +2737,13 @@ class AppState {
 		return own;
 	}
 
-	/** How many times a block is placed: on the drawing, and inside other blocks. */
+	/**
+	 * How many times a block is placed: on this level, on the levels under it,
+	 * and inside every other block of the document.
+	 */
 	copiesOf(id: string): number {
 		const kind = BLOCK_PREFIX + id;
-		const placed = (instances: readonly Instance[]) => instances.filter((i) => i.kind === kind).length;
-		return (
-			placed(this.schematic.instances) +
-			(this.schematic.blocks ?? []).reduce((sum, b) => sum + placed(b.instances), 0)
-		);
+		return this.schematic.instances.filter((i) => i.kind === kind).length + this.usesElsewhere(kind);
 	}
 
 	/**
@@ -2584,37 +2758,60 @@ class AppState {
 		rename: (after: string) => string = (name) => name
 	): void {
 		const kind = BLOCK_PREFIX + id;
-		this.reshape(
-			this.schematic.instances.filter((i) => i.kind === kind),
-			change,
-			rename
+		// The copies inside the other blocks of the document move their pins as
+		// well, and their wires are as much the circuit as this level's. Not the
+		// blocks open around this level: what is stored for those is the inside
+		// as it was on the way in, and leaving writes the open level over it.
+		const open = new Set(this.openBlocks);
+		const inside = (this.schematic.blocks ?? []).filter(
+			(block) => !open.has(block.id) && block.instances.some((i) => i.kind === kind)
 		);
+		this.reshape(this.schematic.instances.filter((i) => i.kind === kind), change, rename, inside);
 	}
 
-	/** `reshapeBlock` for the given boxes, which may be about to become another block's. */
+	/**
+	 * `reshapeBlock` for the given boxes, which may be about to become another
+	 * block's. In each block of `inside`, every box of the same kind as one of
+	 * `copies` is followed too, with the wires inside that block.
+	 */
 	private reshape(
 		copies: Instance[],
 		change: () => void,
-		rename: (after: string) => string = (name) => name
+		rename: (after: string) => string = (name) => name,
+		inside: readonly BlockDef[] = []
 	): void {
+		const drawings = [
+			{ drawing: this.schematic, copies, block: null as BlockDef | null },
+			...inside.map((block) => {
+				const kinds = new Set(copies.map((c) => c.kind));
+				const drawing = interior(block, this.schematic);
+				return { drawing, copies: block.instances.filter((i) => kinds.has(i.kind)), block };
+			})
+		];
 		const before = new Map<string, Point>();
-		for (const placed of copies) {
-			for (const pin of definitionFor(placed).pins) {
-				before.set(`${placed.id}:${pin.name}`, pinPosition(placed, pin));
+		for (const { copies } of drawings) {
+			for (const placed of copies) {
+				for (const pin of definitionFor(placed).pins) {
+					before.set(`${placed.id}:${pin.name}`, pinPosition(placed, pin));
+				}
 			}
 		}
 		change();
 		registerBlocks(this.schematic);
-		const moved = new Map<string, Point>();
-		for (const placed of copies) {
-			for (const pin of definitionFor(placed).pins) {
-				const was = before.get(`${placed.id}:${rename(pin.name)}`);
-				const now = pinPosition(placed, pin);
-				if (was && (was.x !== now.x || was.y !== now.y)) moved.set(pointKey(was.x, was.y), now);
+		for (const { drawing, copies, block } of drawings) {
+			const moved = new Map<string, Point>();
+			for (const placed of copies) {
+				for (const pin of definitionFor(placed).pins) {
+					const was = before.get(`${placed.id}:${rename(pin.name)}`);
+					const now = pinPosition(placed, pin);
+					if (was && (was.x !== now.x || was.y !== now.y)) moved.set(pointKey(was.x, was.y), now);
+				}
 			}
+			if (moved.size === 0) continue;
+			this.rewire(moved, this.router(drawing), drawing);
+			if (block) block.wires = tidiedWires(drawing, freshId);
+			else this.tidyWires();
 		}
-		this.rewire(moved, this.router());
-		if (moved.size > 0) this.tidyWires();
 	}
 
 	/**
@@ -2646,11 +2843,16 @@ class AppState {
 			},
 			(name) => (name === trimmed ? port : name)
 		);
-		// A probe on the pin is a probe on the port, and follows the name.
-		this.probes = this.probes.map((handle) => {
-			const owner = this.schematic.instances.find((i) => handle === probePin(i.id, port));
-			return owner && owner.kind === kind ? probePin(owner.id, trimmed) : handle;
-		});
+		// A probe on the pin is a probe on the port, and follows the name — on
+		// this level and on every level under it, where the copies placed there
+		// are watched as well.
+		const follow = (probes: string[], drawing: Schematic) =>
+			probes.map((handle) => {
+				const owner = drawing.instances.find((i) => handle === probePin(i.id, port));
+				return owner && owner.kind === kind ? probePin(owner.id, trimmed) : handle;
+			});
+		this.probes = follow(this.probes, this.schematic);
+		for (const frame of this.outside) frame.probes = follow(frame.probes, frame.schematic);
 		return null;
 	}
 
@@ -2707,18 +2909,33 @@ class AppState {
 	 * Forget a block, and delete anything placed from it. Refused while another
 	 * block is built out of it: that one would be left with a hole in it.
 	 */
-	removeBlock(id: string): void {
+	removeBlock(id: string): boolean {
 		const kind = BLOCK_PREFIX + id;
-		if ((this.schematic.blocks ?? []).some((b) => b.instances.some((i) => i.kind === kind))) {
-			const name = this.schematic.blocks?.find((b) => b.id === id)?.name ?? 'That block';
-			this.notice = `${name} is used inside another block, so it stays.`;
-			return;
+		const block = (this.schematic.blocks ?? []).find((b) => b.id === id);
+		if (!block) return false;
+		// Asked of the whole document. Inside a block, the drawing underneath and
+		// the other blocks are not on this level, and deleting a definition one of
+		// them still places left a box that nothing could build — a link that
+		// would not open and a file that would not load.
+		if (this.openBlocks.includes(id)) {
+			this.notice = `${block.name} is open for editing, so it stays.`;
+			return false;
 		}
+		if (this.usesElsewhere(kind) > 0) {
+			const why =
+				this.outside.length > 0 && this.whole.instances.some((i) => i.kind === kind)
+					? 'is placed on the drawing outside this block'
+					: 'is used inside another block';
+			this.notice = `${block.name} ${why}, so it stays.`;
+			return false;
+		}
+		this.trace.record({ op: 'unblock', name: block.name });
 		this.checkpoint();
 		this.schematic.instances = this.schematic.instances.filter((i) => i.kind !== kind);
 		this.schematic.blocks = (this.schematic.blocks ?? []).filter((b) => b.id !== id);
 		this.selection = this.stillPresent(this.selection);
 		this.tidyWires();
+		return true;
 	}
 
 	/**
@@ -2731,7 +2948,11 @@ class AppState {
 		const blocks = this.schematic.blocks ?? [];
 		const holder = blocks.find((b) => b.name === wanted);
 		if (!holder) return wanted;
-		if (!blockInUse(this.schematic, holder.id)) {
+		// In use anywhere in the document, not only on this level: inside a
+		// block, a same-named block placed on the drawing underneath is in use.
+		const kind = BLOCK_PREFIX + holder.id;
+		const placed = this.schematic.instances.some((i) => i.kind === kind) || this.usesElsewhere(kind) > 0;
+		if (!placed && !this.openBlocks.includes(holder.id)) {
 			this.schematic.blocks = blocks.filter((b) => b.id !== holder.id);
 			return wanted;
 		}
@@ -2745,7 +2966,7 @@ class AppState {
 	clear(): void {
 		if (this.dragging) return;
 		this.trace.record({ op: 'clear' });
-		this.checkpoint();
+		this.checkpoint(true);
 		// Imported parts survive clearing the drawing. They are a library rather
 		// than part of the circuit, and having to paste the op-amp again because
 		// you started a new sketch with it would make importing one not worth doing.
@@ -2831,13 +3052,28 @@ class AppState {
 	}
 
 	/** Forget an imported part, and delete anything placed from it. */
-	removeSubcircuit(id: string): void {
+	removeSubcircuit(id: string): boolean {
 		const kind = SUBCIRCUIT_PREFIX + id;
+		const sub = (this.schematic.subcircuits ?? []).find((s) => s.id === id);
+		if (!sub) return false;
+		// Refused while anything outside this level places it, as a block is: the
+		// copies inside a block, or on the drawing underneath, would be left
+		// pointing at a definition that is gone.
+		if (this.usesElsewhere(kind) > 0) {
+			const why =
+				this.outside.length > 0 && this.whole.instances.some((i) => i.kind === kind)
+					? 'is placed on the drawing outside this block'
+					: 'is used inside a block';
+			this.notice = `${sub.name} ${why}, so it stays.`;
+			return false;
+		}
+		this.trace.record({ op: 'unimport', name: sub.name });
 		this.checkpoint();
 		this.schematic.instances = this.schematic.instances.filter((i) => i.kind !== kind);
 		this.schematic.subcircuits = (this.schematic.subcircuits ?? []).filter((s) => s.id !== id);
 		this.selection = this.stillPresent(this.selection);
 		this.tidyWires();
+		return true;
 	}
 
 	// -- clipboard --------------------------------------------------------
@@ -2858,10 +3094,14 @@ class AppState {
 			groups: (this.schematic.groups ?? [])
 				.filter((g) => g.members.every((m) => chosen.has(m)))
 				.map((g) => structuredClone($state.snapshot(g)) as PartGroup),
-			// What a copied block is made of, in case it is pasted into a drawing
-			// that has never seen it. Every definition travels: a block inside
-			// the copied one needs its own along too.
-			blocks: (this.schematic.blocks ?? []).map((b) => structuredClone($state.snapshot(b)) as BlockDef)
+			// What a copied block or imported part is made of, in case it is pasted
+			// into a drawing that has never seen it. Every definition travels — a
+			// block inside the copied one needs its own along too — and the paste
+			// takes only the ones the pasted parts reach.
+			blocks: (this.whole.blocks ?? []).map((b) => structuredClone($state.snapshot(b)) as BlockDef),
+			subcircuits: (this.schematic.subcircuits ?? []).map(
+				(s) => structuredClone($state.snapshot(s)) as SubcircuitDef
+			)
 		};
 		return true;
 	}
@@ -2884,19 +3124,100 @@ class AppState {
 	 */
 	paste(at?: { x: number; y: number }): void {
 		if (!this.clipboard || this.dragging) return;
-		const { instances, wires } = this.clipboard;
+		const clipboard = this.clipboard;
+		const { instances, wires } = clipboard;
 		if (instances.length === 0 && wires.length === 0) return;
+
+		// What the pasted parts are made of, and only that: every definition
+		// travels on the clipboard, and adding all of them put blocks in the
+		// palette that nothing pasted had anything to do with.
+		const whole = this.whole;
+		const lookup: Schematic = {
+			instances: [],
+			wires: [],
+			blocks: [...(whole.blocks ?? []), ...(clipboard.blocks ?? [])]
+		};
+		const reached = reachedDefinitions(
+			instances.map((i) => i.kind),
+			lookup
+		);
+		// A box pasted into a block it is, or into one it is built out of, would
+		// contain itself.
+		for (const id of reached.blocks) {
+			if (!this.wouldContainItself(id, clipboard.blocks ?? [])) continue;
+			const name = lookup.blocks?.find((b) => b.id === id)?.name ?? 'a block in it';
+			this.notice = `That cannot be pasted in here: ${name} would end up inside itself.`;
+			return;
+		}
 
 		const xs = [...instances.map((i) => i.x), ...wires.flatMap((w) => w.points.map((p) => p.x))];
 		const ys = [...instances.map((i) => i.y), ...wires.flatMap((w) => w.points.map((p) => p.y))];
 		const minX = Math.min(...xs);
 		const minY = Math.min(...ys);
-		const dx = at ? snap(at.x) - snap(minX) : GRID * 3;
-		const dy = at ? snap(at.y) - snap(minY) : GRID * 3;
+		// Without a place to land, the paste is nudged clear of the original — and
+		// further, a step at a time, while where it would land joins it to
+		// something. A paste at the cursor lands there or not at all.
+		const offsets = at
+			? [{ dx: snap(at.x) - snap(minX), dy: snap(at.y) - snap(minY) }]
+			: Array.from({ length: PASTE_TRIES }, (_, n) => ({
+					dx: GRID * 3 * (n + 1),
+					dy: GRID * 3 * (n + 1)
+				}));
+		// One part on its own is placed rather than pasted: dropped on a wire it
+		// goes in series, and on a pin it joins it, as placing it does.
+		const lone = instances.length === 1 && wires.length === 0;
+		const page = buildConnectivity(this.schematic);
+		const clip = buildConnectivity({ ...lookup, instances, wires });
 
+		const was = this.snapshot();
 		this.checkpoint();
+		let joined: [string, string] | null = null;
+		for (const { dx, dy } of offsets) {
+			const copyOf = this.pasteAt(dx, dy, reached);
+			joined = lone ? null : joinedByPaste(page, clip, buildConnectivity(this.schematic), copyOf, dx, dy);
+			if (!joined) return;
+			this.schematic = adopt(JSON.parse(was.document) as Schematic);
+		}
+		this.selection = this.stillPresent(was.selection);
+		this.withdrawCheckpoint(was);
+		if (joined) {
+			this.notice = `Pasting there would put ${joined[0]} on the same net as ${joined[1]}, so nothing was pasted. Paste it somewhere clear.`;
+		}
+	}
+
+	/**
+	 * Put the clipboard down `(dx, dy)` from where it was copied, with the
+	 * definitions it reaches. Returns each pasted part's clipboard id mapped to
+	 * the id of its copy.
+	 */
+	private pasteAt(
+		dx: number,
+		dy: number,
+		reached: { blocks: Set<string>; subcircuits: Set<string> }
+	): Map<string, string> {
+		const clipboard = this.clipboard!;
+		const { instances, wires } = clipboard;
+
+		const { added, renamed: retargeted } = mergeSubcircuits(
+			(clipboard.subcircuits ?? []).filter((s) => reached.subcircuits.has(s.id)),
+			this.schematic.subcircuits ?? [],
+			(name, ...taken) => this.freeSubcircuitId(name, ...taken)
+		);
+		if (added.length > 0) {
+			this.schematic.subcircuits = [...(this.schematic.subcircuits ?? []), ...added];
+			registerSubcircuits(this.schematic);
+		}
+		const imported = (kind: string) => {
+			if (!kind.startsWith(SUBCIRCUIT_PREFIX)) return kind;
+			const to = retargeted.get(kind.slice(SUBCIRCUIT_PREFIX.length));
+			return to ? SUBCIRCUIT_PREFIX + to : kind;
+		};
+
 		const known = new Set((this.schematic.blocks ?? []).map((b) => b.id));
-		const missing = (this.clipboard.blocks ?? []).filter((b) => !known.has(b.id));
+		const missing = renameSubcircuitKinds(
+			(clipboard.blocks ?? []).filter((b) => reached.blocks.has(b.id) && !known.has(b.id)),
+			retargeted
+		).map((b) => structuredClone(b));
 		if (missing.length > 0) {
 			this.schematic.blocks = [...(this.schematic.blocks ?? []), ...missing];
 			registerBlocks(this.schematic);
@@ -2914,13 +3235,17 @@ class AppState {
 			// would produce three of whatever R-number was free at the start.
 			const copy: Instance = {
 				...structuredClone(source),
+				kind: imported(source.kind),
 				id: freshId(),
 				name: nextName(existing, source.kind),
 				x: source.x + dx,
 				y: source.y + dy
 			};
 			const block = blockOf(this.schematic, source.kind);
-			if (block && blockInUse(this.schematic, block.id)) {
+			// In use anywhere in the document, not only here: a box pasted inside a
+			// block that is also placed on the drawing underneath shares nothing
+			// with the copies down there.
+			if (block && (blockInUse(this.schematic, block.id) || this.usesElsewhere(source.kind) > 0)) {
 				const before = new Map(
 					definitionFor(copy).pins.map((pin) => [pin.name, pinPosition(copy, pin)])
 				);
@@ -2946,7 +3271,7 @@ class AppState {
 			fresh.push(copy.id);
 		}
 
-		for (const group of this.clipboard.groups ?? []) {
+		for (const group of clipboard.groups ?? []) {
 			this.schematic.groups = [
 				...(this.schematic.groups ?? []),
 				{
@@ -2970,6 +3295,7 @@ class AppState {
 			this.rewire(moved, this.router());
 			this.tidyWires();
 		}
+		return renamed;
 	}
 
 	duplicateSelection(): void {
@@ -3068,7 +3394,7 @@ class AppState {
 		while (this.depth > 0) this.leaveBlock();
 		this.replaceDocument(() => {
 			const schematic = example.build();
-			this.checkpoint();
+			this.checkpoint(true);
 			this.schematic = schematic;
 			this.tidyWires();
 			this.stopTime = example.stopTime;
@@ -3102,7 +3428,7 @@ class AppState {
 			this.tidyWires();
 			// Asked once here, so a part the catalog does not know throws now,
 			// with the editor put back, rather than on every read from then on.
-			void this.compiled;
+			this.mustHoldTogether();
 			this.stopTime = circuit.stopTime;
 			this.exampleId = '';
 			this.applySettings(circuit.settings);
@@ -3143,6 +3469,7 @@ class AppState {
 			stopTime: this.stopTime,
 			exampleId: this.exampleId,
 			settings: this.settings(),
+			channels: this.channels,
 			notice: this.notice
 		};
 		try {
@@ -3161,6 +3488,7 @@ class AppState {
 			this.stopTime = before.stopTime;
 			this.exampleId = before.exampleId;
 			this.applySettings(before.settings);
+			this.channels = before.channels;
 			this.notice = before.notice;
 			throw cause;
 		}
@@ -3223,8 +3551,21 @@ class AppState {
 		// Innermost out, each level written back with the definitions the levels
 		// above it produced, as leaving one at a time would have registered them.
 		let definitions: ComponentDef[] = [];
-		for (const frame of [...this.outside].reverse()) {
-			const back = withKinds(definitions, () => writeBack(this.plainFrame(frame), level.schematic, freshId));
+		const frames = this.outside.map((frame) => this.plainFrame(frame));
+		for (let k = frames.length - 1; k >= 0; k--) {
+			const frame = frames[k];
+			const back = withKinds(definitions, () => writeBack(frame, level.schematic, freshId));
+			// The copies on the levels further down follow the block's pins, as
+			// leaving would have had them follow.
+			const edited = (back.schematic.blocks ?? []).find((b) => b.id === frame.editing.id);
+			if (edited) {
+				withKinds(definitions, () => {
+					for (const below of frames.slice(0, k)) {
+						reattachCopies(below.schematic, edited.id, frame.editing, edited, back.definitions, freshId);
+						below.probes = followPorts(below.probes, below.schematic, edited.id, frame.editing, edited);
+					}
+				});
+			}
 			level = back;
 			definitions = [...definitions, ...back.definitions];
 		}
@@ -3277,6 +3618,8 @@ class AppState {
 				.filter((wire): wire is Wire => wire !== null),
 			groups: block.groups
 		}));
+		const looped = selfContained({ instances: [], wires: [], blocks });
+		if (looped) throw new Error(`That file has ${looped} placed inside itself, so it cannot be opened.`);
 		registerBlocks({ instances: [], wires: [], blocks });
 		// The parts inside a block are asked of the catalog as well as the drawing's:
 		// one it does not know would otherwise surface later, on every compile.
@@ -3329,6 +3672,7 @@ class AppState {
 		this.error = null;
 		this.notice = null;
 		this.live = false;
+		this.mustHoldTogether();
 	}
 
 	/**
@@ -3375,6 +3719,15 @@ class AppState {
 	restoreDraft(raw: unknown): void {
 		// Migrated like a file, so a draft kept by an older build comes back too.
 		const doc = migrate(raw, 'saved draft');
+		// Installed and then asked whether it holds together, with the editor
+		// put back if it does not, as a link is. A draft that could not compile —
+		// a part a newer build wrote, a block placed inside itself — used to be
+		// restored on every start, in every new tab, and take the editor down
+		// each time.
+		this.replaceDocument(() => this.installDraft(doc));
+	}
+
+	private installDraft(doc: ReturnType<typeof migrate>): void {
 		const editor = doc.editor;
 		this.leaveEverything();
 		this.past = [];
@@ -3403,7 +3756,20 @@ class AppState {
 			this.schematic = adopt(level.schematic);
 			this.probes = level.probes ?? [];
 		}
-		this.arrivals++;
+		this.mustHoldTogether();
+	}
+
+	/**
+	 * Throw if the document in the editor cannot be built: a part the catalog
+	 * does not know, or a block placed inside itself. Asked of the whole
+	 * document, every open level included, and of the level on screen.
+	 */
+	private mustHoldTogether(): void {
+		const whole = this.toDocument().schematic;
+		const looped = selfContained(whole);
+		if (looped) throw new Error(`${looped} is placed inside itself.`);
+		void compileSchematic(whole, this.temperature + 273.15, this.sample, this.logicFamily);
+		void this.compiled;
 	}
 
 	/**
@@ -3508,6 +3874,18 @@ class AppState {
 					if (error) return stop(error);
 					break;
 				}
+				case 'unimport': {
+					const sub = (this.schematic.subcircuits ?? []).find((s) => s.name === step.name);
+					if (!sub) return stop(`no imported part called ${step.name}`);
+					if (!this.removeSubcircuit(sub.id)) return stop(this.notice ?? `${step.name} stays`);
+					break;
+				}
+				case 'unblock': {
+					const block = (this.schematic.blocks ?? []).find((b) => b.name === step.name);
+					if (!block) return stop(`no block called ${step.name}`);
+					if (!this.removeBlock(block.id)) return stop(this.notice ?? `${step.name} stays`);
+					break;
+				}
 				case 'place':
 					// Asked for by name, so it can name something this editor does not
 					// have — an older trace, or one whose import failed above.
@@ -3516,7 +3894,9 @@ class AppState {
 					} catch {
 						return stop(`no component called ${step.kind}`);
 					}
-					this.place(step.kind, step.x, step.y, step.rotation);
+					if (!this.place(step.kind, step.x, step.y, step.rotation)) {
+						return stop(this.notice ?? `${step.kind} cannot be placed here`);
+					}
 					break;
 				case 'wire':
 					this.addWirePath(step.points);

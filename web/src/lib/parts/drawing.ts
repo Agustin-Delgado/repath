@@ -1,5 +1,5 @@
 import { BLOCK_PREFIX, SUBCIRCUIT_PREFIX } from '$lib/schematic/model';
-import { blockPorts, contains } from '$lib/schematic/blocks';
+import { blockPorts } from '$lib/schematic/blocks';
 import type { App } from '$lib/state.svelte';
 import { BUILT_IN, type PartEntry } from './library';
 
@@ -8,12 +8,12 @@ import { BUILT_IN, type PartEntry } from './library';
  * and subcircuits pasted in as SPICE. Same shape as the built-in ones, so they
  * are searched and placed the same way.
  *
- * Inside a block, the block itself and anything built from it are kept out of
- * reach: placed in there, it would contain itself.
+ * Inside a block, every block open around it and anything built from one are
+ * kept out of reach: placed in there, a block would contain itself.
  */
 export function drawingParts(app: App): PartEntry[] {
 	const blocks = (app.schematic.blocks ?? [])
-		.filter((block) => !app.inside || !contains(app.schematic, block.id, app.inside.id))
+		.filter((block) => !app.wouldContainItself(block.id))
 		.map(
 			(block): PartEntry => ({
 				kind: BLOCK_PREFIX + block.id,
@@ -55,3 +55,18 @@ export function pickPart(app: App, kind: string): void {
 
 export const isArmed = (app: App, kind: string): boolean =>
 	app.tool.mode === 'place' && app.tool.kind === kind;
+
+/**
+ * Take a block or an imported part out of the drawing, from the palette.
+ * Returns what to tell the person, or null when it was refused — the editor's
+ * notice says why.
+ */
+export function removeDrawingPart(app: App, part: PartEntry): string | null {
+	const removed =
+		part.section === 'blocks'
+			? app.removeBlock(part.kind.slice(BLOCK_PREFIX.length))
+			: part.section === 'imported'
+				? app.removeSubcircuit(part.kind.slice(SUBCIRCUIT_PREFIX.length))
+				: false;
+	return removed ? `Removed ${part.label} — Ctrl+Z brings it back` : null;
+}

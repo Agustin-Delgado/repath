@@ -470,6 +470,9 @@ function compileFresh(
 		names.set(net.index, entry);
 	}
 
+	for (const name of unfolded.cycles) {
+		errors.push(`${name} is placed inside itself, so it cannot be built. Delete the copy inside it.`);
+	}
 	if (schematic.instances.length === 0) {
 		errors.push('The schematic is empty. Pick a part or open an example from the parts panel to start.');
 	} else if (!grounded && connectivity.nets.some((n) => n.hasAnalog)) {
