@@ -26,7 +26,7 @@ engine's own figures instead of leaving them still.
 Nothing about the outputs changed: they reach the same levels as before. What
 one figure cannot say — CMOS switching current, a memory's draw while
 selected, a lit LED matrix, an LCD's backlight — is listed in the backlog.
-([#PR](https://github.com/Agustin-Delgado/repath/pull/PR))
+([#96](https://github.com/Agustin-Delgado/repath/pull/96))
 
 ---
 
