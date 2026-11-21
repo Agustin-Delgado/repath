@@ -11,6 +11,20 @@ early entries point at those instead.
 
 ---
 
+## 22 November 2026 — Write and compile an Arduino sketch in the inspector
+
+**Select an Arduino Uno or an ATmega328P and write its sketch in the
+inspector.** The Sketch box starts with Blink. Compile builds it and loads the
+program onto the chip, so there is no .hex file to carry across. The sketch is
+saved with the circuit. Wire, SPI, EEPROM and SoftwareSerial can be included.
+Compiling needs the Arduino AVR toolchain on your computer and works only when
+you run repath yourself. The hosted site cannot compile: load a .hex there, as
+before.
+
+[#NNN](https://github.com/Agustin-Delgado/repath/pull/NNN)
+
+---
+
 ## 21 November 2026 — Shorter, plainer interface text
 
 **Every label, hint, toast and error now says what you need and stops.** Text

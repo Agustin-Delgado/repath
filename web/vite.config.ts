@@ -1,10 +1,23 @@
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, type ViteDevServer } from 'vite';
+import { handleArduinoCompileRequest } from './src/lib/arduino/compile-server.ts';
+
+function serveArduinoCompiler({ middlewares }: Pick<ViteDevServer, 'middlewares'>) {
+	middlewares.use((req, res, next) => {
+		if (req.url?.split('?')[0] !== '/api/arduino/compile') return next();
+		void handleArduinoCompileRequest(req, res).catch(next);
+	});
+}
 
 export default defineConfig({
 	plugins: [
+		{
+			name: 'repath-arduino-compiler',
+			configureServer: serveArduinoCompiler,
+			configurePreviewServer: serveArduinoCompiler
+		},
 		tailwindcss(),
 		sveltekit({
 			compilerOptions: {
