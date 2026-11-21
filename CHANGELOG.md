@@ -21,7 +21,7 @@ Compiling needs the Arduino AVR toolchain on your computer and works only when
 you run repath yourself. The hosted site cannot compile: load a .hex there, as
 before.
 
-[#NNN](https://github.com/Agustin-Delgado/repath/pull/NNN)
+[#111](https://github.com/Agustin-Delgado/repath/pull/111)
 
 ---
 
