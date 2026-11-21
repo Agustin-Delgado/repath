@@ -12,8 +12,9 @@
 import { contactControl, restingContact } from './contacts';
 import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
 import { blockOf, chipOf, NMOS_KP, PMOS_KP, pointKey } from './model';
-import { LCD_KIND, lcdAddress } from './lcd';
-import { MATRIX_KIND } from './max7219';
+import { LCD_KIND, LCD_LEGS, lcdAddress } from './lcd';
+import { MATRIX_KIND, MATRIX_LEGS } from './max7219';
+import { LCD_SUPPLY_CURRENT, MATRIX_SUPPLY_CURRENT, quiescentCurrent } from './supply';
 import { BUZZER_KIND, PIEZO_CAPACITANCE, buzzerDevice, piezoResistance } from './buzzer';
 import { SERVO_KIND, SERVO_LOAD_OHMS, servoDeviceName } from './servo';
 import {
@@ -564,6 +565,129 @@ function compileFresh(
 	const railed = new Map<number, { name: string; volts: number }>();
 
 	/**
+	 * Every powered package with logic inside: its supply legs, and the digital
+	 * devices it is built from. A bridge driving a net one of them has an
+	 * output on draws that output's current through these legs.
+	 */
+	const packages: Array<{
+		instance: Instance;
+		plus: string;
+		minus: string;
+		plusLeg: string;
+		minusLeg: string;
+		devices: string[];
+	}> = [];
+
+	/** The analog node a leg is on, or nothing if its net has none. */
+	const legNode = (instance: Instance, pin: string): string | undefined => {
+		const index = connectivity.netOfPin.get(pinKey(instance.id, pin));
+		if (index === undefined) return undefined;
+		if (connectivity.nets[index].isGround) return 'gnd';
+		return names.get(index)?.analog || undefined;
+	};
+
+	/**
+	 * Close a package's supply, once everything inside it has been emitted.
+	 *
+	 * Three things. Its own quiescent draw, as a `supply_current` from its
+	 * positive leg to its negative one. A record of its logic, for the bridges
+	 * below to take its outputs' current through its legs. And, for the
+	 * drawing, which reported series arrive at each of its legs: everything the
+	 * package was built out of that touches a leg's node, so the current the
+	 * overlay shows at VCC is the sum of what the engine says flows in there.
+	 */
+	function closeSupply(
+		instance: Instance,
+		layout: readonly string[],
+		plusLeg: string | undefined,
+		minusLeg: string | undefined,
+		figure: number | null,
+		firstComponent: number,
+		firstDevice: number
+	) {
+		const plus = plusLeg && legNode(instance, plusLeg);
+		const minus = minusLeg && legNode(instance, minusLeg);
+		if (plus && minus && plus !== minus) {
+			if (figure) {
+				components.push({
+					type: 'supply_current',
+					name: `${instance.name}:icc`,
+					plus,
+					minus,
+					current: figure
+				});
+			}
+			const inside = devices.slice(firstDevice).map((device) => (device as { name: string }).name);
+			if (inside.length) {
+				packages.push({ instance, plus, minus, plusLeg: plusLeg!, minusLeg: minusLeg!, devices: inside });
+			}
+		}
+
+		// Legs that share a node — an input tied to ground beside GND — are one
+		// point electrically, but the current is in the supply leg: the supply
+		// legs are asked first.
+		const legAt = new Map<string, string>();
+		for (const leg of [plusLeg, minusLeg, ...layout]) {
+			if (leg === undefined) continue;
+			const node = legNode(instance, leg);
+			if (node && !legAt.has(node)) legAt.set(node, leg);
+		}
+		const injections: PortInjection[] = [];
+		const at = (node: unknown, element: string, sign: number) => {
+			const leg = typeof node === 'string' ? legAt.get(node) : undefined;
+			if (leg) injections.push({ port: leg, element, sign });
+		};
+		// Each reported current is into the part at its first terminal, so a
+		// terminal that takes current in drains the net it is on.
+		for (const emitted of components.slice(firstComponent)) {
+			const c = emitted as Record<string, string> & { name: string };
+			switch (c.type) {
+				case 'resistor':
+				case 'capacitor':
+				case 'inductor':
+				case 'fuse':
+				case 'switch':
+					at(c.a, c.name, -1);
+					at(c.b, c.name, 1);
+					break;
+				case 'voltage_source':
+				case 'current_source':
+				case 'supply_current':
+				case 'vcvs':
+					at(c.plus, c.name, -1);
+					at(c.minus, c.name, 1);
+					break;
+				case 'diode':
+					at(c.anode, c.name, -1);
+					at(c.cathode, c.name, 1);
+					break;
+				case 'bjt':
+					at(c.collector, c.name, -1);
+					at(c.base, `${c.name}:b`, -1);
+					at(c.emitter, `${c.name}:e`, -1);
+					break;
+				case 'mosfet':
+					at(c.drain, c.name, -1);
+					at(c.gate, `${c.name}:g`, -1);
+					at(c.source, `${c.name}:s`, -1);
+					break;
+				case 'op_amp':
+					at(c.output, c.name, -1);
+					if (c.supply_plus && c.supply_minus) {
+						at(c.supply_plus, `${c.name}:vp`, -1);
+						at(c.supply_minus, `${c.name}:vm`, -1);
+						at(c.input_plus, `${c.name}:ip`, -1);
+						at(c.input_minus, `${c.name}:in`, -1);
+					}
+					break;
+			}
+		}
+		if (injections.length) {
+			portFlow.set(instance.id, [...(portFlow.get(instance.id) ?? []), ...injections]);
+		}
+	}
+
+	/**
 	 * What a net sits at before anything runs, when the drawing says so outright:
 	 * ground, a supply terminal, a battery or a DC source with its other end on
 	 * ground. Anything else — a divider, a regulator's output — is not known
@@ -1029,6 +1153,8 @@ function compileFresh(
 			const legs = new Set(chip.layout);
 			const net = (pin: string) =>
 				legs.has(pin) ? digitalOf(instance, pin) : `${instance.id}_in_${pin}`;
+			const firstComponent = components.length;
+			const firstDevice = devices.length;
 			if (chip.power) emitRails(instance, chip.power);
 			emitPullUps(instance, chip);
 			for (const [index, block] of chip.blocks.entries()) {
@@ -1104,6 +1230,15 @@ function compileFresh(
 				}
 			}
 			if (chip.analog?.length) emitChipAnalog(instance, chip, net);
+			closeSupply(
+				instance,
+				chip.layout,
+				positiveSupply(chip),
+				negativeSupply(chip),
+				quiescentCurrent(chip, family, num(instance, 'frequency', DEFAULT_CLOCK)),
+				firstComponent,
+				firstDevice
+			);
 			continue;
 		}
 
@@ -1554,6 +1689,7 @@ function compileFresh(
 				const scl = netOf(instance, 'SCL');
 				const logic = (index: number | undefined) =>
 					(index !== undefined && names.get(index)?.digital) || null;
+				const lcdDevice = devices.length;
 				devices.push({
 					type: 'i2c_lcd',
 					name,
@@ -1561,6 +1697,15 @@ function compileFresh(
 					sda: logic(sda),
 					scl: logic(scl)
 				});
+				closeSupply(
+					instance,
+					LCD_LEGS,
+					'VCC',
+					'GND',
+					LCD_SUPPLY_CURRENT,
+					components.length,
+					lcdDevice
+				);
 				// The chips and boards that can be its master, with the legs their
 				// PC4 and PC5 come out on: on an Uno that is A4 and A5, which the
 				// board joins to its SDA and SCL pins, so either pair is one net.
@@ -1599,6 +1744,7 @@ function compileFresh(
 					warnings.push(`${name} is not powered: ${unpowered} Its LEDs stay dark.`);
 					break;
 				}
+				const matrixDevice = devices.length;
 				devices.push({
 					type: 'max7219',
 					name,
@@ -1607,6 +1753,15 @@ function compileFresh(
 					load: digitalOf(instance, 'CS'),
 					dout: digitalOf(instance, 'DOUT')
 				});
+				closeSupply(
+					instance,
+					MATRIX_LEGS,
+					'VCC',
+					'GND',
+					MATRIX_SUPPLY_CURRENT,
+					components.length,
+					matrixDevice
+				);
 				break;
 			}
 			// The engine's `servo`, reading the pulses on SIG, and its load on the
@@ -2078,12 +2233,39 @@ function compileFresh(
 		if (!entry.analog || !entry.digital) continue;
 
 		if (net.hasDigitalOutput) {
+			const bridge = fresh(`BDA${net.index}`);
+			// The packages with a leg on this net that could be driving it. What
+			// the output sources comes in at that package's positive leg, and what
+			// it sinks goes out at its negative one; the drawing shows it at the
+			// leg on this net, and at those two.
+			const supplies = packages.flatMap((pkg) => {
+				const pin = net.pins.find(
+					(ref) =>
+						ref.instance.id === pkg.instance.id &&
+						definitionFor(ref.instance).pins.find((p) => p.name === ref.pin.name)?.direction !== 'in'
+				);
+				return pin ? [{ pkg, leg: pin.pin.name }] : [];
+			});
 			bridges.push({
 				direction: 'to_analog',
-				name: fresh(`BDA${net.index}`),
+				name: bridge,
 				net: entry.digital,
-				node: entry.analog
+				node: entry.analog,
+				supplies: supplies.map(({ pkg }) => ({
+					plus: pkg.plus,
+					minus: pkg.minus,
+					devices: pkg.devices
+				}))
 			});
+			for (const [k, { pkg, leg }] of supplies.entries()) {
+				const id = pkg.instance.id;
+				portFlow.set(id, [
+					...(portFlow.get(id) ?? []),
+					{ port: pkg.plusLeg, element: `${bridge}:p${k + 1}`, sign: -1 },
+					{ port: pkg.minusLeg, element: `${bridge}:m${k + 1}`, sign: -1 },
+					{ port: leg, element: `${bridge}:o${k + 1}`, sign: 1 }
+				]);
+			}
 		}
 		// Nothing is read off a floating node. The bridge would compare a voltage
 		// that leakage put there against a threshold and come back with a level, in

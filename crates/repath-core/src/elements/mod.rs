@@ -11,4 +11,4 @@ pub use semiconductor::{
     Bjt, BjtModel, Channel, Diode, DiodeModel, Failure, Heat, LED_HEATING, Mosfet, MosfetModel,
     Polarity, ThermalModel, thermal_voltage,
 };
-pub use sources::{CurrentSource, Vccs, Vcvs, VoltageSource, Waveform};
+pub use sources::{CurrentSource, SupplyCurrent, Vccs, Vcvs, VoltageSource, Waveform};

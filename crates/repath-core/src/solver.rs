@@ -2212,6 +2212,15 @@ impl Simulator {
         // pieces hands back one result per piece, and a chunk that starts empty
         // would take the first sample of an unchanged net as a transition.
         circuit.digital.swap_log(changes);
+        // Which package is driving a bridged net, for whose supply its current
+        // comes through: handed to the bridges to apply when the solve gets there.
+        let mut drivers = Vec::new();
+        circuit.digital.swap_driver_log(&mut drivers);
+        for change in &drivers {
+            for dac in circuit.dacs_mut() {
+                dac.queue_driver(change.time, change.driver, change.driving);
+            }
+        }
         for change in changes.iter() {
             if let (Some(trace), Some(previous), Some(tracing)) = (
                 result.digital.get_mut(change.net),
@@ -2295,6 +2304,7 @@ impl Simulator {
     ) -> Vec<usize> {
         let mut ramped = Vec::new();
         for (k, (dac, pace)) in circuit.dacs_mut().iter_mut().zip(pacing.iter_mut()).enumerate() {
+            dac.reach_drivers(t);
             let reached = pace.ahead.iter().take_while(|c| c.time <= t).count();
             for change in pace.ahead.drain(..reached) {
                 pace.level = change.state;
@@ -2398,6 +2408,24 @@ impl Simulator {
         for (dac, state) in circuit.dacs_mut().iter_mut().zip(levels) {
             dac.set_level(state, t);
         }
+        // And who is driving each, from where the digital side stands now.
+        let driving: Vec<Vec<(DriverId, bool)>> = circuit
+            .dacs()
+            .iter()
+            .map(|d| {
+                d.taps()
+                    .iter()
+                    .flat_map(|tap| tap.drivers.iter())
+                    .map(|&id| (id, circuit.digital.is_driving(id)))
+                    .collect()
+            })
+            .collect();
+        for (dac, drivers) in circuit.dacs_mut().iter_mut().zip(driving) {
+            dac.reach_drivers(t);
+            for (id, active) in drivers {
+                dac.set_driver(id, active);
+            }
+        }
     }
 
     fn record(&self, result: &mut TransientResult, circuit: &Circuit, t: f64) {
@@ -2405,7 +2433,7 @@ impl Simulator {
         result.solution.push(self.x.clone());
 
         let mut currents = Vec::new();
-        circuit.collect_currents(&self.x, &mut currents);
+        circuit.collect_currents(&self.x, t, &mut currents);
         result.currents.push(currents);
     }
 
