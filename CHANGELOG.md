@@ -25,7 +25,7 @@ moving it to the other side or up the box, with another block open, now moves
 the wires of the copies on the levels underneath as well — they used to be left
 hanging until you came back down — and one Undo takes all of it back.
 
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#93](https://github.com/Agustin-Delgado/repath/pull/93)
 
 ---
 
