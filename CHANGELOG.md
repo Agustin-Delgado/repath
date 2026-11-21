@@ -26,7 +26,7 @@ as before, and the answers agree with the old ones to the last figure any plot
 shows. A failed solve still names the node and the parts to blame, however
 large the circuit around them.
 
-PR_LINK
+[#103](https://github.com/Agustin-Delgado/repath/pull/103)
 
 ---
 
