@@ -34,7 +34,7 @@ early entries point at those instead.
 - **Recorded steps.** "Copy the steps taken" now replays renames to names with spaces in them.
 - **Live runs.** A live run that cannot use a frame's results now stops and says why, instead of looking stuck.
 
-[#PR](https://github.com/Agustin-Delgado/repath/pulls)
+[#85](https://github.com/Agustin-Delgado/repath/pull/85)
 
 ---
 
