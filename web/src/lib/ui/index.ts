@@ -10,7 +10,7 @@ export { buttonVariants, type ButtonVariants } from './button/recipe';
 export { default as Select } from './select/Select.svelte';
 export { default as Menu } from './menu/Menu.svelte';
 export { default as MenuItem } from './menu/MenuItem.svelte';
-export { default as MenuLabel } from './menu/MenuLabel.svelte';
+export { default as MenuGroup } from './menu/MenuGroup.svelte';
 export { default as MenuSeparator } from './menu/MenuSeparator.svelte';
 export { default as UnitField } from './field/UnitField.svelte';
 export { default as TextInput } from './field/TextInput.svelte';

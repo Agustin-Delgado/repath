@@ -10,7 +10,7 @@
 		Share2,
 		Undo2
 	} from '@lucide/svelte';
-	import { Button, Menu, MenuItem, MenuLabel, MenuSeparator, ToolbarSeparator } from '$lib/ui';
+	import { Button, Menu, MenuGroup, MenuItem, MenuSeparator, ToolbarSeparator } from '$lib/ui';
 	import { overflowHint } from '$lib/ui/overflow';
 	import { SYMBOL_STANDARDS } from '$lib/schematic/symbols';
 	import { clearAndReport, copyStepsAndReport, openFromFile, saveToFile, shareAndReport } from '$lib/document';
@@ -86,13 +86,14 @@
 				<Eraser /> Clear the drawing
 			</MenuItem>
 			<MenuSeparator />
-			<MenuLabel>Symbols</MenuLabel>
-			{#each SYMBOL_STANDARDS as standard (standard.value)}
-				<MenuItem onAction={() => app.setSymbolStandard(standard.value)}>
-					<span class="w-3 text-accent">{app.symbolStandard === standard.value ? '✓' : ''}</span>
-					{standard.label}
-				</MenuItem>
-			{/each}
+			<MenuGroup label="Symbols">
+				{#each SYMBOL_STANDARDS as standard (standard.value)}
+					<MenuItem onAction={() => app.setSymbolStandard(standard.value)}>
+						<span class="w-3 text-accent">{app.symbolStandard === standard.value ? '✓' : ''}</span>
+						{standard.label}
+					</MenuItem>
+				{/each}
+			</MenuGroup>
 		</Menu>
 	</div>
 </header>
