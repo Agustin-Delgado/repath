@@ -30,6 +30,32 @@ large the circuit around them.
 
 ---
 
+## 21 November 2026 — Current-controlled sources
+
+**A vendor op-amp model that needs `F` and `H` now builds.** A `.subckt` can
+use SPICE's current-controlled current source (`F`) and current-controlled
+voltage source (`H`), each reading the current through a voltage source of the
+same definition, as SPICE scopes it, in any case and across continuation
+lines. Those are what the classic macromodels hang their gain stage and their
+output current limit on: a 741 in the structure vendor libraries were built
+on imports whole, amplifies by the gain its feedback sets, stops short of its
+rails and holds a shorted output to the 40 mA its limiter sets. A line reading
+a source the definition does not have, or one written as a polynomial, is
+named rather than built.
+
+**Both are parts on the drawing too**, under *Sources*: a diamond with an
+arrow for the current, with plus and minus for the voltage. Pick which voltage
+source or battery it follows in the inspector, and set its gain or its
+transresistance; the drawing prints it as `2 × I(V1)`. The current is read as
+SPICE reads it, into the source's + terminal, so a 0 V source in a branch is
+an ammeter, and a part that is not a source is refused with that advice. The
+choice follows a rename, a copy pasted with its source reads the copy, and
+inside a block each copy reads its own.
+
+[#101](https://github.com/Agustin-Delgado/repath/pull/101)
+
+---
+
 ## 21 November 2026 — A DC sweep, for I-V curves
 
 **Run can now sweep a source instead of running in time.** Pick *DC sweep* as

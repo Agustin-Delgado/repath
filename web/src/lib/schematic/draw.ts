@@ -417,6 +417,16 @@ function valueLabel(instance: Instance): string | null {
 			return sourceLabel(p, 'V');
 		case 'isource':
 			return sourceLabel(p, 'A');
+		// What it follows is half of what it is, so both go on the drawing, in
+		// the I(V1) a SPICE listing would print.
+		case 'cccs':
+		case 'ccvs': {
+			const factor =
+				instance.kind === 'cccs'
+					? String(Number(p.gain))
+					: formatWithUnit(Number(p.transresistance), 'Ω');
+			return `${factor} × I(${String(p.control ?? '') || '?'})`;
+		}
 		case 'led':
 			// The rating rather than the colour: the colour is already on the symbol,
 			// and what is worth reading off a schematic is the number you have to size
