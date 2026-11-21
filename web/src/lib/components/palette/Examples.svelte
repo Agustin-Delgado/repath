@@ -49,7 +49,7 @@
 <div class="flex h-full min-h-0 w-full min-w-0 flex-col">
 	<div class="border-b border-border p-2">
 		<label
-			class="flex h-7 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-muted focus-within:border-accent/70"
+			class="flex h-7 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-muted field"
 		>
 			<Search class="size-3.5 shrink-0" />
 			<input
@@ -89,7 +89,7 @@
 		{#each shelves as { shelf, examples } (shelf)}
 			<section class="mb-2">
 				<h3
-					class="m-0 flex items-center px-0.5 py-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase"
+					class="m-0 flex items-center px-0.5 py-1 eyebrow"
 				>
 					{shelf}
 					<span class="ml-auto font-mono text-3xs font-normal tracking-normal opacity-60">

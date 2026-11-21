@@ -85,7 +85,8 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Router | Widening the search box is a fixed ladder (12 then 40 cells) | An obstacle wider than 40 cells is still routed through rather than around |
 | Blocks | A box that grows wider (a longer name, a longer port name) grows over whatever stands beside it | The wires follow the pins; a part under the box has to be moved out by hand. A longer name only grows the box downward, under the ports, for the same reason |
 | Subcircuit | An `X` line inside a definition is reported, not expanded | A subcircuit built out of other subcircuits imports as its outer layer only |
-| Subcircuit | No current-controlled sources (`F`, `H`) for a definition to use | Some vendor macromodels cannot be built; the lines are named rather than dropped in silence |
+| Subcircuit | The polynomial form (`POLY`) of `E`, `G`, `F` and `H` is reported, not built | A macromodel that writes its gain stage as one polynomial source of several currents, as the classic Boyle op-amp files do, has to be rewritten as the sum of linear sources it stands for before it builds; the line is named rather than dropped in silence |
+| Controlled sources | An `F` or an `H` reads its current through a voltage source or a battery, never through any other part, and on the drawing only through one on the same sheet | As in SPICE: a branch with no source in it is measured by putting a 0 V source in series. A supply symbol is not offered, since two on one rail are built as one |
 
 ---
 
@@ -118,12 +119,15 @@ because each step is what makes the next one worth having:
    unfolded into the netlist when the drawing compiles.)*
 4. **Sparse solver.** Dense LU is fine to a few hundred nodes and quadratic-ish
    past that. It matters once steps 2 and 3 bring circuits big enough to feel it,
-   which is why it is fourth and not first.
+   which is why it is fourth and not first. *(In: a sparse LU solves the real
+   and the complex systems, and a thousand-part ladder that took over half a
+   second runs in a few tens of milliseconds.)*
 5. **Measurement.** Parameter sweep, noise, Fourier and THD. *(The scope is
    mostly there: gain and position per channel, split scales, two cursors with
    deltas, and a panel that reads off frequency, duty, RMS, rise time and
-   overshoot, and a timebase turned from the header, the wheel or a pinch. A
-   trigger is what it still lacks.)*
+   overshoot, a timebase turned from the header, the wheel or a pinch, an edge
+   trigger, and the FFT of a trace with its THD. Parameter sweeps and noise
+   are what is left.)*
 
 ## Must
 
@@ -137,10 +141,19 @@ because each step is what makes the next one worth having:
       its column and across to the other side. *What is left:* ports go on the
       left and right only, never the top or bottom; a symbol of one's own for a
       block.
-- [ ] **Current-controlled sources** (`F`, `H`), which some vendor macromodels
-      need before they will build.
-- [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
+- [x] **Current-controlled sources** (`F`, `H`), which some vendor macromodels
+      need before they will build. Imported inside a `.subckt`, reading a
+      source of the same definition, and drawn as parts reading a voltage
+      source or battery on the sheet. *What is left:* the `POLY` form, which is
+      refused for `E` and `G` as well.
+- [x] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
       pivoting). The `LinearSystem` interface was kept narrow for this.
+      Minimum-degree ordering once per pattern, left-looking LU with threshold
+      pivoting, numeric refactoring on the same pivots every Newton iteration
+      and a fresh factorization when one of them goes bad; AC solves on the
+      same code over complex numbers. *What is left:* block triangular form
+      (KLU's first step), which would let a circuit of independent pieces be
+      factored piece by piece; nothing drawn by hand needs it yet.
 - [ ] **Meyer gate capacitance** on the MOSFET — the channel charge split that
       makes `CGS` and `CGD` follow the operating region instead of sitting still.
       What a gate charge curve needs; the constant values are already enough for
@@ -195,8 +208,13 @@ because each step is what makes the next one worth having:
       file, a share link and a draft are one versioned document (`format.ts`),
       read through an ordered list of migrations; a document from a newer build
       is refused with the reason.
-- [ ] **Performance budget and benchmarks** — a 500-component circuit that pans at
+- [x] **Performance budget and benchmarks** — a 500-component circuit that pans at
       60 fps and simulates in under a second, measured in CI rather than assumed.
+      The engine half is in: `cargo run --release -p repath-core --example bench`
+      times ladders, meshes, transistor chains, banks of counters and editor
+      examples, and the suite fails a 738-part mesh that stops simulating
+      inside its budget or a grid whose factors fill in. *What is left:* the
+      60 fps pan, which is the canvas's budget and needs a browser to measure.
 
 ---
 
@@ -208,8 +226,11 @@ because each step is what makes the next one worth having:
       curves are one of the most instructive things a simulator can draw.
 - [ ] **Noise analysis** (thermal and shot), reported as spectral density and
       integrated over a band.
-- [ ] **FFT of a transient trace**, so a distortion question can be answered
-      without leaving the app.
+- [x] **FFT of a transient trace**, so a distortion question can be answered
+      without leaving the app. Under the scope, of the screen, whole periods or
+      the whole memory, through a rectangular, Hann, Blackman-Harris or flat-top
+      window, in dBV or volts, with the strongest tones marked and the THD of
+      the strongest counted to the 10th harmonic.
 - [ ] **Parameter sweeps** — run the same analysis across a range of a component
       value and overlay the results.
 - [ ] **Operating point display on the schematic** — node voltages and branch
@@ -262,10 +283,11 @@ because each step is what makes the next one worth having:
 - [ ] **Align and distribute** on a multi-selection.
 - [x] **Component search** in the palette, by name or part number, and `Ctrl+K`
       for every part, command and example.
-- [ ] **A trigger**, so a repeating waveform holds still instead of being read
-      from wherever the run happened to start. The timebase is done — the window
-      field, the wheel and a pinch turn it, and a stopped trace zooms — and so is
-      the vertical: gain, position, split scales, two cursors and a measure panel.
+- [x] **A trigger**, so a repeating waveform holds still instead of being read
+      from wherever the run happened to start. An edge trigger on an analog trace:
+      auto, normal and single, level and hysteresis (both automatic until set),
+      holdoff and the share of the screen before the trigger. Not yet: triggering
+      on a logic lane, on a pulse width or on a pattern.
 - [ ] **Current and differential probes**, not just node voltages.
 - [ ] **Export** — PNG/SVG of the schematic, CSV of the traces, SPICE netlist out.
 - [ ] **Print / PDF** of a schematic that looks like a schematic.
@@ -286,10 +308,14 @@ because each step is what makes the next one worth having:
       free lane beyond the drawing's extent would nearly always find a real route.
 - [ ] **Golden-file regression tests** for the analyses, so a numerical change is
       noticed rather than discovered.
-- [ ] **Browser checks in CI.** Playwright is a dev dependency and has found three
-      shipped bugs — a dead overlay, a double-click that could not fire, a compiler
-      case that never landed — none of which the other tests could see, because
-      none of them opens a browser. Nothing in CI runs it yet.
+- [x] **Browser checks in CI.** Playwright had found three shipped bugs — a dead
+      overlay, a double-click that could not fire, a compiler case that never
+      landed — none of which the other tests could see, because none of them opens
+      a browser. The `Browser` job now runs `tests/e2e` against the built site
+      before every deploy: every example run, the editing gestures, share and
+      save round trips, the layout at three widths, and a check for each of those
+      three. Its first run found a fourth: at exactly 900 px the panels were
+      drawers under the wide toolbar, with no More menu.
 - [ ] **Fuzz the netlist compiler** — no input should panic the engine.
 
 ---

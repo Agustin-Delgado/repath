@@ -893,6 +893,25 @@ function currentSource(standard: SymbolStandard): SymbolGeometry {
 	return { shapes, labels: [] };
 }
 
+/**
+ * A dependent source: the diamond every standard draws a controlled source
+ * in, with what is inside it saying which kind. An arrow is a current, as on
+ * the independent source; plus and minus, or an arrow under GOST, a voltage.
+ * The diamond is the circle's size, so the two kinds line up on a drawing.
+ */
+function dependentSource(current: boolean, standard: SymbolStandard): SymbolGeometry {
+	const shapes: Shape[] = [path('M0 -30 V-16 M0 16 V30 M0 -16 L16 0 L0 16 L-16 0 Z')];
+	if (current && standard === 'gost') {
+		shapes.push(path('M-3 7 V-7 M-6 -4 L-3 -7 L0 -4'));
+		shapes.push(path('M3 7 V-7 M0 -4 L3 -7 L6 -4'));
+	} else if (current || standard === 'gost') {
+		shapes.push(path('M0 7 V-7 M-4 -3 L0 -7 L4 -3'));
+	} else {
+		shapes.push(sign(0, -5, true, 3.5), sign(0, 6, false, 3.5));
+	}
+	return { shapes, labels: [] };
+}
+
 const variantCache = new Map<string, SymbolGeometry>();
 const blockVariants = new WeakMap<object, string>();
 
@@ -1029,6 +1048,7 @@ export function symbolGeometry(
 	if (kind === 'diode') geometry = diode(String(params.model ?? 'silicon'));
 	else if (kind === 'vsource') geometry = voltageSource(String(params.waveform ?? 'dc'), standard);
 	else if (kind === 'isource') geometry = currentSource(standard);
+	else if (kind === 'cccs' || kind === 'ccvs') geometry = dependentSource(kind === 'cccs', standard);
 	else if (kind === 'switch') {
 		geometry = switchSymbol(String(params.action ?? 'manual'), String(params.start ?? 'open'));
 	}

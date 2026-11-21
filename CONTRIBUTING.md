@@ -71,6 +71,23 @@ cargo test --workspace
 cd web && npm test          # the editor, the canvas, the netlist, and the engine through wasm
 ```
 
+And the browser checks, in `tests/e2e`: the built site served by `vite preview`
+on `localhost:5202` and driven by a headless Chromium — every example opened
+and run, the editing gestures, sharing and saving, the layout at three widths.
+CI runs them against the same build it deploys.
+
+```sh
+cd web
+npx playwright install chromium --only-shell   # once, and after a Playwright bump
+npm run test:e2e                                # builds, then runs them
+npx playwright test --ui                        # against the last build, to watch them
+```
+
+They find things by role and accessible name, not by class or position, so a
+change of look does not break them. Where there is nothing accessible to go by,
+add a `data-testid` rather than reaching for a class. A failure leaves a trace
+in `web/test-results`; `npx playwright show-trace` on it replays the run.
+
 Clippy is `-D warnings` on purpose: a warning nobody is required to fix is a
 warning everybody stops reading.
 

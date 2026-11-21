@@ -11,6 +11,141 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — Large circuits run in a fraction of the time
+
+**A circuit of hundreds of parts no longer slows to a crawl.** The engine used
+to solve every step as if each node in the drawing were wired to every other
+one, so doubling a circuit made each step up to eight times slower. It now
+works only with the connections that are actually there, and works out the
+order to take them in once per circuit rather than once per step. A ladder of
+a thousand resistors and capacitors runs about five times faster, a mesh of
+1700 parts eight times, a board of 48 counters lighting LEDs six times, a
+chain of 80 transistor stages five times; an AC sweep of that ladder went from
+nearly a second to twenty milliseconds. Circuits the size of the examples run
+as before, and the answers agree with the old ones to the last figure any plot
+shows. A failed solve still names the node and the parts to blame, however
+large the circuit around them.
+
+[#103](https://github.com/Agustin-Delgado/repath/pull/103)
+
+---
+
+## 21 November 2026 — Current-controlled sources
+
+**A vendor op-amp model that needs `F` and `H` now builds.** A `.subckt` can
+use SPICE's current-controlled current source (`F`) and current-controlled
+voltage source (`H`), each reading the current through a voltage source of the
+same definition, as SPICE scopes it, in any case and across continuation
+lines. Those are what the classic macromodels hang their gain stage and their
+output current limit on: a 741 in the structure vendor libraries were built
+on imports whole, amplifies by the gain its feedback sets, stops short of its
+rails and holds a shorted output to the 40 mA its limiter sets. A line reading
+a source the definition does not have, or one written as a polynomial, is
+named rather than built.
+
+**Both are parts on the drawing too**, under *Sources*: a diamond with an
+arrow for the current, with plus and minus for the voltage. Pick which voltage
+source or battery it follows in the inspector, and set its gain or its
+transresistance; the drawing prints it as `2 × I(V1)`. The current is read as
+SPICE reads it, into the source's + terminal, so a 0 V source in a branch is
+an ammeter, and a part that is not a source is refused with that advice. The
+choice follows a rename, a copy pasted with its source reads the copy, and
+inside a block each copy reads its own.
+
+[#101](https://github.com/Agustin-Delgado/repath/pull/101)
+
+---
+
+## 21 November 2026 — A trigger, and the spectrum of a trace
+
+**A repeating waveform holds still.** The scope has a trigger, beside the
+traces under *Trigger*. Auto holds the screen on each rising (or falling) edge
+of the trace you pick and rolls as before when there has been none for a
+screen; Normal shows only what a trigger caught and keeps the last one; Single
+catches one and stops the run, and *arm* waits for the next. The level sits
+halfway between the trace's extremes until you type one, and the hysteresis —
+how far back past the level the trace has to go before it can fire again, so
+noise on a slow edge fires once — is 2% of its swing until you type that. A
+holdoff ignores everything for a while after each trigger, which is how a
+burst is caught on its first pulse every time, and *pre* says how much of the
+screen comes before the trigger. Where it fired is marked at the top of the
+plot, and the level on its right edge.
+
+**And the spectrum of a trace, without leaving the app.** *fft* opens it under
+the scope: the screen, a whole number of periods, or everything in memory, as
+peak volts or dBV, so a 1 V sine reads 1 V and 0 dBV, through a rectangular,
+Hann, Blackman-Harris or flat-top window. The strongest tones are marked and
+listed with their frequency and level, and the THD of the strongest is given,
+counting to the 10th harmonic — or, if the span is too short for its harmonics
+to be told apart through that window, how many periods it needs. The DC level
+is given on its own rather than spread over the lowest bins. A bar along the
+foot of the scope shows the stretch being transformed. Both are kept with the
+circuit, in files, links and drafts; a circuit that never used them saves no
+differently.
+
+[#99](https://github.com/Agustin-Delgado/repath/pull/99)
+
+---
+
+## 21 November 2026 — One look, everywhere
+
+**The whole app now follows a single design system.** Text comes in four
+sizes instead of nine, the smallest a little larger than before, and the dim
+grey used for hints and labels is now readable on every surface it sits on,
+buttons and highlighted rows included. Buttons, menus, the command palette and
+toasts share one set of corners, shadows and a focus ring you can see from
+across the room; fields light up while you type in them, and a click gives a
+little under the pointer. Wiring warnings are amber rather than the selection's
+yellow, so a warning no longer looks like something you selected. Probes get
+a new set of eight colours, picked so that every pair stays distinct for
+readers with any of the three common kinds of colour blindness, and none of
+them is the selection yellow any more. The Bode plot's finer gridlines are
+fainter instead of darker, and at exactly 900 px wide the header and the phone
+controls now agree on which layout they are in.
+
+[#100](https://github.com/Agustin-Delgado/repath/pull/100)
+
+---
+
+## 21 November 2026 — Every change is now tried in a real browser
+
+**Before anything is published, a browser opens the site and uses it.** Every
+example is opened and run, and has to put traces on the scope without an
+error. Parts are placed from the palette and from Ctrl+K, wired, edited,
+renamed, deleted, copied, undone and boxed into a block that is opened by
+double-clicking it. Run, Stop, Resume and Reset are pressed; a probe dropped on
+a wire has to show up on the scope, and turning a resistor while the circuit
+runs has to move the reading. A share link is opened in a second tab and has to
+hold the same circuit; so does a saved file opened again. And the page is
+checked at three widths for anything spilling off the side. The three bugs that
+were found by hand this way before — the live overlay going dark, a double
+click that never registered, a probe that stopped the whole circuit compiling —
+each have a check of their own now.
+
+**At exactly 900 pixels wide the toolbar and the panels agree.** The panels
+turned into drawers at 900 px while the toolbar still showed its wide layout,
+so a window that size had a phone's bottom bar, no *More* menu, and the full
+toolbar crammed above it. All of them now count 900 px itself as narrow, and
+the browser checks hold the line there: narrow at 900, wide at 901.
+
+[#102](https://github.com/Agustin-Delgado/repath/pull/102)
+
+---
+
+## 21 November 2026 — repath gets a face
+
+**repath has a logo: a lowercase r whose arm is a step response**, rising,
+overshooting, ringing and settling, in a stroke that runs from blue to green.
+It sits beside the name in the header, in the browser tab, on the home screen
+when you add repath to a phone, and on the card a link to repath unfolds into
+when you paste it in a chat or a post — which until now showed no picture and
+no description at all. The whole kit, with the rules for using it and the
+scripts that draw every file, is in the repository under `brand/`.
+
+[#104](https://github.com/Agustin-Delgado/repath/pull/104)
+
+---
+
 ## 21 November 2026 — A DC sweep, for I-V curves
 
 **Run can now sweep a source instead of running in time.** Pick *DC sweep* as

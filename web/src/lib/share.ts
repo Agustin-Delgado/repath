@@ -23,6 +23,8 @@ import {
 } from './schematic/model';
 import { registerBlocks } from './schematic/blocks';
 import { probePin } from './schematic/nets';
+import { compactTrigger, readTrigger } from './trigger';
+import { compactSpectrum, readSpectrum } from './spectrum';
 import {
 	FORMAT_VERSION,
 	NewerFormatError,
@@ -381,6 +383,12 @@ function readSettings(raw: unknown): CircuitSettings {
 	if (Array.isArray(s.dcCurrents) && s.dcCurrents.every((name) => typeof name === 'string')) {
 		out.dcCurrents = s.dcCurrents;
 	}
+	// Read the way the editor reads them, and kept only where that differs from
+	// the defaults, so a link carries back what it was given and no more.
+	const trigger = s.trigger === undefined ? undefined : compactTrigger(readTrigger(s.trigger));
+	if (trigger) out.trigger = trigger;
+	const spectrum = s.spectrum === undefined ? undefined : compactSpectrum(readSpectrum(s.spectrum));
+	if (spectrum) out.spectrum = spectrum;
 	return out;
 }
 

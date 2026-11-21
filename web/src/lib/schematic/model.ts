@@ -108,6 +108,12 @@ export interface ParamDef {
 	 * Left out, `isAdvanced` decides from the key; see there.
 	 */
 	advanced?: boolean;
+	/**
+	 * A name of another part on the drawing rather than a value: the field is
+	 * a list of the parts it can name. The only kind so far is the voltage
+	 * source a current-controlled source reads its current through.
+	 */
+	pick?: 'voltage-source';
 }
 
 /** Why a value was refused, or null when it is fine. */
@@ -704,6 +710,60 @@ const SOURCE_PARAMS: ParamDef[] = [
 		description: 'Amplitude in the frequency sweep.'
 	}
 ];
+
+/**
+ * What a current-controlled source reads, said once for both of them. The
+ * sign is SPICE's, so a netlist written from the drawing means the same in
+ * any other simulator.
+ */
+const CONTROL_DESCRIPTION =
+	'The voltage source whose current it follows, read into its + terminal: a source delivering current reads negative. A 0 V source in series measures any branch.';
+
+/** The parts whose name a current-controlled source can be set to read. */
+export const CONTROLLING_KINDS: ReadonlySet<string> = new Set(['vsource', 'battery']);
+
+/** What the source picker holds while nothing is chosen; a select item needs a key. */
+export const NO_CONTROLLER = '__none__';
+
+/**
+ * What the inspector offers a current-controlled source to read: the voltage
+ * sources and batteries on the sheet, in the order they were placed. A name
+ * that is no longer on it stays in the list, said to be missing, so the field
+ * never shows something other than what the part is set to.
+ */
+export function controllerChoices(
+	instances: readonly Instance[],
+	current: string
+): Array<{ value: string; label: string }> {
+	const items = instances
+		.filter((i) => CONTROLLING_KINDS.has(i.kind))
+		.map((i) => ({ value: i.name, label: i.name }));
+	if (current === '') items.unshift({ value: NO_CONTROLLER, label: 'Choose a source' });
+	else if (!items.some((item) => item.value === current)) {
+		items.unshift({ value: current, label: `${current} (not on the drawing)` });
+	}
+	return items;
+}
+
+/** Parts that follow the current through another part, by its name. */
+export const CURRENT_CONTROLLED: ReadonlySet<string> = new Set(['cccs', 'ccvs']);
+
+/**
+ * Point current-controlled sources at the new names of the sources they read,
+ * after parts were renamed: `renamed` maps an old name to the new one. A
+ * source copied with the part reading it is read by the copy, not by the
+ * original's reader; one left behind keeps being read by both.
+ */
+export function followRenames(
+	instances: Iterable<Instance>,
+	renamed: ReadonlyMap<string, string>
+): void {
+	for (const instance of instances) {
+		if (!CURRENT_CONTROLLED.has(instance.kind)) continue;
+		const to = renamed.get(String(instance.params.control ?? ''));
+		if (to !== undefined) instance.params.control = to;
+	}
+}
 
 /** How a pair of contacts is operated, shared by every part that has a pair. */
 const SWITCH_PARAMS: ParamDef[] = [
@@ -1411,6 +1471,67 @@ export const CATALOG: ComponentDef[] = [
 		params: SOURCE_PARAMS.map((p) =>
 			p.key === 'value' ? { ...p, label: 'Amplitude', unit: 'A', default: 1e-3 } : p
 		)
+	},
+	{
+		/**
+		 * SPICE's `F`: a current that is a multiple of the current through a
+		 * voltage source somewhere else on the drawing. The source is the
+		 * ammeter, as in SPICE, so a branch with no source in it is measured by
+		 * putting a 0 V one in series. Drawn as a current source in a diamond,
+		 * the dependent-source shape, and delivering at the pin its arrow
+		 * points at, as the independent one does.
+		 */
+		kind: 'cccs',
+		box: { x: -17, y: -30, w: 34, h: 60 },
+		label: 'Current-controlled current source',
+		group: 'sources',
+		prefix: 'F',
+		pins: [analog('plus', 0, -30), analog('minus', 0, 30)],
+		params: [
+			{
+				key: 'control',
+				label: 'Controlled by',
+				unit: '',
+				default: '',
+				pick: 'voltage-source',
+				description: CONTROL_DESCRIPTION
+			},
+			{
+				key: 'gain',
+				label: 'Current gain',
+				unit: 'A/A',
+				default: 1,
+				plain: true,
+				step: 0.1,
+				description: 'Negative turns the current round.'
+			}
+		]
+	},
+	{
+		/** SPICE's `H`: a voltage set by the current through a voltage source. */
+		kind: 'ccvs',
+		box: { x: -17, y: -30, w: 34, h: 60 },
+		label: 'Current-controlled voltage source',
+		group: 'sources',
+		prefix: 'H',
+		pins: [analog('plus', 0, -30), analog('minus', 0, 30)],
+		params: [
+			{
+				key: 'control',
+				label: 'Controlled by',
+				unit: '',
+				default: '',
+				pick: 'voltage-source',
+				description: CONTROL_DESCRIPTION
+			},
+			{
+				key: 'transresistance',
+				label: 'Transresistance',
+				unit: 'Ω',
+				default: 1000,
+				description: 'Volts across + and − per ampere through the source it reads.'
+			}
+		]
 	},
 	{
 		/**

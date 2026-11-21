@@ -6,6 +6,7 @@
  * simulator quietly runs the circuit you drew a minute ago.
  */
 
+import { TRACE_COLOURS } from '$lib/theme';
 import {
 	EngineError,
 	ensureEngine,
@@ -37,6 +38,8 @@ import {
 	pickSweepSource,
 	sweepSources
 } from './dc-sweep';
+import { DEFAULT_TRIGGER, compactTrigger, readTrigger, type TriggerSettings } from './trigger';
+import { DEFAULT_SPECTRUM, compactSpectrum, readSpectrum, type SpectrumSettings } from './spectrum';
 import {
 	isAnalysis,
 	migrate,
@@ -97,6 +100,7 @@ import {
 	CONTACTS,
 	DIODE_PRESETS,
 	REGULATOR_PRESETS,
+	followRenames,
 	migrateInstance,
 	nextName,
 	OPERABLE,
@@ -160,17 +164,8 @@ export interface ProbeInfo {
 	colour: string;
 }
 
-/** Distinguishable at a glance, and readable on a dark background. */
-export const TRACE_COLOURS = [
-	'#4ea8ff',
-	'#ffb454',
-	'#5ddc9a',
-	'#ff7b9c',
-	'#c58bff',
-	'#5ad4e6',
-	'#ffe066',
-	'#ff9b6a'
-];
+/** Re-exported from where the rest of the palette is, for the code that already reads it here. */
+export { TRACE_COLOURS };
 
 let idCounter = 0;
 const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`;
@@ -184,6 +179,11 @@ const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`
  * document — opened, shared, undone — goes through here, rather than each
  * remembering on its own.
  */
+/** `{ [key]: value }`, or nothing at all when there is no value. */
+function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
+	return value === undefined ? {} : ({ [key]: value } as { [P in K]?: V });
+}
+
 function adopt(schematic: Schematic): Schematic {
 	registerSubcircuits(schematic);
 	registerBlocks(schematic);
@@ -488,6 +488,24 @@ class AppState {
 	resetChannel(key: string): void {
 		delete this.channels[key];
 		this.channels = { ...this.channels };
+	}
+
+	/**
+	 * The scope's trigger. Off by default, which is the roll mode the scope
+	 * always had; the rest is what a bench scope comes up with.
+	 */
+	trigger = $state<TriggerSettings>({ ...DEFAULT_TRIGGER });
+
+	/** The spectrum under the scope, and how it is taken. */
+	spectrum = $state<SpectrumSettings>({ ...DEFAULT_SPECTRUM });
+
+	/** Change some of the trigger's settings, keeping the rest. */
+	setTrigger(change: Partial<TriggerSettings>): void {
+		this.trigger = readTrigger({ ...this.trigger, ...change });
+	}
+
+	setSpectrum(change: Partial<SpectrumSettings>): void {
+		this.spectrum = readSpectrum({ ...this.spectrum, ...change });
 	}
 	stopTime = $state(DEFAULT_STOP_TIME);
 	/**
@@ -2234,7 +2252,10 @@ class AppState {
 		this.trace.record({ op: 'rename', part: instance.name, to: trimmed });
 		if (instance.name === trimmed) return null;
 		this.checkpoint();
+		const was = instance.name;
 		instance.name = trimmed;
+		// A controlled source names the source it reads, and goes on reading it.
+		followRenames(this.schematic.instances, new Map([[was, trimmed]]));
 		return null;
 	}
 
@@ -2684,6 +2705,14 @@ class AppState {
 			fresh.set(inner.id, copy);
 			wasCalled.set(copy.id, `${placed.id}/${inner.id}`);
 		}
+		// A controlled source inside reads the source inside, under whatever
+		// name that one came out with.
+		const outNames = new Map<string, string>();
+		for (const inner of block.instances) {
+			const copy = fresh.get(inner.id);
+			if (copy) outNames.set(inner.name, copy.name);
+		}
+		followRenames(fresh.values(), outNames);
 		const wires: Wire[] = block.wires.map((w) => ({ id: freshId(), points: w.points.map(turn) }));
 
 		// Where each pin of the box was, and where the port it stood for was.
@@ -3471,6 +3500,7 @@ class AppState {
 		const moved = new Map<string, Point>();
 
 		const renamed = new Map<string, string>();
+		const names = new Map<string, string>();
 		for (const source of instances) {
 			// Names have to be regenerated as we go, or pasting three resistors
 			// would produce three of whatever R-number was free at the start.
@@ -3501,7 +3531,12 @@ class AppState {
 			this.schematic.instances.push(copy);
 			fresh.push(copy.id);
 			renamed.set(source.id, copy.id);
+			names.set(source.name, copy.name);
 		}
+		followRenames(
+			this.schematic.instances.filter((i) => fresh.includes(i.id)),
+			names
+		);
 
 		for (const source of wires) {
 			const copy: Wire = {
@@ -3818,7 +3853,10 @@ class AppState {
 			...(this.dcStart !== DEFAULT_DC_START ? { dcStart: this.dcStart } : {}),
 			...(this.dcStop !== DEFAULT_DC_STOP ? { dcStop: this.dcStop } : {}),
 			...(this.dcStep !== DEFAULT_DC_STEP ? { dcStep: this.dcStep } : {}),
-			...(this.dcCurrents.length > 0 ? { dcCurrents: [...this.dcCurrents] } : {})
+			...(this.dcCurrents.length > 0 ? { dcCurrents: [...this.dcCurrents] } : {}),
+			// The same for the scope's trigger and spectrum, field by field.
+			...optional('trigger', compactTrigger(this.trigger)),
+			...optional('spectrum', compactSpectrum(this.spectrum))
 		};
 	}
 
@@ -3853,6 +3891,8 @@ class AppState {
 		this.dcCurrents = Array.isArray(settings.dcCurrents)
 			? settings.dcCurrents.filter((name): name is string => typeof name === 'string')
 			: [];
+		this.trigger = readTrigger(settings.trigger);
+		this.spectrum = readSpectrum(settings.spectrum);
 		this.envelope = null;
 	}
 

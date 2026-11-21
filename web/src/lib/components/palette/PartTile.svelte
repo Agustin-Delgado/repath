@@ -28,7 +28,7 @@
 	{onclick}
 	{oncontextmenu}
 	aria-pressed={active}
-	class="flex cursor-pointer flex-col items-center gap-0.5 rounded-md border px-0.5 pt-1.5 pb-1 text-center text-3xs leading-tight outline-none [contain-intrinsic-size:auto_56px] [content-visibility:auto] focus-visible:ring-2 focus-visible:ring-accent/60
+	class="flex cursor-pointer flex-col items-center gap-0.5 rounded-md border px-0.5 pt-1.5 pb-1 text-center text-3xs leading-tight outline-none [contain-intrinsic-size:auto_56px] [content-visibility:auto] transition-colors focus-visible:focus-ring
 		{active
 		? 'border-accent bg-accent/15 text-fg [--symbol-stroke:var(--accent)]'
 		: 'border-transparent bg-transparent text-muted [--symbol-stroke:var(--symbol)] hover:border-border hover:bg-hover hover:text-fg'}

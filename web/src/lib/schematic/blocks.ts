@@ -29,6 +29,7 @@ import {
 	BLOCK_PREFIX,
 	blockDefinition,
 	blockOf,
+	CURRENT_CONTROLLED,
 	definitionFor,
 	GRID,
 	isKnownKind,
@@ -443,6 +444,14 @@ export function unfoldBlocks(schematic: Schematic): Unfolded {
 				y: origin.y + inner.y,
 				params: { ...inner.params }
 			};
+			// A controlled source inside a block reads a source inside the same
+			// block, the way a `.subckt`'s F reads the subcircuit's own V: the
+			// name it holds is renamed with the source it names.
+			if (CURRENT_CONTROLLED.has(inner.kind)) {
+				const control = String(inner.params.control ?? '');
+				const named = block.instances.find((i) => i.name === control);
+				if (named) copy.params.control = innerName(placed, named);
+			}
 			copies.set(inner.id, copy);
 			take(copy);
 		}

@@ -49,8 +49,8 @@
 
 <style>
 	path {
-		stroke: var(--symbol-stroke, #d8dee9);
-		stroke-width: 1;
+		stroke: var(--symbol-stroke, var(--symbol));
+		stroke-width: 1.25;
 		stroke-linecap: round;
 		stroke-linejoin: round;
 		fill: none;
@@ -58,12 +58,12 @@
 	}
 
 	.filled {
-		fill: var(--symbol-stroke, #d8dee9);
+		fill: var(--symbol-stroke, var(--symbol));
 	}
 
 	.pin-label {
 		font-family: inherit;
-		fill: var(--symbol-stroke, #d8dee9);
+		fill: var(--symbol-stroke, var(--symbol));
 		stroke: none;
 		opacity: 0.75;
 		dominant-baseline: middle;

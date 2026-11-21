@@ -318,7 +318,10 @@ export type SubElement =
 			l?: number;
 	  }
 	| { kind: 'vcvs'; name: string; nodes: string[]; gain: number }
-	| { kind: 'vccs'; name: string; nodes: string[]; gain: number };
+	| { kind: 'vccs'; name: string; nodes: string[]; gain: number }
+	/** `control` is the voltage source whose current is read, as written in the file. */
+	| { kind: 'cccs'; name: string; nodes: string[]; control: string; gain: number }
+	| { kind: 'ccvs'; name: string; nodes: string[]; control: string; gain: number };
 
 export interface Subcircuit {
 	name: string;
@@ -342,7 +345,11 @@ const ELEMENTS: Record<string, { nodes: number; kind: SubElement['kind']; value:
 	Q: { nodes: 3, kind: 'bjt', value: 'model' },
 	M: { nodes: 4, kind: 'mosfet', value: 'model' },
 	E: { nodes: 4, kind: 'vcvs', value: 'number' },
-	G: { nodes: 4, kind: 'vccs', value: 'number' }
+	G: { nodes: 4, kind: 'vccs', value: 'number' },
+	// Two nodes, then the voltage source the current is read through, then the
+	// gain: `F1 out 0 VSENSE 2`.
+	F: { nodes: 2, kind: 'cccs', value: 'number' },
+	H: { nodes: 2, kind: 'ccvs', value: 'number' }
 };
 
 /**
@@ -449,6 +456,16 @@ function readElement(line: string): SubElement | null {
 			size.w *= multiplier;
 		}
 		return { kind: 'mosfet', name, nodes: used, model, ...size };
+	}
+
+	if (spec.kind === 'cccs' || spec.kind === 'ccvs') {
+		if (plain.length !== spec.nodes + 2) return null;
+		const control = plain[spec.nodes];
+		const gain = parseSpiceNumber(plain[spec.nodes + 1]);
+		// A number where the source's name goes is the start of a polynomial
+		// written without its keyword, or a line missing its controller.
+		if (gain === null || parseSpiceNumber(control) !== null) return null;
+		return { kind: spec.kind, name, nodes: plain.slice(0, spec.nodes), control, gain };
 	}
 
 	// R, C, L, E and G: exactly their nodes, then exactly one value.
@@ -659,6 +676,19 @@ export function expandSubcircuit(
 	const skipped = sub.unread.map((line) => line.split(/\s+/)[0]);
 	const names = new Set<string>();
 
+	// The voltage sources an F or an H can read, by the name SPICE knows them
+	// by, which is any case: `vsense` and `VSENSE` are one source. Only the
+	// first of a name counts, since a second of it is not built below. They
+	// are looked up inside this definition only, as SPICE scopes them.
+	const sources = new Map<string, string>();
+	const firsts = new Set<string>();
+	for (const element of sub.elements) {
+		const key = element.name.toUpperCase();
+		if (firsts.has(key)) continue;
+		firsts.add(key);
+		if (element.kind === 'vsource') sources.set(key, named(element));
+	}
+
 	for (const element of sub.elements) {
 		// Two elements whose names differ only in case are one name twice, which
 		// a SPICE refuses. Building both would be a part the file never had.
@@ -775,6 +805,25 @@ export function expandSubcircuit(
 						: { transconductance: element.gain })
 				});
 				break;
+			case 'cccs':
+			case 'ccvs': {
+				const control = sources.get(element.control.toUpperCase());
+				if (!control) {
+					skipped.push(`${element.name} (no voltage source ${element.control} to read its current through)`);
+					break;
+				}
+				components.push({
+					type: element.kind,
+					name: named(element),
+					plus: n[0],
+					minus: n[1],
+					control,
+					...(element.kind === 'cccs'
+						? { gain: element.gain }
+						: { transresistance: element.gain })
+				});
+				break;
+			}
 		}
 	}
 
@@ -837,7 +886,10 @@ const TERMINAL_FLOW: Record<SubElement['kind'], Array<{ sign: number; series?: s
 	bjt: [{ sign: -1 }, { sign: -1, series: ':b' }, { sign: -1, series: ':e' }],
 	mosfet: [{ sign: -1 }, { sign: -1, series: ':g' }, { sign: -1, series: ':s' }, null],
 	vcvs: [{ sign: -1 }, { sign: 1 }, null, null],
-	vccs: [null, null, null, null]
+	vccs: [null, null, null, null],
+	// Two terminals each; what controls them is a name, not a pin.
+	cccs: [{ sign: -1 }, { sign: 1 }],
+	ccvs: [{ sign: -1 }, { sign: 1 }]
 };
 
 /** One reported series arriving at a subcircuit's terminal. */
