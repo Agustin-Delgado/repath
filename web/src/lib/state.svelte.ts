@@ -57,7 +57,9 @@ import {
 	joinedByBoxing,
 	outgrownPins,
 	planBlock,
-	registerBlocks
+	registerBlocks,
+	writeBack,
+	type OpenedFrom
 } from './schematic/blocks';
 import {
 	DEFAULT_STANDARD,
@@ -84,13 +86,16 @@ import {
 	pointKey,
 	portFlow,
 	rotatePoint,
+	registerKind,
 	registerSubcircuits,
 	simplifyPath,
 	snap,
 	SUBCIRCUIT_PREFIX,
 	validateParam,
 	wireSegments,
+	withKinds,
 	type BlockDef,
+	type ComponentDef,
 	type PartGroup,
 	type Instance,
 	type LabelSlot,
@@ -100,19 +105,17 @@ import {
 	type SubcircuitDef,
 	type Wire
 } from './schematic/model';
-import { elbow, routeWire } from './schematic/route';
+import { elbow, rerouteMoved, routeWire, type RouteBetween } from './schematic/route';
 import { compileSchematic } from './schematic/netlist';
 import { serialBytes, usbSerialName, type LineEnding } from './schematic/serial';
 import {
 	buildConnectivity,
-	mergeWireChains,
 	netLabel,
 	openForPins,
 	pinPartition,
 	probePin,
 	remapProbes,
-	splitAtJunctions,
-	trimOverlaps,
+	tidiedWires,
 	unexpectedJoin,
 	liesWithin,
 	type Connectivity,
@@ -167,22 +170,7 @@ function adopt(schematic: Schematic): Schematic {
 	return schematic;
 }
 
-/**
- * How a tool asks for a path between two points.
- *
- * `settling` is every wire whose shape this same operation is about to change.
- * All of them are excluded as obstacles, not just the one being routed: a gesture
- * recomputes wires one at a time, so the ones not reached yet are still sitting
- * where they used to be. Treating those as obstacles makes a route dodge a wire
- * that is about to move — a detour around a state that never appears on screen.
- */
-export type RouteBetween = (
-	from: Point,
-	to: Point,
-	settling: ReadonlySet<string>,
-	/** The shape this wire already had, which the route is charged for leaving. */
-	prefer?: readonly Point[]
-) => Point[];
+export type { RouteBetween } from './schematic/route';
 
 /**
  * The spread of a Monte Carlo run: the lowest and highest each signal reached
@@ -1088,50 +1076,7 @@ class AppState {
 	 * snapshot keyed by them.
 	 */
 	private tidyWires(): void {
-		const original = this.schematic.wires;
-		let wires = original;
-		const step = (next: Wire[]) => {
-			wires = next;
-		};
-
-		// A wire whose ends have arrived at the same point is not a wire any more.
-		// Dragging a component until one of its pins touches another is a supported
-		// way to connect two parts, and when a wire already ran between those two
-		// pins it collapses to nothing: the connection is now the pins themselves.
-		// Left in the document it is invisible but real — selectable, saved to file,
-		// carried in a share link.
-		step(wires.filter((w) => w.points.length >= 2));
-		step(mergeWireChains({ ...this.schematic, wires }));
-
-		// A wire that ends up running along another one is two conductors on the
-		// same line — the thing the router pays most to avoid. Moving a wire whose
-		// end is pinned somewhere can produce exactly that, doubling back along a
-		// neighbour to reach where it was plugged in.
-		step(trimOverlaps({ ...this.schematic, wires }));
-		// Trimming can leave two wires meeting end to end, which is a joint worth
-		// folding away for the same reasons as any other.
-		step(mergeWireChains({ ...this.schematic, wires }));
-
-		// Last, because trimming is what creates most of these: a wire cut back to
-		// where it meets another one now ends partway along it, and a branch resting
-		// on someone else's segment is not carried when that segment moves.
-		step(splitAtJunctions({ ...this.schematic, wires }, freshId));
-
-		// Tidying rearranges wires without ever meaning to change what is joined to
-		// what. Each step argues it cannot; between them the arguments have failed
-		// before, and a silent disconnection is the worst thing this editor can do.
-		// So the claim is checked rather than trusted, and a tidy that would break
-		// the circuit is dropped instead — the drawing stays untidy, which is a far
-		// smaller problem than a wire that stopped conducting without saying so.
-		//
-		// Checked as the grouping of the pins rather than as a count of nets. A
-		// count only ever caught the tidy coming apart; one that *joined* two nets
-		// made the number go down, which passed. A silent short is the same size of
-		// mistake as a silent break and reads the same way on the canvas — the
-		// drawing looks right and the answer is for a different circuit.
-		const before = pinPartition(buildConnectivity(this.schematic));
-		const after = pinPartition(buildConnectivity({ ...this.schematic, wires }));
-		this.schematic.wires = after === before ? wires : original;
+		this.schematic.wires = tidiedWires(this.schematic, freshId);
 	}
 
 	/**
@@ -2445,29 +2390,9 @@ class AppState {
 		moved: ReadonlyMap<string, Point>,
 		route: RouteBetween,
 		within: Schematic = this.schematic,
-		{ also, keep }: { also?: ReadonlySet<string>; keep?: ReadonlySet<string> } = {}
+		options: { also?: ReadonlySet<string>; keep?: ReadonlySet<string> } = {}
 	): void {
-		if (moved.size === 0 && !also?.size) return;
-		const settling = new Set<string>(also);
-		for (const wire of within.wires) {
-			if (keep?.has(wire.id)) continue;
-			const last = wire.points.length - 1;
-			for (const end of [0, last]) {
-				if (moved.has(pointKey(wire.points[end].x, wire.points[end].y))) settling.add(wire.id);
-			}
-		}
-		// One at a time, each routed around the ones already settled: two
-		// wires bound for neighbouring pins that could not see each other
-		// landed one on the other's end and made a junction nobody drew.
-		for (const wire of within.wires) {
-			if (!settling.has(wire.id)) continue;
-			const last = wire.points.length - 1;
-			const from = wire.points;
-			const start = moved.get(pointKey(from[0].x, from[0].y)) ?? from[0];
-			const finish = moved.get(pointKey(from[last].x, from[last].y)) ?? from[last];
-			wire.points = simplifyPath(route(start, finish, settling, from));
-			settling.delete(wire.id);
-		}
+		rerouteMoved(within, moved, route, options);
 	}
 
 	/**
@@ -2525,61 +2450,21 @@ class AppState {
 	 * its wire hanging, which is the truth of it.
 	 */
 	leaveBlock(): void {
-		const frame = this.outside.pop();
-		if (!frame) return;
+		if (this.outside.length === 0) return;
 		this.trace.record({ op: 'leave' });
 		this.discardRun();
-		const edited = this.schematic;
-		const block = frame.editing;
-		const outer = frame.schematic;
+		this.ascend();
+	}
 
-		// Boxing something up inside made a definition; it belongs to the
-		// document as a whole.
-		outer.blocks = edited.blocks ?? outer.blocks;
-		const target = (outer.blocks ?? []).find((b) => b.id === block.id) ?? block;
-		this.schematic = outer;
-		const copies = outer.instances.filter((i) => i.kind === BLOCK_PREFIX + target.id);
-		// Pins are followed by the port they are, not by name: a port renamed
-		// inside is the same terminal, and the wire on it stays on it.
-		const wasPort = new Map(blockPorts(target).map((p) => [p.name, p.instance]));
-		const before = new Map<string, Point>();
-		for (const placed of copies) {
-			for (const pin of definitionFor(placed).pins) {
-				const port = wasPort.get(pin.name);
-				if (port) before.set(`${placed.id}:${port}`, pinPosition(placed, pin));
-			}
-		}
-		target.instances = edited.instances;
-		target.wires = edited.wires;
-		target.groups = edited.groups;
-		registerBlocks(outer);
-		const moved = new Map<string, Point>();
-		for (const placed of copies) {
-			const pins = definitionFor(placed).pins;
-			const still = new Set<string>();
-			for (const port of blockPorts(target)) {
-				const pin = pins.find((p) => p.name === port.name);
-				const was = before.get(`${placed.id}:${port.instance}`);
-				if (!pin || !was) continue;
-				still.add(`${placed.id}:${port.instance}`);
-				const now = pinPosition(placed, pin);
-				if (was.x !== now.x || was.y !== now.y) moved.set(pointKey(was.x, was.y), now);
-			}
-			// A wire on a pin that is gone goes with it. Left hanging where the
-			// pin was, it sat exactly where the pins that remain close up to,
-			// and one of them landing on the loose end was a connection nobody
-			// drew. The part at its far end is then unconnected, and says so.
-			for (const [key, was] of before) {
-				if (!key.startsWith(`${placed.id}:`) || still.has(key)) continue;
-				const at = pointKey(was.x, was.y);
-				this.schematic.wires = this.schematic.wires.filter((w) => {
-					const ends = [w.points[0], w.points[w.points.length - 1]];
-					return !ends.some((p) => pointKey(p.x, p.y) === at);
-				});
-			}
-		}
-		this.rewire(moved, this.router());
-		if (moved.size > 0) this.tidyWires();
+	/** Write the open level back into the one under it and go there: `leaveBlock` without the bookkeeping of a step taken. */
+	private ascend(): void {
+		const frame = this.outside.pop();
+		if (!frame) return;
+		const back = writeBack(this.plainFrame(frame), $state.snapshot(this.schematic) as Schematic, freshId);
+		// The editor's own drawing is the one written back, so the catalog
+		// follows it: the copies of the block are drawn with their new pins.
+		for (const def of back.definitions) registerKind(def);
+		this.schematic = back.schematic;
 
 		this.past = frame.past;
 		this.future = frame.future;
@@ -2593,7 +2478,14 @@ class AppState {
 		}
 		this.selection = this.stillPresent(frame.selection);
 		this.probes = frame.probes;
-		this.inside = this.outside.length > 0 ? this.outside[this.outside.length - 1].editing : null;
+		// The block still open around this level is its definition in the drawing
+		// just written back, not the one from before: a rename from here on has to
+		// reach what the editor says it is inside.
+		const around = this.outside.at(-1);
+		if (around) {
+			around.editing = (this.schematic.blocks ?? []).find((b) => b.id === around.editing.id) ?? around.editing;
+		}
+		this.inside = around?.editing ?? null;
 		this.depth = this.outside.length;
 		this.error = null;
 		this.notice = null;
@@ -3315,14 +3207,42 @@ class AppState {
 
 	// -- persistence ------------------------------------------------------
 
-	/** The circuit as a document: what a saved file holds. */
+	/**
+	 * The circuit as a document: what a saved file and a share link hold.
+	 *
+	 * The whole circuit, wherever the editor stands. With a block open, the
+	 * drawing on screen is only that block's inside, and its edits reach the
+	 * drawing on the way out; so the document is the drawing as leaving every
+	 * open block would leave it, worked out on copies, with nothing in the
+	 * editor or the catalog changed. Which block was open is not kept: a file
+	 * or a link is the circuit, and opens on the drawing, as a file saved after
+	 * leaving would. Coming back into the block is the draft's business.
+	 */
 	toDocument(): RepathDocument {
+		let level = { schematic: $state.snapshot(this.schematic) as Schematic, probes: this.probes };
+		// Innermost out, each level written back with the definitions the levels
+		// above it produced, as leaving one at a time would have registered them.
+		let definitions: ComponentDef[] = [];
+		for (const frame of [...this.outside].reverse()) {
+			const back = withKinds(definitions, () => writeBack(this.plainFrame(frame), level.schematic, freshId));
+			level = back;
+			definitions = [...definitions, ...back.definitions];
+		}
 		return toDocument({
-			schematic: this.schematic,
+			schematic: level.schematic,
 			stopTime: this.stopTime,
-			probes: this.probes,
+			probes: [...level.probes],
 			settings: this.settings()
 		});
+	}
+
+	/** What `writeBack` needs of a level left behind, as plain data. */
+	private plainFrame(frame: (typeof this.outside)[number]): OpenedFrom {
+		return {
+			schematic: $state.snapshot(frame.schematic) as Schematic,
+			probes: [...frame.probes],
+			editing: $state.snapshot(frame.editing) as BlockDef
+		};
 	}
 
 	toJSON(): string {

@@ -2293,8 +2293,33 @@ const BY_KIND = new Map(
 	[...CATALOG, ...CHIPS.map(chipDefinition)].map((d) => [d.kind, d])
 );
 
+/**
+ * Definitions that stand in front of the catalog for the length of a
+ * `withKinds` call, and are gone after it.
+ */
+let overlay: ReadonlyMap<string, ComponentDef> | null = null;
+
+/**
+ * Run `body` with `defs` answering for their kinds in place of what the
+ * catalog holds, and put the catalog's answers back after.
+ *
+ * For working out a drawing as it would be with some definitions changed —
+ * a block's edited inside written back, for a file — without changing what
+ * the editor's own drawing is drawn and routed with. Calls nest: the inner
+ * one sees the outer one's definitions too, unless it replaces them.
+ */
+export function withKinds<T>(defs: readonly ComponentDef[], body: () => T): T {
+	const was = overlay;
+	overlay = new Map([...(was ?? []), ...defs.map((def) => [def.kind, def] as const)]);
+	try {
+		return body();
+	} finally {
+		overlay = was;
+	}
+}
+
 export function definitionOf(kind: string): ComponentDef {
-	const def = BY_KIND.get(kind);
+	const def = overlay?.get(kind) ?? BY_KIND.get(kind);
 	if (!def) throw new Error(`unknown component kind: ${kind}`);
 	return def;
 }
@@ -2557,7 +2582,7 @@ export function registerKind(def: ComponentDef): void {
 
 /** Whether a kind can be asked about without throwing. */
 export function isKnownKind(kind: string): boolean {
-	return BY_KIND.has(kind);
+	return (overlay?.has(kind) ?? false) || BY_KIND.has(kind);
 }
 
 /** The definition a placed block was built from, if it is one. */

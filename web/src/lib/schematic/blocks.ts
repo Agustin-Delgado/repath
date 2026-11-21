@@ -39,16 +39,18 @@ import {
 	portOrder,
 	registerKind,
 	snap,
+	withKinds,
 	wireSegments,
 	type BlockDef,
 	type BlockPort,
+	type ComponentDef,
 	type Instance,
 	type Point,
 	type Schematic,
 	type Wire
 } from './model';
-import { buildConnectivity, liesWithin, pinKey, type Connectivity } from './nets';
-import { routeWire } from './route';
+import { buildConnectivity, liesWithin, pinKey, tidiedWires, type Connectivity } from './nets';
+import { rerouteMoved, routeWire } from './route';
 import type { PortInjection } from '../spice';
 
 /** The inside of a block as a drawing of its own, with the document's definitions along. */
@@ -98,24 +100,137 @@ export function blockPorts(block: BlockDef): BlockPort[] {
 }
 
 /**
- * Make a drawing's blocks available to everything that asks about a kind, on
- * the same terms as `registerSubcircuits`: before anything reads the instances.
+ * The part every block of a drawing is, as it is defined now.
  *
- * A block can hold another block, and the inner one has to be known before the
- * outer one is built — its pins are read off the parts inside. The list is in
- * no particular order, so this goes round until every one is built, and a block
- * whose contents it cannot resolve is left out rather than allowed to throw.
+ * A block can hold another block, and the inner one has to be built before the
+ * outer one — its pins are read off the parts inside, and the pins of a block
+ * inside are the inner definition's. The list is in no particular order, so
+ * this goes round until every one is built, each round seeing the definitions
+ * the rounds before it made; a block whose contents it cannot resolve is left
+ * out rather than allowed to throw. Nothing is registered.
  */
-export function registerBlocks(schematic: Schematic): void {
-	let pending = [...(schematic.blocks ?? [])];
+export function blockDefinitions(schematic: Schematic): ComponentDef[] {
+	const blocks = schematic.blocks ?? [];
+	const ours = new Set(blocks.map((block) => BLOCK_PREFIX + block.id));
+	const built = new Map<string, ComponentDef>();
+	// A block of this drawing counts as known once it is built here, not
+	// because the catalog still holds an older version of it.
+	const known = (kind: string) =>
+		!kind.startsWith(BLOCK_PREFIX) || built.has(kind) || (!ours.has(kind) && isKnownKind(kind));
+	let pending = [...blocks];
 	while (pending.length > 0) {
-		const ready = pending.filter((block) =>
-			block.instances.every((i) => !i.kind.startsWith(BLOCK_PREFIX) || isKnownKind(i.kind))
-		);
-		if (ready.length === 0) return;
-		for (const block of ready) registerKind(blockDefinition(block, blockPorts(block)));
+		const ready = pending.filter((block) => block.instances.every((i) => known(i.kind)));
+		if (ready.length === 0) break;
+		withKinds([...built.values()], () => {
+			for (const block of ready) {
+				const def = blockDefinition(block, blockPorts(block));
+				built.set(def.kind, def);
+			}
+		});
 		pending = pending.filter((block) => !ready.includes(block));
 	}
+	return [...built.values()];
+}
+
+/**
+ * Make a drawing's blocks available to everything that asks about a kind, on
+ * the same terms as `registerSubcircuits`: before anything reads the instances.
+ */
+export function registerBlocks(schematic: Schematic): void {
+	for (const def of blockDefinitions(schematic)) registerKind(def);
+}
+
+/** A level the editor left to open a block: the drawing it was, and the block opened. */
+export interface OpenedFrom {
+	schematic: Schematic;
+	probes: string[];
+	editing: BlockDef;
+}
+
+/** A level with the block opened from it written back in. */
+export interface WrittenBack {
+	schematic: Schematic;
+	probes: string[];
+	/**
+	 * Every block of `schematic` as it is defined now, the edited one among
+	 * them. The drawing was worked out with these; whoever keeps it decides
+	 * whether the catalog gets them.
+	 */
+	definitions: ComponentDef[];
+}
+
+/**
+ * The drawing a block was opened from, with the block's edited inside written
+ * back into it: what leaving the block comes back to.
+ *
+ * Every placed copy of the block changes with the definition. Its pins may
+ * have moved — a port renamed, added or taken away — so each copy's wires are
+ * re-attached to where its pins are now; a pin that is gone takes its wire
+ * with it.
+ *
+ * Neither argument is changed, nor is the catalog: the pins before are read
+ * from it as it stands, the pins after from the new definitions, which are
+ * handed back. The arguments must be plain data, not reactive state.
+ */
+export function writeBack(
+	frame: OpenedFrom,
+	edited: Schematic,
+	nextId: () => string
+): WrittenBack {
+	const outer = structuredClone(frame.schematic);
+	const inside = structuredClone(edited);
+	// Boxing something up inside made a definition; it belongs to the
+	// document as a whole.
+	outer.blocks = inside.blocks ?? outer.blocks;
+	const target =
+		(outer.blocks ?? []).find((b) => b.id === frame.editing.id) ?? structuredClone(frame.editing);
+	const copies = outer.instances.filter((i) => i.kind === BLOCK_PREFIX + target.id);
+	// Pins are followed by the port they are, not by name: a port renamed
+	// inside is the same terminal, and the wire on it stays on it.
+	const wasPort = new Map(blockPorts(target).map((p) => [p.name, p.instance]));
+	const before = new Map<string, Point>();
+	for (const placed of copies) {
+		for (const pin of definitionFor(placed).pins) {
+			const port = wasPort.get(pin.name);
+			if (port) before.set(`${placed.id}:${port}`, pinPosition(placed, pin));
+		}
+	}
+	target.instances = inside.instances;
+	target.wires = inside.wires;
+	target.groups = inside.groups;
+	const definitions = blockDefinitions(outer);
+	withKinds(definitions, () => {
+		const moved = new Map<string, Point>();
+		for (const placed of copies) {
+			const pins = definitionFor(placed).pins;
+			const still = new Set<string>();
+			for (const port of blockPorts(target)) {
+				const pin = pins.find((p) => p.name === port.name);
+				const was = before.get(`${placed.id}:${port.instance}`);
+				if (!pin || !was) continue;
+				still.add(`${placed.id}:${port.instance}`);
+				const now = pinPosition(placed, pin);
+				if (was.x !== now.x || was.y !== now.y) moved.set(pointKey(was.x, was.y), now);
+			}
+			// A wire on a pin that is gone goes with it. Left hanging where the
+			// pin was, it sat exactly where the pins that remain close up to,
+			// and one of them landing on the loose end was a connection nobody
+			// drew. The part at its far end is then unconnected, and says so.
+			for (const [key, was] of before) {
+				if (!key.startsWith(`${placed.id}:`) || still.has(key)) continue;
+				const at = pointKey(was.x, was.y);
+				outer.wires = outer.wires.filter((w) => {
+					const ends = [w.points[0], w.points[w.points.length - 1]];
+					return !ends.some((p) => pointKey(p.x, p.y) === at);
+				});
+			}
+		}
+		rerouteMoved(outer, moved, (from, to, settling, prefer) =>
+			routeWire(outer, from, to, { grid: GRID, ignoreWires: settling, prefer })
+		);
+		if (moved.size > 0) outer.wires = tidiedWires(outer, nextId);
+	});
+	return { schematic: outer, probes: [...frame.probes], definitions };
 }
 
 /**

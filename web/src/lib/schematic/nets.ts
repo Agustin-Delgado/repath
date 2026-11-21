@@ -1141,3 +1141,59 @@ export function floatingLogicInputs(
 		}
 	};
 }
+
+/**
+ * A drawing's wires with the ones that meet end to end folded back into
+ * single runs, overlaps trimmed and junctions split — or the wires as they
+ * were, when tidying would change what is joined to what.
+ *
+ * Called after anything that changes wire structure. Never during a drag: the
+ * shape does not change, but the identities do, and the gesture is holding a
+ * snapshot keyed by them.
+ */
+export function tidiedWires(schematic: Schematic, nextId: () => string): Wire[] {
+	const original = schematic.wires;
+	let wires = original;
+	const step = (next: Wire[]) => {
+		wires = next;
+	};
+
+	// A wire whose ends have arrived at the same point is not a wire any more.
+	// Dragging a component until one of its pins touches another is a supported
+	// way to connect two parts, and when a wire already ran between those two
+	// pins it collapses to nothing: the connection is now the pins themselves.
+	// Left in the document it is invisible but real — selectable, saved to file,
+	// carried in a share link.
+	step(wires.filter((w) => w.points.length >= 2));
+	step(mergeWireChains({ ...schematic, wires }));
+
+	// A wire that ends up running along another one is two conductors on the
+	// same line — the thing the router pays most to avoid. Moving a wire whose
+	// end is pinned somewhere can produce exactly that, doubling back along a
+	// neighbour to reach where it was plugged in.
+	step(trimOverlaps({ ...schematic, wires }));
+	// Trimming can leave two wires meeting end to end, which is a joint worth
+	// folding away for the same reasons as any other.
+	step(mergeWireChains({ ...schematic, wires }));
+
+	// Last, because trimming is what creates most of these: a wire cut back to
+	// where it meets another one now ends partway along it, and a branch resting
+	// on someone else's segment is not carried when that segment moves.
+	step(splitAtJunctions({ ...schematic, wires }, nextId));
+
+	// Tidying rearranges wires without ever meaning to change what is joined to
+	// what. Each step argues it cannot; between them the arguments have failed
+	// before, and a silent disconnection is the worst thing this editor can do.
+	// So the claim is checked rather than trusted, and a tidy that would break
+	// the circuit is dropped instead — the drawing stays untidy, which is a far
+	// smaller problem than a wire that stopped conducting without saying so.
+	//
+	// Checked as the grouping of the pins rather than as a count of nets. A
+	// count only ever caught the tidy coming apart; one that *joined* two nets
+	// made the number go down, which passed. A silent short is the same size of
+	// mistake as a silent break and reads the same way on the canvas — the
+	// drawing looks right and the answer is for a different circuit.
+	const before = pinPartition(buildConnectivity(schematic));
+	const after = pinPartition(buildConnectivity({ ...schematic, wires }));
+	return after === before ? wires : original;
+}

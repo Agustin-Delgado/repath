@@ -26,7 +26,15 @@
  */
 
 import { snapTo, type Vec2 } from '$lib/canvas';
-import { definitionFor, rotatePoint, wireSegments, type Point, type Schematic } from './model';
+import {
+	definitionFor,
+	pointKey,
+	rotatePoint,
+	simplifyPath,
+	wireSegments,
+	type Point,
+	type Schematic
+} from './model';
 
 export interface RouteOptions {
 	grid: number;
@@ -894,4 +902,59 @@ export function crossesBody(schematic: Schematic, path: readonly Point[], option
 		}
 	}
 	return false;
+}
+
+/**
+ * How a tool asks for a path between two points.
+ *
+ * `settling` is every wire whose shape this same operation is about to change.
+ * All of them are excluded as obstacles, not just the one being routed: a gesture
+ * recomputes wires one at a time, so the ones not reached yet are still sitting
+ * where they used to be. Treating those as obstacles makes a route dodge a wire
+ * that is about to move — a detour around a state that never appears on screen.
+ */
+export type RouteBetween = (
+	from: Point,
+	to: Point,
+	settling: ReadonlySet<string>,
+	/** The shape this wire already had, which the route is charged for leaving. */
+	prefer?: readonly Point[]
+) => Point[];
+
+/**
+ * Every wire with an end at one of `moved`'s keys is re-routed to the
+ * point that key maps to, keeping its shape where it can. How a pin that
+ * moved keeps what was plugged into it. The wires in `also` are re-routed
+ * between the ends they have, for when what moved is under them; the
+ * wires in `keep` are never re-routed, whatever their ends sit on.
+ *
+ * Changes the wires of `within` in place.
+ */
+export function rerouteMoved(
+	within: Schematic,
+	moved: ReadonlyMap<string, Point>,
+	route: RouteBetween,
+	{ also, keep }: { also?: ReadonlySet<string>; keep?: ReadonlySet<string> } = {}
+): void {
+	if (moved.size === 0 && !also?.size) return;
+	const settling = new Set<string>(also);
+	for (const wire of within.wires) {
+		if (keep?.has(wire.id)) continue;
+		const last = wire.points.length - 1;
+		for (const end of [0, last]) {
+			if (moved.has(pointKey(wire.points[end].x, wire.points[end].y))) settling.add(wire.id);
+		}
+	}
+	// One at a time, each routed around the ones already settled: two
+	// wires bound for neighbouring pins that could not see each other
+	// landed one on the other's end and made a junction nobody drew.
+	for (const wire of within.wires) {
+		if (!settling.has(wire.id)) continue;
+		const last = wire.points.length - 1;
+		const from = wire.points;
+		const start = moved.get(pointKey(from[0].x, from[0].y)) ?? from[0];
+		const finish = moved.get(pointKey(from[last].x, from[last].y)) ?? from[last];
+		wire.points = simplifyPath(route(start, finish, settling, from));
+		settling.delete(wire.id);
+	}
 }
