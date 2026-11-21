@@ -2454,6 +2454,7 @@ export function chipDefinition(chip: ChipDef): ComponentDef {
 			: mcu
 				? [
 						{ key: 'firmware', label: 'Program', unit: '', default: '', hidden: true },
+						{ key: 'sketch', label: 'Sketch', unit: '', default: '', hidden: true },
 						{
 							key: 'frequency',
 							label: 'Clock',

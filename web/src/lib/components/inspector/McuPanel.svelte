@@ -24,6 +24,7 @@
 	} from '$lib/schematic/serial';
 	import { app } from '$lib/state.svelte';
 	import { formatWithUnit } from '$lib/units';
+	import McuSketch from './McuSketch.svelte';
 	import { fieldBox, fieldInput, hint, problem, sectionTitle } from './styles';
 
 	/**
@@ -31,8 +32,7 @@
 	 *
 	 * The program is the .hex file a toolchain writes, kept as text on the part
 	 * the way an EEPROM keeps its contents, so it is saved and shared with the
-	 * drawing. Nothing here compiles: the inspector says where a .hex comes from
-	 * instead.
+	 * drawing.
 	 */
 	let { instance }: { instance: Instance } = $props();
 
@@ -103,6 +103,8 @@
 	}
 </script>
 
+<McuSketch {instance} />
+
 <section class="flex flex-col gap-1.5">
 	<h3 class={sectionTitle}>Program</h3>
 	{#if !loaded}
@@ -166,7 +168,7 @@
 		/>
 	{/if}
 	<p class={hint}>
-		Intel HEX, no bootloader. Arduino IDE: Sketch → Export Compiled Binary, the <code>.hex</code>
+		Or compile the sketch above. Intel HEX, no bootloader. Arduino IDE: Sketch → Export Compiled Binary, the <code>.hex</code>
 		without “with_bootloader”.
 	</p>
 	<p class={hint}>
