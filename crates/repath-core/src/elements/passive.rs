@@ -288,7 +288,7 @@ impl Element for Capacitor {
             // companion value above is the same number the stamp uses, and with a
             // settled voltage the trapezoidal form of it is simply `-i_prev`.
             self.i_mean = self.c * (v - self.v_prev) / ctx.dt;
-            self.ring.push(self.i_mean);
+            self.ring.push(self.v_prev, v, ctx.scale());
         }
         self.v_prev = v;
         self.charge.push(ctx.time, self.stored(ctx));
@@ -453,7 +453,7 @@ impl Element for Inductor {
             // What the branch actually had across it over the step, which cannot
             // ring by construction — the mirror of the capacitor's mean current.
             self.v_mean = self.l * (i - self.i_prev) / ctx.dt;
-            self.ring.push(self.v_mean);
+            self.ring.push(self.i_prev, i, ctx.scale());
         }
         self.i_prev = i;
         self.v_prev = ctx.voltage(self.p) - ctx.voltage(self.m);

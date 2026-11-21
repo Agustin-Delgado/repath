@@ -25,6 +25,14 @@ against its own error estimate. When the step was too long, it takes it again
 shorter, before anything downstream (the logic, the chip, the screen) has used
 it.
 
+**And at the rate its parts give.** The blinker's period now comes out within
+a tenth of a percent of what its resistors and capacitor give. It is the same
+whatever the timebase and on whatever machine. Before, it ran 1.3 % slow at the
+editor's timebase. A capacitor sitting still on the chip's reference was
+mistaken for one ringing, and that switched the timing capacitor onto a less
+accurate integration rule. How slow it ran then depended on the timebase and on
+the computer's rounding.
+
 It costs little where nothing switches. On circuits that do, it pays for the
 accuracy. The 555 blinker takes 1.6 times as many steps, the Arduino blink
 1.2 times. The LED matrix takes fewer steps than before.
