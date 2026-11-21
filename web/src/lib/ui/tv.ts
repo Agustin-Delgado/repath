@@ -11,7 +11,7 @@ export const tv = createTV({
 	twMergeConfig: {
 		extend: {
 			theme: {
-				text: ['2xs', 'ui']
+				text: ['3xs', '2xs', 'ui', 'md']
 			}
 		}
 	}

@@ -1249,7 +1249,7 @@
 		place-content: center;
 		margin: 0;
 		color: var(--label-dim);
-		font-size: 0.85rem;
+		font-size: var(--text-ui);
 		pointer-events: none;
 	}
 
@@ -1265,7 +1265,7 @@
 		pointer-events: auto;
 		background: color-mix(in srgb, var(--panel-bg) 85%, transparent);
 		padding: 0.15rem 0.4rem;
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 	}
 
 	.readout {
@@ -1277,13 +1277,13 @@
 		flex-wrap: wrap;
 		justify-content: flex-end;
 		font-family: var(--font-mono);
-		font-size: 0.72rem;
+		font-size: var(--text-2xs);
 		pointer-events: none;
 		/* Nearly opaque, with a frame: it sits over the traces it describes. */
-		background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+		background: color-mix(in srgb, var(--raised) 94%, transparent);
 		border: 1px solid var(--border);
 		padding: 0.25rem 0.5rem;
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 	}
 
 	.readout .time {
@@ -1300,11 +1300,11 @@
 		bottom: 30px;
 		margin: 0;
 		font-family: var(--font-mono);
-		font-size: 0.72rem;
+		font-size: var(--text-2xs);
 		color: var(--label-dim);
 		background: color-mix(in srgb, var(--panel-bg) 85%, transparent);
 		padding: 0.15rem 0.4rem;
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 	}
 
 	footer {

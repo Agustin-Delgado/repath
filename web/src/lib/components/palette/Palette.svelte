@@ -164,7 +164,7 @@
 {#snippet shelfHeading(id: string, label: string, count: number)}
 	<button
 		type="button"
-		class="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left text-3xs font-semibold tracking-[0.08em] text-muted uppercase hover:text-fg"
+		class="group flex w-full cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-0.5 py-1 text-left eyebrow hover:text-fg"
 		aria-expanded={!folded.has(id)}
 		onclick={() => toggleShelf(id)}
 	>
@@ -178,7 +178,7 @@
 	<!-- Search stays put while the shelves scroll under it. -->
 	<div class="border-b border-border p-2">
 		<label
-			class="flex h-7 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-muted focus-within:border-accent/70"
+			class="flex h-7 items-center gap-1.5 rounded-control border border-border bg-control px-2 text-muted field"
 		>
 			<Search class="size-3.5 shrink-0" />
 			<input
@@ -298,7 +298,7 @@
 
 				{#if recent.length > 0}
 					<section>
-						<h3 class="m-0 px-0.5 py-1 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
+						<h3 class="m-0 px-0.5 py-1 eyebrow">
 							Recent
 						</h3>
 						<div class="grid grid-cols-[repeat(auto-fill,minmax(58px,1fr))] gap-1">

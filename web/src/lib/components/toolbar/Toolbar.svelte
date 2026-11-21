@@ -38,20 +38,20 @@
 	edge at 768 px, with nothing to say they were there.
 -->
 <header
-	class="flex items-center gap-4 border-b border-border bg-panel px-3 py-1.5 max-[900px]:gap-2 max-[900px]:px-2.5"
+	class="flex items-center gap-4 border-b border-border bg-panel px-3 py-1.5 narrow:gap-2 narrow:px-2.5"
 >
 	<strong class="shrink-0 text-base tracking-tight">repath</strong>
 
 	<div
 		use:overflowHint
-		class="scroll-row relative flex min-w-0 flex-1 items-center gap-1.5 max-[900px]:p-0.5"
+		class="scroll-row relative flex min-w-0 flex-1 items-center gap-1.5 narrow:p-0.5"
 	>
 		<AnalysisControls />
 
 		<span class="flex-1"></span>
 		<!-- Where everything else is: every part, every command, by name. -->
 		<Button
-			class="w-44 justify-start text-muted max-[1200px]:w-auto max-[900px]:hidden"
+			class="w-52 justify-start font-normal text-muted max-[1200px]:w-auto narrow:hidden"
 			onclick={onFind}
 			title="Find a part or a command (Ctrl+K)"
 		>
@@ -59,14 +59,14 @@
 			<span class="max-[1200px]:hidden">Find anything…</span>
 			<kbd class="ml-auto font-mono text-3xs max-[1200px]:hidden">Ctrl K</kbd>
 		</Button>
-		<span class="contents max-[900px]:hidden"><ToolbarSeparator /></span>
+		<span class="contents narrow:hidden"><ToolbarSeparator /></span>
 
-		<div class="contents max-[900px]:hidden">
+		<div class="contents narrow:hidden">
 			<DocumentControls {share} />
 		</div>
 	</div>
 
-	<div class="hidden shrink-0 items-center gap-1 max-[900px]:flex">
+	<div class="hidden shrink-0 items-center gap-1 narrow:flex">
 		<Button variant="ghost" size="icon" onclick={onFind} title="Find a part or a command" aria-label="Find a part or a command">
 			<Search />
 		</Button>

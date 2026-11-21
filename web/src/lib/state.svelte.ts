@@ -6,6 +6,7 @@
  * simulator quietly runs the circuit you drew a minute ago.
  */
 
+import { TRACE_COLOURS } from '$lib/theme';
 import {
 	EngineError,
 	ensureEngine,
@@ -160,17 +161,8 @@ export interface ProbeInfo {
 	colour: string;
 }
 
-/** Distinguishable at a glance, and readable on a dark background. */
-export const TRACE_COLOURS = [
-	'#4ea8ff',
-	'#ffb454',
-	'#5ddc9a',
-	'#ff7b9c',
-	'#c58bff',
-	'#5ad4e6',
-	'#ffe066',
-	'#ff9b6a'
-];
+/** Re-exported from where the rest of the palette is, for the code that already reads it here. */
+export { TRACE_COLOURS };
 
 let idCounter = 0;
 const freshId = () => `e${Date.now().toString(36)}${(idCounter++).toString(36)}`;

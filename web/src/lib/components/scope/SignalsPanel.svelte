@@ -96,9 +96,9 @@
 	{/if}
 {/snippet}
 
-<aside class="flex h-full min-h-0 flex-col overflow-y-auto border-l border-border bg-panel text-[0.72rem]">
+<aside class="flex h-full min-h-0 flex-col overflow-y-auto border-l border-border bg-panel text-3xs">
 	<header class="flex items-center gap-1 px-2.5 pt-2 pb-1">
-		<h3 class="m-0 mr-auto text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
+		<h3 class="m-0 mr-auto eyebrow">
 			Signals
 		</h3>
 		<Button
@@ -213,7 +213,7 @@
 	{#if unplotted.length > 0}
 		<section class="mt-2 flex flex-col gap-1 border-t border-border px-1.5 pt-2">
 			<label
-				class="mx-1 flex h-6 items-center gap-1.5 rounded-control border border-border bg-control px-1.5 text-muted focus-within:border-accent/70"
+				class="mx-1 flex h-6 items-center gap-1.5 rounded-control border border-border bg-control px-1.5 text-muted field"
 			>
 				<Search class="size-3 shrink-0" />
 				<input
@@ -268,7 +268,7 @@
 			fewer parts worth a current than it has nets.
 		-->
 		<section class="mt-2 flex flex-col gap-0.5 border-t border-border px-1.5 pt-2">
-			<h3 class="m-0 px-1 pb-0.5 text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
+			<h3 class="m-0 px-1 pb-0.5 eyebrow">
 				Currents
 			</h3>
 			<ul class="m-0 flex list-none flex-col gap-0.5 p-0">

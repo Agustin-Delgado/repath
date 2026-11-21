@@ -11,6 +11,26 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — One look, everywhere
+
+**The whole app now follows a single design system.** Text comes in four
+sizes instead of nine, the smallest a little larger than before, and the dim
+grey used for hints and labels is now readable on every surface it sits on,
+buttons and highlighted rows included. Buttons, menus, the command palette and
+toasts share one set of corners, shadows and a focus ring you can see from
+across the room; fields light up while you type in them, and a click gives a
+little under the pointer. Wiring warnings are amber rather than the selection's
+yellow, so a warning no longer looks like something you selected. Probes get
+a new set of eight colours, picked so that every pair stays distinct for
+readers with any of the three common kinds of colour blindness, and none of
+them is the selection yellow any more. The Bode plot's finer gridlines are
+fainter instead of darker, and at exactly 900 px wide the header and the phone
+controls now agree on which layout they are in.
+
+[#PR](https://github.com/Agustin-Delgado/repath/pulls)
+
+---
+
 ## 21 November 2026 — A DC sweep, for I-V curves
 
 **Run can now sweep a source instead of running in time.** Pick *DC sweep* as
