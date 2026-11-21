@@ -249,9 +249,16 @@ interface Bond {
 	wireId: string;
 }
 
-/** A point on the undo stack: the drawing, and what was selected at the time. */
+/** A point on the undo stack: the drawing, what is probed on it, and what was selected at the time. */
 interface HistoryEntry {
 	document: string;
+	/**
+	 * The probes picked on this level, which are as much the document as its
+	 * parts: a file keeps them. Held apart from the drawing, so undo put back a
+	 * renamed port without the probe on it, which went on following the new
+	 * name and watched nothing.
+	 */
+	probes: string[];
 	selection: string[];
 	/**
 	 * What else the step replaced, for one that replaced the whole document —
@@ -262,7 +269,7 @@ interface HistoryEntry {
 	around?: DocumentAround;
 	/**
 	 * The levels under the open one that the step changed, as they were before
-	 * it: slot `k` is the drawing of `outside[k]`, left empty where the step did
+	 * it: slot `k` is `outside[k]`'s drawing and probes (`levelDocs`), left empty where the step did
 	 * not touch that level. With a block open the drawing underneath waits on
 	 * its own level, and an edit up here can still change it — leaving a block
 	 * re-attaches the wires of its copies there, and a port renamed or moved
@@ -276,7 +283,6 @@ interface HistoryEntry {
 
 /** What goes with a drawing besides its parts: what is watched and how it is run. */
 interface DocumentAround {
-	probes: string[];
 	stopTime: number;
 	exampleId: string;
 	settings: CircuitSettings;
@@ -299,9 +305,19 @@ const HISTORY_LIMIT = 100;
  */
 const HISTORY_BYTES = 8 * 1024 * 1024;
 
+/** Whether two points on the history are the same document: the drawing and its probes. */
+function sameState(a: HistoryEntry, b: HistoryEntry): boolean {
+	return (
+		a.document === b.document &&
+		a.probes.length === b.probes.length &&
+		a.probes.every((probe, k) => probe === b.probes[k])
+	);
+}
+
 /** What a step on the undo stack holds, against `HISTORY_BYTES`: its drawing and the other levels it changed. */
 function entryBytes(entry: HistoryEntry): number {
 	let bytes = entry.document.length;
+	for (const probe of entry.probes) bytes += probe.length;
 	for (const level of entry.levels ?? []) bytes += level?.length ?? 0;
 	return bytes;
 }
@@ -1060,11 +1076,11 @@ class AppState {
 	private snapshot(around = false): HistoryEntry {
 		return {
 			document: JSON.stringify($state.snapshot(this.schematic)),
+			probes: [...this.probes],
 			selection: [...this.selection],
 			...(around
 				? {
 						around: {
-							probes: [...this.probes],
 							stopTime: this.stopTime,
 							exampleId: this.exampleId,
 							settings: this.settings()
@@ -1076,7 +1092,6 @@ class AppState {
 
 	/** Put back what went with a drawing that a step replaced whole. */
 	private restoreAround(around: DocumentAround): void {
-		this.probes = [...around.probes];
 		this.stopTime = around.stopTime;
 		this.exampleId = around.exampleId;
 		this.applySettings(around.settings);
@@ -1090,7 +1105,8 @@ class AppState {
 	private checkpoint(around = false): void {
 		const entry = this.snapshot(around);
 		// An operation that changed nothing should not cost an undo press.
-		if (this.past[this.past.length - 1]?.document === entry.document) return;
+		const top = this.past[this.past.length - 1];
+		if (top && sameState(top, entry)) return;
 		this.remember(entry);
 	}
 
@@ -1123,16 +1139,19 @@ class AppState {
 	 * to cost everything that could have been redone.
 	 */
 	private withdrawCheckpoint(was: HistoryEntry): void {
-		if (this.past[this.past.length - 1]?.document !== was.document) return;
+		const top = this.past[this.past.length - 1];
+		if (!top || !sameState(top, was)) return;
 		const dropped = this.past.pop();
 		this.historyChanged();
 		if (dropped) this.historyBytes -= entryBytes(dropped);
 		this.future = this.clearedFuture;
 	}
 
-	/** Each level under the open one, as text: what a step's `levels` holds. */
+	/** Each level under the open one, its drawing and its probes, as text: what a step's `levels` holds. */
 	private levelDocs(): string[] {
-		return this.outside.map((frame) => JSON.stringify($state.snapshot(frame.schematic)));
+		return this.outside.map((frame) =>
+			JSON.stringify({ schematic: $state.snapshot(frame.schematic), probes: $state.snapshot(frame.probes) })
+		);
 	}
 
 	/**
@@ -1169,7 +1188,9 @@ class AppState {
 			const frame = this.outside[k];
 			if (doc === undefined || !frame) return;
 			was[k] = current[k];
-			frame.schematic = adopt(JSON.parse(doc) as Schematic);
+			const level = JSON.parse(doc) as { schematic: Schematic; probes: string[] };
+			frame.schematic = adopt(level.schematic);
+			frame.probes = level.probes;
 		});
 		return was;
 	}
@@ -1205,6 +1226,7 @@ class AppState {
 		this.future.push(now);
 		this.historyChanged();
 		this.schematic = adopt(JSON.parse(previous.document) as Schematic);
+		this.probes = [...previous.probes];
 		if (previous.around) this.restoreAround(previous.around);
 		// Put the selection back too: undoing a nudge and finding nothing selected
 		// means re-picking the thing you were working on every single time.
@@ -1222,6 +1244,7 @@ class AppState {
 		this.historyChanged();
 		this.historyBytes += entryBytes(now);
 		this.schematic = adopt(JSON.parse(next.document) as Schematic);
+		this.probes = [...next.probes];
 		if (next.around) this.restoreAround(next.around);
 		this.selection = this.stillPresent(next.selection);
 	}
@@ -2783,12 +2806,12 @@ class AppState {
 		// that the visit changed are part of the same step: the copies there
 		// whose wires leaving re-attached, and anything the inspector reached
 		// from inside.
+		this.probes = back.probes;
 		const below = this.noteLevels(frame.entered, frame.enteredLevels);
-		if (below || JSON.stringify($state.snapshot(this.schematic)) !== frame.entered.document) {
+		if (below || !sameState(frame.entered, this.snapshot())) {
 			this.remember(frame.entered);
 		}
 		this.selection = this.stillPresent(frame.selection);
-		this.probes = back.probes;
 		// The block still open around this level is its definition in the drawing
 		// just written back, not the one from before: a rename from here on has to
 		// reach what the editor says it is inside.
@@ -2990,6 +3013,7 @@ class AppState {
 		}
 		this.trace.record({ op: 'port', block: block.name, from: port, to: trimmed });
 		this.checkpoint();
+		const before = this.levelDocs();
 		const kind = BLOCK_PREFIX + id;
 		// The box is as wide as its longest names, so a longer name can push
 		// every pin a step outward.
@@ -3010,6 +3034,9 @@ class AppState {
 			});
 		this.probes = follow(this.probes, this.schematic);
 		for (const frame of this.outside) frame.probes = follow(frame.probes, frame.schematic);
+		// The probes that followed underneath are the same step as the wires.
+		const step = this.past.at(-1);
+		if (step) this.noteLevels(step, before);
 		return null;
 	}
 
@@ -3495,13 +3522,18 @@ class AppState {
 		if (netIndex === undefined) return;
 		// Probe the net, not the point: clicking anywhere on the same wire toggles
 		// the same trace.
+		// A step like any other edit: the probes are part of the document, and
+		// one picked between two edits has to survive undoing the first.
 		const existing = this.probes.find((k) => this.netForProbe(k) === netIndex);
 		if (existing) {
+			this.checkpoint();
 			this.probes = this.probes.filter((k) => k !== existing);
 			return;
 		}
 		const handle = this.probeHandle(key);
-		if (handle) this.probes = [...this.probes, handle];
+		if (!handle) return;
+		this.checkpoint();
+		this.probes = [...this.probes, handle];
 	}
 
 	/**
@@ -3516,6 +3548,8 @@ class AppState {
 	unplot(key: string): void {
 		const placed = this.placedProbe(key);
 		if (!placed) {
+			if (!this.probes.includes(key)) return;
+			this.checkpoint();
 			this.probes = this.probes.filter((k) => k !== key);
 			return;
 		}
@@ -3540,6 +3574,21 @@ class AppState {
 
 	/** Pick a few interesting nets so a freshly loaded circuit plots something. */
 	autoProbe(): void {
+		const chosen = this.interestingProbes();
+		if (chosen.length === this.probes.length && chosen.every((probe, k) => probe === this.probes[k])) return;
+		// One step, like picking them by hand: Run probing an empty scope is an
+		// edit to the document, and undoing it is taking those probes back off.
+		this.checkpoint();
+		this.probes = chosen;
+	}
+
+	/** `autoProbe`'s choice, for a step that already has its own checkpoint. */
+	private pickProbes(): void {
+		this.probes = this.interestingProbes();
+	}
+
+	/** The nets `autoProbe` would plot. */
+	private interestingProbes(): string[] {
 		const compiled = compileSchematic(this.schematic, this.temperature + 273.15, this.sample, this.logicFamily);
 		const chosen: string[] = [];
 		// A board's SDA and A4 are one net through two points of one part, with no
@@ -3554,10 +3603,7 @@ class AppState {
 		// A drawing that already carries probes has said what it wants plotted:
 		// the servo, the melody and the matrix each put one on the wire they are
 		// about, and topping those up with the board's own nets buried them.
-		if (this.schematic.instances.some((i) => i.kind === 'probe')) {
-			this.probes = [];
-			return;
-		}
+		if (this.schematic.instances.some((i) => i.kind === 'probe')) return [];
 		// Wired nets first — a lone pin is rarely what you want — and pin-only ones
 		// after, rather than never. An output with nothing hanging off it is exactly
 		// what you want when the circuit is small enough that there is nothing else,
@@ -3575,7 +3621,7 @@ class AppState {
 				if (handle !== undefined && !chosen.includes(handle)) chosen.push(handle);
 			}
 		}
-		this.probes = chosen;
+		return chosen;
 	}
 
 	// -- examples ---------------------------------------------------------
@@ -3613,7 +3659,7 @@ class AppState {
 			this.error = null;
 			this.notice = null;
 			this.live = false;
-			this.autoProbe();
+			this.pickProbes();
 		});
 	}
 
@@ -3643,7 +3689,7 @@ class AppState {
 			// picking a few nets is for a link written before probes travelled, and for
 			// one sent with nothing probed.
 			this.probes = circuit.probes ?? [];
-			if (this.probes.length === 0) this.autoProbe();
+			if (this.probes.length === 0) this.pickProbes();
 		});
 	}
 

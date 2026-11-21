@@ -25,6 +25,13 @@ moving it to the other side or up the box, with another block open, now moves
 the wires of the copies on the levels underneath as well — they used to be left
 hanging until you came back down — and one Undo takes all of it back.
 
+**Probes come back with what they were on.** Undoing a port rename used to put
+the old name back on the pin but leave its probe on the new name, watching
+nothing. The probes are now part of every step, on every level: Undo and Redo
+put them back exactly, and picking or dropping a probe — by hand, or Run picking
+a few for an empty scope — is a step of its own, so undoing an earlier edit no
+longer takes it with it.
+
 [#93](https://github.com/Agustin-Delgado/repath/pull/93)
 
 ---
