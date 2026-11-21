@@ -31,7 +31,10 @@ And a sketch printing in a loop for an hour no longer fills the engine's memory:
 it keeps the newest bytes, as the serial monitor already did.
 
 [#84](https://github.com/Agustin-Delgado/repath/pull/84)
-\n---\n\n## 21 November 2026 — Imported parts as their files describe them
+
+---
+
+## 21 November 2026 — Imported parts as their files describe them
 
 **A pasted vendor model behaves like it does in SPICE.**
 - **P-channel transistors.** A P-channel MOSFET card writes its threshold as a negative number, the way SPICE does. Those parts used to come in as transistors that were always on. Now they turn on where the datasheet says.
@@ -55,7 +58,10 @@ it keeps the newest bytes, as the serial monitor already did.
 - **Live runs.** A live run that cannot use a frame's results now stops and says why, instead of looking stuck.
 
 [#85](https://github.com/Agustin-Delgado/repath/pull/85)
-\n---\n\n## 21 November 2026 — Parts closer to their datasheets
+
+---
+
+## 21 November 2026 — Parts closer to their datasheets
 
 **An LED lives on 21 mA.** An LED's default rating is now the 30 mA its
 absolute maximum allows, not the 20 mA its forward voltage is quoted at, so a
@@ -87,7 +93,10 @@ transistor on a chip at 1.7 kΩ. An LM358's input bias current now flows out of
 its inputs, as its PNP inputs push it, so an offset through a source
 resistance comes out the right way round.
 [#89](https://github.com/Agustin-Delgado/repath/pull/89)
-\n---\n\n## 21 November 2026 — The solver stops stealing energy
+
+---
+
+## 21 November 2026 — The solver stops stealing energy
 
 **An oscillator keeps ringing next to a clock.** A tank, a crystal or an LC
 filter drawn beside a pulse source, a clock or a microcontroller used to die
@@ -115,7 +124,10 @@ than the same run in one go. A single shot with an edge a hair before its end
 finishes instead of hanging. A circuit with hundreds of parts that fails to
 solve is explained in a moment rather than freezing the tab first.
 [#91](https://github.com/Agustin-Delgado/repath/pull/91)
-\n---\n\n## 21 November 2026 — Blocks, pastes and drafts that hold together
+
+---
+
+## 21 November 2026 — Blocks, pastes and drafts that hold together
 
 **A block can no longer end up inside itself.** Pasting a box into its own
 inside, or placing a block inside one you came in through, used to be allowed
@@ -154,7 +166,10 @@ when it cannot keep your work; an old draft of a tab still open is no longer
 pruned; and coming back up from a draft restored several blocks deep shows
 each level whole.
 [#88](https://github.com/Agustin-Delgado/repath/pull/88)
-\n---\n\n## 21 November 2026 — Runs that stop when they are told to, and fields that keep their values
+
+---
+
+## 21 November 2026 — Runs that stop when they are told to, and fields that keep their values
 
 **Switching to the frequency sweep stops the run.** It used to only say it had:
 the transient sweep kept solving behind the Bode plot, a buzzer kept sounding,
@@ -187,7 +202,10 @@ starts or stops, and Run and Stop show Space beside them. On a phone, the
 closed side panel is out of the Tab order. Zooming the timebase with the wheel
 writes one step into "Copy the steps taken", not one per notch.
 [#86](https://github.com/Agustin-Delgado/repath/pull/86)
-\n---\n\n## 21 November 2026 — A scope that fits what it shows, and a header that fits a phone
+
+---
+
+## 21 November 2026 — A scope that fits what it shows, and a header that fits a phone
 
 **Every lane name reads whole.** The scope's left margin widens for long net
 names instead of cutting their first letters off, and a name too long even
@@ -225,7 +243,8 @@ scale, and the buzzer no longer clicks when a run stops.
 [#87](https://github.com/Agustin-Delgado/repath/pull/87)
 
 ---
-\n---\n\n## 21 November 2026 — Symbols, currents and examples that read right
+
+## 21 November 2026 — Symbols, currents and examples that read right
 
 **Symbols say what the part does.** The PNP's arrow sits on its emitter, not
 its collector, and the MOSFET arrows point the right way for each channel. The
@@ -252,6 +271,10 @@ and examples that place their own probes plot those and nothing else.
 **Smaller things.** The LCD, the LED matrix and the servo have a Modules
 shelf, the probe a Measuring one. Warnings name pins as drawn (`V1.+`, not
 `V1.plus`), and a net label's count reads `R1.a · R2.a +3`.
+
+[#90](https://github.com/Agustin-Delgado/repath/pull/90)
+
+---
 
 ## 20 November 2026 — Saving from inside a block keeps the whole circuit
 
