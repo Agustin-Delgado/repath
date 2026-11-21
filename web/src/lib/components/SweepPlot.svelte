@@ -274,11 +274,11 @@
 			{app.running
 				? 'Sweeping…'
 				: app.dcSwept
-					? `Press Run to sweep ${app.dcSwept.name} and solve the circuit at each value.`
-					: 'Place a source to sweep: a voltage source, a current source, a battery or a supply.'}
+					? `Press Run to sweep ${app.dcSwept.name}.`
+					: 'No source to sweep. Add a voltage source, current source, battery or supply.'}
 		</p>
 	{:else if voltages.length + currents.length === 0}
-		<p class="empty">Tick a net, or a part’s current, on the right to plot it against {app.dcResult.source}.</p>
+		<p class="empty">Tick a net or a part current to plot it against {app.dcResult.source}.</p>
 	{/if}
 
 	{#if readout && readout.entries.length > 0}

@@ -31,11 +31,11 @@
 <section class="flex flex-col gap-1.5">
 	<h3 class={sectionTitle}>Contents</h3>
 	<p class={hint}>
-		What it holds when a run starts, as hex words from address 0; <code>@7F0</code> jumps to an
-		address and <code>;</code> starts a comment. A write during the run does not change this.
+		Contents at run start: hex words from address 0. <code>@7F0</code> sets the address.
+		<code>;</code> starts a comment. Writes during a run do not change this text.
 		{written === 0
-			? `Nothing written yet: every address reads ${erased}.`
-			: `${written} of ${count} words written; the rest read ${erased}.`}
+			? `Empty: every address reads ${erased}.`
+			: `${written} of ${count} words written. The rest read ${erased}.`}
 	</p>
 	<textarea
 		rows="5"

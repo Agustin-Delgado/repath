@@ -184,7 +184,7 @@ export const ARDUINO_UNO: ChipDef = {
 	id: 'ArduinoUno',
 	name: 'Arduino Uno',
 	role: 'microcontrollers',
-	description: 'The whole board, powered from USB: headers as printed, its L LED and reset',
+	description: 'Whole board on USB power: printed headers, L LED and reset',
 	aliases: ['arduino', 'uno', 'board', 'r3', 'genuino', 'dev board', 'sketch'],
 	layout: [...TOP, ...BOTTOM].filter((name) => name !== ''),
 	blocks: [
@@ -233,7 +233,7 @@ export const ARDUINO_UNO: ChipDef = {
 		]
 	},
 	caveat:
-		"The board as it runs from a USB cable: 5V and 3V3 are held there, GND is the circuit's ground, and VIN does nothing. The 500 mA fuse on USB is not modelled, so a short across 5V is not stopped. Its ATmega328P runs a .hex exactly as the ATmega328P part does, and leaves out what that leaves out. The L LED follows pin 13 through the board's buffer, and the USB-to-serial chip sends pin 0 what is typed into the serial monitor; the TX and RX LEDs are not modelled."
+		'Powered from USB: 5V and 3V3 are fixed, GND is circuit ground, VIN does nothing. Not modelled: the 500 mA USB fuse (a short across 5V is not stopped) and the TX and RX LEDs. The ATmega328P is the same as the ATmega328P part. The L LED follows pin 13. Serial monitor input goes to pin 0.'
 };
 
 export const BOARDS: readonly ChipDef[] = [ARDUINO_UNO];

@@ -22,10 +22,10 @@
 	pending={app.running}
 	onclick={() => (stopping ? app.stop() : app.run())}
 	title={app.playing
-		? 'Stop the sweep and freeze what is on screen'
+		? 'Stop and hold the screen (Space)'
 		: app.depth > 0
 			? 'Leave the block to run the circuit'
-			: 'Start a new sweep from zero'}
+			: 'Run from the start (Space)'}
 >
 	<svg viewBox="0 0 12 12" aria-hidden="true" class="fill-current">
 		{#if app.running}

@@ -46,13 +46,13 @@ pub fn parse(text: &str, capacity: usize) -> Result<Vec<u8>, HexError> {
         }
         let fail = |reason: String| HexError { line, reason };
         let Some(digits) = record.strip_prefix(':') else {
-            return Err(fail("a record has to start with ':'".into()));
+            return Err(fail("a record must start with ':'".into()));
         };
         if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(fail("a record is hexadecimal digits after the ':'".into()));
+            return Err(fail("a record must be hex digits after the ':'".into()));
         }
         if digits.len() % 2 != 0 || digits.len() < 10 {
-            return Err(fail("the record is too short or has half a byte".into()));
+            return Err(fail("the record is too short or has an odd number of digits".into()));
         }
         let bytes: Vec<u8> = (0..digits.len())
             .step_by(2)
@@ -61,7 +61,7 @@ pub fn parse(text: &str, capacity: usize) -> Result<Vec<u8>, HexError> {
         let count = bytes[0] as usize;
         if bytes.len() != count + 5 {
             return Err(fail(format!(
-                "the record says it carries {count} bytes but has {}",
+                "the record declares {count} bytes but has {}",
                 bytes.len().saturating_sub(5)
             )));
         }
@@ -70,9 +70,7 @@ pub fn parse(text: &str, capacity: usize) -> Result<Vec<u8>, HexError> {
         if sum != 0 {
             let given = bytes[bytes.len() - 1];
             let expected = given.wrapping_sub(sum);
-            return Err(fail(format!(
-                "the checksum is {given:02X} where the record needs {expected:02X}"
-            )));
+            return Err(fail(format!("checksum {given:02X}, expected {expected:02X}")));
         }
         let address = usize::from(u16::from_be_bytes([bytes[1], bytes[2]]));
         let data = &bytes[4..4 + count];
@@ -94,20 +92,20 @@ pub fn parse(text: &str, capacity: usize) -> Result<Vec<u8>, HexError> {
             0x01 => return Ok(image),
             kind @ (0x02 | 0x04) => {
                 if count != 2 {
-                    return Err(fail("an extended address record carries two bytes".into()));
+                    return Err(fail("an extended address record must have two bytes".into()));
                 }
                 let value = usize::from(u16::from_be_bytes([data[0], data[1]]));
                 base = if kind == 0x02 { value << 4 } else { value << 16 };
             }
             0x03 | 0x05 => {}
             other => {
-                return Err(fail(format!("record type {other:02X} is not one Intel HEX has")));
+                return Err(fail(format!("record type {other:02X} is not valid Intel HEX")));
             }
         }
     }
     Err(HexError {
         line: lines.max(1),
-        reason: "there is no end-of-file record; the file may have been cut short".into(),
+        reason: "no end-of-file record; the file may be truncated".into(),
     })
 }
 
@@ -172,7 +170,7 @@ mod tests {
     fn malformed_records_say_what_is_wrong() {
         assert!(parse("0100000055AA\n", 64).unwrap_err().reason.contains("':'"));
         assert!(parse(":01000000GGAA\n", 64).is_err());
-        assert!(parse(":0200000055AA\n", 64).unwrap_err().reason.contains("carries"));
+        assert!(parse(":0200000055AA\n", 64).unwrap_err().reason.contains("declares"));
         assert!(parse(":00000007F9\n", 64).unwrap_err().reason.contains("type"));
     }
 }

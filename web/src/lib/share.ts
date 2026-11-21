@@ -94,7 +94,7 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array | null> {
 		total += value.length;
 		if (total > MAX_LINK_BYTES) {
 			await reader.cancel();
-			throw new Error('That link unpacks to far more than any circuit, so it was not opened.');
+			throw new Error('The link unpacks to far more data than a circuit. It was not opened.');
 		}
 		pieces.push(value);
 	}
@@ -121,7 +121,7 @@ export const LONG_LINK = 8000;
 /** What to tell someone about a link before they paste it somewhere, or null. */
 export function linkWarning(url: string): string | null {
 	if (url.length <= LONG_LINK) return null;
-	return `This link is ${url.length.toLocaleString('en')} characters long, and some apps cut links past ${LONG_LINK.toLocaleString('en')}. If it arrives damaged, send the file instead (File → Save).`;
+	return `The link is ${url.length.toLocaleString('en')} characters. Some apps cut links longer than ${LONG_LINK.toLocaleString('en')}. If it arrives damaged, send the file (File → Save to file).`;
 }
 
 /**
@@ -255,7 +255,7 @@ function compact(circuit: SharedCircuit): unknown {
 /** Why a link is refused, in terms of the link rather than of the code. */
 class Damaged extends Error {
 	constructor(what: string) {
-		super(`That link is damaged (${what}), so nothing in it was opened.`);
+		super(`The link is damaged (${what}). Nothing was opened.`);
 	}
 }
 
@@ -351,15 +351,15 @@ function check(data: Record<string, unknown>): void {
 		checkWires(block[3], `block ${block[1]}`);
 		if (block[4] !== undefined) checkGroups(block[4], `block ${block[1]}`);
 	}
-	for (const packed of (data.i as unknown[]) ?? []) checkInstance(packed, 'the drawing');
-	checkWires(data.w, 'the drawing');
+	for (const packed of (data.i as unknown[]) ?? []) checkInstance(packed, 'the circuit');
+	checkWires(data.w, 'the circuit');
 	for (const probe of (data.p as unknown[]) ?? []) {
 		const ok =
 			typeof probe === 'string' ||
 			(Array.isArray(probe) && Number.isInteger(probe[0]) && typeof probe[1] === 'string');
-		if (!ok) throw new Damaged('what was being watched');
+		if (!ok) throw new Damaged('the probes');
 	}
-	if (data.g !== undefined) checkGroups(data.g, 'the drawing');
+	if (data.g !== undefined) checkGroups(data.g, 'the circuit');
 	if (data.s !== undefined && (typeof data.s !== 'object' || data.s === null || Array.isArray(data.s))) {
 		throw new Damaged('its settings');
 	}
@@ -423,7 +423,7 @@ function expand(raw: unknown): SharedCircuit {
 			? defined.has(kind)
 			: isKnownKind(migrateInstance({ id: '', kind, name: '', x: 0, y: 0, rotation: 0, params: {} }).kind);
 	for (const [kind] of [...(data.i ?? []), ...(data.b ?? []).flatMap((block) => block[2])]) {
-		if (!known(kind)) throw new Error(`That link has a part this version of repath does not know (${kind}).`);
+		if (!known(kind)) throw new Error(`The link has a part type this version does not know (${kind}).`);
 	}
 
 	let counter = 0;

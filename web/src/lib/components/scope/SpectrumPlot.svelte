@@ -51,18 +51,18 @@
 	const FONT_PX = 11;
 
 	const WINDOW_ITEMS: Array<{ value: WindowKind; label: string; description: string }> = [
-		{ value: 'rectangular', label: 'Rectangular', description: 'No window: exact for a tone that fits the span a whole number of times, and leaky for any other' },
-		{ value: 'hann', label: 'Hann', description: 'The general-purpose window' },
-		{ value: 'blackman-harris', label: 'Blackman-Harris', description: 'Sidelobes down 92 dB, for a small harmonic beside a large tone' },
-		{ value: 'flat-top', label: 'Flat top', description: 'A lobe flat to a hundredth of a decibel, for reading levels' }
+		{ value: 'rectangular', label: 'Rectangular', description: 'No window. Exact only for whole periods; leaks otherwise.' },
+		{ value: 'hann', label: 'Hann', description: 'General purpose' },
+		{ value: 'blackman-harris', label: 'Blackman-Harris', description: 'Sidelobes −92 dB: small harmonics next to a large tone' },
+		{ value: 'flat-top', label: 'Flat top', description: 'Flat to 0.01 dB: for level readings' }
 	];
 	const SPAN_ITEMS: Array<{ value: SpectrumSpan; label: string; description: string }> = [
-		{ value: 'window', label: 'Screen', description: 'What the scope is showing' },
-		{ value: 'periods', label: 'Periods', description: 'Whole periods ending at the right of the screen, measured over the screen' },
-		{ value: 'memory', label: 'Memory', description: 'Everything the scope still holds: the finest frequency step' }
+		{ value: 'window', label: 'Screen', description: 'The visible screen' },
+		{ value: 'periods', label: 'Periods', description: 'Whole periods, up to the right edge of the screen' },
+		{ value: 'memory', label: 'Memory', description: 'All samples in memory: finest frequency step' }
 	];
 	const SCALE_ITEMS = [
-		{ value: 'db', label: 'dBV', description: 'Decibels referred to 1 V peak' },
+		{ value: 'db', label: 'dBV', description: 'dB re 1 V peak' },
 		{ value: 'linear', label: 'V', description: 'Peak volts' }
 	];
 	const AXIS_ITEMS = [
@@ -378,7 +378,6 @@
 				value={String(Math.min(app.spectrum.source, sources.length - 1))}
 				onChange={(value) => app.setSpectrum({ source: Number(value) })}
 				aria-label="Trace to transform"
-				title="Which trace the spectrum is of"
 			/>
 		{/if}
 		<Select
@@ -386,16 +385,14 @@
 			items={WINDOW_ITEMS}
 			value={app.spectrum.window}
 			onChange={(value) => app.setSpectrum({ window: value as WindowKind })}
-			aria-label="Window"
-			title="The window the trace is weighted by before it is transformed"
+			aria-label="FFT window"
 		/>
 		<Select
 			size="sm"
 			items={SPAN_ITEMS}
 			value={app.spectrum.span}
 			onChange={(value) => app.setSpectrum({ span: value as SpectrumSpan })}
-			aria-label="Span"
-			title="Which stretch of time is transformed"
+			aria-label="FFT span"
 		/>
 		{#if app.spectrum.span === 'periods'}
 			<UnitField
@@ -407,8 +404,8 @@
 					if (Number.isFinite(parsed) && parsed >= 1) app.setSpectrum({ periods: parsed });
 				}}
 				title={whole
-					? 'How many periods: a tone that fits whole lands on a bin'
-					: 'No period could be measured on the screen, so the screen is taken instead'}
+					? 'Number of periods. Whole periods put the tone on a bin.'
+					: 'No period found on screen: the span is the screen'}
 				aria-label="Periods to transform"
 			/>
 		{/if}
@@ -418,7 +415,6 @@
 			value={app.spectrum.scale}
 			onChange={(value) => app.setSpectrum({ scale: value as 'db' | 'linear' })}
 			aria-label="Level scale"
-			title="Levels in decibels referred to 1 V peak, or in peak volts"
 		/>
 		<Select
 			size="sm"
@@ -426,10 +422,9 @@
 			value={app.spectrum.axis}
 			onChange={(value) => app.setSpectrum({ axis: value as 'log' | 'linear' })}
 			aria-label="Frequency axis"
-			title="Logarithmic or linear frequency axis"
 		/>
 		{#if result}
-			<span class="facts" title="Frequency step, the points transformed, and the time span they cover">
+			<span class="facts" title="Frequency step · points · time span">
 				Δf {formatWithUnit(result.df, 'Hz', 3)} · {result.n} pts · {formatWithUnit(to - from, 's', 3)}
 			</span>
 		{/if}
@@ -445,14 +440,14 @@
 		></canvas>
 		{#if !result}
 			<p class="empty">
-				{!time ? 'Press Run to see a spectrum.' : samples ? 'Nothing in the span to transform yet.' : 'Plot a trace to see its spectrum.'}
+				{!time ? 'Press Run to see a spectrum.' : samples ? 'No samples in the span yet.' : 'Plot a trace to see its spectrum.'}
 			</p>
 		{:else}
 			<div class="tones">
 				{#if readout}
 					<span class="dim">{formatWithUnit(readout.hz, 'Hz', 4)} · {levelText(readout.volts)}</span>
 				{/if}
-				<span title="The time average, which the spectrum's first bin stands for">
+				<span title="Time average (bin 0)">
 					<span class="dim">DC</span> {formatWithUnit(result.dc, 'V', 3)}
 				</span>
 				{#each tones as tone, i (tone.bin)}
@@ -463,7 +458,7 @@
 				{/each}
 				{#if thd}
 					<span
-						title="Total harmonic distortion of tone 1, counting the 2nd to the {THD_HARMONICS}th harmonic ({thd.harmonics.length} below the Nyquist frequency)"
+						title="THD of tone 1, harmonics 2 to {THD_HARMONICS} ({thd.harmonics.length} below Nyquist)"
 					>
 						<span class="dim">THD</span>
 						{(thd.thd * 100).toPrecision(3)}% ({dbv(thd.thd).toFixed(1)} dB)
@@ -471,7 +466,7 @@
 				{:else if tones.length > 0}
 					<span
 						class="dim"
-						title="The span holds too few periods of tone 1 for its harmonics to be told apart through this window: {periodsForDistortion(app.spectrum.window)} at least. Widen the screen or take more periods."
+						title="Too few periods of tone 1 to separate its harmonics with this window. Widen the screen or use more periods."
 					>
 						THD needs ≥{periodsForDistortion(app.spectrum.window)} periods
 					</span>

@@ -106,9 +106,9 @@
 <section class="flex flex-col gap-1.5">
 	<h3 class={sectionTitle}>Program</h3>
 	{#if !loaded}
-		<p class={hint}>None loaded: until one is, the chip runs nothing and leaves its pins alone.</p>
+		<p class={hint}>No program. All pins are high-Z.</p>
 	{:else if summary?.problem}
-		<p class={problem} role="alert">That is not a program it can run: {summary.problem}.</p>
+		<p class={problem} role="alert">Not a valid program: {summary.problem}.</p>
 	{:else if summary}
 		<p class={hint}>
 			<strong class="text-fg">{summary.bytes.toLocaleString('en')} bytes</strong> of
@@ -117,7 +117,7 @@
 	{/if}
 	{#if unreadable}<p class={problem} role="alert">{unreadable}</p>{/if}
 	<div class="flex gap-1.5">
-		<Button size="sm" onclick={() => picker?.click()} title="Load a .hex file">
+		<Button size="sm" onclick={() => picker?.click()}>
 			<FileUp /> Load .hex
 		</Button>
 		<Button size="sm" variant="ghost" active={pasting} onclick={() => (pasting = !pasting)}>
@@ -129,7 +129,6 @@
 				variant="ghost"
 				class="ml-auto"
 				onclick={() => app.setParam(instance.id, 'firmware', '')}
-				title="Remove the program"
 			>
 				<X /> Clear
 			</Button>
@@ -167,10 +166,12 @@
 		></textarea>
 	{/if}
 	<p class={hint}>
-		From the Arduino IDE: Sketch → Export Compiled Binary, then the <code>.hex</code> without
-		“with_bootloader”. From a terminal:
-		<code>arduino-cli compile -b arduino:avr:uno --output-dir out</code>. Arduino D0–D7 are PD0–PD7,
-		D8–D13 are PB0–PB5 and A0–A5 are PC0–PC5.
+		Intel HEX, no bootloader. Arduino IDE: Sketch → Export Compiled Binary, the <code>.hex</code>
+		without “with_bootloader”.
+	</p>
+	<p class={hint}>
+		<span class="whitespace-nowrap">D0–7 = PD0–7</span> · <span class="whitespace-nowrap">D8–13 = PB0–5</span> ·
+		<span class="whitespace-nowrap">A0–5 = PC0–5</span>
 	</p>
 </section>
 
@@ -195,13 +196,11 @@
 			{#each unsimulated as notice (notice.peripheral)}
 				<li class={hint}>
 					<span class="text-fg">{unsimulatedMessage(notice.peripheral)}</span>
-					First used at {formatWithUnit(notice.time, 's', 4)}.
+					First at {formatWithUnit(notice.time, 's', 4)}.
 				</li>
 			{/each}
 		</ul>
-		<p class={hint}>
-			The program runs on: these parts of the chip just do not do what the real ones would.
-		</p>
+		<p class={hint}>The program continues. These peripherals do not operate as on a real chip.</p>
 	</section>
 {/if}
 
@@ -216,10 +215,7 @@
 		<pre
 			bind:this={monitor}
 			aria-label="Serial output"
-			class="m-0 max-h-40 min-h-12 overflow-auto rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal whitespace-pre-wrap break-all text-fg">{#if log?.text}{log.text}{:else}<span
-					class="text-muted">Nothing sent yet.</span
-				>{/if}</pre>
-		<p class={hint}>What it sends on TX (D1), at whatever baud rate the program set.</p>
+			class="m-0 max-h-40 min-h-12 overflow-auto rounded-control border border-border bg-canvas px-2 py-1.5 font-mono text-3xs leading-normal whitespace-pre-wrap break-all text-fg">{log?.text ?? ''}</pre>
 		<form
 			class="flex gap-1.5"
 			onsubmit={(e) => {
@@ -232,13 +228,13 @@
 					class={fieldInput}
 					bind:value={typed}
 					disabled={!live}
-					placeholder={live ? 'Message to send' : 'Run the circuit to type to it'}
+					placeholder={live ? 'Message' : 'Run the circuit to send'}
 					aria-label="Serial input"
 					spellcheck="false"
 					autocomplete="off"
 				/>
 			</label>
-			<Button size="sm" type="submit" disabled={!live || (typed === '' && ending === 'none')} title="Send">
+			<Button size="sm" type="submit" disabled={!live || (typed === '' && ending === 'none')}>
 				<SendHorizontal /> Send
 			</Button>
 		</form>
@@ -260,15 +256,12 @@
 		</div>
 		{#if garbled && listening !== null}
 			<p class={problem} role="alert">
-				The program listens at {Math.round(listening).toLocaleString('en')} baud: sent at
-				{baud.toLocaleString('en')} it arrives as garbage, as it would on a real Uno.
+				The program listens at {Math.round(listening).toLocaleString('en')} baud. Data sent at
+				{baud.toLocaleString('en')} baud arrives garbled.
 			</p>
 		{:else if log && listening === null}
-			<p class={hint}>Its receiver is off, so it takes in nothing it is sent. Serial.begin() turns it on.</p>
+			<p class={hint}>Receiver off: input is ignored. Serial.begin() turns it on.</p>
 		{/if}
-		<p class={hint}>
-			Typed text reaches RX (D0) the way an Uno's USB converter sends it, at the baud rate chosen
-			here.
-		</p>
+		<p class={hint}>Output: TX (D1), at the program's baud. Input: RX (D0), at the baud set here.</p>
 	</section>
 {/if}

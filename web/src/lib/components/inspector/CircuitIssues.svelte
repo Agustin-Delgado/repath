@@ -49,11 +49,11 @@
 {#if failure}
 	<section
 		class="flex flex-col gap-1.5 rounded-md border border-danger/40 bg-danger/10 p-2"
-		aria-label="Where the solve failed"
+		aria-label="Solve failure"
 	>
 		<h3 class="m-0 flex items-center gap-1.5 text-2xs font-semibold text-danger">
 			<CircleX class="size-3.5" />
-			{failure.kind === 'singular' ? 'No single answer' : 'Did not settle'}
+			{failure.kind === 'singular' ? 'Singular matrix' : 'No convergence'}
 			{#if failure.time !== null && failure.time > 0}
 				<span class="ml-auto font-mono text-3xs font-normal opacity-70"
 					>at {formatWithUnit(failure.time, 's')}</span
@@ -97,8 +97,7 @@
 			{/each}
 		</ul>
 		<p class="m-0 text-2xs text-muted">
-			Its program goes no further from there. One built for another chip, or one that ran off its end
-			into empty flash, stops like this.
+			Usual causes: a program built for another chip, or a program that ran into erased flash.
 		</p>
 	</section>
 {/if}
@@ -112,20 +111,16 @@
 		<ul class="m-0 flex list-none flex-col gap-1 p-0 text-2xs leading-snug text-strong">
 			{#each burnouts as burnout (burnoutKey(burnout))}
 				<li>
-					<strong class="text-fg">{burnout.name}</strong> reached {formatWithUnit(burnout.peak, 'A')}
-					against a {formatWithUnit(burnout.rated, 'A')} rating, and {burnout.kind === 'fuse'
-						? 'blew'
-						: 'went'} at
+					<strong class="text-fg">{burnout.name}</strong>: {formatWithUnit(burnout.peak, 'A')} peak,
+					{formatWithUnit(burnout.rated, 'A')} rated. {burnout.kind === 'fuse' ? 'Blew' : 'Burnt out'} at
 					{formatWithUnit(burnout.time, 's')}.
 				</li>
 			{/each}
 		</ul>
 		<p class="m-0 text-2xs text-muted">
-			{burnouts.length === 1 ? 'It is' : 'They are'} open from then on, and the rest of the run is the
-			circuit without {burnouts.length === 1 ? 'it' : 'them'}.
-			{#if leds > 0}Add a series resistor to keep {leds === 1 ? 'an LED' : 'the LEDs'} alive.{/if}
-			{#if fuses > 0}A fuse blowing is it doing its job: find what drew that much before fitting a
-				bigger one.{/if}
+			Open circuit for the rest of the run.
+			{#if leds > 0}Add a series resistor.{/if}
+			{#if fuses > 0}Find the overcurrent before you fit a larger fuse.{/if}
 		</p>
 	</section>
 {/if}
@@ -141,7 +136,7 @@
 				<li>{warning}</li>
 			{/each}
 			{#if warnings.length > SHOWN}
-				<li class="text-muted">…and {warnings.length - SHOWN} more</li>
+				<li class="text-muted">+{warnings.length - SHOWN} more</li>
 			{/if}
 		</ul>
 	</section>
@@ -150,7 +145,7 @@
 {#if unanswered.length > 0}
 	<section class="flex flex-col gap-1.5 rounded-md border border-warn/30 bg-warn/5 p-2">
 		<h3 class="m-0 flex items-center gap-1.5 text-2xs font-semibold text-warn">
-			<TriangleAlert class="size-3.5" /> Nobody answered
+			<TriangleAlert class="size-3.5" /> No I²C response
 		</h3>
 		<ul class="m-0 flex list-none flex-col gap-1 p-0 text-2xs leading-snug text-strong">
 			{#each unanswered as notice (`${notice.name}:${notice.peripheral}`)}
@@ -174,9 +169,6 @@
 				</li>
 			{/each}
 		</ul>
-		<p class="m-0 text-2xs text-muted">
-			The program keeps running; only what it gets from these parts of the chip is not what a real one
-			would give.
-		</p>
+		<p class="m-0 text-2xs text-muted">The program continues. These peripherals do not operate as on a real chip.</p>
 	</section>
 {/if}

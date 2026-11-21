@@ -104,7 +104,7 @@ export class NewerFormatError extends Error {
 		what: string
 	) {
 		super(
-			`That ${what} was made by a newer version of repath (format ${found}); this one can read up to format ${FORMAT_VERSION}. Reload the page to get the latest repath and open it again.`
+			`That ${what} was made by a newer version of repath (format ${found}). This version can read up to format ${FORMAT_VERSION}. Reload the page and open it again.`
 		);
 	}
 }

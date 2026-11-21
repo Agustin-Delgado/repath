@@ -348,7 +348,7 @@
 			const parsed = parseQuantity(raw, value.unit);
 			refusal =
 				parsed === null
-					? `"${raw.trim()}" is not a value in ${value.unit}. Try 330, 4k7 or 4.7 k${value.unit}.`
+					? `"${raw.trim()}" is not a value in ${value.unit}. Examples: 330, 4k7, 4.7 k${value.unit}.`
 					: app.setParam(box.id, value.key, parsed);
 		}
 		if (refusal) app.notice = refusal;
@@ -915,10 +915,10 @@
 	{#if app.inside}
 		<div class="inside">
 			<span>
-				Inside <strong>{app.inside.name}</strong> — every copy of the block changes with it. Wire a
-				pin to a <em>Port</em> to give the box a pin.
+				Inside <strong>{app.inside.name}</strong>. Edits change every copy. Wire a pin to a
+				<em>Port</em> to add a pin to the box.
 			</span>
-			<button onclick={() => app.leaveBlock()}>Back to the drawing</button>
+			<button onclick={() => app.leaveBlock()}>Leave block</button>
 		</div>
 	{/if}
 	{#if labelBox}

@@ -87,7 +87,7 @@ export function nameRefusal(name: string): string | null {
 	if (/\s/.test(name)) return 'A name cannot have spaces in it.';
 	const reserved = /[.:,]/.exec(name);
 	if (reserved) {
-		return `A name cannot have “${reserved[0]}” in it: that is how the names inside a part are joined.`;
+		return `A name cannot contain “${reserved[0]}”: repath uses it to build other names.`;
 	}
 	return null;
 }

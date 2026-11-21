@@ -233,7 +233,7 @@
 			<input
 				inputmode="decimal"
 				aria-label={param.label}
-				title="Arrow keys step the value — Shift for ten at a time, Alt for a tenth"
+				title="Arrow keys: step · Shift: ×10 · Alt: ×0.1"
 				value={editing ?? String(split(value).mantissa)}
 				class={fieldInput}
 				onfocus={() => (typedIn = split(value).prefix)}

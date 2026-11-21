@@ -26,7 +26,7 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['l', 'coil', 'henry', 'choke', 'filter']
 	},
 	varcap: {
-		description: 'A capacitor you set between its smallest and largest value',
+		description: 'Capacitance set between a minimum and a maximum',
 		keywords: ['variable capacitor', 'trimmer', 'tuning capacitor', 'varicap', 'air variable', 'radio', 'tank']
 	},
 	transformer: {
@@ -34,19 +34,19 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['coupled inductors', 'mutual inductance', 'mains', 'isolation', 'step down', 'step up', 'winding', 'ratio', 'k']
 	},
 	fuse: {
-		description: 'Opens for good once it has carried too much for too long',
+		description: 'Opens permanently on sustained overcurrent',
 		keywords: ['f', 'protection', 'overcurrent', 'blow', 'i2t', 'slow blow', 'fast acting', 'polyfuse']
 	},
 	switch: {
-		description: 'Contacts you flip by clicking, or on a schedule, with bounce',
+		description: 'SPST contacts, clicked or timed, with bounce',
 		keywords: ['s', 'spst', 'button', 'push-button', 'momentary', 'contact', 'bounce']
 	},
 	pushbutton: {
-		description: 'Contacts that move while you hold it down and spring back when you let go',
+		description: 'Momentary contacts: they change while held',
 		keywords: ['button', 'push button', 'momentary', 'tactile', 'tact switch', 'no', 'nc', 'press']
 	},
 	potentiometer: {
-		description: 'Resistance track with a sliding wiper; a divider you can set',
+		description: 'Resistance track with a wiper: an adjustable divider',
 		keywords: ['pot', 'trimmer', 'trimpot', 'rheostat', 'variable resistor', 'wiper', 'volume', 'divider', 'knob']
 	},
 	crystal: {
@@ -58,19 +58,19 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['switch', 'changeover', 'change-over', 'toggle switch', 'selector', 'no', 'nc', 'two way']
 	},
 	relay: {
-		description: 'Coil and changeover contacts that pull in and drop out on the coil current',
+		description: 'Coil with changeover contacts',
 		keywords: ['coil', 'electromechanical', 'contactor', 'spdt', 'no', 'nc', 'flyback', 'k']
 	},
 	lamp: {
-		description: 'Filament bulb, rated in volts and watts, that glows with the power in it',
+		description: 'Filament bulb rated in volts and watts',
 		keywords: ['bulb', 'light', 'incandescent', 'filament', 'indicator', 'torch']
 	},
 	buzzer: {
-		description: 'Passive piezo disc that sounds at the frequency it is driven at: tone(), noTone()',
+		description: 'Passive piezo: sounds at its drive frequency (tone())',
 		keywords: ['piezo', 'buzzer', 'speaker', 'beeper', 'sound', 'tone', 'notone', 'melody', 'audio', 'beep', 'transducer']
 	},
 	port: {
-		description: 'A terminal of a block: wire a pin to it and the box gets a pin',
+		description: 'Block terminal: each port is a pin on the box',
 		keywords: ['terminal', 'pin', 'io', 'label', 'net']
 	},
 	probe: {
@@ -78,11 +78,11 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['measure', 'label', 'scope', 'net', 'test point', 'marker']
 	},
 	ground: {
-		description: 'The reference node every voltage is measured from',
+		description: '0 V reference for all voltages',
 		keywords: ['gnd', '0v', 'earth', 'common', 'reference']
 	},
 	supply: {
-		description: 'A fixed rail to connect anywhere, like VCC or +5 V',
+		description: 'Fixed voltage rail (VCC, +5 V)',
 		keywords: ['vcc', 'vdd', 'rail', 'power', 'battery', 'dc', '+5v']
 	},
 	vsource: {
@@ -94,15 +94,15 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['i', 'current', 'bias', 'constant current', 'generator']
 	},
 	cccs: {
-		description: 'SPICE F: a current that is a multiple of the current through a voltage source',
+		description: 'SPICE F: current = gain × current in a voltage source',
 		keywords: ['f', 'cccs', 'dependent', 'controlled', 'current mirror', 'current gain', 'beta', 'macromodel']
 	},
 	ccvs: {
-		description: 'SPICE H: a voltage set by the current through a voltage source',
+		description: 'SPICE H: voltage = transresistance × current in a voltage source',
 		keywords: ['h', 'ccvs', 'dependent', 'controlled', 'transresistance', 'transimpedance', 'macromodel']
 	},
 	battery: {
-		description: 'A cell or a stack of them: voltage behind an internal resistance',
+		description: 'Cell or stack, with internal resistance',
 		keywords: ['cell', 'bt', '9v', 'aa', 'aaa', 'lipo', 'alkaline', 'coin cell', 'power']
 	},
 	diode: {
@@ -110,7 +110,7 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['d', 'rectifier', 'zener', 'schottky', '1n4148', '1n4007', '1n5819', '1n4733', 'clamp', 'regulator']
 	},
 	led: {
-		description: 'Lights up with the current through it',
+		description: 'Lights with its current; burns out above its rating',
 		keywords: ['light', 'indicator', 'lamp', 'diode', 'red', 'green', 'blue']
 	},
 	display7: {
@@ -118,7 +118,7 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['seven segment', '7seg', 'digit', 'display', 'number', 'readout']
 	},
 	display7x4: {
-		description: 'Four digits sharing their segment pins, lit one at a time',
+		description: 'Four multiplexed digits on shared segment pins',
 		keywords: ['seven segment', '7seg', 'multiplexed', 'multiplex', 'clock', 'four digit', '4 digit', 'display', 'readout']
 	},
 	bargraph: {
@@ -126,21 +126,21 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['bar graph', 'led bar', 'level meter', 'vu', 'ladder', 'display', 'indicator']
 	},
 	lcd1602: {
-		description: 'Sixteen characters on two lines, on an I²C backpack: GND, VCC, SDA, SCL',
+		description: '16×2 characters on an I²C backpack: GND, VCC, SDA, SCL',
 		keywords: [
 			'lcd', '1602', '16x2', 'i2c lcd', 'lcd i2c', 'pcf8574', 'hd44780', 'liquidcrystal',
 			'liquidcrystal_i2c', 'character display', 'display', 'text', 'screen'
 		]
 	},
 	max7219: {
-		description: 'Sixty-four red LEDs driven over SPI: VCC, GND, DIN, CS, CLK, and DOUT to chain the next',
+		description: '8×8 red LEDs over SPI: VCC, GND, DIN, CS, CLK. DOUT chains the next.',
 		keywords: [
 			'max7219', 'led matrix', 'matrix', '8x8', 'dot matrix', 'spi', 'ledcontrol', '1088as',
 			'display', 'max7221'
 		]
 	},
 	servo: {
-		description: 'A hobby servo (SG90): its horn turns to the angle the pulses on SIG ask for, 544–2400 µs for 0–180°',
+		description: 'Hobby servo (SG90): 544–2400 µs pulses on SIG set 0–180°',
 		keywords: ['servo', 'sg90', 'mg90', 'motor', 'rc servo', 'hobby servo', 'pwm', 'angle', 'horn', 'actuator']
 	},
 	nmos: {
@@ -164,7 +164,7 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['op amp', 'amplifier', 'comparator', 'integrator']
 	},
 	regulator: {
-		description: 'Linear voltage regulator: 7805, 7812, LM317 and friends',
+		description: 'Linear regulator: 78xx, 79xx, LM317',
 		keywords: ['7805', '7809', '7812', '7815', '7905', '7912', '7915', 'lm317', 'lm7805', 'negative', 'linear', 'power supply', 'vreg']
 	},
 	and: { description: 'Output high only when every input is high', keywords: ['gate', '&'] },
@@ -175,7 +175,7 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 	xnor: { description: 'Output high when the inputs agree', keywords: ['gate', 'equality', 'parity'] },
 	buffer: { description: 'Passes its input through, with a delay', keywords: ['gate', 'driver', 'repeater'] },
 	tristate: {
-		description: 'A buffer that lets go of its output when not enabled',
+		description: 'Buffer; output is high-Z when not enabled',
 		keywords: ['gate', 'three-state', 'enable', 'bus', 'high-z']
 	},
 	not: { description: 'Inverts its input', keywords: ['gate', 'inverter'] },
@@ -184,11 +184,11 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		keywords: ['flip-flop', 'flipflop', 'register', 'latch', 'memory', 'clocked']
 	},
 	clock: {
-		description: 'A square wave at a logic level',
+		description: 'Logic-level square wave',
 		keywords: ['oscillator', 'clk', 'square', 'timer', 'pulse']
 	},
 	toggle: {
-		description: 'A logic level you flip by clicking it',
+		description: 'Logic level; click to flip',
 		keywords: ['switch', 'input', 'button', 'high', 'low', 'level']
 	}
 };

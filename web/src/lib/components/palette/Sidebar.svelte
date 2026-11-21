@@ -49,7 +49,7 @@
 	}
 
 	const TABS: Array<{ id: Tab; label: string }> = [
-		{ id: 'parts', label: 'Components' },
+		{ id: 'parts', label: 'Parts' },
 		{ id: 'examples', label: 'Examples' }
 	];
 </script>
