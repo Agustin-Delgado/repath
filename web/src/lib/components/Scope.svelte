@@ -1145,6 +1145,7 @@
 	<div class="stack" class:split={app.spectrum.on}>
 	<div class="plot" bind:this={host}>
 		<canvas
+			aria-label="Scope traces"
 			bind:this={canvas}
 			style:width="{size.width}px"
 			style:height="{size.height}px"

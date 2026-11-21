@@ -261,6 +261,7 @@
 
 <div class="sweep" bind:this={host}>
 	<canvas
+		aria-label="DC sweep plot"
 		bind:this={canvas}
 		style:width="{size.width}px"
 		style:height="{size.height}px"

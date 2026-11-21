@@ -74,11 +74,11 @@
 			<h3 class={sectionTitle}>{app.inside ? `Inside ${app.inside.name}` : 'This circuit'}</h3>
 			<div class="grid grid-cols-2 gap-1.5">
 				<div class="rounded-md border border-border bg-canvas px-2 py-1.5">
-					<div class="font-mono text-base text-fg">{parts}</div>
+					<div class="font-mono text-base text-fg" data-testid="part-count">{parts}</div>
 					<div class="text-3xs text-muted">{parts === 1 ? 'part' : 'parts'}</div>
 				</div>
 				<div class="rounded-md border border-border bg-canvas px-2 py-1.5">
-					<div class="font-mono text-base text-fg">{wires}</div>
+					<div class="font-mono text-base text-fg" data-testid="wire-count">{wires}</div>
 					<div class="text-3xs text-muted">{wires === 1 ? 'wire' : 'wires'}</div>
 				</div>
 			</div>

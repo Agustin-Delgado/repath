@@ -308,10 +308,14 @@ because each step is what makes the next one worth having:
       free lane beyond the drawing's extent would nearly always find a real route.
 - [ ] **Golden-file regression tests** for the analyses, so a numerical change is
       noticed rather than discovered.
-- [ ] **Browser checks in CI.** Playwright is a dev dependency and has found three
-      shipped bugs — a dead overlay, a double-click that could not fire, a compiler
-      case that never landed — none of which the other tests could see, because
-      none of them opens a browser. Nothing in CI runs it yet.
+- [x] **Browser checks in CI.** Playwright had found three shipped bugs — a dead
+      overlay, a double-click that could not fire, a compiler case that never
+      landed — none of which the other tests could see, because none of them opens
+      a browser. The `Browser` job now runs `tests/e2e` against the built site
+      before every deploy: every example run, the editing gestures, share and
+      save round trips, the layout at three widths, and a check for each of those
+      three. Its first run found a fourth: at exactly 900 px the panels were
+      drawers under the wide toolbar, with no More menu.
 - [ ] **Fuzz the netlist compiler** — no input should panic the engine.
 
 ---
