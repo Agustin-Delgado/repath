@@ -11,6 +11,25 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — A run you can operate but not rearrange, and a knob for the pot
+
+**While a circuit runs, the drawing holds still.** A drag no longer moves a
+part, the palette greys out, and a note at the foot of the drawing reads
+"Running. Stop to edit." What still works is what you would touch on a
+powered bench: throw a switch, hold a button, turn a knob, set a value the
+running circuit takes in place, add a probe, pan, zoom and select a part to
+read it. Stop gives the drawing back.
+
+**A potentiometer turns with a knob.** In the inspector, drag it, scroll it,
+use the arrow keys, or double-click it to type a percentage. It shows the
+resistance on each side of the wiper. During a run, drag or scroll the pot
+on the drawing itself and the circuit follows. The symbol draws the wiper
+where it is set. A variable capacitor turns the same way.
+
+[#107](https://github.com/Agustin-Delgado/repath/pull/107)
+
+---
+
 ## 21 November 2026 — Large circuits run in a fraction of the time
 
 **A circuit of hundreds of parts no longer slows to a crawl.** The engine used
