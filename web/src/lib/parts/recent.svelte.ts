@@ -15,7 +15,10 @@ const KEY = 'repath.recentParts';
 const LIMIT = 8;
 
 function load(): string[] {
+	// The check for storage inside the try too: with site data blocked, naming
+	// `localStorage` at all throws.
 	try {
+		if (typeof localStorage === 'undefined') return [];
 		const raw = JSON.parse(localStorage.getItem(KEY) ?? '[]');
 		return Array.isArray(raw) ? raw.filter((k): k is string => typeof k === 'string').slice(0, LIMIT) : [];
 	} catch {
@@ -24,7 +27,7 @@ function load(): string[] {
 }
 
 class RecentParts {
-	kinds = $state<string[]>(typeof localStorage === 'undefined' ? [] : load());
+	kinds = $state<string[]>(load());
 
 	remember(kind: string): void {
 		if (this.kinds[0] === kind) return;

@@ -9,6 +9,7 @@
 	 */
 	import { untrack } from 'svelte';
 	import { CanvasEditor, type Painter, type ViewportState } from '$lib/canvas';
+	import { followDepth } from '$lib/canvas/levels';
 	import { createAnimationState, forget } from '$lib/schematic/animate';
 	import {
 		isActuatedAt,
@@ -557,25 +558,21 @@
 	// own origin, nowhere near where the drawing was being looked at, and a
 	// double click that lands on an empty screen reads as nothing happening.
 	// Coming back out, the drawing is looked at from where it was left.
-	let views: ViewportState[] = [];
+	// A level arrived on without being looked at — a draft restored several
+	// blocks deep — has no view to come back to, and is fitted instead.
+	let views: (ViewportState | null)[] = [];
 	$effect(() => {
 		const active = editor;
 		const depth = app.depth;
 		if (!active) return;
-		if (depth > views.length) {
-			views.push(active.viewport.snapshot());
-			// After the index has been rebuilt for the new document, or the fit
-			// would be to the old one.
-			queueMicrotask(() => active.fit());
-		} else {
-			while (views.length > depth) {
-				const back = views.pop();
-				if (views.length === depth && back) {
-					active.viewport.restore(back);
-					active.invalidate();
-				}
-			}
+		const next = followDepth(views, depth, () => active.viewport.snapshot());
+		if (next.restore) {
+			active.viewport.restore(next.restore);
+			active.invalidate();
 		}
+		// After the index has been rebuilt for the new document, or the fit
+		// would be to the old one.
+		if (next.fit) queueMicrotask(() => active.fit());
 	});
 
 	/**

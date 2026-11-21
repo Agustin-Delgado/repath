@@ -65,6 +65,8 @@ export type Step =
 	| { op: 'rotate'; parts: string[]; wires: WireRef[] }
 	| { op: 'param'; part: string; key: string; value: number | string }
 	| { op: 'import'; source: string }
+	| { op: 'unimport'; name: string }
+	| { op: 'unblock'; name: string }
 	| { op: 'rename'; part: string; to: string }
 	| { op: 'group'; parts: string[]; name: string }
 	| { op: 'ungroup'; parts: string[] }
@@ -196,6 +198,11 @@ function format(step: Step): string {
 			return `param ${quote(step.part)} ${step.key} ${flatten(step.value)}`;
 		case 'import':
 			return `import ${flatten(step.source)}`;
+		// Names may have spaces in them, so they go last.
+		case 'unimport':
+			return `unimport ${step.name}`;
+		case 'unblock':
+			return `unblock ${step.name}`;
 		case 'rename':
 			return `rename ${quote(step.part)} ${quote(step.to)}`;
 		// A group's name goes last: it may have spaces in it.
@@ -322,6 +329,9 @@ function read(op: string, rest: string[]): Step {
 		}
 		case 'import':
 			return { op, source: unflatten(rest.join(' ')) };
+		case 'unimport':
+		case 'unblock':
+			return { op, name: rest.join(' ') };
 		case 'rename':
 			return { op, part: unquote(rest[0]), to: unquote(rest[1]) };
 		case 'group':

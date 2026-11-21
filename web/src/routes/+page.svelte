@@ -12,9 +12,12 @@
 	import {
 		Autosaver,
 		chooseStart,
+		draftLock,
+		heldDrafts,
 		newDraftId,
 		openDraftStore,
 		staleDrafts,
+		UNSAVED_NOTICE,
 		type DraftRecord,
 		type DraftStore
 	} from '$lib/draft';
@@ -74,7 +77,7 @@
 		if (typeof navigator === 'undefined' || !navigator.locks) return Promise.resolve(true);
 		return new Promise((resolve) => {
 			navigator.locks
-				.request(`repath.draft.${id}`, { ifAvailable: true }, (lock) => {
+				.request(draftLock(id), { ifAvailable: true }, (lock) => {
 					resolve(lock !== null);
 					return lock ? new Promise<void>(() => {}) : undefined;
 				})
@@ -134,7 +137,12 @@
 		let origin = resumed?.origin ?? '';
 		if (!resumed && hash) origin = (await openLink(hash)) ? hash : '';
 
-		if (!store) return;
+		if (!store) {
+			// Said after whatever was opened, which clears notices as it loads: the
+			// person needs to know before they put an hour into it.
+			app.notice ??= UNSAVED_NOTICE;
+			return;
+		}
 		const id = resumed && (await claim(resumed.id)) ? resumed.id : newDraftId();
 		if (id !== resumed?.id) await claim(id);
 		setTabDraft(id);
@@ -152,8 +160,7 @@
 			},
 			{
 				onError: () => {
-					app.notice =
-						'Your work could not be saved in this browser, so a reload would lose it. Save it to a file to be safe.';
+					app.notice = UNSAVED_NOTICE;
 				},
 				isEmpty: (doc) => {
 					const draft = doc as ReturnType<typeof app.draft>;
@@ -161,7 +168,10 @@
 				}
 			}
 		);
-		for (const stale of staleDrafts(records, new Set([id]))) void store.remove(stale).catch(() => {});
+		// Never another open tab's draft, however old: it is where that tab's next
+		// change goes.
+		const held = await heldDrafts();
+		for (const stale of staleDrafts(records, new Set([id, ...held]))) void store.remove(stale).catch(() => {});
 		saverReady = true;
 	}
 

@@ -29,9 +29,15 @@ interface Saved {
 }
 
 function load(): Saved {
+	// All of it inside the try, the check for storage included: with site data
+	// blocked, merely naming `localStorage` throws, and that used to stop the
+	// whole app loading.
 	try {
+		if (typeof localStorage === 'undefined') return {};
 		const raw = localStorage.getItem(KEY);
-		if (raw) return JSON.parse(raw) as Saved;
+		const parsed: unknown = raw ? JSON.parse(raw) : null;
+		// Anything but an object — `null`, a number, a list — is not a layout.
+		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Saved;
 	} catch {
 		// A private window, or storage turned off: the defaults will do.
 	}
@@ -45,7 +51,7 @@ class Layout {
 	scopeOpen = $state(true);
 
 	constructor() {
-		const saved = typeof localStorage === 'undefined' ? {} : load();
+		const saved = load();
 		for (const panel of ['left', 'right', 'scope'] as const) {
 			const size = saved[panel];
 			if (typeof size === 'number' && Number.isFinite(size)) this[panel] = clampPanel(panel, size);
