@@ -49,7 +49,7 @@ every start; the app starts in a browser that blocks site data, and says so
 when it cannot keep your work; an old draft of a tab still open is no longer
 pruned; and coming back up from a draft restored several blocks deep shows
 each level whole.
-[#84](https://github.com/Agustin-Delgado/repath/pull/84)
+[#88](https://github.com/Agustin-Delgado/repath/pull/88)
 
 ---
 
