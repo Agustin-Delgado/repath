@@ -29,7 +29,7 @@ It costs little where nothing switches. On circuits that do, it pays for the
 accuracy. The 555 blinker takes 1.6 times as many steps, the Arduino blink
 1.2 times. The LED matrix takes fewer steps than before.
 
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#95](https://github.com/Agustin-Delgado/repath/pull/95)
 
 ---
 
