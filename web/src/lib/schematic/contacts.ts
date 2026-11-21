@@ -82,9 +82,118 @@ export function contactControl(
 	instance: Instance,
 	flips: readonly number[] = []
 ): Array<[number, number]> {
+	return worked(instance, flips).points.slice();
+}
+
+/**
+ * The operations still worth keeping, soonest first, once the run's memory
+ * starts at `earliest`.
+ *
+ * Every operation flips the part, so dropping them in pairs leaves where it is
+ * at every later instant as it was — and a pair is only dropped once the next
+ * operation is itself behind the memory, so its bounce has finished too. What
+ * is left is bounded by what memory holds rather than by how many times the
+ * part has been worked since the run began. A part with a scheduled operation
+ * keeps them all, since that operation's bounce depends on its neighbours.
+ */
+export function keptOperations(
+	instance: Instance,
+	flips: readonly number[],
+	earliest: number
+): number[] {
+	const times = [...flips].sort((a, b) => a - b);
+	if (isScheduled(instance)) return times;
+	let drop = 0;
+	while (drop + 2 < times.length && times[drop + 2] <= earliest) drop += 2;
+	return drop > 0 ? times.slice(drop) : times;
+}
+
+/**
+ * The control signal from `at` on: the same waveform as `contactControl`'s for
+ * every instant from `at`, starting from the corner at or before it.
+ *
+ * What a run that has already reached `at` is handed when the switch is
+ * operated. The whole history is no use to it — it never solves an instant
+ * twice — and sending it grew by a bounce train a press: by a few hundred
+ * presses every one of them was handing over kilobytes, and the engine was
+ * walking all of it to find where it was.
+ */
+export function contactControlFrom(
+	instance: Instance,
+	flips: readonly number[],
+	at: number
+): Array<[number, number]> {
+	const { points } = worked(instance, flips);
+	return points.slice(lastAtOrBefore(points, at));
+}
+
+/** Index of the last point at or before `time`, or 0 when there is none. */
+function lastAtOrBefore(points: ReadonlyArray<readonly [number, number]>, time: number): number {
+	let lo = 0;
+	let hi = points.length - 1;
+	while (lo < hi) {
+		const mid = (lo + hi + 1) >> 1;
+		if (points[mid][0] <= time) lo = mid;
+		else hi = mid - 1;
+	}
+	return lo;
+}
+
+/** How many of the sorted `moments` are at or before `time`. */
+function countUpTo(moments: readonly number[], time: number): number {
+	let lo = 0;
+	let hi = moments.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (moments[mid] <= time) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}
+
+/** What one switch's operations come to: when it moves, and the control that says so. */
+interface Worked {
+	key: string;
+	moments: number[];
+	points: Array<[number, number]>;
+}
+
+/**
+ * The answers already worked out, by the list of operations they were worked
+ * out from. A run hands over a new list each time a part is operated and the
+ * same one on every frame in between, and the drawing asks several times a
+ * frame: worked out afresh, the cost of a frame grew with every press there
+ * had been. A list is shared by every part that has never been operated, so
+ * each holds a few answers, told apart by what they were worked out from.
+ */
+const memo = new WeakMap<readonly number[], Worked[]>();
+/** Answers kept per list: enough for every part sharing the empty one on a drawing. */
+const KEPT = 32;
+
+function worked(instance: Instance, flips: readonly number[]): Worked {
+	const key = [
+		instance.params.start,
+		instance.params.action,
+		instance.params.at,
+		instance.params.hold,
+		instance.params.bounce,
+		flips.length,
+		flips[flips.length - 1]
+	].join('|');
+	let list = memo.get(flips);
+	const found = list?.find((w) => w.key === key);
+	if (found) return found;
+	const moments = operations(instance, flips);
+	const answer = { key, moments, points: control(instance, moments) };
+	if (!list) memo.set(flips, (list = []));
+	list.unshift(answer);
+	if (list.length > KEPT) list.pop();
+	return answer;
+}
+
+function control(instance: Instance, moments: readonly number[]): Array<[number, number]> {
 	const rest = restingContact(instance);
 	const points: Array<[number, number]> = [[0, rest]];
-	const moments = operations(instance, flips);
 	if (moments.length === 0) return points;
 
 	const bounce = Math.max(num(instance, 'bounce', 0), 0);
@@ -138,12 +247,10 @@ export function isClosedAt(
 	time: number,
 	flips: readonly number[] = []
 ): boolean {
-	const points = contactControl(instance, flips);
-	let level = points[0][1];
-	for (const [t, value] of points) {
-		if (t > time) break;
-		level = value;
-	}
+	const { points } = worked(instance, flips);
+	// The last corner at or before the instant, or the first when there is none:
+	// before the first corner a PWL holds its first value.
+	const level = points[lastAtOrBefore(points, time)][1];
 	// The ramp between two levels is a nanosecond wide and belongs to whichever
 	// end it is closer to; rounding is the honest reading of a signal that is
 	// only ever meant to be at one end or the other.
@@ -168,12 +275,9 @@ export function isActuatedAt(
 	time: number,
 	flips: readonly number[] = []
 ): boolean {
-	let actuated = restingContact(instance) === 1;
-	for (const when of operations(instance, flips)) {
-		if (when > time) break;
-		actuated = !actuated;
-	}
-	return actuated;
+	const resting = restingContact(instance) === 1;
+	// Each operation flips it, so only how many have happened matters.
+	return countUpTo(worked(instance, flips).moments, time) % 2 === 1 ? !resting : resting;
 }
 
 /**
@@ -188,12 +292,18 @@ export function isHighAt(
 	time: number,
 	flips: readonly number[] = []
 ): boolean {
-	let high = str(instance, 'state', 'low') === 'high';
-	for (const when of [...flips].sort((a, b) => a - b)) {
-		if (when > time) break;
-		high = !high;
-	}
-	return high;
+	const high = str(instance, 'state', 'low') === 'high';
+	return countUpTo(sortedFlips(flips), time) % 2 === 1 ? !high : high;
+}
+
+/** `flips` soonest first, sorted once per list rather than on every frame. */
+const sorted = new WeakMap<readonly number[], { length: number; times: number[] }>();
+function sortedFlips(flips: readonly number[]): number[] {
+	const known = sorted.get(flips);
+	if (known && known.length === flips.length) return known.times;
+	const times = [...flips].sort((a, b) => a - b);
+	sorted.set(flips, { length: flips.length, times });
+	return times;
 }
 
 /** Where a relay's contacts were last worked out to, so the next frame can carry on from there. */

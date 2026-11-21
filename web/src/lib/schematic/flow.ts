@@ -235,6 +235,14 @@ export interface FlowContext {
 	 */
 	voltageRange: { lo: number; hi: number };
 	/**
+	 * The stretch of the run, in seconds, whose samples `voltageRange` has
+	 * already taken in. The range only grows, so a sample looked at once has
+	 * nothing more to say, and each frame reads only what is new: scanning the
+	 * whole window again on every frame cost in proportion to how many samples
+	 * it held, and a button pressed over and over packs it ten times denser.
+	 */
+	voltageSeen?: { from: number; to: number };
+	/**
 	 * Reference for scaling animation speed.
 	 *
 	 * Not the largest current — that is one number away from ruining the whole
@@ -481,16 +489,32 @@ export function rescale(context: FlowContext, run: TransientRun, from: number, t
 
 	// Voltage: the range only ever grows. Colours that re-scaled every frame
 	// would have a steady rail changing colour because something else spiked.
+	const time = run.time;
 	let low = context.voltageRange.lo;
 	let high = context.voltageRange.hi;
-	for (let i = 0; i < run.nodeCount; i++) {
-		const samples = run.signalsByIndex[i];
-		if (!samples) continue;
-		for (let k = lo; k <= hi; k++) {
-			const v = samples[k];
-			if (v < low) low = v;
-			if (v > high) high = v;
+	const take = (from: number, to: number) => {
+		for (let i = 0; i < run.nodeCount; i++) {
+			const samples = run.signalsByIndex[i];
+			if (!samples) continue;
+			for (let k = from; k <= to; k++) {
+				const v = samples[k];
+				if (v < low) low = v;
+				if (v > high) high = v;
+			}
 		}
+	};
+	const seen = context.voltageSeen;
+	if (!seen || time[hi] < seen.from || time[lo] > seen.to) {
+		take(lo, hi);
+		context.voltageSeen = { from: time[lo], to: time[hi] };
+	} else {
+		// Only the ends of the window that stick out past what has been seen.
+		if (time[lo] < seen.from) take(lo, sampleIndexAt(time, seen.from));
+		if (time[hi] > seen.to) take(sampleIndexAt(time, seen.to), hi);
+		context.voltageSeen = {
+			from: Math.min(seen.from, time[lo]),
+			to: Math.max(seen.to, time[hi])
+		};
 	}
 	context.voltageRange = high - low < 1e-9 ? { lo: -1, hi: 1 } : { lo: low, hi: high };
 
@@ -518,7 +542,7 @@ export function rescale(context: FlowContext, run: TransientRun, from: number, t
 		for (let k = lo; k + stride <= hi; k += stride) {
 			const magnitude = Math.abs(series[k]);
 			if (!Number.isFinite(magnitude)) continue;
-			const width = run.time[k + stride] - run.time[k];
+			const width = time[k + stride] - time[k];
 			charge += magnitude * width;
 			elapsed += width;
 		}
