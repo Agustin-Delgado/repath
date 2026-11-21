@@ -25,7 +25,7 @@ sign, a step of zero, or more than 5000 points is refused with the reason,
 before anything is solved. The sweep is kept with the circuit, in files, links
 and drafts; a circuit that never used it saves no differently.
 
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#98](https://github.com/Agustin-Delgado/repath/pull/98)
 
 ---
 
