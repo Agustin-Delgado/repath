@@ -125,8 +125,9 @@ because each step is what makes the next one worth having:
 5. **Measurement.** Parameter sweep, noise, Fourier and THD. *(The scope is
    mostly there: gain and position per channel, split scales, two cursors with
    deltas, and a panel that reads off frequency, duty, RMS, rise time and
-   overshoot, and a timebase turned from the header, the wheel or a pinch. A
-   trigger is what it still lacks.)*
+   overshoot, a timebase turned from the header, the wheel or a pinch, an edge
+   trigger, and the FFT of a trace with its THD. Parameter sweeps and noise
+   are what is left.)*
 
 ## Must
 
@@ -225,8 +226,11 @@ because each step is what makes the next one worth having:
       curves are one of the most instructive things a simulator can draw.
 - [ ] **Noise analysis** (thermal and shot), reported as spectral density and
       integrated over a band.
-- [ ] **FFT of a transient trace**, so a distortion question can be answered
-      without leaving the app.
+- [x] **FFT of a transient trace**, so a distortion question can be answered
+      without leaving the app. Under the scope, of the screen, whole periods or
+      the whole memory, through a rectangular, Hann, Blackman-Harris or flat-top
+      window, in dBV or volts, with the strongest tones marked and the THD of
+      the strongest counted to the 10th harmonic.
 - [ ] **Parameter sweeps** — run the same analysis across a range of a component
       value and overlay the results.
 - [ ] **Operating point display on the schematic** — node voltages and branch
@@ -279,10 +283,11 @@ because each step is what makes the next one worth having:
 - [ ] **Align and distribute** on a multi-selection.
 - [x] **Component search** in the palette, by name or part number, and `Ctrl+K`
       for every part, command and example.
-- [ ] **A trigger**, so a repeating waveform holds still instead of being read
-      from wherever the run happened to start. The timebase is done — the window
-      field, the wheel and a pinch turn it, and a stopped trace zooms — and so is
-      the vertical: gain, position, split scales, two cursors and a measure panel.
+- [x] **A trigger**, so a repeating waveform holds still instead of being read
+      from wherever the run happened to start. An edge trigger on an analog trace:
+      auto, normal and single, level and hysteresis (both automatic until set),
+      holdoff and the share of the screen before the trigger. Not yet: triggering
+      on a logic lane, on a pulse width or on a pattern.
 - [ ] **Current and differential probes**, not just node voltages.
 - [ ] **Export** — PNG/SVG of the schematic, CSV of the traces, SPICE netlist out.
 - [ ] **Print / PDF** of a schematic that looks like a schematic.

@@ -21,6 +21,8 @@
 		traceCount: number;
 		/** The measurement rows, drawn by the scope that computes them. */
 		measures?: Snippet;
+		/** More buttons for the header, from the plot they act on. */
+		actions?: Snippet;
 		footer?: Snippet;
 	};
 
@@ -29,6 +31,7 @@
 		separate = $bindable(),
 		traceCount,
 		measures,
+		actions,
 		footer
 	}: Props = $props();
 
@@ -97,7 +100,7 @@
 {/snippet}
 
 <aside class="flex h-full min-h-0 flex-col overflow-y-auto border-l border-border bg-panel text-[0.72rem]">
-	<header class="flex items-center gap-1 px-2.5 pt-2 pb-1">
+	<header class="flex flex-wrap items-center gap-1 px-2.5 pt-2 pb-1">
 		<h3 class="m-0 mr-auto text-3xs font-semibold tracking-[0.08em] text-muted uppercase">
 			Signals
 		</h3>
@@ -130,6 +133,7 @@
 				split
 			</Button>
 		{/if}
+		{@render actions?.()}
 	</header>
 
 	<!--

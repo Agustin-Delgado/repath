@@ -56,6 +56,37 @@ inside a block each copy reads its own.
 
 ---
 
+## 21 November 2026 — A trigger, and the spectrum of a trace
+
+**A repeating waveform holds still.** The scope has a trigger, beside the
+traces under *Trigger*. Auto holds the screen on each rising (or falling) edge
+of the trace you pick and rolls as before when there has been none for a
+screen; Normal shows only what a trigger caught and keeps the last one; Single
+catches one and stops the run, and *arm* waits for the next. The level sits
+halfway between the trace's extremes until you type one, and the hysteresis —
+how far back past the level the trace has to go before it can fire again, so
+noise on a slow edge fires once — is 2% of its swing until you type that. A
+holdoff ignores everything for a while after each trigger, which is how a
+burst is caught on its first pulse every time, and *pre* says how much of the
+screen comes before the trigger. Where it fired is marked at the top of the
+plot, and the level on its right edge.
+
+**And the spectrum of a trace, without leaving the app.** *fft* opens it under
+the scope: the screen, a whole number of periods, or everything in memory, as
+peak volts or dBV, so a 1 V sine reads 1 V and 0 dBV, through a rectangular,
+Hann, Blackman-Harris or flat-top window. The strongest tones are marked and
+listed with their frequency and level, and the THD of the strongest is given,
+counting to the 10th harmonic — or, if the span is too short for its harmonics
+to be told apart through that window, how many periods it needs. The DC level
+is given on its own rather than spread over the lowest bins. A bar along the
+foot of the scope shows the stretch being transformed. Both are kept with the
+circuit, in files, links and drafts; a circuit that never used them saves no
+differently.
+
+[#99](https://github.com/Agustin-Delgado/repath/pull/99)
+
+---
+
 ## 21 November 2026 — A DC sweep, for I-V curves
 
 **Run can now sweep a source instead of running in time.** Pick *DC sweep* as
