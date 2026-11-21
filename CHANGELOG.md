@@ -46,7 +46,7 @@ top of the drawing instead of over the scope's time labels. Pressing Tab on a
 fresh page offers "Skip to the drawing", past the hundred-odd palette buttons.
 The scope stays sharp when the window moves to a screen with a different
 scale, and the buzzer no longer clicks when a run stops.
-[#PR](https://github.com/Agustin-Delgado/repath/pulls)
+[#87](https://github.com/Agustin-Delgado/repath/pull/87)
 
 ---
 
