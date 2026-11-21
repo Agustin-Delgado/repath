@@ -24,3 +24,4 @@ export { default as Splitter } from './splitter/Splitter.svelte';
 export { default as Disclosure } from './disclosure/Disclosure.svelte';
 export { default as Dialog } from './dialog/Dialog.svelte';
 export { default as Tabs } from './tabs/Tabs.svelte';
+export { default as Knob } from './knob/Knob.svelte';

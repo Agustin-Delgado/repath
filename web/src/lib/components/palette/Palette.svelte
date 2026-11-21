@@ -152,6 +152,7 @@
 		label={part.label}
 		title={tip(part)}
 		active={isArmed(app, part.kind)}
+		disabled={app.locked && part.kind !== 'probe'}
 		onclick={() => pick(part.kind)}
 		oncontextmenu={removable(part)}
 	>
@@ -231,6 +232,7 @@
 							label="Wire"
 							title="Draw a wire between two pins, or off an existing wire (W)"
 							active={app.tool.mode === 'wire'}
+							disabled={app.locked}
 							onclick={wire}
 						>
 							{#snippet icon()}

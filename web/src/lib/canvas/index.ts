@@ -15,4 +15,4 @@ export { Painter, type StrokeStyle, type FillStyle, type TextStyle } from './pai
 export { Scene, type SceneItem } from './scene';
 export { SnapIndex, type SnapKind, type SnapPoint, type SnapSegment, type SnapTarget } from './snap';
 export { CanvasEditor, type EditorOptions, type RenderFn } from './editor';
-export type { Tool, ToolContext, EditorPointer } from './tool';
+export type { Tool, ToolContext, EditorPointer, EditorWheel } from './tool';

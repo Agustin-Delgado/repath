@@ -32,6 +32,7 @@
 			label="Group"
 			value={app.selectedGroup.name}
 			commit={(raw) => (app.selectedGroup ? app.renameGroup(app.selectedGroup.id, raw) : null)}
+			disabled={app.locked}
 			aria-label="Group name"
 		/>
 		<p class={hint}>
@@ -39,10 +40,10 @@
 			of the frame to take it out of the group.
 		</p>
 		<div class="flex gap-1.5">
-			<Button class="flex-1" onclick={() => app.ungroupSelection()}>
+			<Button class="flex-1" disabled={app.locked} onclick={() => app.ungroupSelection()}>
 				<Ungroup /> Ungroup <kbd class="font-mono text-3xs text-muted">U</kbd>
 			</Button>
-			<Button class="flex-1" onclick={() => app.boxSelection()}>
+			<Button class="flex-1" disabled={app.locked} onclick={() => app.boxSelection()}>
 				<Boxes /> Box up <kbd class="font-mono text-3xs text-muted">B</kbd>
 			</Button>
 		</div>
@@ -53,10 +54,10 @@
 	{:else if count > 1}
 		<h3 class={sectionTitle}>{count} components selected</h3>
 		<div class="flex gap-1.5">
-			<Button class="flex-1" onclick={() => app.groupSelection()}>
+			<Button class="flex-1" disabled={app.locked} onclick={() => app.groupSelection()}>
 				<Group /> Group <kbd class="font-mono text-3xs text-muted">G</kbd>
 			</Button>
-			<Button class="flex-1" onclick={() => app.boxSelection()}>
+			<Button class="flex-1" disabled={app.locked} onclick={() => app.boxSelection()}>
 				<Boxes /> Box up <kbd class="font-mono text-3xs text-muted">B</kbd>
 			</Button>
 		</div>

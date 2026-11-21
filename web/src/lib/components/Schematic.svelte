@@ -756,6 +756,21 @@
 		};
 	});
 
+	/**
+	 * Whether the run-mode note is drawing the eye: for a moment after an edit
+	 * was refused, so a blocked click is answered without a toast for each.
+	 */
+	let nudged = $state(false);
+	let refusalsSeen = 0;
+	$effect(() => {
+		const count = app.refusals;
+		if (count === refusalsSeen) return;
+		refusalsSeen = count;
+		nudged = true;
+		const settle = setTimeout(() => (nudged = false), 900);
+		return () => clearTimeout(settle);
+	});
+
 	export function fitToContent() {
 		editor?.fit();
 	}
@@ -834,6 +849,11 @@
 					return;
 				case 'x':
 					if (textSelected()) return;
+					// A cut is a delete: refused whole while a run locks the drawing.
+					if (app.refuse()) {
+						event.preventDefault();
+						return;
+					}
 					if (app.copySelection()) {
 						app.deleteSelection();
 						event.preventDefault();
@@ -921,6 +941,9 @@
 			</span>
 			<Pressable onclick={() => app.leaveBlock()}>Back to the drawing</Pressable>
 		</div>
+	{/if}
+	{#if app.locked}
+		<p class="run-note" role="status" data-nudged={nudged ? '' : undefined}>Running. Stop to edit.</p>
 	{/if}
 	{#if labelBox}
 		<TextInput
@@ -1016,6 +1039,31 @@
 
 	.inside :global(button:hover) {
 		background: var(--hover);
+	}
+
+	/* Says the drawing is locked, at the foot of it, out of the way of the parts. */
+	.run-note {
+		position: absolute;
+		left: 50%;
+		bottom: 0.75rem;
+		transform: translateX(-50%);
+		margin: 0;
+		padding: 0.2rem 0.6rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: var(--raised);
+		color: var(--label-dim);
+		font-size: var(--text-2xs);
+		white-space: nowrap;
+		pointer-events: none;
+		transition-property: color, border-color;
+		transition-duration: var(--duration-base);
+		transition-timing-function: var(--ease-out-strong);
+	}
+
+	.run-note[data-nudged] {
+		border-color: var(--accent);
+		color: var(--text);
 	}
 
 	.stage :global(.rename) {

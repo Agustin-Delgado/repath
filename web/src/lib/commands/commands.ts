@@ -32,7 +32,9 @@ export interface CommandContext {
 }
 
 export function buildCommands(app: App, context: CommandContext): Command[] {
-	const hasSelection = () => app.selection.length > 0;
+	// While a run locks the drawing, the edits are left out of the list.
+	const editing = () => !app.locked;
+	const hasSelection = () => editing() && app.selection.length > 0;
 
 	const commands: Command[] = [
 		// --- Simulation -------------------------------------------------------
@@ -130,8 +132,15 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 		},
 
 		// --- Edit -------------------------------------------------------------
-		{ id: 'undo', label: 'Undo', group: 'Edit', shortcut: 'Ctrl+Z', run: () => app.undo() },
-		{ id: 'redo', label: 'Redo', group: 'Edit', shortcut: 'Ctrl+Shift+Z', run: () => app.redo() },
+		{ id: 'undo', label: 'Undo', group: 'Edit', shortcut: 'Ctrl+Z', available: editing, run: () => app.undo() },
+		{
+			id: 'redo',
+			label: 'Redo',
+			group: 'Edit',
+			shortcut: 'Ctrl+Shift+Z',
+			available: editing,
+			run: () => app.redo()
+		},
 		{
 			id: 'rotate',
 			label: 'Rotate the selection',
@@ -164,7 +173,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 			label: 'Group the selection',
 			group: 'Edit',
 			shortcut: 'Ctrl+G',
-			available: () => app.selection.length > 1,
+			available: () => editing() && app.selection.length > 1,
 			run: () => void app.groupSelection()
 		},
 		{
@@ -206,6 +215,7 @@ export function buildCommands(app: App, context: CommandContext): Command[] {
 			group: 'Edit',
 			shortcut: 'W',
 			keywords: ['connect', 'net', 'branch'],
+			available: editing,
 			run: () => (app.tool = { mode: 'wire' })
 		},
 
