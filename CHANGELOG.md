@@ -22,7 +22,7 @@ on the same clock's ticks, so where an incoming start bit falls between two
 ticks now shifts its samples the way it does on a real board. Bytes sent back
 to back still follow each other with no gap.
 
-[#93](https://github.com/Agustin-Delgado/repath/pull/93)
+[#94](https://github.com/Agustin-Delgado/repath/pull/94)
 
 ---
 
