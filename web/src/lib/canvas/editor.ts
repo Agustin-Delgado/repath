@@ -120,6 +120,11 @@ export class CanvasEditor {
 			});
 			this.lastSize = size;
 			this.afterViewportChange();
+			// Now, not on the next frame. Resizing a canvas clears it, and the
+			// observer reports after layout and before paint: waiting for the next
+			// animation frame put a cleared canvas on screen for every frame of a
+			// resize, so the drawing vanished for as long as a panel was dragged.
+			this.paintNow();
 		};
 
 		container.addEventListener('pointerdown', this.onPointerDown);
@@ -194,6 +199,15 @@ export class CanvasEditor {
 			this.frame = null;
 			this.paint();
 		});
+	}
+
+	/** Paint whatever is waiting, at once, instead of on the next frame. */
+	private paintNow(): void {
+		if (this.frame !== null) {
+			cancelAnimationFrame(this.frame);
+			this.frame = null;
+		}
+		this.paint();
 	}
 
 	private paint(): void {
