@@ -1,10 +1,10 @@
-//! Complex arithmetic and a complex linear solver, for frequency-domain analysis.
+//! Complex arithmetic and the complex linear system, for frequency-domain analysis.
 //!
 //! Kept deliberately small: AC analysis needs the four operations, a magnitude,
-//! a phase, and Gaussian elimination. Pulling in a numerics crate for that would
-//! be more dependency than value.
+//! a phase, and the same sparse elimination the real system uses. Pulling in a
+//! numerics crate for that would be more dependency than value.
 
-use crate::linalg::Pattern;
+use crate::linalg::{Scalar, System};
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 
 /// A complex number, `re + im·j`.
@@ -133,86 +133,24 @@ impl SubAssign for C64 {
     }
 }
 
-/// A dense complex system `A x = b`, stamped the same way as the real one.
-#[derive(Clone, Debug)]
-pub struct ComplexSystem {
-    n: usize,
-    a: Vec<C64>,
-    b: Vec<C64>,
-    /// See [`crate::linalg::LinearSystem::pattern`].
-    record: Option<Pattern>,
+impl Scalar for C64 {
+    const ZERO: Self = Self::ZERO;
+    const ONE: Self = Self::ONE;
+    #[inline]
+    fn magnitude(self) -> f64 {
+        self.abs()
+    }
+    #[inline]
+    fn finite(self) -> bool {
+        self.is_finite()
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SingularMatrix {
-    /// The row with no pivot, or `None` when the matrix had one but the
-    /// answer overflowed — which is the numbers' fault, not a node's.
-    pub row: Option<usize>,
-}
+/// The complex system AC analysis solves: stamped the same way as the real
+/// one, and solved by the same sparse code.
+pub type ComplexSystem = System<C64>;
 
-impl ComplexSystem {
-    pub fn new(n: usize) -> Self {
-        Self { n, a: vec![C64::ZERO; n * n], b: vec![C64::ZERO; n], record: None }
-    }
-
-    /// A system that only records where it is stamped, and cannot be solved.
-    pub fn pattern(n: usize) -> Self {
-        Self { n, a: Vec::new(), b: Vec::new(), record: Some(Pattern::default()) }
-    }
-
-    /// What a system made by [`Self::pattern`] has recorded since it was last
-    /// cleared; `None` for an ordinary one.
-    pub fn recorded(&self) -> Option<&Pattern> {
-        self.record.as_ref()
-    }
-
-    #[inline]
-    pub fn size(&self) -> usize {
-        self.n
-    }
-
-    /// Which unknowns can affect which; see [`crate::linalg::coupled_labels`].
-    pub fn coupled(&self, barriers: &[usize]) -> Vec<usize> {
-        let n = self.n;
-        crate::linalg::coupled_labels(n, barriers, |r, c| {
-            let v = self.a[r * n + c];
-            v.re != 0.0 || v.im != 0.0
-        })
-    }
-
-    pub fn clear(&mut self) {
-        self.a.fill(C64::ZERO);
-        self.b.fill(C64::ZERO);
-        if let Some(record) = &mut self.record {
-            record.clear();
-        }
-    }
-
-    /// `A[row][col] += value`, with `None` meaning ground and being dropped.
-    #[inline]
-    pub fn add(&mut self, row: Option<usize>, col: Option<usize>, value: C64) {
-        if let (Some(r), Some(c)) = (row, col) {
-            if let Some(record) = &mut self.record {
-                if value.re != 0.0 || value.im != 0.0 {
-                    record.entries.push((r, c));
-                }
-                return;
-            }
-            self.a[r * self.n + c] += value;
-        }
-    }
-
-    #[inline]
-    pub fn add_rhs(&mut self, row: Option<usize>, value: C64) {
-        if let Some(r) = row {
-            if let Some(record) = &mut self.record {
-                record.rhs.push(r);
-                return;
-            }
-            self.b[r] += value;
-        }
-    }
-
+impl System<C64> {
     /// Stamp an admittance between two nodes — the usual four-entry pattern.
     #[inline]
     pub fn add_admittance(&mut self, p: Option<usize>, m: Option<usize>, y: C64) {
@@ -227,75 +165,6 @@ impl ComplexSystem {
     pub fn add_current(&mut self, p: Option<usize>, m: Option<usize>, i: C64) {
         self.add_rhs(p, -i);
         self.add_rhs(m, i);
-    }
-
-    /// Gaussian elimination with partial pivoting. Consumes the matrix.
-    pub fn solve_into(&mut self, x: &mut Vec<C64>) -> Result<(), SingularMatrix> {
-        debug_assert!(self.record.is_none(), "a pattern is not a system to solve");
-        let n = self.n;
-        x.clear();
-        x.resize(n, C64::ZERO);
-        if n == 0 {
-            return Ok(());
-        }
-
-        // Judged against each row's own largest entry, for the reason written out
-        // on the real solver: an admittance matrix spans twenty decades by design,
-        // so "small" only means anything beside something.
-        let mut scale = vec![0.0f64; n];
-        for (r, s) in scale.iter_mut().enumerate() {
-            let largest = self.a[r * n..r * n + n].iter().fold(0.0f64, |acc, v| acc.max(v.abs()));
-            if largest == 0.0 {
-                return Err(SingularMatrix { row: Some(r) });
-            }
-            *s = 1.0 / largest;
-        }
-
-        for k in 0..n {
-            let (mut pivot_row, mut pivot_mag) = (k, 0.0);
-            for (r, s) in scale.iter().enumerate().skip(k) {
-                let mag = s * self.a[r * n + k].abs();
-                if mag > pivot_mag {
-                    pivot_row = r;
-                    pivot_mag = mag;
-                }
-            }
-            if pivot_mag < 1e-14 {
-                return Err(SingularMatrix { row: Some(k) });
-            }
-            if pivot_row != k {
-                for c in 0..n {
-                    self.a.swap(k * n + c, pivot_row * n + c);
-                }
-                self.b.swap(k, pivot_row);
-                scale.swap(k, pivot_row);
-            }
-
-            let pivot = self.a[k * n + k];
-            for r in (k + 1)..n {
-                let factor = self.a[r * n + k] / pivot;
-                if factor == C64::ZERO {
-                    continue;
-                }
-                for c in (k + 1)..n {
-                    let update = factor * self.a[k * n + c];
-                    self.a[r * n + c] -= update;
-                }
-                let update = factor * self.b[k];
-                self.b[r] -= update;
-            }
-        }
-
-        for r in (0..n).rev() {
-            let row = &self.a[r * n + r + 1..r * n + n];
-            let dot = row.iter().zip(&x[r + 1..]).fold(C64::ZERO, |acc, (a, xc)| acc + *a * *xc);
-            x[r] = (self.b[r] - dot) / self.a[r * n + r];
-        }
-
-        if x.iter().any(|v| !v.is_finite()) {
-            return Err(SingularMatrix { row: None });
-        }
-        Ok(())
     }
 }
 
