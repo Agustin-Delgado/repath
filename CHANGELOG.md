@@ -43,7 +43,7 @@ examples tab too. The command palette's highlight stays on its row while a run
 starts or stops, and Run and Stop show Space beside them. On a phone, the
 closed side panel is out of the Tab order. Zooming the timebase with the wheel
 writes one step into "Copy the steps taken", not one per notch.
-[#PR](https://github.com/Agustin-Delgado/repath/pulls)
+[#86](https://github.com/Agustin-Delgado/repath/pull/86)
 
 ---
 
