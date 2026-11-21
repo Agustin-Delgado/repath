@@ -38,7 +38,7 @@ foot of the scope shows the stretch being transformed. Both are kept with the
 circuit, in files, links and drafts; a circuit that never used them saves no
 differently.
 
-[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+[#99](https://github.com/Agustin-Delgado/repath/pull/99)
 
 ---
 
