@@ -11,7 +11,7 @@
 
 import { contactControl, restingContact } from './contacts';
 import { BARS, DIGITS, ledDiodeModel, ledRating, SEGMENTS } from './led';
-import { blockOf, chipOf, pointKey } from './model';
+import { blockOf, chipOf, NMOS_KP, PMOS_KP, pointKey } from './model';
 import { LCD_KIND, lcdAddress } from './lcd';
 import { MATRIX_KIND } from './max7219';
 import { BUZZER_KIND, PIEZO_CAPACITANCE, buzzerDevice, piezoResistance } from './buzzer';
@@ -26,7 +26,7 @@ import {
 	type ChipDef,
 	type ChipVolts
 } from './chips';
-import { DEFAULT_CLOCK, PORT_PULL_UP_OHMS } from './chips-mcu';
+import { DEFAULT_CLOCK, MCU_FALLING, MCU_RISING, PORT_PULL_UP_OHMS } from './chips-mcu';
 import { USB_SERIAL_OHMS, usbSerialName } from './serial';
 import { unfoldBlocks } from './blocks';
 import { parseContents } from './memory';
@@ -1384,7 +1384,9 @@ function compileFresh(
 			// resistance — the coil current, scaled by a number the datasheet already
 			// gives in volts. The NC side reads it negated, as the changeover does.
 			// A coil driven backwards reads as a coil not driven at all, which a DC
-			// relay with a flyback diode never sees and a bare one does.
+			// relay with a flyback diode never sees and a bare one does. Both
+			// contacts latch: they move at pull-in on the way up and at drop-out on
+			// the way down, and hold between, which is the hysteresis a relay has.
 			case 'relay': {
 				const a = analogOf(instance, 'a');
 				const mid = `${name}__coil`;
@@ -1408,7 +1410,7 @@ function compileFresh(
 					b: analogOf(instance, 'no'),
 					control_plus: a,
 					control_minus: mid,
-					model: { v_on: pullIn, v_off: dropOut, r_on, r_off }
+					model: { v_on: pullIn, v_off: dropOut, r_on, r_off, latch: true }
 				});
 				components.push({
 					type: 'switch',
@@ -1417,7 +1419,7 @@ function compileFresh(
 					b: analogOf(instance, 'nc'),
 					control_plus: mid,
 					control_minus: a,
-					model: { v_on: -dropOut, v_off: -pullIn, r_on, r_off }
+					model: { v_on: -dropOut, v_off: -pullIn, r_on, r_off, latch: true, closed: true }
 				});
 				break;
 			}
@@ -1688,10 +1690,10 @@ function compileFresh(
 						{
 							channel: instance.kind === 'nmos' ? 'n' : 'p',
 							vto: num(instance, 'vto', 2),
-							kp: num(instance, 'kp', 2e-5),
+							kp: num(instance, 'kp', instance.kind === 'nmos' ? NMOS_KP : PMOS_KP),
 							lambda: num(instance, 'lambda', 0.02),
 							// Only the ratio matters at this model level.
-							w: num(instance, 'ratio', 10),
+							w: num(instance, 'ratio', 1),
 							l: 1,
 							cgs: num(instance, 'cgs', 20e-12),
 							cgd: num(instance, 'cgd', 5e-12),
@@ -2007,6 +2009,42 @@ function compileFresh(
 		);
 	}
 
+	/**
+	 * A microcontroller's port pins are Schmitt inputs, unlike a gate's: the
+	 * ATmega328P's typical characteristics put the rising threshold near 0.52 of
+	 * its supply and the falling one near 0.43, 2.6 V and 2.15 V at 5 V. Where
+	 * every leg reading a net is a port pin, its bridge reads with those; where
+	 * a gate shares the net, one bridge has to serve both, and it is the
+	 * drawing's family. The supply they are a share of is the chip's own leg,
+	 * so a chip on 3.3 V switches at 3.3 V's thresholds; a leg left off any
+	 * analog net is taken to be the 5 V an Uno runs at.
+	 */
+	const mcuThresholds = (net: Net): Record<string, unknown> => {
+		let mcu: { instance: Instance; chip: ChipDef } | null = null;
+		for (const ref of net.pins) {
+			if (ref.pin.domain !== 'digital' || ref.pin.direction === 'out') continue;
+			const chip = chipOf(ref.instance.kind);
+			const block = chip && mcuBlock(chip);
+			const isPort =
+				!!chip && !!block && (block.ports ?? []).some((port) => mcuLeg(chip, block, port) === ref.pin.name);
+			if (!isPort) return {};
+			mcu ??= { instance: ref.instance, chip: chip! };
+		}
+		if (!mcu) return {};
+		const base = logicFamily(family);
+		const plus = positiveSupply(mcu.chip);
+		const minus = negativeSupply(mcu.chip);
+		const supply = plus === undefined ? null : nodeOf(mcu.instance, plus);
+		const ground = minus === undefined ? 'gnd' : (nodeOf(mcu.instance, minus) ?? 'gnd');
+		if (supply) {
+			return {
+				family: { ...base, v_ih: MCU_RISING, v_il: MCU_FALLING },
+				reference: [supply, ground]
+			};
+		}
+		return { family: { ...base, v_ih: MCU_RISING * 5, v_il: MCU_FALLING * 5 } };
+	};
+
 	// ---- automatic bridges ----------------------------------------------
 	const bridges: unknown[] = [...chipBridges];
 	// A bridge is named after its net, and a part can be named anything —
@@ -2047,7 +2085,8 @@ function compileFresh(
 				name: fresh(`BAD${net.index}`),
 				node: entry.analog,
 				net: entry.readBack ?? entry.digital,
-				delay: 0
+				delay: 0,
+				...mcuThresholds(net)
 			});
 		}
 	}

@@ -481,6 +481,20 @@ const BASE_CHARGE = [
 	}
 ] as const;
 
+/**
+ * The MOSFETs' default transconductance, `kp·W/L` with W/L at one: a small
+ * discrete part rather than a transistor on a chip.
+ *
+ * Level 1 puts the on-resistance at `1 / (β·(Vgs − Vt))`. A 2N7000's datasheet
+ * gives at most 5.3 Ω at 4.5 V of gate drive and about 1.2 Ω at 10 V, which a
+ * β of 0.1 A/V² meets with its 2 V threshold: 4 Ω and 1.25 Ω. Holes are slower
+ * than electrons, and a BS250's 6 Ω or so at 10 V makes the p-channel one a
+ * fifth of that. The old 20 µA/V² at W/L 10 was an integrated device's — a
+ * kilohm and a half on, too weak to light an LED.
+ */
+export const NMOS_KP = 0.1;
+export const PMOS_KP = 0.02;
+
 const GATE_CHARGE = [
 	{
 		key: 'cgd',
@@ -1759,8 +1773,16 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('gate', -30, 0), analog('drain', 10, -30), analog('source', 10, 30)],
 		params: [
 			{ key: 'vto', label: 'Threshold', unit: 'V', default: 2 },
-			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5, min: 0, nonZero: true },
-			{ key: 'ratio', label: 'W/L', unit: '', default: 10, min: 0, nonZero: true },
+			{
+				key: 'kp',
+				label: 'Transconductance',
+				unit: 'A/V²',
+				default: NMOS_KP,
+				min: 0,
+				nonZero: true,
+				description: 'A small discrete part, about a 2N7000: 3 Ω on at 5 V of gate drive.'
+			},
+			{ key: 'ratio', label: 'W/L', unit: '', default: 1, min: 0, nonZero: true },
 			{
 				key: 'lambda',
 				label: 'Channel-length modulation',
@@ -1781,8 +1803,16 @@ export const CATALOG: ComponentDef[] = [
 		pins: [analog('gate', -30, 0), analog('drain', 10, 30), analog('source', 10, -30)],
 		params: [
 			{ key: 'vto', label: 'Threshold', unit: 'V', default: 2 },
-			{ key: 'kp', label: 'Transconductance', unit: 'A/V²', default: 2e-5, min: 0, nonZero: true },
-			{ key: 'ratio', label: 'W/L', unit: '', default: 10, min: 0, nonZero: true },
+			{
+				key: 'kp',
+				label: 'Transconductance',
+				unit: 'A/V²',
+				default: PMOS_KP,
+				min: 0,
+				nonZero: true,
+				description: 'A small discrete part, about a BS250: 6 Ω on at 10 V of gate drive.'
+			},
+			{ key: 'ratio', label: 'W/L', unit: '', default: 1, min: 0, nonZero: true },
 			{
 				key: 'lambda',
 				label: 'Channel-length modulation',
@@ -2600,9 +2630,29 @@ export function blockOf(schematic: Schematic, kind: string): BlockDef | null {
  * without this would leave them holding a plain silicon diode that no longer
  * glows and no longer has the forward voltage their circuit was designed around.
  */
+/** The parts made of LEDs, each with a rating. */
+const LED_KINDS = new Set(['led', 'display7', 'display7x4', 'bargraph']);
+
 export function migrateInstance(instance: Instance): Instance {
 	if (instance.kind === 'diode' && instance.params.model === 'led') {
 		return { ...instance, kind: 'led', params: defaultParams('led') };
+	}
+	// An LED's default rating used to be its 20 mA test current, which burnt out
+	// an LED run at 21 mA within a few tens of milliseconds. Only the untouched
+	// default moves to the absolute maximum: a rating somebody typed is theirs.
+	if (LED_KINDS.has(instance.kind) && instance.params.imax === 0.02) {
+		return { ...instance, params: { ...instance.params, imax: RATED } };
+	}
+	// The MOSFETs used to default to an integrated device's 20 µA/V² at a W/L of
+	// ten, an on-resistance of kilohms. Both numbers untouched is the old default
+	// and nothing anybody chose; the threshold and the rest stay as they are.
+	if (
+		(instance.kind === 'nmos' || instance.kind === 'pmos') &&
+		instance.params.kp === 2e-5 &&
+		instance.params.ratio === 10
+	) {
+		const kp = instance.kind === 'nmos' ? NMOS_KP : PMOS_KP;
+		return { ...instance, params: { ...instance.params, kp, ratio: 1 } };
 	}
 	// A switch used to have no choice but to operate during the run: "toggle at
 	// one millisecond" was the default, so every switch anybody drew flipped

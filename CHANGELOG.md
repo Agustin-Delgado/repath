@@ -55,6 +55,38 @@ it keeps the newest bytes, as the serial monitor already did.
 - **Live runs.** A live run that cannot use a frame's results now stops and says why, instead of looking stuck.
 
 [#85](https://github.com/Agustin-Delgado/repath/pull/85)
+\n---\n\n## 21 November 2026 — Parts closer to their datasheets
+
+**An LED lives on 21 mA.** An LED's default rating is now the 30 mA its
+absolute maximum allows, not the 20 mA its forward voltage is quoted at, so a
+red LED on 9 V through 330 Ω no longer burns out in 43 ms. Its forward voltage
+falls as it warms, by the 2 mV a degree datasheets print, instead of rising,
+and it drops exactly its quoted voltage at 20 mA. How bright it looks still
+goes by the current, so a raised rating does not dim it. A rating you set
+yourself stays as you set it; the old default moves.
+
+**A relay holds.** Its contacts move at the pull-in voltage on the way up and
+at the drop-out voltage on the way down, and stay put between: a coil at 3 V
+no longer half-closes a relay that pulls in at 3.75 V, and one already pulled in
+does not let go as its coil sags to 2 V.
+
+**A fuse blows when a fuse would.** It carries one and a half times its rating
+without blowing, as IEC 60127 asks of a fast glass fuse, where 1.1 times used
+to blow it in 15 seconds; 2.75 times takes about half a second and ten times
+a few milliseconds.
+
+**Logic inputs switch where real ones do.** A 74HC input switches near half
+its supply rather than at the 1.5 V and 3.5 V its datasheet guarantees, so an
+RC delay into a gate lasts the 0.69 RC worked out on paper, not 1.2 RC. TTL
+switches near 1.3 V. A microcontroller's port pin is a Schmitt input with its
+datasheet's half volt of hysteresis.
+
+**A MOSFET from the palette can switch a load.** The defaults are a small
+discrete part's, about a 2N7000 or a BS250 — a few ohms on — rather than a
+transistor on a chip at 1.7 kΩ. An LM358's input bias current now flows out of
+its inputs, as its PNP inputs push it, so an offset through a source
+resistance comes out the right way round.
+[#89](https://github.com/Agustin-Delgado/repath/pull/89)
 
 ---
 

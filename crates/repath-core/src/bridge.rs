@@ -24,9 +24,15 @@ pub struct LogicFamily {
     /// Voltage a driven `High` produces, and above which an input reads `High`.
     pub v_high: f64,
     /// Input threshold for a falling signal.
+    ///
+    /// Where an input actually switches, not the datasheet's guaranteed
+    /// `V_IL`: a 74HC is promised to read a low below 1.5 V and switches near
+    /// half its supply, and it is the second that decides when an edge lands.
     pub v_il: f64,
     /// Input threshold for a rising signal. Must be above `v_il` — the gap is
     /// the hysteresis that stops a slow edge from producing a burst of events.
+    /// Narrow for an ordinary gate, which has next to none; a Schmitt input's
+    /// is its own and wider.
     pub v_ih: f64,
     /// Output impedance of a driven digital output.
     pub r_out: f64,
@@ -41,16 +47,18 @@ impl Default for LogicFamily {
 }
 
 impl LogicFamily {
+    /// A 74HC on 5 V. NXP's typical input thresholds at 4.5 V are 2.4 V rising
+    /// and 2.1 V falling: half the supply, with a tenth of a volt or so between.
     pub fn cmos_5v() -> Self {
-        Self { v_low: 0.0, v_high: 5.0, v_il: 1.5, v_ih: 3.5, r_out: 50.0, rise: 2e-9, fall: 2e-9 }
+        Self { v_low: 0.0, v_high: 5.0, v_il: 2.4, v_ih: 2.6, r_out: 50.0, rise: 2e-9, fall: 2e-9 }
     }
 
     pub fn cmos_3v3() -> Self {
         Self {
             v_low: 0.0,
             v_high: 3.3,
-            v_il: 0.99,
-            v_ih: 2.31,
+            v_il: 1.55,
+            v_ih: 1.75,
             r_out: 50.0,
             rise: 1e-9,
             fall: 1e-9,
@@ -400,10 +408,10 @@ mod tests {
     fn adc_interpolates_the_crossing_instant() {
         let mut adc = AdcBridge::new("A1", 1, 0, LogicFamily::cmos_5v(), DriverId(0));
         adc.sample(0.0, 0.0);
-        // Ramp from 0 V to 5 V across a 10 ns step: 3.5 V is crossed at 7 ns,
-        // not at the end of the step.
+        // Ramp from 0 V to 5 V across a 10 ns step: the 2.6 V rising threshold
+        // is crossed at 5.2 ns, not at the end of the step.
         let (t, state) = adc.sample(10e-9, 5.0).unwrap();
         assert_eq!(state, Logic::High);
-        assert!((t - 7e-9).abs() < 1e-12, "got {t}");
+        assert!((t - 5.2e-9).abs() < 1e-12, "got {t}");
     }
 }

@@ -440,17 +440,35 @@ impl Element for VariableResistor {
     }
 }
 
+/// How far past its rating a fuse has to be pushed before it melts at all, as a
+/// multiple of the rating: the minimum fusing current over the rated one.
+///
+/// Between IEC 60127's 1.5, held for an hour, and its 2.1, blown inside half an
+/// hour.
+pub const FUSING: f64 = 1.8;
+
 /// A fuse: a small resistance that opens for good once it has carried too much
 /// for too long.
 ///
 /// What melts the element is heat, and what heats it is `i²`. It is the two
-/// thermal masses of `ThermalModel`, loaded with `(i / rated)²`: the element
-/// itself and the end caps and glass around it. The fast one's time constant
+/// thermal masses of `ThermalModel`, loaded with `(i / (FUSING · rated))²`: the
+/// element itself and the end caps and glass around it.
+///
+/// A fuse's rating is not where it blows. It carries its rating forever and a
+/// good deal more for a long time — IEC 60127's fast-acting glass fuse has to
+/// hold one and a half times its rating for an hour — so the current that
+/// eventually melts it, the minimum fusing current, sits well above the number
+/// printed on it. `FUSING` is that ratio. Past it the fast mass's time constant
 /// comes from the melting integral, the `I²t` every fuse datasheet prints, so a
 /// short blows it once that much `i²t` has gone through — ten times the rating
 /// through a 1 A fuse with 0.5 A²s lasts about five milliseconds. The slow one
-/// is what makes a small overload take seconds, and what lets a fuse ride out a
-/// surge followed by a rest. At or below its rating it never blows.
+/// is what makes a modest overload take seconds, and what lets a fuse ride out a
+/// surge followed by a rest.
+///
+/// Checked against the IEC 60127-2 table for a type F fuse: 1.5 times the
+/// rating held for an hour, 2.1 times blowing within half an hour, 2.75 times
+/// between 10 ms and 2 s, 4 times between 3 ms and 300 ms, and 10 times inside
+/// 20 ms.
 #[derive(Debug, Clone)]
 pub struct Fuse {
     pub name: String,
@@ -483,8 +501,13 @@ impl Fuse {
         let i2t = i2t.abs().max(1e-12);
         // Well past the rating the element melts before any heat leaves it, so
         // what heats it is all of `i²t`: the fast mass's time constant over its
-        // share is the melting integral in units of the rating.
-        let adiabatic = i2t / (rated * rated);
+        // share is the melting integral in units of the fusing current, which is
+        // the current the load is measured against. The slow one stays in units
+        // of the rating, as before: it is the end caps, and what they hold is
+        // set by the part's size rather than by where the element gives way.
+        let fusing = FUSING * rated;
+        let adiabatic = i2t / (fusing * fusing);
+        let slow = 25.0 * i2t / (rated * rated);
         let share = 0.4;
         Self {
             name: name.into(),
@@ -493,7 +516,7 @@ impl Fuse {
             r: r.abs().max(1e-6),
             rated,
             i2t,
-            thermal: ThermalModel { share, fast: share * adiabatic, slow: 25.0 * adiabatic },
+            thermal: ThermalModel { share, fast: share * adiabatic, slow },
             heat: Heat::default(),
             i_accepted: 0.0,
             peak: 0.0,
@@ -503,6 +526,16 @@ impl Fuse {
 
     fn conductance(&self, gmin: f64) -> f64 {
         if self.blown_at.is_some() { gmin } else { 1.0 / self.r }
+    }
+
+    /// The square of the minimum fusing current, which a load is measured in.
+    fn melts(&self) -> f64 {
+        (FUSING * self.rated).powi(2)
+    }
+
+    /// How long a steady `current` takes to blow it from cold, if it ever does.
+    pub fn time_to_blow(&self, current: f64) -> Option<f64> {
+        self.thermal.time_to_fail(current * current / self.melts())
     }
 }
 
@@ -535,8 +568,7 @@ impl Element for Fuse {
         let current = self.current(ctx.x).unwrap_or(0.0).abs();
         if self.blown_at.is_none() && ctx.mode == Mode::Transient && ctx.dt > 0.0 {
             self.peak = self.peak.max(current);
-            let rated = self.rated * self.rated;
-            let load = (self.i_accepted * self.i_accepted + current * current) / 2.0 / rated;
+            let load = (self.i_accepted * self.i_accepted + current * current) / 2.0 / self.melts();
             self.heat.advance(&self.thermal, load, ctx.dt);
             if self.heat.level() >= 1.0 {
                 self.blown_at = Some(ctx.time);
@@ -553,7 +585,7 @@ impl Element for Fuse {
             Some(at) if ctx.time <= at => 1e-9,
             Some(_) => f64::INFINITY,
             None => {
-                let load = (self.i_accepted / self.rated).powi(2);
+                let load = self.i_accepted * self.i_accepted / self.melts();
                 self.heat.max_step(&self.thermal, load)
             }
         }
