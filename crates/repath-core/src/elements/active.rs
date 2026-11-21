@@ -389,8 +389,8 @@ impl Element for OpAmp {
     /// reactive and then had no opinion about how finely it was stepped: the whole
     /// of a slew — the one part of the response the datasheet number is about — was
     /// resolved at whatever the ceiling happened to be.
-    fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
-        self.charge.suggested_step()
+    fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.charge.suggested_step_for(ctx.integration)
     }
 
     fn is_ringing(&self) -> bool {

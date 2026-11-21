@@ -4,6 +4,7 @@
 //! a phase, and Gaussian elimination. Pulling in a numerics crate for that would
 //! be more dependency than value.
 
+use crate::linalg::Pattern;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 
 /// A complex number, `re + im·j`.
@@ -138,6 +139,8 @@ pub struct ComplexSystem {
     n: usize,
     a: Vec<C64>,
     b: Vec<C64>,
+    /// See [`crate::linalg::LinearSystem::pattern`].
+    record: Option<Pattern>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,7 +152,18 @@ pub struct SingularMatrix {
 
 impl ComplexSystem {
     pub fn new(n: usize) -> Self {
-        Self { n, a: vec![C64::ZERO; n * n], b: vec![C64::ZERO; n] }
+        Self { n, a: vec![C64::ZERO; n * n], b: vec![C64::ZERO; n], record: None }
+    }
+
+    /// A system that only records where it is stamped, and cannot be solved.
+    pub fn pattern(n: usize) -> Self {
+        Self { n, a: Vec::new(), b: Vec::new(), record: Some(Pattern::default()) }
+    }
+
+    /// What a system made by [`Self::pattern`] has recorded since it was last
+    /// cleared; `None` for an ordinary one.
+    pub fn recorded(&self) -> Option<&Pattern> {
+        self.record.as_ref()
     }
 
     #[inline]
@@ -169,12 +183,21 @@ impl ComplexSystem {
     pub fn clear(&mut self) {
         self.a.fill(C64::ZERO);
         self.b.fill(C64::ZERO);
+        if let Some(record) = &mut self.record {
+            record.clear();
+        }
     }
 
     /// `A[row][col] += value`, with `None` meaning ground and being dropped.
     #[inline]
     pub fn add(&mut self, row: Option<usize>, col: Option<usize>, value: C64) {
         if let (Some(r), Some(c)) = (row, col) {
+            if let Some(record) = &mut self.record {
+                if value.re != 0.0 || value.im != 0.0 {
+                    record.entries.push((r, c));
+                }
+                return;
+            }
             self.a[r * self.n + c] += value;
         }
     }
@@ -182,6 +205,10 @@ impl ComplexSystem {
     #[inline]
     pub fn add_rhs(&mut self, row: Option<usize>, value: C64) {
         if let Some(r) = row {
+            if let Some(record) = &mut self.record {
+                record.rhs.push(r);
+                return;
+            }
             self.b[r] += value;
         }
     }
@@ -204,6 +231,7 @@ impl ComplexSystem {
 
     /// Gaussian elimination with partial pivoting. Consumes the matrix.
     pub fn solve_into(&mut self, x: &mut Vec<C64>) -> Result<(), SingularMatrix> {
+        debug_assert!(self.record.is_none(), "a pattern is not a system to solve");
         let n = self.n;
         x.clear();
         x.resize(n, C64::ZERO);

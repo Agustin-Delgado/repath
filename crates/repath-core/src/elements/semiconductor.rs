@@ -282,8 +282,8 @@ impl ChargeBranch {
 
     /// Largest step this branch will take before its own truncation error is
     /// worth more than the tolerance. `INFINITY` while it has nothing to say.
-    fn max_timestep(&self) -> f64 {
-        self.charge.suggested_step()
+    fn max_timestep(&self, integration: Integration) -> f64 {
+        self.charge.suggested_step_for(integration)
     }
 
     fn reset(&mut self) {
@@ -831,7 +831,7 @@ impl Element for Diode {
         // of. Left out, the only thing bounding the step through one was the
         // ceiling — so the sharpest feature a rectifier has was resolved at
         // whatever resolution the run happened to be watched at.
-        failing.min(self.charge.max_timestep())
+        failing.min(self.charge.max_timestep(ctx.integration))
     }
 
     fn reset(&mut self) {
@@ -1328,9 +1328,9 @@ impl Element for Mosfet {
     /// MOSFET turned on depended on how wide a window somebody was watching.
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
         self.q_gs
-            .max_timestep()
-            .min(self.q_gd.max_timestep())
-            .min(self.q_ds.max_timestep())
+            .max_timestep(ctx.integration)
+            .min(self.q_gd.max_timestep(ctx.integration))
+            .min(self.q_ds.max_timestep(ctx.integration))
             .min(self.body.max_timestep(ctx))
     }
 
@@ -1843,8 +1843,8 @@ impl Element for Bjt {
     /// The junction charge decides the step. `tf` is what sets a transistor's
     /// transition frequency, and a step long beside it integrates straight across
     /// the part of a switching edge the device is characterised by.
-    fn max_timestep(&self, _ctx: &AcceptCtx) -> f64 {
-        self.q_be.max_timestep().min(self.q_bc.max_timestep())
+    fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.q_be.max_timestep(ctx.integration).min(self.q_bc.max_timestep(ctx.integration))
     }
 
     fn terminal_names(&self) -> &'static [&'static str] {

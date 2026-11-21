@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::bridge::{AdcBridge, DacBridge, LogicFamily};
 use crate::complex::{C64, ComplexSystem};
 use crate::digital::{DigitalDevice, DigitalDomain, Logic, NetId};
-use crate::element::{AcCtx, Element, NodeId, StampCtx};
+use crate::element::{AcCtx, Element, Integration, NodeId, StampCtx};
 use crate::elements::{Capacitor, CurrentSource, Inductor, Resistor, VoltageSource, Waveform};
 use crate::linalg::LinearSystem;
 use serde::{Deserialize, Serialize};
@@ -216,11 +216,22 @@ impl Circuit {
 
     /// Stamp every element and DAC bridge into `sys`.
     ///
+    /// An element marked in `damped` is stamped with backward Euler whatever
+    /// rule `ctx` names: damping is decided element by element, so a corner in
+    /// one part of the drawing does not cost the rest of it its accuracy.
+    ///
     /// Returns true if any element limited itself this iteration, which blocks
     /// Newton from declaring convergence.
-    pub(crate) fn stamp_all(&mut self, sys: &mut LinearSystem, ctx: &StampCtx) -> bool {
+    pub(crate) fn stamp_all(
+        &mut self,
+        sys: &mut LinearSystem,
+        ctx: &StampCtx,
+        damped: &[bool],
+    ) -> bool {
         let mut limited = false;
-        for element in &mut self.elements {
+        let euler = StampCtx { integration: Integration::BackwardEuler, ..*ctx };
+        for (k, element) in self.elements.iter_mut().enumerate() {
+            let ctx = if damped.get(k).copied().unwrap_or(false) { &euler } else { ctx };
             limited |= element.stamp(sys, ctx).limited;
         }
         for dac in &mut self.dacs {
@@ -294,9 +305,7 @@ impl Circuit {
 
     /// Discard all history so the next run starts from scratch.
     pub fn reset(&mut self) {
-        for element in &mut self.elements {
-            element.reset();
-        }
+        self.reset_elements();
         for dac in &mut self.dacs {
             dac.reset();
         }
@@ -304,6 +313,17 @@ impl Circuit {
             adc.reset();
         }
         self.digital.reset();
+    }
+
+    /// Put every analog element back to where it started, and nothing else.
+    ///
+    /// What a convergence aid starting over needs: the junction voltages a
+    /// failed attempt left behind are gone, while the logic the attempt was
+    /// solved around, and the levels the bridges hold from it, stay.
+    pub(crate) fn reset_elements(&mut self) {
+        for element in &mut self.elements {
+            element.reset();
+        }
     }
 
     /// Resolved state of a digital net.
@@ -340,8 +360,9 @@ impl Circuit {
     /// there, so a run handed the same retunes up front lands on the same
     /// instants as the one they were made on live. An instant already reached
     /// takes effect from the next step. Everything solved before it stays
-    /// solved; what the element stores — a capacitor's voltage, an inductor's
-    /// current — carries across.
+    /// solved; what the element stores — a capacitor's charge, an inductor's
+    /// flux — carries across, so the voltage across a capacitor turned down
+    /// rises, as it does on the bench.
     ///
     /// Returns false, and schedules nothing, when there is no element by that
     /// name, the change does not fit it, or the value is not a positive number.
@@ -377,13 +398,16 @@ impl Circuit {
         self.retunes.first().map(|r| r.at)
     }
 
-    /// Apply every retune due by `t`. Returns whether any was.
-    pub(crate) fn apply_retunes(&mut self, t: f64) -> bool {
+    /// Apply every retune due by `t`. Returns the elements changed, in the order
+    /// they were, empty when nothing was due.
+    pub(crate) fn apply_retunes(&mut self, t: f64) -> Vec<usize> {
         let due = self.retunes.partition_point(|r| r.at <= t);
         if due == 0 {
-            return false;
+            return Vec::new();
         }
+        let mut changed = Vec::with_capacity(due);
         for Scheduled { element, change, .. } in self.retunes.drain(..due) {
+            changed.push(element);
             let any = (*self.elements[element]).as_any_mut();
             match change {
                 Retune::Resistance(r) => {
@@ -410,7 +434,7 @@ impl Circuit {
                 }
             }
         }
-        true
+        changed
     }
 
     /// Move a named logic source to a level, from `at` onwards.
