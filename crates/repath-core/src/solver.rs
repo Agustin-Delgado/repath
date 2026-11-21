@@ -541,6 +541,21 @@ enum Origin {
     Dac(usize),
 }
 
+/// A corner at the newest accepted timepoint: what it reaches takes its next
+/// steps damped, and forgets the error history from before it.
+fn corner_at_latest(circuit: &mut Circuit, run: &mut Running, origins: &[Origin]) {
+    let mut reached = vec![0; run.damp.len()];
+    run.coupling.damp(origins, CORNER_DAMPING, &mut reached);
+    for ((element, owed), now) in
+        circuit.elements_mut().iter_mut().zip(run.damp.iter_mut()).zip(reached)
+    {
+        if now > 0 {
+            element.corner();
+            *owed = (*owed).max(now);
+        }
+    }
+}
+
 /// The nodes an ideal voltage source holds against ground.
 fn rails(circuit: &Circuit) -> Vec<usize> {
     circuit
@@ -863,6 +878,11 @@ pub const MAX_AC_POINTS: usize = 10_000;
 fn step_floor(min_step: f64, t: f64) -> f64 {
     min_step.max(4.0 * f64::EPSILON * t.abs())
 }
+
+/// A solved step is thrown away when its own error estimate asks for less than
+/// this share of it. SPICE's figure: a step is not rejected for being a hair
+/// long, which the next one, sized from the new history, makes good on anyway.
+const STEP_REJECTION: f64 = 0.9;
 
 /// Damped steps taken after landing on a corner.
 ///
@@ -1773,7 +1793,7 @@ impl Simulator {
             let reached = self.reach_changes(circuit, &mut run.ledger.pacing, t);
             if !reached.is_empty() {
                 let origins: Vec<Origin> = reached.into_iter().map(Origin::Dac).collect();
-                run.coupling.damp(&origins, CORNER_DAMPING, &mut run.damp);
+                corner_at_latest(circuit, run, &origins);
             }
             if settled.halt == Halt::Budget && settled.time <= t {
                 // What ran out was the safety valve, not the frame's share: that
@@ -1899,7 +1919,25 @@ impl Simulator {
                     self.config.transient_max_iterations,
                     &mut stats,
                 ) {
-                    Ok(_) => break,
+                    Ok(_) => {
+                        // Solved is not yet accepted. The step was sized from the
+                        // history before it, which cannot see an onset that starts
+                        // inside it; its own point can. A step longer than the one
+                        // its error estimate now asks for is thrown away and taken
+                        // again at that length — SPICE's test, the same 0.9 — and
+                        // since nothing has been accepted, nothing has to be undone:
+                        // the devices record a timepoint only once it is final, and
+                        // the digital side has consumed nothing from this one.
+                        let allowed =
+                            self.trial_step_limit(circuit, t + attempt, attempt, integration);
+                        let floor = step_floor(min_step, t);
+                        if allowed < STEP_REJECTION * attempt && attempt > floor {
+                            stats.rejected_steps += 1;
+                            attempt = allowed.max(floor);
+                            continue;
+                        }
+                        break;
+                    }
                     // An iterate that overflowed is a step too long for the
                     // exponentials in it, as much as one that did not settle.
                     Err(failed @ (SimError::NoConvergence { .. } | SimError::NonFinite { .. })) => {
@@ -1981,7 +2019,7 @@ impl Simulator {
             // a clock beside a tank used to put the whole circuit on backward
             // Euler at every edge, and the tank gave up its energy to them.
             if on_corner && attempt >= step {
-                run.coupling.damp(&corner, CORNER_DAMPING, &mut run.damp);
+                corner_at_latest(circuit, run, &corner);
             }
 
             self.record(&mut result, circuit, t);
@@ -1996,7 +2034,7 @@ impl Simulator {
             // A bridge that started a ramp here is a corner where it is.
             if !reached.is_empty() {
                 let origins: Vec<Origin> = reached.into_iter().map(Origin::Dac).collect();
-                run.coupling.damp(&origins, CORNER_DAMPING, &mut run.damp);
+                corner_at_latest(circuit, run, &origins);
             }
             if let Err(e) = unsettled(circuit) {
                 restore(run, t, dt, euler_steps, stats);
@@ -2075,6 +2113,30 @@ impl Simulator {
             .map(|(k, e)| {
                 let sized = self.sized.get(k).copied().unwrap_or(false);
                 e.max_timestep(if sized { &euler } else { &ctx })
+            })
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    /// Tightest step any element asks for once the timepoint just solved at
+    /// `time` is counted as accepted — judged by the same rule each element's
+    /// step was sized by in [`Self::element_step_limit`], and recording nothing.
+    fn trial_step_limit(
+        &self,
+        circuit: &Circuit,
+        time: f64,
+        dt: f64,
+        integration: Integration,
+    ) -> f64 {
+        let ctx = AcceptCtx { mode: Mode::Transient, integration, time, dt, x: &self.x };
+        let trapezoidal = AcceptCtx { integration: Integration::Trapezoidal, ..ctx };
+        let euler = AcceptCtx { integration: Integration::BackwardEuler, ..ctx };
+        circuit
+            .elements()
+            .iter()
+            .enumerate()
+            .map(|(k, e)| {
+                let sized = self.sized.get(k).copied().unwrap_or(false);
+                e.trial_timestep(if sized { &euler } else { &trapezoidal })
             })
             .fold(f64::INFINITY, f64::min)
     }

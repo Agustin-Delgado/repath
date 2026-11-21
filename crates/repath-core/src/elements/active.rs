@@ -384,6 +384,7 @@ impl Element for OpAmp {
             self.ring.push(self.i_mean);
         }
         self.v_prev = v;
+        // The same sample `trial_timestep` judges a step by.
         self.charge.push(ctx.time, CC * v);
     }
 
@@ -395,6 +396,14 @@ impl Element for OpAmp {
     /// resolved at whatever the ceiling happened to be.
     fn max_timestep(&self, ctx: &AcceptCtx) -> f64 {
         self.charge.suggested_step_for(ctx.integration)
+    }
+
+    fn trial_timestep(&self, ctx: &AcceptCtx) -> f64 {
+        self.charge.suggested_step_after(ctx.time, CC * ctx.unknown(self.first), ctx.integration)
+    }
+
+    fn corner(&mut self) {
+        self.charge.restart();
     }
 
     fn is_ringing(&self) -> bool {
