@@ -1,4 +1,10 @@
-# repath
+<h1>
+	<picture>
+		<source media="(prefers-color-scheme: dark)" srcset="brand/logo/repath-logo.svg" />
+		<source media="(prefers-color-scheme: light)" srcset="brand/logo/repath-logo-day.svg" />
+		<img src="brand/logo/repath-logo-day.svg" alt="repath" height="56" />
+	</picture>
+</h1>
 
 A free, open source, mixed-signal circuit simulator that runs entirely in your browser.
 

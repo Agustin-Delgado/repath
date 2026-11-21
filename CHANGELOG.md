@@ -132,6 +132,20 @@ the browser checks hold the line there: narrow at 900, wide at 901.
 
 ---
 
+## 21 November 2026 — repath gets a face
+
+**repath has a logo: a lowercase r whose arm is a step response**, rising,
+overshooting, ringing and settling, in a stroke that runs from blue to green.
+It sits beside the name in the header, in the browser tab, on the home screen
+when you add repath to a phone, and on the card a link to repath unfolds into
+when you paste it in a chat or a post — which until now showed no picture and
+no description at all. The whole kit, with the rules for using it and the
+scripts that draw every file, is in the repository under `brand/`.
+
+[#104](https://github.com/Agustin-Delgado/repath/pull/104)
+
+---
+
 ## 21 November 2026 — A DC sweep, for I-V curves
 
 **Run can now sweep a source instead of running in time.** Pick *DC sweep* as
