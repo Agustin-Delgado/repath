@@ -518,6 +518,161 @@ impl Element for Vccs {
     }
 }
 
+/// Current-controlled current source (SPICE `F`): `i(p->m) = gain * i(control)`.
+///
+/// The controlling current is the branch current of a voltage source, read the
+/// way SPICE reads it: flowing into that source's `+` terminal and out of its
+/// `-` one, so a source delivering current reads negative. A 0 V source is the
+/// usual way to put one in a branch purely to measure it. Which matrix column
+/// that current lives in is only known once every element is bound, so the
+/// circuit hands it over in [`Element::bind_control`].
+#[derive(Debug, Clone)]
+pub struct Cccs {
+    pub name: String,
+    pub p: NodeId,
+    pub m: NodeId,
+    /// Name of the controlling voltage source.
+    pub control: String,
+    pub gain: f64,
+    /// Branch unknown of the controlling source. `None` until bound, and an
+    /// unbound one stamps nothing rather than reading some other unknown.
+    control_branch: Option<usize>,
+}
+
+impl Cccs {
+    pub fn new(
+        name: impl Into<String>,
+        p: NodeId,
+        m: NodeId,
+        control: impl Into<String>,
+        gain: f64,
+    ) -> Self {
+        Self { name: name.into(), p, m, control: control.into(), gain, control_branch: None }
+    }
+}
+
+impl Element for Cccs {
+    fn kind(&self) -> &'static str {
+        "cccs"
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn controlling_source(&self) -> Option<&str> {
+        Some(&self.control)
+    }
+    fn bind_control(&mut self, branch: usize) {
+        self.control_branch = Some(branch);
+    }
+
+    fn stamp(&mut self, sys: &mut LinearSystem, _ctx: &StampCtx) -> StampReport {
+        let Some(k) = self.control_branch else { return StampReport::CLEAN };
+        let (p, m) = (node_index(self.p), node_index(self.m));
+        sys.add(p, Some(k), self.gain);
+        sys.add(m, Some(k), -self.gain);
+        StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        let Some(k) = self.control_branch else { return };
+        let (p, m) = (node_index(self.p), node_index(self.m));
+        sys.add(p, Some(k), C64::real(self.gain));
+        sys.add(m, Some(k), C64::real(-self.gain));
+    }
+
+    fn current(&self, x: &[f64]) -> Option<f64> {
+        let k = self.control_branch?;
+        Some(self.gain * x.get(k).copied()?)
+    }
+}
+
+/// Current-controlled voltage source (SPICE `H`):
+/// `v(p,m) = transresistance * i(control)`.
+///
+/// Voltage-defined, so it adds a branch current of its own, as a `V` or an `E`
+/// does; the controlling current is read as for [`Cccs`].
+#[derive(Debug, Clone)]
+pub struct Ccvs {
+    pub name: String,
+    pub p: NodeId,
+    pub m: NodeId,
+    pub control: String,
+    /// Ohms: volts out per ampere through the controlling source.
+    pub transresistance: f64,
+    branch: usize,
+    control_branch: Option<usize>,
+}
+
+impl Ccvs {
+    pub fn new(
+        name: impl Into<String>,
+        p: NodeId,
+        m: NodeId,
+        control: impl Into<String>,
+        transresistance: f64,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            p,
+            m,
+            control: control.into(),
+            transresistance,
+            branch: 0,
+            control_branch: None,
+        }
+    }
+}
+
+impl Element for Ccvs {
+    fn kind(&self) -> &'static str {
+        "ccvs"
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn extra_unknowns(&self) -> usize {
+        1
+    }
+    fn bind(&mut self, first_extra_index: usize) {
+        self.branch = first_extra_index;
+    }
+    fn controlling_source(&self) -> Option<&str> {
+        Some(&self.control)
+    }
+    fn bind_control(&mut self, branch: usize) {
+        self.control_branch = Some(branch);
+    }
+
+    fn stamp(&mut self, sys: &mut LinearSystem, _ctx: &StampCtx) -> StampReport {
+        let (p, m, k) = (node_index(self.p), node_index(self.m), Some(self.branch));
+        sys.add(p, k, 1.0);
+        sys.add(m, k, -1.0);
+        sys.add(k, p, 1.0);
+        sys.add(k, m, -1.0);
+        // Unbound, the row still holds the output at zero volts rather than
+        // leaving the branch unknown with nothing to decide it.
+        if let Some(c) = self.control_branch {
+            sys.add(k, Some(c), -self.transresistance);
+        }
+        StampReport::CLEAN
+    }
+
+    fn ac_stamp(&self, sys: &mut ComplexSystem, _ctx: &AcCtx) {
+        let (p, m, k) = (node_index(self.p), node_index(self.m), Some(self.branch));
+        sys.add(p, k, C64::ONE);
+        sys.add(m, k, -C64::ONE);
+        sys.add(k, p, C64::ONE);
+        sys.add(k, m, -C64::ONE);
+        if let Some(c) = self.control_branch {
+            sys.add(k, Some(c), C64::real(-self.transresistance));
+        }
+    }
+
+    fn current(&self, x: &[f64]) -> Option<f64> {
+        x.get(self.branch).copied()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

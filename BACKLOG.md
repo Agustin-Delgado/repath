@@ -85,7 +85,8 @@ Each one should either move into Must/Should below, or be documented in the UI.
 | Router | Widening the search box is a fixed ladder (12 then 40 cells) | An obstacle wider than 40 cells is still routed through rather than around |
 | Blocks | A box that grows wider (a longer name, a longer port name) grows over whatever stands beside it | The wires follow the pins; a part under the box has to be moved out by hand. A longer name only grows the box downward, under the ports, for the same reason |
 | Subcircuit | An `X` line inside a definition is reported, not expanded | A subcircuit built out of other subcircuits imports as its outer layer only |
-| Subcircuit | No current-controlled sources (`F`, `H`) for a definition to use | Some vendor macromodels cannot be built; the lines are named rather than dropped in silence |
+| Subcircuit | The polynomial form (`POLY`) of `E`, `G`, `F` and `H` is reported, not built | A macromodel that writes its gain stage as one polynomial source of several currents, as the classic Boyle op-amp files do, has to be rewritten as the sum of linear sources it stands for before it builds; the line is named rather than dropped in silence |
+| Controlled sources | An `F` or an `H` reads its current through a voltage source or a battery, never through any other part, and on the drawing only through one on the same sheet | As in SPICE: a branch with no source in it is measured by putting a 0 V source in series. A supply symbol is not offered, since two on one rail are built as one |
 
 ---
 
@@ -137,8 +138,11 @@ because each step is what makes the next one worth having:
       its column and across to the other side. *What is left:* ports go on the
       left and right only, never the top or bottom; a symbol of one's own for a
       block.
-- [ ] **Current-controlled sources** (`F`, `H`), which some vendor macromodels
-      need before they will build.
+- [x] **Current-controlled sources** (`F`, `H`), which some vendor macromodels
+      need before they will build. Imported inside a `.subckt`, reading a
+      source of the same definition, and drawn as parts reading a voltage
+      source or battery on the sheet. *What is left:* the `POLY` form, which is
+      refused for `E` and `G` as well.
 - [ ] **Sparse matrix solver** (KLU-style, or at least a sparse LU with Markowitz
       pivoting). The `LinearSystem` interface was kept narrow for this.
 - [ ] **Meyer gate capacitance** on the MOSFET — the channel charge split that

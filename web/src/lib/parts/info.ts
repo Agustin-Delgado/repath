@@ -93,6 +93,14 @@ export const PART_INFO: Readonly<Record<string, PartInfo>> = {
 		description: 'DC, sine, square or pulse current',
 		keywords: ['i', 'current', 'bias', 'constant current', 'generator']
 	},
+	cccs: {
+		description: 'SPICE F: a current that is a multiple of the current through a voltage source',
+		keywords: ['f', 'cccs', 'dependent', 'controlled', 'current mirror', 'current gain', 'beta', 'macromodel']
+	},
+	ccvs: {
+		description: 'SPICE H: a voltage set by the current through a voltage source',
+		keywords: ['h', 'ccvs', 'dependent', 'controlled', 'transresistance', 'transimpedance', 'macromodel']
+	},
 	battery: {
 		description: 'A cell or a stack of them: voltage behind an internal resistance',
 		keywords: ['cell', 'bt', '9v', 'aa', 'aaa', 'lipo', 'alkaline', 'coin cell', 'power']

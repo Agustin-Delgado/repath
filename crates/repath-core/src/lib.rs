@@ -52,9 +52,10 @@ pub mod prelude {
     };
     pub use crate::element::{Element, Integration, Mode, NodeId};
     pub use crate::elements::{
-        Bjt, BjtModel, Capacitor, Channel, CurrentSource, Diode, DiodeModel, Failure, Fuse, Heat,
-        Inductor, LED_HEATING, Mosfet, MosfetModel, OpAmp, OpAmpModel, Polarity, Resistor, Switch,
-        SwitchModel, ThermalModel, Transformer, Vccs, Vcvs, VoltageSource, Waveform,
+        Bjt, BjtModel, Capacitor, Cccs, Ccvs, Channel, CurrentSource, Diode, DiodeModel, Failure,
+        Fuse, Heat, Inductor, LED_HEATING, Mosfet, MosfetModel, OpAmp, OpAmpModel, Polarity,
+        Resistor, Switch, SwitchModel, ThermalModel, Transformer, Vccs, Vcvs, VoltageSource,
+        Waveform,
     };
     pub use crate::netlist::{Netlist, NetlistError};
     pub use crate::solver::{

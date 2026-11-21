@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Select } from '$lib/ui';
-	import type { ParamDef } from '$lib/schematic/model';
+	import { controllerChoices, NO_CONTROLLER, type ParamDef } from '$lib/schematic/model';
 	import { app } from '$lib/state.svelte';
 	import { onLeave, readEntry } from '$lib/entry';
 	import { joinValue, PREFIX_OPTIONS, splitValue, stepValue, type SplitValue } from '$lib/units';
@@ -174,6 +174,11 @@
 		pendingText = null;
 	}
 
+	/** The parts a `pick` field can name, from this sheet. */
+	const picks = $derived(
+		param.pick ? controllerChoices(app.schematic.instances, String(value ?? '')) : []
+	);
+
 	/** The scale picker's keys; the empty prefix needs a key a select can hold. */
 	const UNIT_KEY = '1';
 	const scales = PREFIX_OPTIONS.map((option) => ({
@@ -185,7 +190,17 @@
 <div class="flex flex-col gap-1">
 	<span class={fieldLabel}>{param.label}</span>
 
-	{#if param.choices}
+	{#if param.pick}
+		<Select
+			items={picks}
+			value={String(value ?? '') || NO_CONTROLLER}
+			onChange={(next) => {
+				if (next !== NO_CONTROLLER) app.setParam(id, param.key, next);
+			}}
+			aria-label={param.label}
+			class="w-full justify-between"
+		/>
+	{:else if param.choices}
 		<Select
 			items={param.choices}
 			value={String(value)}

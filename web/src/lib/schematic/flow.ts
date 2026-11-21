@@ -92,6 +92,10 @@ const PIN_FLOW: Record<string, Array<[pin: string, sign: number, series?: string
 	// takes current in at the pin its arrow points away from and delivers it at
 	// the one it points at, which is our `plus`.
 	isource: [['minus', -1], ['plus', 1]],
+	// Built the same way round as the current source; the voltage one as the
+	// voltage source is.
+	cccs: [['minus', -1], ['plus', 1]],
+	ccvs: [['plus', -1], ['minus', 1]],
 	// The disc, as the engine has it: a resistor from + to −.
 	buzzer: [['plus', -1], ['minus', 1]],
 	diode: [['anode', -1], ['cathode', 1]],

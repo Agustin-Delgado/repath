@@ -1056,6 +1056,7 @@ const NO_DC_PATH = new Set([
 	'varcap',
 	'crystal',
 	'isource',
+	'cccs',
 	'probe',
 	'port',
 	'lcd1602',

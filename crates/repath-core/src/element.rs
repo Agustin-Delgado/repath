@@ -268,6 +268,19 @@ pub trait Element: std::fmt::Debug + Send + AsAny {
         None
     }
 
+    /// Name of the voltage source whose branch current controls this element,
+    /// for a current-controlled source (SPICE `F` and `H`). `None` for
+    /// everything else.
+    fn controlling_source(&self) -> Option<&str> {
+        None
+    }
+
+    /// Called during build, after every element is bound, with the matrix
+    /// index of the controlling source's branch current.
+    fn bind_control(&mut self, branch: usize) {
+        let _ = branch;
+    }
+
     /// Whether this element must be re-linearized on every Newton iteration.
     fn is_nonlinear(&self) -> bool {
         false

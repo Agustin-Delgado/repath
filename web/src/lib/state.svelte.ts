@@ -97,6 +97,7 @@ import {
 	CONTACTS,
 	DIODE_PRESETS,
 	REGULATOR_PRESETS,
+	followRenames,
 	migrateInstance,
 	nextName,
 	OPERABLE,
@@ -2234,7 +2235,10 @@ class AppState {
 		this.trace.record({ op: 'rename', part: instance.name, to: trimmed });
 		if (instance.name === trimmed) return null;
 		this.checkpoint();
+		const was = instance.name;
 		instance.name = trimmed;
+		// A controlled source names the source it reads, and goes on reading it.
+		followRenames(this.schematic.instances, new Map([[was, trimmed]]));
 		return null;
 	}
 
@@ -2684,6 +2688,14 @@ class AppState {
 			fresh.set(inner.id, copy);
 			wasCalled.set(copy.id, `${placed.id}/${inner.id}`);
 		}
+		// A controlled source inside reads the source inside, under whatever
+		// name that one came out with.
+		const outNames = new Map<string, string>();
+		for (const inner of block.instances) {
+			const copy = fresh.get(inner.id);
+			if (copy) outNames.set(inner.name, copy.name);
+		}
+		followRenames(fresh.values(), outNames);
 		const wires: Wire[] = block.wires.map((w) => ({ id: freshId(), points: w.points.map(turn) }));
 
 		// Where each pin of the box was, and where the port it stood for was.
@@ -3471,6 +3483,7 @@ class AppState {
 		const moved = new Map<string, Point>();
 
 		const renamed = new Map<string, string>();
+		const names = new Map<string, string>();
 		for (const source of instances) {
 			// Names have to be regenerated as we go, or pasting three resistors
 			// would produce three of whatever R-number was free at the start.
@@ -3501,7 +3514,12 @@ class AppState {
 			this.schematic.instances.push(copy);
 			fresh.push(copy.id);
 			renamed.set(source.id, copy.id);
+			names.set(source.name, copy.name);
 		}
+		followRenames(
+			this.schematic.instances.filter((i) => fresh.includes(i.id)),
+			names
+		);
 
 		for (const source of wires) {
 			const copy: Wire = {

@@ -19,7 +19,7 @@ use crate::digital::{
 use crate::element::NodeId;
 use crate::elements::semiconductor::TNOM;
 use crate::elements::{
-    Bjt, BjtModel, Capacitor, CurrentSource, Diode, DiodeModel, Fuse, Inductor, Mosfet,
+    Bjt, BjtModel, Capacitor, Cccs, Ccvs, CurrentSource, Diode, DiodeModel, Fuse, Inductor, Mosfet,
     MosfetModel, OpAmp, OpAmpModel, Resistor, Supply, SupplyCurrent, Switch, SwitchModel,
     Transformer, Vccs, Vcvs, VoltageSource, Waveform,
 };
@@ -71,6 +71,9 @@ fn check_values(component: &Component) -> Result<(), NetlistError> {
     let not_negative = |what: &str, v: f64| -> Option<String> {
         (!(v.is_finite() && v >= 0.0)).then(|| format!("{what} cannot be negative, and is {v}"))
     };
+    let finite = |what: &str, v: f64| -> Option<String> {
+        (!v.is_finite()).then(|| format!("{what} must be a finite number, not {v}"))
+    };
     let first = |checks: Vec<Option<String>>| checks.into_iter().flatten().next();
     let found = match component {
         Component::Diode { model, .. } => first(vec![
@@ -108,6 +111,15 @@ fn check_values(component: &Component) -> Result<(), NetlistError> {
         Component::Capacitor { capacitance, .. } => not_negative("the capacitance", *capacitance),
         Component::Inductor { inductance, .. } => not_negative("the inductance", *inductance),
         Component::SupplyCurrent { current, .. } => not_negative("the supply current", *current),
+        // Any sign is a gain, and zero is a source that does nothing; what is not
+        // a number would come back from the solve as a singular matrix.
+        Component::Vcvs { gain, .. } | Component::Cccs { gain, .. } => finite("the gain", *gain),
+        Component::Vccs { transconductance, .. } => {
+            finite("the transconductance", *transconductance)
+        }
+        Component::Ccvs { transresistance, .. } => {
+            finite("the transresistance", *transresistance)
+        }
         _ => None,
     };
     match found {
@@ -289,6 +301,14 @@ pub enum Component {
         control_minus: String,
         transconductance: f64,
     },
+    /// Current-controlled current source (SPICE `F`): `gain` times the current
+    /// through the voltage source named `control`, flowing from `plus` to
+    /// `minus` through this one.
+    Cccs { name: String, plus: String, minus: String, control: String, gain: f64 },
+    /// Current-controlled voltage source (SPICE `H`): `v(plus, minus)` is
+    /// `transresistance` times the current through the voltage source named
+    /// `control`.
+    Ccvs { name: String, plus: String, minus: String, control: String, transresistance: f64 },
 }
 
 fn default_opamp_gain() -> f64 {
@@ -326,6 +346,29 @@ fn default_i_bias() -> f64 {
 }
 
 impl Component {
+    /// What this component is, in words with its article, for a message about it.
+    fn kind_label(&self) -> &'static str {
+        match self {
+            Component::Resistor { .. } => "a resistor",
+            Component::Capacitor { .. } => "a capacitor",
+            Component::Inductor { .. } => "an inductor",
+            Component::Transformer { .. } => "a transformer",
+            Component::Fuse { .. } => "a fuse",
+            Component::VoltageSource { .. } => "a voltage source",
+            Component::CurrentSource { .. } => "a current source",
+            Component::SupplyCurrent { .. } => "a supply current",
+            Component::Diode { .. } => "a diode",
+            Component::Mosfet { .. } => "a MOSFET",
+            Component::Bjt { .. } => "a bipolar transistor",
+            Component::OpAmp { .. } => "an op-amp",
+            Component::Switch { .. } => "a switch",
+            Component::Vcvs { .. } => "a voltage-controlled voltage source",
+            Component::Vccs { .. } => "a voltage-controlled current source",
+            Component::Cccs { .. } => "a current-controlled current source",
+            Component::Ccvs { .. } => "a current-controlled voltage source",
+        }
+    }
+
     pub fn name(&self) -> &str {
         match self {
             Component::Resistor { name, .. }
@@ -342,7 +385,9 @@ impl Component {
             | Component::OpAmp { name, .. }
             | Component::Switch { name, .. }
             | Component::Vcvs { name, .. }
-            | Component::Vccs { name, .. } => name,
+            | Component::Vccs { name, .. }
+            | Component::Cccs { name, .. }
+            | Component::Ccvs { name, .. } => name,
         }
     }
 }
@@ -690,6 +735,7 @@ impl Netlist {
 
         for component in &self.components {
             check_values(component)?;
+            self.check_controller(component)?;
         }
         // At absolute zero there are no carriers and the thermal voltage is zero,
         // which every junction divides by. Refused here, by name, rather than
@@ -749,6 +795,41 @@ impl Netlist {
             })
             .collect();
         i2c::Bus { targets }
+    }
+
+    /// Refuse a current-controlled source whose controller is not a voltage
+    /// source in this netlist.
+    ///
+    /// The current it reads is a voltage source's branch unknown, the one thing
+    /// in modified nodal analysis that is a current by construction. Anything
+    /// else would have to grow a branch to be measured, which is what putting a
+    /// 0 V source in series with it does, and SPICE asks for exactly that.
+    fn check_controller(&self, component: &Component) -> Result<(), NetlistError> {
+        let (Component::Cccs { name, control, .. } | Component::Ccvs { name, control, .. }) =
+            component
+        else {
+            return Ok(());
+        };
+        let refuse =
+            |reason: String| Err(NetlistError::BadTerminals { component: name.clone(), reason });
+        if control.trim().is_empty() {
+            return refuse(
+                "no voltage source is named to read the controlling current through".into(),
+            );
+        }
+        if control == name {
+            return refuse("it cannot be controlled by its own current".into());
+        }
+        match self.components.iter().find(|c| c.name() == control) {
+            Some(Component::VoltageSource { .. }) => Ok(()),
+            Some(other) => refuse(format!(
+                "its controlling current is read through a voltage source, and {control} is {kind}; put a 0 V source in series with it and name that instead",
+                kind = other.kind_label()
+            )),
+            None => refuse(format!(
+                "there is no voltage source called {control} to read the controlling current through"
+            )),
+        }
     }
 
     fn node(&self, circuit: &mut Circuit, name: &str) -> NodeId {
@@ -901,6 +982,14 @@ impl Netlist {
                 let (p, m) = (self.node(c, plus), self.node(c, minus));
                 let (cp, cm) = (self.node(c, control_plus), self.node(c, control_minus));
                 c.add(Box::new(Vccs::new(name, p, m, cp, cm, *transconductance)));
+            }
+            Component::Cccs { name, plus, minus, control, gain } => {
+                let (p, m) = (self.node(c, plus), self.node(c, minus));
+                c.add(Box::new(Cccs::new(name, p, m, control, *gain)));
+            }
+            Component::Ccvs { name, plus, minus, control, transresistance } => {
+                let (p, m) = (self.node(c, plus), self.node(c, minus));
+                c.add(Box::new(Ccvs::new(name, p, m, control, *transresistance)));
             }
         }
         Ok(())
