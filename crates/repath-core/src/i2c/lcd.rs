@@ -22,7 +22,9 @@ const UNWIRED: u8 = 0x0F;
 
 #[derive(Debug, Clone)]
 pub struct LcdModule {
-    pub name: String,
+    /// Shared, not owned: the module is cloned with the machine on every
+    /// speculation, and a name is the one part of it that would allocate.
+    pub name: std::sync::Arc<str>,
     expander: Pcf8574,
     lcd: Hd44780,
     /// Bumped by every write that reaches it, so that whoever draws it can
@@ -36,7 +38,7 @@ impl LcdModule {
     /// controller in its power-on reset.
     pub fn new(name: impl Into<String>, address: u8) -> Self {
         let mut module = Self {
-            name: name.into(),
+            name: name.into().into(),
             expander: Pcf8574::new(address),
             lcd: Hd44780::new(),
             version: 0,
@@ -155,5 +157,15 @@ mod tests {
         // the address bits 6–4 of it are zero: P6–P4 pulled low.
         assert_eq!(port & 0x70, 0x00);
         assert_eq!(port & 0x0F, RW | E);
+    }
+
+    #[test]
+    fn a_copy_of_the_module_shares_its_name() {
+        // Every speculation clones the machine and its bus with it; the name
+        // is the module's only heap data, and it must not be copied.
+        let module = LcdModule::new("LCD1", 0x27);
+        let copy = module.clone();
+        assert!(std::sync::Arc::ptr_eq(&module.name, &copy.name));
+        assert_eq!(&*copy.name, "LCD1");
     }
 }

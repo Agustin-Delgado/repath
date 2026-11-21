@@ -236,6 +236,12 @@ export interface McuNotice {
 /** What a microcontroller in a live run has to report. */
 export interface McuState {
 	serial: SerialByte[];
+	/**
+	 * How many bytes it has sent in all: the `from` to ask with next. More
+	 * than `from` plus `serial.length` only when the engine had already let
+	 * go of the oldest of them.
+	 */
+	sent: number;
 	/** Every notice so far, not only the new ones: there are at most a handful. */
 	notices: McuNotice[];
 	/** Why its CPU stopped, and when: an instruction it does not know. */
@@ -366,6 +372,7 @@ export class LiveRun {
 		if (this.freed) return null;
 		const state = JSON.parse(this.simulation.mcuState(name, from)) as {
 			serial: SerialByte[];
+			sent?: number;
 			notices: McuNotice[];
 			fault: string | null;
 			fault_time: number | null;
@@ -374,6 +381,7 @@ export class LiveRun {
 		if (!state) return null;
 		return {
 			serial: state.serial,
+			sent: state.sent ?? from + state.serial.length,
 			notices: state.notices,
 			fault:
 				state.fault === null ? null : { message: state.fault, time: state.fault_time ?? 0 },

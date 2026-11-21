@@ -326,7 +326,9 @@ impl Simulation {
     ///
     /// `serial` is every byte it has sent from the `serial_from`-th on, as
     /// `{ time, byte }`, so a caller polling a live run asks only for what it
-    /// has not seen. `notices` is every peripheral the program has used that
+    /// has not seen; `sent` is how many it has sent in all, the `serial_from`
+    /// to ask with next. The engine holds only the newest bytes, so a caller
+    /// that falls far behind is handed fewer than `sent` says went out. `notices` is every peripheral the program has used that
     /// is not simulated, as `{ peripheral, time }`, all of them every time:
     /// there are at most a handful. `fault` is why the CPU stopped, if it
     /// has, and `fault_time` when, in seconds from the start of the run.
@@ -347,6 +349,7 @@ impl Simulation {
         #[derive(Serialize)]
         struct State {
             serial: Vec<Byte>,
+            sent: usize,
             notices: Vec<Notice>,
             fault: Option<String>,
             fault_time: Option<f64>,
@@ -359,11 +362,11 @@ impl Simulation {
             .and_then(|device| device.as_any().downcast_ref::<Mcu>());
         let state = mcu.map(|mcu| State {
             serial: mcu
-                .serial()
+                .serial_from(serial_from)
                 .iter()
-                .skip(serial_from)
                 .map(|b| Byte { time: b.time, byte: b.byte })
                 .collect(),
+            sent: mcu.serial_sent(),
             notices: mcu
                 .notices()
                 .iter()

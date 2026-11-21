@@ -99,6 +99,19 @@ const MIN_CHUNK: u64 = 256;
 /// A wake-up pulse's width. Anything shorter than a clock cycle will do.
 const WAKE_PULSE: f64 = 1e-12;
 
+/// The most bytes of a chip's serial output held at once. A run is polled
+/// for what it sent every frame, so only a reader that has fallen this far
+/// behind loses any; the oldest go first, and the count of all sent stays
+/// exact. 64 Ki bytes is over five seconds of 115 200 baud flat out, and
+/// with up to twice that held, at 16 bytes each, two megabytes; kept whole,
+/// an hour of `Serial.println` in a loop held hundreds of megabytes of the
+/// module's memory.
+#[cfg(not(test))]
+const SERIAL_KEPT: usize = 1 << 16;
+/// Small enough for a test to overflow it in a few thousand cycles.
+#[cfg(test)]
+const SERIAL_KEPT: usize = 8;
+
 /// A port pin: PB0–PB7, PC0–PC5 or PD0–PD7. PC6 is RESET, wired separately;
 /// PB6 and PB7 are the crystal on an Uno, but a pin all the same on a chip
 /// clocked another way.
@@ -261,6 +274,8 @@ pub struct Mcu {
     published: Vec<Logic>,
     chunk: u64,
     serial: Vec<SerialByte>,
+    /// How many of the bytes sent are no longer in `serial`.
+    serial_dropped: usize,
     notices: Vec<Notice>,
     fault: Option<Fault>,
     /// ADC0 to ADC5, AREF, AVCC and AGND, with ground for a leg not wired; or
@@ -344,6 +359,7 @@ impl Mcu {
             in_reset: false,
             chunk: MIN_CHUNK,
             serial: Vec::new(),
+            serial_dropped: 0,
             notices: Vec::new(),
             fault: None,
             analog: Vec::new(),
@@ -398,11 +414,24 @@ impl Mcu {
         self.time_of(self.committed.cycle)
     }
 
-    /// Every byte sent so far, oldest first. A finished byte is one of the
-    /// things a speculation stops at, so it is here as soon as the domain's
-    /// clock reaches the end of its stop bit.
+    /// The bytes sent that are still held, oldest first: every one of them
+    /// unless more than `SERIAL_KEPT` have gone out. A finished byte is one
+    /// of the things a speculation stops at, so it is here as soon as the
+    /// domain's clock reaches the end of its stop bit.
     pub fn serial(&self) -> &[SerialByte] {
         &self.serial
+    }
+
+    /// The bytes sent from the `from`-th on, counting from the first byte of
+    /// the run; those no longer held are skipped.
+    pub fn serial_from(&self, from: usize) -> &[SerialByte] {
+        let start = from.saturating_sub(self.serial_dropped).min(self.serial.len());
+        &self.serial[start..]
+    }
+
+    /// How many bytes have been sent since the run began, held or not.
+    pub fn serial_sent(&self) -> usize {
+        self.serial_dropped + self.serial.len()
     }
 
     /// Each peripheral the program has used that is not simulated, once, in
@@ -437,6 +466,7 @@ impl Mcu {
         self.published.fill(Logic::Unknown);
         self.chunk = MIN_CHUNK;
         self.serial.clear();
+        self.serial_dropped = 0;
         self.notices.clear();
         self.fault = None;
         self.samples.taken.clear();
@@ -514,6 +544,13 @@ impl Mcu {
                 .drain(..)
                 .map(|(cycle, byte)| SerialByte { time: cycle as f64 / f, byte }),
         );
+        // Dropped in halves, so the copy down is paid once per SERIAL_KEPT
+        // bytes rather than on every one.
+        if self.serial.len() > 2 * SERIAL_KEPT {
+            let excess = self.serial.len() - SERIAL_KEPT;
+            self.serial.drain(..excess);
+            self.serial_dropped += excess;
+        }
         for (cycle, peripheral) in self.committed.notices.drain(..) {
             if !self.notices.iter().any(|n| n.peripheral == peripheral) {
                 self.notices.push(Notice { time: cycle as f64 / f, peripheral });
@@ -1054,6 +1091,50 @@ mod tests {
                 (2_404, Logic::High),
             ]
         );
+    }
+
+    #[test]
+    fn the_serial_log_keeps_the_newest_bytes_and_counts_them_all() {
+        // A loop sending 0, 1, 2, ... back to back at UBRR0 = 0, 160 cycles
+        // a frame. Far more go out than the log holds; what it still holds
+        // must be the newest, each at its place in the count of all sent,
+        // which is what a reader polling with `serial_from` relies on.
+        let program = [
+            ldi(16, 0x08),
+            sts(0xC1, 16)[0],
+            0x00C1,     //       sts UCSR0B, r16      ; TXEN0
+            ldi(16, 0), //   ldi r16, 0
+            lds(17, 0xC0)[0],
+            0x00C0,      // wait: lds r17, UCSR0A
+            sbrs(17, 5), //  sbrs r17, UDRE0
+            rjmp(-4),    //     rjmp wait
+            sts(0xC6, 16)[0],
+            0x00C6,   //       sts UDR0, r16
+            inc(16),  //      inc r16
+            rjmp(-8), //     rjmp wait
+        ];
+        let mut bench = Bench::new();
+        let txd = bench.net("txd");
+        bench.mcu(&program, &[("PD1", output(txd))], None);
+        bench.run(40 * 160 + 400);
+        let mcu = bench.mcu_state();
+        let sent = mcu.serial_sent();
+        assert!(sent >= 40, "{sent}");
+        assert!(mcu.serial().len() <= 2 * SERIAL_KEPT, "{}", mcu.serial().len());
+        // Byte n of the run is n: the held ones are the last few sent.
+        let held = mcu.serial_from(0);
+        assert!(held.len() < sent, "some were dropped");
+        let first = sent - held.len();
+        for (i, b) in held.iter().enumerate() {
+            assert_eq!(usize::from(b.byte), first + i);
+        }
+        // A reader up to date is handed nothing; one a byte behind, that byte.
+        assert!(mcu.serial_from(sent).is_empty());
+        assert_eq!(mcu.serial_from(sent - 1).len(), 1);
+        assert_eq!(usize::from(mcu.serial_from(sent - 1)[0].byte), sent - 1);
+        // And the held frames keep their timing: back to back, 160 cycles.
+        let gaps = held.windows(2).map(|w| ((w[1].time - w[0].time) * 16e6).round() as u64);
+        assert!(gaps.clone().all(|g| g == 160), "{:?}", gaps.collect::<Vec<_>>());
     }
 
     #[test]

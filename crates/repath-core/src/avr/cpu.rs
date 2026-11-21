@@ -270,7 +270,10 @@ impl Machine {
                 let base = if op & 8 != 0 { self.pointer(Y) } else { self.pointer(ZP) };
                 let a = base.wrapping_add(q);
                 if op & 0x0200 != 0 {
+                    // Two cycles, the write landing at the end, like ST X.
+                    self.store_lands = 2;
                     self.write(a, rd);
+                    self.store_lands = 1;
                 } else {
                     self.data[d] = self.read(a);
                 }

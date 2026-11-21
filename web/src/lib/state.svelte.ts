@@ -3922,7 +3922,7 @@ class AppState {
 			}
 			this.mcuLogs[name] = {
 				text: appendSerial(log.text, state.serial.map((b) => b.byte)),
-				bytes: log.bytes + state.serial.length,
+				bytes: state.sent,
 				notices: state.notices,
 				fault: state.fault,
 				listening: state.listening

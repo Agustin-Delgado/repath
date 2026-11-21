@@ -11,6 +11,29 @@ early entries point at those instead.
 
 ---
 
+## 21 November 2026 — The chip's timers, pins and serial port, closer to the datasheet
+
+**Phase-correct PWM changes frequency cleanly.** Raising TOP in a phase-correct
+mode (Timer0 or Timer2 mode 5, Timer1 mode 11) used to let the counter keep
+climbing to the new TOP mid-period, stretching that one period. It now turns at
+the old TOP and counts up to the new one on the next slope, as the chip does.
+Timer1's modes 8 and 10 no longer toggle OC1A with COM1A = 01: on the chip the
+pin stays the port's there.
+
+**A software interrupt works on a pin with nothing wired to it.** Writing a
+pin that is an output now raises its INT0/INT1 or pin-change interrupt whether
+or not anything is connected to it — the datasheet's way of triggering an
+interrupt from code.
+
+**Serial stops cleanly.** Clearing TXEN with bytes still going out lets them
+finish on the wire before TX is let go, instead of cutting the line mid-frame.
+And a sketch printing in a loop for an hour no longer fills the engine's memory:
+it keeps the newest bytes, as the serial monitor already did.
+
+[#PR](https://github.com/Agustin-Delgado/repath/pull/PR)
+
+---
+
 ## 20 November 2026 — Saving from inside a block keeps the whole circuit
 
 **Save and Share work wherever you are.** With a block open for editing, File
